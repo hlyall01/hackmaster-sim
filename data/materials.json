@@ -1,0 +1,26 @@
+{
+  "version": "HackMaster 5e",
+  "source": "references/materials.md",
+  "effects": {
+    "melee_thrown": "Increased Attack and Damage per tier",
+    "ranged": "Increased Damage per tier; +1 Strength requirement per tier",
+    "projectiles": "Increased Attack and Damage per tier (stacks with ranged weapon tier)",
+    "armor": "Increased Damage Reduction per tier; reduce Defense penalty up to 0",
+    "shields": "Increased Damage Reduction and Defense per tier"
+  },
+  "metals": [
+    { "tier": 0, "name": "Bronze", "weight_multiplier": 1.2 },
+    { "tier": 1, "name": "Iron", "weight_multiplier": 1.0 },
+    { "tier": 2, "name": "Steel", "weight_multiplier": 1.0 }
+  ],
+  "fabrics": [
+    { "tier": 0, "name": "Cotton", "weight_multiplier": 1.0 },
+    { "tier": 1, "name": "Wool", "weight_multiplier": 1.5 },
+    { "tier": 2, "name": "Linen", "weight_multiplier": 1.5 }
+  ],
+  "woods": [
+    { "tier": 0, "name": "Oak", "weight_multiplier": 1.0 },
+    { "tier": 1, "name": "Yew", "weight_multiplier": 0.8 },
+    { "tier": 2, "name": "Ash", "weight_multiplier": 0.8 }
+  ]
+}

@@ -1,0 +1,246 @@
+{
+  "version": "HackMaster 5e",
+  "source": "references/armor_tables.md",
+  "armor": [
+    {
+      "name": "None",
+      "region": "Northern",
+      "damage_reduction": 0,
+      "defense_adjustment": 0,
+      "initiative_modifier": -1,
+      "speed_modifier": 0,
+      "type": "None",
+      "weight_lbs": null
+    },
+    {
+      "name": "Robe",
+      "region": "Northern",
+      "damage_reduction": 1,
+      "defense_adjustment": -1,
+      "initiative_modifier": 0,
+      "speed_modifier": 0,
+      "type": "None",
+      "weight_lbs": 5.0
+    },
+    {
+      "name": "Doublet",
+      "region": "Northern",
+      "damage_reduction": 2,
+      "defense_adjustment": -3,
+      "initiative_modifier": 1,
+      "speed_modifier": 0,
+      "type": "Light",
+      "weight_lbs": 15.0
+    },
+    {
+      "name": "Gambeson",
+      "region": "Northern",
+      "damage_reduction": 2,
+      "defense_adjustment": -2,
+      "initiative_modifier": 0,
+      "speed_modifier": 0,
+      "type": "Light",
+      "weight_lbs": 15.0
+    },
+    {
+      "name": "Chainshirt",
+      "region": "Northern",
+      "damage_reduction": 3,
+      "defense_adjustment": -3,
+      "initiative_modifier": 1,
+      "speed_modifier": 0,
+      "type": "Medium",
+      "weight_lbs": 20.0
+    },
+    {
+      "name": "Ringmail",
+      "region": "Northern",
+      "damage_reduction": 4,
+      "defense_adjustment": -4,
+      "initiative_modifier": 1,
+      "speed_modifier": 1,
+      "type": "Medium",
+      "weight_lbs": 30.0
+    },
+    {
+      "name": "Breastplate",
+      "region": "Northern",
+      "damage_reduction": 5,
+      "defense_adjustment": -5,
+      "initiative_modifier": 1,
+      "speed_modifier": 2,
+      "type": "Medium",
+      "weight_lbs": 35.0
+    },
+    {
+      "name": "Scalemail",
+      "region": "Northern",
+      "damage_reduction": 5,
+      "defense_adjustment": -6,
+      "initiative_modifier": 3,
+      "speed_modifier": 2,
+      "type": "Heavy",
+      "weight_lbs": 60.0
+    },
+    {
+      "name": "Chainmail",
+      "region": "Northern",
+      "damage_reduction": 5,
+      "defense_adjustment": -5,
+      "initiative_modifier": 2,
+      "speed_modifier": 2,
+      "type": "Heavy",
+      "weight_lbs": 45.0
+    },
+    {
+      "name": "Splintmail",
+      "region": "Northern",
+      "damage_reduction": 6,
+      "defense_adjustment": -5,
+      "initiative_modifier": 2,
+      "speed_modifier": 2,
+      "type": "Heavy",
+      "weight_lbs": 55.0
+    },
+    {
+      "name": "Brigandine",
+      "region": "Northern",
+      "damage_reduction": 6,
+      "defense_adjustment": -4,
+      "initiative_modifier": 2,
+      "speed_modifier": 1,
+      "type": "Heavy",
+      "weight_lbs": 50.0
+    },
+    {
+      "name": "Halfplate",
+      "region": "Northern",
+      "damage_reduction": 7,
+      "defense_adjustment": -5,
+      "initiative_modifier": 2,
+      "speed_modifier": 2,
+      "type": "Heavy",
+      "weight_lbs": 40.0
+    },
+    {
+      "name": "Platemail",
+      "region": "Northern",
+      "damage_reduction": 8,
+      "defense_adjustment": -5,
+      "initiative_modifier": 3,
+      "speed_modifier": 2,
+      "type": "Heavy",
+      "weight_lbs": 55.0
+    },
+    {
+      "name": "None",
+      "region": "Southern",
+      "damage_reduction": 0,
+      "defense_adjustment": 0,
+      "initiative_modifier": -1,
+      "speed_modifier": 0,
+      "type": "None",
+      "weight_lbs": null
+    },
+    {
+      "name": "Kaftan",
+      "region": "Southern",
+      "damage_reduction": 1,
+      "defense_adjustment": 0,
+      "initiative_modifier": 2,
+      "speed_modifier": 0,
+      "type": "None",
+      "weight_lbs": 8.0
+    },
+    {
+      "name": "Quilted",
+      "region": "Southern",
+      "damage_reduction": 1,
+      "defense_adjustment": 0,
+      "initiative_modifier": 0,
+      "speed_modifier": 0,
+      "type": "Light",
+      "weight_lbs": 10.0
+    },
+    {
+      "name": "Boiled",
+      "region": "Southern",
+      "damage_reduction": 2,
+      "defense_adjustment": -2,
+      "initiative_modifier": 1,
+      "speed_modifier": 0,
+      "type": "Light",
+      "weight_lbs": 20.0
+    },
+    {
+      "name": "Rawhide",
+      "region": "Southern",
+      "damage_reduction": 2,
+      "defense_adjustment": -1,
+      "initiative_modifier": 1,
+      "speed_modifier": 1,
+      "type": "Light",
+      "weight_lbs": 20.0
+    },
+    {
+      "name": "Studded",
+      "region": "Southern",
+      "damage_reduction": 2,
+      "defense_adjustment": -1,
+      "initiative_modifier": 0,
+      "speed_modifier": 1,
+      "type": "Medium",
+      "weight_lbs": 25.0
+    },
+    {
+      "name": "Jazerant",
+      "region": "Southern",
+      "damage_reduction": 3,
+      "defense_adjustment": -2,
+      "initiative_modifier": 0,
+      "speed_modifier": 2,
+      "type": "Medium",
+      "weight_lbs": 25.0
+    },
+    {
+      "name": "Kazhagand",
+      "region": "Southern",
+      "damage_reduction": 4,
+      "defense_adjustment": -3,
+      "initiative_modifier": 2,
+      "speed_modifier": 2,
+      "type": "Medium",
+      "weight_lbs": 30.0
+    },
+    {
+      "name": "Hoopmail",
+      "region": "Southern",
+      "damage_reduction": 5,
+      "defense_adjustment": -5,
+      "initiative_modifier": 2,
+      "speed_modifier": 2,
+      "type": "Medium",
+      "weight_lbs": 35.0
+    },
+    {
+      "name": "Lamellar",
+      "region": "Southern",
+      "damage_reduction": 6,
+      "defense_adjustment": -4,
+      "initiative_modifier": 1,
+      "speed_modifier": 2,
+      "type": "Heavy",
+      "weight_lbs": 40.0
+    },
+    {
+      "name": "Mirror",
+      "region": "Southern",
+      "damage_reduction": 7,
+      "defense_adjustment": -5,
+      "initiative_modifier": 3,
+      "speed_modifier": 1,
+      "type": "Heavy",
+      "weight_lbs": 45.0
+    }
+  ]
+}
