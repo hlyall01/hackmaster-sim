@@ -1,0 +1,9 @@
+[package]
+name = "HackmasterSim"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+eframe = { version = "0.28", features = ["glow"] }
+egui_plot = "0.28"
+rand = "0.8"
