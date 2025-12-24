@@ -2,6 +2,9 @@
 mod character;
 #[path = "../sim.rs"]
 mod sim;
+#[path = "../game_logic.rs"]
+#[allow(dead_code)]
+mod game_logic;
 
 use character::{
     AbilityScore, AbilitySet, ArmorRegion, Character, Equipment, MaterialKind, Progression,
@@ -43,7 +46,7 @@ fn main() {
         .cloned();
 
     let equipment = Equipment {
-        weapon: Some(weapon),
+        weapon: Some(weapon.clone()),
         shield: None,
         armor,
         weapon_material: character::MATERIALS
@@ -91,6 +94,10 @@ fn main() {
     println!("Load category: {}", derived.load_category);
 
     let mut sim = SimState::new(SimConfig::new(20.0, reach_ft));
+    let strength_damage = game_logic::strength_damage_for_weapon(
+        &weapon.name,
+        character.ability_mods.strength.damage,
+    );
     let combatant = Combatant::new(
         character.name.clone(),
         character
@@ -104,6 +111,12 @@ fn main() {
         derived.armor_dr,
         character
             .equipment
+            .armor
+            .as_ref()
+            .map(|armor| matches!(armor.armor_type, character::ArmorType::Heavy))
+            .unwrap_or(false),
+        character
+            .equipment
             .weapon
             .as_ref()
             .map(|weapon| weapon.armor_pen)
@@ -114,7 +127,7 @@ fn main() {
             .as_ref()
             .map(|weapon| weapon.damage_expr.clone())
             .unwrap_or_else(|| "d4p".to_string()),
-        character.ability_mods.strength.damage,
+        strength_damage,
         character
             .equipment
             .weapon
@@ -129,6 +142,8 @@ fn main() {
             .unwrap_or(1.0),
         5.0,
         false,
+        false,
+        None,
         character.equipment.weapon.is_some(),
         character
             .equipment

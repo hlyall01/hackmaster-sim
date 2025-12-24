@@ -2,114 +2,15 @@
 mod character;
 #[path = "../sim.rs"]
 mod sim;
+#[path = "../game_logic.rs"]
+mod game_logic;
 
-use character::{
-    AbilityScore, AbilitySet, Armor, Character, Equipment, Progression, ProgressionTier, Weapon,
-    WeaponGroup, WeaponMastery,
-};
+use character::ProgressionTier;
 use eframe::egui::{self, Color32, Pos2, Rect};
-use serde::Deserialize;
-use sim::{Combatant, SimConfig, SimState};
-use std::fs;
-
-#[derive(Clone)]
-struct WeaponPreset {
-    name: String,
-    group: WeaponGroup,
-    speed: f32,
-    speed_label: String,
-    damage_expr: String,
-    reach_label: String,
-    reach_ft: f32,
-    armor_pen: i32,
-    defense_bonus_always: bool,
-    size: WeaponSize,
-    handedness: WeaponHandedness,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum WeaponSize {
-    Small,
-    Medium,
-    Large,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum WeaponHandedness {
-    OneHanded,
-    TwoHanded,
-}
-
-#[derive(Clone)]
-struct ArmorEntry {
-    label: String,
-    armor: Option<Armor>,
-}
-
-#[derive(Clone, Deserialize)]
-struct NpcPreset {
-    name: String,
-    hp: i32,
-    attack_bonus: i32,
-    damage_bonus: i32,
-    defense_mod: i32,
-    armor_dr: i32,
-    top: i32,
-}
-
-#[derive(Deserialize)]
-struct NpcPresetsFile {
-    presets: Vec<NpcPreset>,
-}
-
-#[derive(Clone)]
-struct PlayerConfig {
-    name: String,
-    color: Color32,
-    level: u8,
-    progression: Progression,
-    base_hp: u32,
-    move_speed: f32,
-    strength_base: u8,
-    strength_pct: u8,
-    dex_base: u8,
-    dex_pct: u8,
-    intelligence: u8,
-    wisdom: u8,
-    constitution: u8,
-    looks: u8,
-    charisma: u8,
-    weapon_index: usize,
-    armor_index: usize,
-    npc_preset: Option<usize>,
-    two_hand_grip: bool,
-}
-
-impl PlayerConfig {
-    fn new(name: &str, color: Color32, weapon_index: usize) -> Self {
-        Self {
-            name: name.to_string(),
-            color,
-            level: 1,
-            progression: Progression::default(),
-            base_hp: 10,
-            move_speed: 5.0,
-            strength_base: 10,
-            strength_pct: 1,
-            dex_base: 10,
-            dex_pct: 1,
-            intelligence: 10,
-            wisdom: 10,
-            constitution: 10,
-            looks: 10,
-            charisma: 10,
-            weapon_index,
-            armor_index: 0,
-            npc_preset: None,
-            two_hand_grip: false,
-        }
-    }
-}
+use sim::{SimConfig, SimState};
+use game_logic::{
+    ArmorEntry, NpcPreset, PlayerConfig, WeaponHandedness, WeaponPreset, WeaponSize,
+};
 
 struct SimGuiApp {
     running: bool,
@@ -119,18 +20,22 @@ struct SimGuiApp {
     armor_catalog: Vec<ArmorEntry>,
     npc_presets: Vec<NpcPreset>,
     show_player_editor: [bool; 2],
+    last_screen_size: egui::Vec2,
 }
 
 impl SimGuiApp {
     fn new() -> Self {
-        let (weapon_catalog, armor_catalog) = match load_catalogs() {
+        let (weapon_catalog, armor_catalog) = match game_logic::load_catalogs() {
             Ok((weapons, armors)) => (weapons, armors),
             Err(err) => {
                 eprintln!("Failed to load JSON catalogs: {err}");
-                (default_weapon_catalog(), default_armor_catalog())
+                (
+                    game_logic::default_weapon_catalog(),
+                    game_logic::default_armor_catalog(),
+                )
             }
         };
-        let npc_presets = match load_npc_presets("data/npc_presets.json") {
+        let npc_presets = match game_logic::load_npc_presets("data/npc_presets.json") {
             Ok(presets) => presets,
             Err(err) => {
                 eprintln!("Failed to load NPC presets: {err}");
@@ -149,13 +54,14 @@ impl SimGuiApp {
             armor_catalog,
             npc_presets,
             show_player_editor: [false, false],
+            last_screen_size: egui::vec2(0.0, 0.0),
         };
         app.reset_positions();
         app
     }
 
     fn reset_positions(&mut self) {
-        let combatants = build_combatants(
+        let combatants = game_logic::build_combatants(
             &self.players,
             &self.weapon_catalog,
             &self.armor_catalog,
@@ -179,6 +85,8 @@ impl SimGuiApp {
         if rect.width() <= padding * 2.0 || rect.height() <= 0.0 {
             return;
         }
+        let bg = ui.style().visuals.panel_fill;
+        ui.painter().rect_filled(rect, 0.0, bg);
         let hud_bottom = self.draw_hud(ui, rect, padding);
         self.draw_timeline(ui, rect, padding, hud_bottom + 25.0);
         let painter = ui.painter();
@@ -217,13 +125,6 @@ impl SimGuiApp {
         {
             let pos = Pos2::new(x, ground_y - 20.0);
             painter.circle_filled(pos, 12.0, player.color);
-            painter.text(
-                Pos2::new(x, ground_y - 38.0),
-                egui::Align2::CENTER_CENTER,
-                &player.name,
-                egui::TextStyle::Body.resolve(ui.style()),
-                Color32::from_gray(220),
-            );
         }
     }
 
@@ -309,8 +210,13 @@ impl SimGuiApp {
 impl eframe::App for SimGuiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let dt = ctx.input(|i| i.unstable_dt).min(0.05);
+        let screen_rect = ctx.input(|i| i.screen_rect);
+        if screen_rect.size() != self.last_screen_size {
+            self.last_screen_size = screen_rect.size();
+            ctx.request_repaint();
+        }
         self.sim.config.stop_distance =
-            stop_distance_for_players(&self.players, &self.weapon_catalog);
+            game_logic::stop_distance_for_players(&self.players, &self.weapon_catalog);
         self.update_sim(dt);
 
         egui::TopBottomPanel::top("controls").show(ctx, |ui| {
@@ -432,9 +338,9 @@ impl eframe::App for SimGuiApp {
             });
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            let (rect, _response) =
-                ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
-            self.draw_arena(ui, rect);
+            let rect = ui.max_rect();
+            let response = ui.allocate_rect(rect, egui::Sense::hover());
+            self.draw_arena(ui, response.rect);
         });
 
         for idx in 0..self.players.len() {
@@ -501,6 +407,7 @@ fn render_player_editor(
             };
         });
         if let Some(preset) = player.npc_preset.and_then(|idx| npc_presets.get(idx)) {
+            player.name = preset.name.clone();
             ui.label(format!(
                 "Preset: HP {} | ATT {} | DEF {} | DR {} | DMG +{} | TOP {}",
                 preset.hp,
@@ -600,6 +507,7 @@ fn render_player_editor(
         });
     });
 
+    let mut uses_projectiles = false;
     ui.horizontal(|ui| {
         ui.label("Weapon");
         egui::ComboBox::from_id_source(format!("{id_prefix}_weapon"))
@@ -609,6 +517,23 @@ fn render_player_editor(
                     ui.selectable_value(&mut player.weapon_index, idx, weapon.name.as_str());
                 }
             });
+        let weapon = &weapon_catalog[player.weapon_index];
+        game_logic::sanitize_projectile_tier(player, weapon);
+        uses_projectiles = game_logic::weapon_uses_projectiles(weapon);
+        material_tier_combo(
+            ui,
+            format!("{id_prefix}_weapon_material"),
+            "Weapon material",
+            &mut player.weapon_material_tier,
+        );
+        if uses_projectiles {
+            material_tier_combo(
+                ui,
+                format!("{id_prefix}_ammo_material"),
+                "Ammo material",
+                &mut player.projectile_material_tier,
+            );
+        }
     });
 
     let weapon = &weapon_catalog[player.weapon_index];
@@ -620,10 +545,34 @@ fn render_player_editor(
     } else if !can_two_hand {
         player.two_hand_grip = false;
     }
+    let jab_label = weapon
+        .jab_speed_label
+        .as_ref()
+        .map(|jab| format!(" (jab {jab})"))
+        .unwrap_or_default();
     ui.label(format!(
-        "Speed {} | Damage {} | Reach/Range {}",
-        weapon.speed_label, weapon.damage_expr, weapon.reach_label
+        "Speed {}{} | Damage {} | Reach/Range {}",
+        weapon.speed_label, jab_label, weapon.damage_expr, weapon.reach_label
     ));
+    let has_jab = weapon.jab_speed.is_some();
+    if !has_jab {
+        player.use_jab = false;
+    }
+    ui.horizontal(|ui| {
+        ui.add_enabled_ui(has_jab, |ui| {
+            ui.checkbox(&mut player.use_jab, "Jab attack");
+        });
+        if !has_jab {
+            ui.label("Unavailable");
+        }
+    });
+    if player.use_jab {
+        if let Some(jab_special) = weapon.jab_special_expr.as_ref() {
+            ui.label(format!("Jab special damage: {jab_special} (non-penetrating)"));
+        } else {
+            ui.label("Jab damage: half, non-penetrating");
+        }
+    }
     if player.two_hand_grip && can_two_hand {
         ui.label("Two-hand grip: +3 damage, +2 speed");
     }
@@ -649,6 +598,12 @@ fn render_player_editor(
                         ui.selectable_value(&mut player.armor_index, idx, armor.label.clone());
                     }
                 });
+            material_tier_combo(
+                ui,
+                format!("{id_prefix}_armor_material"),
+                "Material",
+                &mut player.armor_material_tier,
+            );
         });
 
         ui.separator();
@@ -674,8 +629,8 @@ fn render_player_editor(
         ability_slider(ui, "CHA", &mut player.charisma);
     });
 
-    let character = build_character(player, weapon_catalog, armor_catalog);
-    let derived = character.derived();
+    let game_logic::PlayerSummary { derived, roll } =
+        game_logic::player_summary(player, weapon_catalog, armor_catalog);
     ui.separator();
     if npc_active {
         ui.label("Derived stats ignored while NPC preset is active.");
@@ -695,6 +650,26 @@ fn render_player_editor(
             derived.carry_capacity
         ));
         ui.label(format!("Load: {}", derived.load_category));
+
+        let attack_bonus = roll.attack_bonus;
+        let strength_damage = roll.strength_damage;
+
+        ui.separator();
+        ui.label("Rolls");
+        ui.label(format!("Attack roll: d20p + {}", attack_bonus));
+        if roll.is_ranged_weapon {
+            ui.label("Defense roll (ranged): d12p if stationary, else d20p");
+        } else {
+            let defense_bonus = if weapon.defense_bonus_always { " (+4 weapon)" } else { "" };
+            ui.label(format!(
+                "Defense roll (melee): d20p + {}{}",
+                derived.base_dv, defense_bonus
+            ));
+        }
+        ui.label(format!(
+            "Damage roll: {} + {} vs DR {} (AP {})",
+            weapon.damage_expr, strength_damage, derived.armor_dr, weapon.armor_pen
+        ));
     }
 }
 
@@ -752,908 +727,21 @@ fn tier_combo(
         });
 }
 
+fn material_tier_combo(ui: &mut egui::Ui, id_source: String, label: &str, selection: &mut i32) {
+    ui.label(label);
+    egui::ComboBox::from_id_source(id_source)
+        .selected_text(format!("+{selection}"))
+        .show_ui(ui, |ui| {
+            for tier in 0..=5 {
+                ui.selectable_value(selection, tier, format!("+{tier}"));
+            }
+        });
+}
+
 fn armor_display_name(entry: Option<&ArmorEntry>) -> String {
     entry
         .map(|armor| armor.label.clone())
         .unwrap_or_else(|| "None".to_string())
-}
-
-fn base_weapon_threshold(group: WeaponGroup) -> f32 {
-    match group {
-        WeaponGroup::Bows | WeaponGroup::Crossbows => 150.0,
-        WeaponGroup::Shields => 200.0,
-        _ => 100.0,
-    }
-}
-
-fn weapon_preset(
-    name: &'static str,
-    group: WeaponGroup,
-    speed: f32,
-    damage_expr: &'static str,
-    reach_label: &'static str,
-    reach_ft: f32,
-) -> WeaponPreset {
-    WeaponPreset {
-        name: name.to_string(),
-        group,
-        speed,
-        speed_label: format!("{speed:.0}"),
-        damage_expr: damage_expr.to_string(),
-        reach_label: reach_label.to_string(),
-        reach_ft,
-        armor_pen: 0,
-        defense_bonus_always: false,
-        size: WeaponSize::Medium,
-        handedness: WeaponHandedness::OneHanded,
-    }
-}
-
-fn build_character(
-    player: &PlayerConfig,
-    weapon_catalog: &[WeaponPreset],
-    armor_catalog: &[ArmorEntry],
-) -> Character {
-    let weapon_preset = &weapon_catalog[player.weapon_index];
-    let weapon = Weapon {
-        name: weapon_preset.name.clone(),
-        group: weapon_preset.group,
-        speed: weapon_preset.speed,
-        damage_expr: weapon_preset.damage_expr.clone(),
-        reach_ft: weapon_preset.reach_ft,
-        armor_pen: weapon_preset.armor_pen,
-        defense_bonus_always: weapon_preset.defense_bonus_always,
-    };
-    let armor = armor_catalog
-        .get(player.armor_index)
-        .and_then(|entry| entry.armor.clone());
-
-    let abilities = AbilitySet {
-        strength: AbilityScore::new(player.strength_base, player.strength_pct),
-        intelligence: player.intelligence,
-        wisdom: player.wisdom,
-        dexterity: AbilityScore::new(player.dex_base, player.dex_pct),
-        constitution: player.constitution,
-        looks: player.looks,
-        charisma: player.charisma,
-    };
-
-    let mastery = WeaponMastery {
-        group: weapon_preset.group,
-        points: Default::default(),
-        base_threshold: base_weapon_threshold(weapon_preset.group),
-    };
-
-    let equipment = Equipment {
-        weapon: Some(weapon),
-        shield: None,
-        armor,
-        weapon_material: None,
-        armor_material: None,
-        shield_material: None,
-    };
-
-    Character::builder(&player.name)
-        .level(player.level, player.progression)
-        .base_hp(player.base_hp)
-        .abilities(abilities)
-        .weapon_mastery(mastery)
-        .equipment(equipment)
-        .build()
-}
-
-fn build_combatants(
-    players: &[PlayerConfig; 2],
-    weapon_catalog: &[WeaponPreset],
-    armor_catalog: &[ArmorEntry],
-    npc_presets: &[NpcPreset],
-) -> [Combatant; 2] {
-    [
-        build_combatant(&players[0], weapon_catalog, armor_catalog, npc_presets),
-        build_combatant(&players[1], weapon_catalog, armor_catalog, npc_presets),
-    ]
-}
-
-fn build_combatant(
-    player: &PlayerConfig,
-    weapon_catalog: &[WeaponPreset],
-    armor_catalog: &[ArmorEntry],
-    npc_presets: &[NpcPreset],
-) -> Combatant {
-    let weapon_preset = &weapon_catalog[player.weapon_index];
-    let character = build_character(player, weapon_catalog, armor_catalog);
-    let derived = character.derived();
-    let weapon_name = character
-        .equipment
-        .weapon
-        .as_ref()
-        .map(|weapon| weapon.name.clone())
-        .unwrap_or_else(|| "Unarmed".to_string());
-    let weapon_speed = character
-        .equipment
-        .weapon
-        .as_ref()
-        .map(|weapon| weapon.speed)
-        .unwrap_or(10.0);
-    let weapon_reach = character
-        .equipment
-        .weapon
-        .as_ref()
-        .map(|weapon| weapon.reach_ft)
-        .unwrap_or(1.0);
-    let armor_penetration = character
-        .equipment
-        .weapon
-        .as_ref()
-        .map(|weapon| weapon.armor_pen)
-        .unwrap_or(0);
-    let weapon_defense_always = character
-        .equipment
-        .weapon
-        .as_ref()
-        .map(|weapon| weapon.defense_bonus_always)
-        .unwrap_or(false);
-    let has_weapon = character.equipment.weapon.is_some();
-    let weapon_damage = character
-        .equipment
-        .weapon
-        .as_ref()
-        .map(|weapon| weapon.damage_expr.clone())
-        .unwrap_or_else(|| "d4p".to_string());
-
-    let is_two_handed = weapon_preset.handedness == WeaponHandedness::TwoHanded;
-    let can_two_hand = weapon_preset.handedness == WeaponHandedness::OneHanded
-        && (weapon_preset.size == WeaponSize::Medium || weapon_preset.size == WeaponSize::Large);
-    let effective_two_hand = is_two_handed || (player.two_hand_grip && can_two_hand);
-    let two_hand_damage_bonus = if effective_two_hand && can_two_hand { 3 } else { 0 };
-    let two_hand_speed_bonus = if effective_two_hand && can_two_hand { 2.0 } else { 0.0 };
-
-    let mut name = character.name;
-    let mut attack_bonus = derived.attack_bonus;
-    let mut defense_mod = derived.base_dv;
-    let mut armor_dr = derived.armor_dr;
-    let mut strength_damage = character.ability_mods.strength.damage + two_hand_damage_bonus;
-    let mut max_hp = derived.hit_points as i32;
-    if let Some(preset) = player.npc_preset.and_then(|idx| npc_presets.get(idx)) {
-        name = preset.name.clone();
-        attack_bonus = preset.attack_bonus;
-        defense_mod = preset.defense_mod;
-        armor_dr = preset.armor_dr;
-        strength_damage = preset.damage_bonus;
-        max_hp = preset.hp.max(1);
-    }
-
-    Combatant::new(
-        name,
-        weapon_name,
-        attack_bonus,
-        defense_mod,
-        armor_dr,
-        armor_penetration,
-        weapon_damage,
-        strength_damage,
-        weapon_speed + two_hand_speed_bonus,
-        weapon_reach,
-        player.move_speed,
-        effective_two_hand,
-        has_weapon,
-        weapon_defense_always,
-        max_hp,
-    )
-}
-
-fn stop_distance_for_players(players: &[PlayerConfig; 2], weapon_catalog: &[WeaponPreset]) -> f32 {
-    let reach_a = weapon_catalog
-        .get(players[0].weapon_index)
-        .map(|weapon| weapon.reach_ft)
-        .unwrap_or(1.0);
-    let reach_b = weapon_catalog
-        .get(players[1].weapon_index)
-        .map(|weapon| weapon.reach_ft)
-        .unwrap_or(1.0);
-    let reach_a = if reach_a <= 0.0 { 1.0 } else { reach_a };
-    let reach_b = if reach_b <= 0.0 { 1.0 } else { reach_b };
-    reach_a.max(reach_b)
-}
-
-fn default_weapon_catalog() -> Vec<WeaponPreset> {
-    vec![
-        // Unarmed
-        weapon_preset("Fist", WeaponGroup::Unarmed, 10.0, "(d4p-2)+(d4p-2)", "1 foot", 1.0),
-        weapon_preset("Antler", WeaponGroup::Unarmed, 10.0, "2d6p", "3 feet", 3.0),
-        weapon_preset("Claw", WeaponGroup::Unarmed, 5.0, "1d8p", "1 foot", 1.0),
-        weapon_preset("Fang", WeaponGroup::Unarmed, 10.0, "1d10p", "0.5 feet", 0.5),
-        weapon_preset("Cestus", WeaponGroup::Unarmed, 10.0, "2d4p", "1 foot", 1.0),
-        weapon_preset(
-            "Gauntlet",
-            WeaponGroup::Unarmed,
-            10.0,
-            "(d4p-1)+(d4p-1)",
-            "1 foot",
-            1.0,
-        ),
-        weapon_preset(
-            "Spiked gauntlet",
-            WeaponGroup::Unarmed,
-            10.0,
-            "1d8p",
-            "1 foot",
-            1.0,
-        ),
-        // Axes
-        weapon_preset("Battle axe", WeaponGroup::Axes, 12.0, "4d3p^2", "3 feet", 3.0),
-        weapon_preset(
-            "Executioner's axe",
-            WeaponGroup::Axes,
-            18.0,
-            "3d8p+3^2",
-            "4 feet",
-            4.0,
-        ),
-        weapon_preset("Greataxe", WeaponGroup::Axes, 14.0, "3d6p+3^2", "3.5 feet", 3.5),
-        weapon_preset("Hand axe", WeaponGroup::Axes, 8.0, "d4p+d6p", "1.5 feet", 1.5),
-        weapon_preset("Khopesh", WeaponGroup::Axes, 8.0, "2d6p", "2 feet", 2.0),
-        weapon_preset("Military pick", WeaponGroup::Axes, 12.0, "3d4p^2", "3 feet", 3.0),
-        weapon_preset(
-            "Horseman's pick",
-            WeaponGroup::Axes,
-            8.0,
-            "d4p+d6p^1",
-            "1.5 feet",
-            1.5,
-        ),
-        weapon_preset("Scythe", WeaponGroup::Axes, 15.0, "2d6p+3", "4.5 feet", 4.5),
-        weapon_preset("Sickle", WeaponGroup::Axes, 8.0, "d6p+d3p", "1.5 feet", 1.5),
-        weapon_preset(
-            "Throwing axe",
-            WeaponGroup::Axes,
-            7.0,
-            "d4p+d6p",
-            "1/60 feet",
-            0.0,
-        ),
-        // Basic
-        weapon_preset("Club", WeaponGroup::Basic, 10.0, "d6p+d4p", "2.5 feet", 2.5),
-        weapon_preset("Dart", WeaponGroup::Basic, 5.0, "d4p", "0.5/40 feet", 0.0),
-        weapon_preset("Sling", WeaponGroup::Basic, 10.0, "d4p+d6p", "160 feet", 0.0),
-        weapon_preset("Staff", WeaponGroup::Basic, 13.0, "2d4p+3", "8 feet", 8.0),
-        // Blunt
-        weapon_preset("Greatclub", WeaponGroup::Blunt, 16.0, "d20p+3^1", "5 feet", 5.0),
-        weapon_preset(
-            "Greathammer",
-            WeaponGroup::Blunt,
-            20.0,
-            "d8p+2d10p+3^2",
-            "4.5 feet",
-            4.5,
-        ),
-        weapon_preset("Hammer", WeaponGroup::Blunt, 8.0, "2d6p^1", "1.5 feet", 1.5),
-        weapon_preset("Warhammer", WeaponGroup::Blunt, 12.0, "d8p+d10p^1", "2.5 feet", 2.5),
-        weapon_preset("Mace", WeaponGroup::Blunt, 11.0, "d6p+d8p^2", "2 feet", 2.0),
-        weapon_preset(
-            "Horseman's mace",
-            WeaponGroup::Blunt,
-            10.0,
-            "2d6p^1",
-            "1.5 feet",
-            1.5,
-        ),
-        weapon_preset("Maul", WeaponGroup::Blunt, 15.0, "2d12p+3^2", "3 feet", 3.0),
-        weapon_preset("Morningstar", WeaponGroup::Blunt, 11.0, "2d8p", "3 feet", 3.0),
-        // Bows
-        weapon_preset("Longbow", WeaponGroup::Bows, 12.0, "2d8p", "210 feet", 0.0),
-        weapon_preset("Recurve bow", WeaponGroup::Bows, 11.0, "3d4p", "150 feet", 0.0),
-        weapon_preset("Shortbow", WeaponGroup::Bows, 12.0, "2d6p", "150 feet", 0.0),
-        weapon_preset("Warbow", WeaponGroup::Bows, 20.0, "3d6p^1", "300 feet", 0.0),
-        // Crossbows
-        weapon_preset("Arbalest", WeaponGroup::Crossbows, 90.0, "3d8p^1", "400 feet", 0.0),
-        weapon_preset(
-            "Light crossbow",
-            WeaponGroup::Crossbows,
-            20.0,
-            "2d6p",
-            "180 feet",
-            0.0,
-        ),
-        weapon_preset(
-            "Hand crossbow",
-            WeaponGroup::Crossbows,
-            15.0,
-            "2d4p",
-            "120 feet",
-            0.0,
-        ),
-        weapon_preset(
-            "Heavy crossbow",
-            WeaponGroup::Crossbows,
-            60.0,
-            "2d10p",
-            "250 feet",
-            0.0,
-        ),
-        // Double weapons
-        weapon_preset(
-            "Double axe",
-            WeaponGroup::Double,
-            13.0,
-            "4d3p^2 and 4d3p^2",
-            "3.5 feet",
-            3.5,
-        ),
-        weapon_preset(
-            "Double scimitar",
-            WeaponGroup::Double,
-            10.0,
-            "2d8p and 2d8p",
-            "3.5 feet",
-            3.5,
-        ),
-        weapon_preset(
-            "Dual scythe",
-            WeaponGroup::Double,
-            16.0,
-            "2d6p and 2d6p",
-            "4 feet",
-            4.0,
-        ),
-        weapon_preset(
-            "Hooked hammer",
-            WeaponGroup::Double,
-            14.0,
-            "d8p+d10p^1 and 3d4p^2",
-            "3 feet",
-            3.0,
-        ),
-        weapon_preset(
-            "Monk's Spade",
-            WeaponGroup::Double,
-            9.0,
-            "2d4p and 2d4p",
-            "3 feet",
-            3.0,
-        ),
-        weapon_preset(
-            "Spear-axe",
-            WeaponGroup::Double,
-            13.0,
-            "2d6p and 4d3p^2",
-            "6.5 feet",
-            6.5,
-        ),
-        weapon_preset(
-            "Two-bladed sword",
-            WeaponGroup::Double,
-            11.0,
-            "2d8p and 2d8p",
-            "4 feet",
-            4.0,
-        ),
-        // Ensnaring
-        weapon_preset("Bola", WeaponGroup::Ensnaring, 10.0, "d4p", "50 feet", 0.0),
-        weapon_preset("Lasso", WeaponGroup::Ensnaring, 15.0, "-", "50 feet", 0.0),
-        weapon_preset("Net", WeaponGroup::Ensnaring, 20.0, "-", "15 feet", 0.0),
-        // Lashes
-        weapon_preset("Flail", WeaponGroup::Lashes, 13.0, "2d8p^1", "4 feet", 4.0),
-        weapon_preset(
-            "Horseman's flail",
-            WeaponGroup::Lashes,
-            11.0,
-            "d4p+d6p",
-            "2 feet",
-            2.0,
-        ),
-        weapon_preset("Scourge", WeaponGroup::Lashes, 9.0, "2d4p", "1.5 feet", 1.5),
-        weapon_preset(
-            "Spiked chain",
-            WeaponGroup::Lashes,
-            14.0,
-            "2d6p+3",
-            "6 feet",
-            6.0,
-        ),
-        weapon_preset("Whip", WeaponGroup::Lashes, 8.0, "1d6p", "1.5 feet", 1.5),
-        // Large swords
-        weapon_preset(
-            "Broadsword",
-            WeaponGroup::LargeSwords,
-            11.0,
-            "2d6p+d3p",
-            "3.25 feet",
-            3.25,
-        ),
-        weapon_preset(
-            "Bastard sword",
-            WeaponGroup::LargeSwords,
-            12.0,
-            "d8p+d10p",
-            "4.5 feet",
-            4.5,
-        ),
-        weapon_preset(
-            "Claymore",
-            WeaponGroup::LargeSwords,
-            13.0,
-            "2d10p+3^1",
-            "5 feet",
-            5.0,
-        ),
-        weapon_preset(
-            "Flamberge",
-            WeaponGroup::LargeSwords,
-            16.0,
-            "6d3p+3^2",
-            "6 feet",
-            6.0,
-        ),
-        weapon_preset(
-            "Greatsword",
-            WeaponGroup::LargeSwords,
-            14.0,
-            "d10p+d12p+3^2",
-            "5.5 feet",
-            5.5,
-        ),
-        weapon_preset(
-            "Longsword",
-            WeaponGroup::LargeSwords,
-            10.0,
-            "2d8p",
-            "3.5 feet",
-            3.5,
-        ),
-        weapon_preset(
-            "Greatknife",
-            WeaponGroup::LargeSwords,
-            12.0,
-            "3d6p+3^1",
-            "4 feet",
-            4.0,
-        ),
-        weapon_preset("Sabre", WeaponGroup::LargeSwords, 8.0, "d6p+d8p", "3 feet", 3.0),
-        weapon_preset("Scimitar", WeaponGroup::LargeSwords, 9.0, "2d8p", "3 feet", 3.0),
-        weapon_preset("Spatha", WeaponGroup::LargeSwords, 9.0, "d6p+d8p", "3 feet", 3.0),
-        weapon_preset(
-            "Thrusting sword",
-            WeaponGroup::LargeSwords,
-            9.0,
-            "3d4p+3",
-            "4.5 feet",
-            4.5,
-        ),
-        weapon_preset(
-            "Two-handed sword",
-            WeaponGroup::LargeSwords,
-            16.0,
-            "2d12p+3^2",
-            "6 feet",
-            6.0,
-        ),
-        // Small swords
-        weapon_preset("Dagger", WeaponGroup::SmallSwords, 7.0, "2d4p", "1 foot", 1.0),
-        weapon_preset(
-            "Dueling sword",
-            WeaponGroup::SmallSwords,
-            7.0,
-            "3d4p",
-            "3.5 feet",
-            3.5,
-        ),
-        weapon_preset(
-            "Falx",
-            WeaponGroup::SmallSwords,
-            9.0,
-            "2d3p+d6p",
-            "2.5 feet",
-            2.5,
-        ),
-        weapon_preset("Knife", WeaponGroup::SmallSwords, 7.0, "d6p", "1 foot", 1.0),
-        weapon_preset(
-            "Gladius",
-            WeaponGroup::SmallSwords,
-            9.0,
-            "d4p+d8p",
-            "2 feet",
-            2.0,
-        ),
-        weapon_preset(
-            "Long knife",
-            WeaponGroup::SmallSwords,
-            6.0,
-            "1d10p",
-            "1.5 feet",
-            1.5,
-        ),
-        weapon_preset(
-            "Short sword",
-            WeaponGroup::SmallSwords,
-            8.0,
-            "2d6p",
-            "2 feet",
-            2.0,
-        ),
-        weapon_preset(
-            "Throwing knife",
-            WeaponGroup::SmallSwords,
-            6.0,
-            "d6p",
-            "1/50 feet",
-            0.0,
-        ),
-        // Polearms
-        weapon_preset("Bardiche", WeaponGroup::Polearms, 14.0, "4d4p+3", "5 feet", 5.0),
-        weapon_preset(
-            "Fauchard",
-            WeaponGroup::Polearms,
-            13.0,
-            "2d6p+3",
-            "8 feet",
-            8.0,
-        ),
-        weapon_preset("Glaive", WeaponGroup::Polearms, 14.0, "5d4p+3", "8 feet", 8.0),
-        weapon_preset(
-            "Guisarme",
-            WeaponGroup::Polearms,
-            13.0,
-            "2d6p+3",
-            "6 feet",
-            6.0,
-        ),
-        weapon_preset(
-            "Halberd",
-            WeaponGroup::Polearms,
-            14.0,
-            "2d10p+3^2",
-            "7 feet",
-            7.0,
-        ),
-        weapon_preset(
-            "Mancatcher",
-            WeaponGroup::Polearms,
-            14.0,
-            "d4p",
-            "8 feet",
-            8.0,
-        ),
-        weapon_preset(
-            "Poleaxe",
-            WeaponGroup::Polearms,
-            13.0,
-            "3d6p+3^2",
-            "6 feet",
-            6.0,
-        ),
-        weapon_preset(
-            "Polehammer",
-            WeaponGroup::Polearms,
-            15.0,
-            "d10p+d12p+3^2",
-            "7 feet",
-            7.0,
-        ),
-        weapon_preset(
-            "Raven's Beak",
-            WeaponGroup::Polearms,
-            14.0,
-            "2d6p+3^2",
-            "6 feet",
-            6.0,
-        ),
-        weapon_preset(
-            "Swordstaff",
-            WeaponGroup::Polearms,
-            11.0,
-            "2d8p+3",
-            "8 feet",
-            8.0,
-        ),
-        weapon_preset(
-            "Voulge",
-            WeaponGroup::Polearms,
-            15.0,
-            "4d4p+3",
-            "8 feet",
-            8.0,
-        ),
-        // Spears
-        weapon_preset("Hasta", WeaponGroup::Spears, 12.0, "2d6p", "7 feet", 7.0),
-        weapon_preset("Javelin", WeaponGroup::Spears, 7.0, "d12p", "5/100 feet", 0.0),
-        weapon_preset("Lance", WeaponGroup::Spears, 12.0, "2d8p^2", "10 feet", 10.0),
-        weapon_preset(
-            "Partisan",
-            WeaponGroup::Spears,
-            14.0,
-            "2d8p+3",
-            "7 feet",
-            7.0,
-        ),
-        weapon_preset("Pike", WeaponGroup::Spears, 18.0, "2d6p+3", "18 feet", 18.0),
-        weapon_preset("Pilum", WeaponGroup::Spears, 8.0, "2d6p", "5/80 feet", 0.0),
-        weapon_preset(
-            "Ranseur",
-            WeaponGroup::Spears,
-            13.0,
-            "2d6p+3^3",
-            "8 feet",
-            8.0,
-        ),
-        weapon_preset(
-            "Short Spear",
-            WeaponGroup::Spears,
-            12.0,
-            "d4p+d6p",
-            "5 feet",
-            5.0,
-        ),
-        weapon_preset("Spear", WeaponGroup::Spears, 12.0, "2d6p", "13 feet", 13.0),
-        weapon_preset(
-            "Spetum",
-            WeaponGroup::Spears,
-            13.0,
-            "2d8p+3",
-            "8 feet",
-            8.0,
-        ),
-        weapon_preset(
-            "Trident",
-            WeaponGroup::Spears,
-            12.0,
-            "d6p+d8p+3",
-            "6 feet",
-            6.0,
-        ),
-    ]
-}
-
-fn default_armor_catalog() -> Vec<ArmorEntry> {
-    vec![ArmorEntry {
-        label: "None".to_string(),
-        armor: None,
-    }]
-}
-
-fn load_catalogs() -> Result<(Vec<WeaponPreset>, Vec<ArmorEntry>), String> {
-    let weapons = load_weapon_catalog("data/weapons.json")?;
-    let armor = load_armor_catalog("data/armor.json")?;
-    let _materials = load_materials("data/materials.json")?;
-    Ok((weapons, armor))
-}
-
-fn load_npc_presets(path: &str) -> Result<Vec<NpcPreset>, String> {
-    let data = fs::read_to_string(path).map_err(|err| err.to_string())?;
-    let parsed: NpcPresetsFile = serde_json::from_str(&data).map_err(|err| err.to_string())?;
-    Ok(parsed.presets)
-}
-
-#[derive(Deserialize)]
-struct WeaponsFile {
-    weapons: Vec<WeaponJson>,
-    #[allow(dead_code)]
-    shields: Vec<ShieldJson>,
-}
-
-#[derive(Deserialize)]
-struct WeaponJson {
-    name: String,
-    group: String,
-    speed: String,
-    damage: Option<String>,
-    armor_penetration: Option<i32>,
-    defense_bonus_always: Option<bool>,
-    #[serde(rename = "reach_or_range")]
-    reach_or_range: Option<String>,
-    size: String,
-    handedness: String,
-}
-
-#[derive(Deserialize)]
-struct ShieldJson {
-    #[allow(dead_code)]
-    name: String,
-}
-
-#[derive(Deserialize)]
-struct ArmorFile {
-    armor: Vec<ArmorJson>,
-}
-
-#[derive(Deserialize)]
-struct ArmorJson {
-    name: String,
-    region: String,
-    damage_reduction: i32,
-    defense_adjustment: i32,
-    initiative_modifier: i32,
-    speed_modifier: i32,
-    #[serde(rename = "type")]
-    armor_type: String,
-    weight_lbs: Option<f32>,
-}
-
-#[derive(Deserialize)]
-#[allow(dead_code)]
-struct MaterialsFile {
-    metals: Vec<MaterialJson>,
-    fabrics: Vec<MaterialJson>,
-    woods: Vec<MaterialJson>,
-}
-
-#[derive(Deserialize)]
-struct MaterialJson {
-    #[allow(dead_code)]
-    tier: i32,
-    #[allow(dead_code)]
-    name: String,
-    #[allow(dead_code)]
-    weight_multiplier: f32,
-}
-
-fn load_weapon_catalog(path: &str) -> Result<Vec<WeaponPreset>, String> {
-    let data = fs::read_to_string(path).map_err(|err| err.to_string())?;
-    let parsed: WeaponsFile = serde_json::from_str(&data).map_err(|err| err.to_string())?;
-    let mut catalog = Vec::new();
-    for entry in parsed.weapons {
-        let group = match weapon_group_from_str(&entry.group) {
-            Some(group) => group,
-            None => continue,
-        };
-        let size = match weapon_size_from_str(&entry.size) {
-            Some(size) => size,
-            None => continue,
-        };
-        let handedness = match weapon_handedness_from_str(&entry.handedness) {
-            Some(handedness) => handedness,
-            None => continue,
-        };
-        let speed_value = parse_leading_number(&entry.speed);
-        let reach_label = entry
-            .reach_or_range
-            .clone()
-            .unwrap_or_else(|| "-".to_string());
-        let reach_ft = parse_reach_ft(&reach_label);
-        let damage_expr = entry.damage.unwrap_or_else(|| "-".to_string());
-        catalog.push(WeaponPreset {
-            name: entry.name,
-            group,
-            speed: speed_value,
-            speed_label: entry.speed,
-            damage_expr,
-            reach_label,
-            reach_ft,
-            armor_pen: entry.armor_penetration.unwrap_or(0),
-            defense_bonus_always: entry.defense_bonus_always.unwrap_or(false),
-            size,
-            handedness,
-        });
-    }
-    if catalog.is_empty() {
-        Err("No weapons loaded from JSON".to_string())
-    } else {
-        Ok(catalog)
-    }
-}
-
-fn load_armor_catalog(path: &str) -> Result<Vec<ArmorEntry>, String> {
-    let data = fs::read_to_string(path).map_err(|err| err.to_string())?;
-    let parsed: ArmorFile = serde_json::from_str(&data).map_err(|err| err.to_string())?;
-    let mut catalog = Vec::new();
-    catalog.push(ArmorEntry {
-        label: "None".to_string(),
-        armor: None,
-    });
-    for entry in parsed.armor {
-        if entry.name == "None" {
-            continue;
-        }
-        let region = match armor_region_from_str(&entry.region) {
-            Some(region) => region,
-            None => continue,
-        };
-        let armor_type = match armor_type_from_str(&entry.armor_type) {
-            Some(kind) => kind,
-            None => continue,
-        };
-        let label = format!("{} ({})", entry.name, entry.region);
-        let armor = Armor {
-            name: leak_str(entry.name),
-            region,
-            damage_reduction: entry.damage_reduction,
-            defense_adj: entry.defense_adjustment,
-            initiative_mod: entry.initiative_modifier,
-            speed_mod: entry.speed_modifier,
-            armor_type,
-            weight_lbs: entry.weight_lbs.unwrap_or(0.0),
-        };
-        catalog.push(ArmorEntry {
-            label,
-            armor: Some(armor),
-        });
-    }
-    Ok(catalog)
-}
-
-fn load_materials(path: &str) -> Result<MaterialsFile, String> {
-    let data = fs::read_to_string(path).map_err(|err| err.to_string())?;
-    serde_json::from_str(&data).map_err(|err| err.to_string())
-}
-
-fn weapon_group_from_str(group: &str) -> Option<WeaponGroup> {
-    match group {
-        "Unarmed" => Some(WeaponGroup::Unarmed),
-        "Axes" => Some(WeaponGroup::Axes),
-        "Basic" => Some(WeaponGroup::Basic),
-        "Blunt" => Some(WeaponGroup::Blunt),
-        "Bows" => Some(WeaponGroup::Bows),
-        "Crossbows" => Some(WeaponGroup::Crossbows),
-        "Double" => Some(WeaponGroup::Double),
-        "Ensnaring" => Some(WeaponGroup::Ensnaring),
-        "Lashes" => Some(WeaponGroup::Lashes),
-        "Large Swords" => Some(WeaponGroup::LargeSwords),
-        "Small Swords" => Some(WeaponGroup::SmallSwords),
-        "Polearms" => Some(WeaponGroup::Polearms),
-        "Spears" => Some(WeaponGroup::Spears),
-        "Shields" => Some(WeaponGroup::Shields),
-        _ => None,
-    }
-}
-
-fn armor_region_from_str(region: &str) -> Option<character::ArmorRegion> {
-    match region {
-        "Northern" => Some(character::ArmorRegion::Northern),
-        "Southern" => Some(character::ArmorRegion::Southern),
-        _ => None,
-    }
-}
-
-fn armor_type_from_str(kind: &str) -> Option<character::ArmorType> {
-    match kind {
-        "None" => Some(character::ArmorType::None),
-        "Light" => Some(character::ArmorType::Light),
-        "Medium" => Some(character::ArmorType::Medium),
-        "Heavy" => Some(character::ArmorType::Heavy),
-        _ => None,
-    }
-}
-
-fn weapon_size_from_str(size: &str) -> Option<WeaponSize> {
-    match size {
-        "S" => Some(WeaponSize::Small),
-        "M" => Some(WeaponSize::Medium),
-        "L" => Some(WeaponSize::Large),
-        _ => None,
-    }
-}
-
-fn weapon_handedness_from_str(handedness: &str) -> Option<WeaponHandedness> {
-    match handedness {
-        "1h" => Some(WeaponHandedness::OneHanded),
-        "2h" => Some(WeaponHandedness::TwoHanded),
-        _ => None,
-    }
-}
-
-fn parse_leading_number(value: &str) -> f32 {
-    let mut started = false;
-    let mut buf = String::new();
-    for ch in value.chars() {
-        if ch.is_ascii_digit() || (ch == '.' && started) {
-            started = true;
-            buf.push(ch);
-        } else if started {
-            break;
-        }
-    }
-    buf.parse::<f32>().unwrap_or(0.0)
-}
-
-fn parse_reach_ft(value: &str) -> f32 {
-    if value.contains('/') {
-        return 0.0;
-    }
-    parse_leading_number(value)
-}
-
-fn leak_str(value: String) -> &'static str {
-    Box::leak(value.into_boxed_str())
 }
 
 fn main() -> eframe::Result<()> {

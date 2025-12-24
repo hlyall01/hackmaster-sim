@@ -27,6 +27,7 @@ pub struct Combatant {
     pub attack_bonus: i32,
     pub defense_mod: i32,
     pub armor_dr: i32,
+    pub armor_is_heavy: bool,
     pub armor_penetration: i32,
     pub damage_expr: String,
     pub strength_damage: i32,
@@ -34,12 +35,15 @@ pub struct Combatant {
     pub reach_ft: f32,
     pub move_speed: f32,
     pub two_hand_grip: bool,
+    pub use_jab: bool,
+    pub jab_special_expr: Option<String>,
     pub has_weapon: bool,
     pub weapon_defense_always: bool,
     pub max_hp: i32,
     pub hp: i32,
     pub next_attack_time: Option<f32>,
     pub defense_plus_four_ready: bool,
+    pub moved_last_tick: bool,
 }
 
 impl Combatant {
@@ -49,6 +53,7 @@ impl Combatant {
         attack_bonus: i32,
         defense_mod: i32,
         armor_dr: i32,
+        armor_is_heavy: bool,
         armor_penetration: i32,
         damage_expr: String,
         strength_damage: i32,
@@ -56,6 +61,8 @@ impl Combatant {
         reach_ft: f32,
         move_speed: f32,
         two_hand_grip: bool,
+        use_jab: bool,
+        jab_special_expr: Option<String>,
         has_weapon: bool,
         weapon_defense_always: bool,
         max_hp: i32,
@@ -66,6 +73,7 @@ impl Combatant {
             attack_bonus,
             defense_mod,
             armor_dr,
+            armor_is_heavy,
             armor_penetration,
             damage_expr,
             strength_damage,
@@ -73,12 +81,15 @@ impl Combatant {
             reach_ft,
             move_speed,
             two_hand_grip,
+            use_jab,
+            jab_special_expr,
             has_weapon,
             weapon_defense_always,
             max_hp,
             hp: max_hp,
             next_attack_time: None,
             defense_plus_four_ready: false,
+            moved_last_tick: false,
         }
     }
 
@@ -86,6 +97,7 @@ impl Combatant {
         self.hp = self.max_hp;
         self.next_attack_time = None;
         self.defense_plus_four_ready = false;
+        self.moved_last_tick = false;
     }
 }
 
@@ -97,6 +109,7 @@ impl Default for Combatant {
             attack_bonus: 0,
             defense_mod: 0,
             armor_dr: 0,
+            armor_is_heavy: false,
             armor_penetration: 0,
             damage_expr: "d4p".to_string(),
             strength_damage: 0,
@@ -104,13 +117,153 @@ impl Default for Combatant {
             reach_ft: 1.0,
             move_speed: 5.0,
             two_hand_grip: false,
+            use_jab: false,
+            jab_special_expr: None,
             has_weapon: false,
             weapon_defense_always: false,
             max_hp: 10,
             hp: 10,
             next_attack_time: None,
             defense_plus_four_ready: false,
+            moved_last_tick: false,
         }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct RangeBands {
+    band_0: f32,
+    band_4: f32,
+    band_6: f32,
+    band_8: f32,
+}
+
+fn ranged_bands_for_weapon(name: &str) -> Option<RangeBands> {
+    match name {
+        "Shortbow" | "Recurve bow" => Some(RangeBands {
+            band_0: 50.0,
+            band_4: 80.0,
+            band_6: 120.0,
+            band_8: 150.0,
+        }),
+        "Longbow" => Some(RangeBands {
+            band_0: 60.0,
+            band_4: 120.0,
+            band_6: 160.0,
+            band_8: 210.0,
+        }),
+        "Warbow" => Some(RangeBands {
+            band_0: 80.0,
+            band_4: 160.0,
+            band_6: 230.0,
+            band_8: 300.0,
+        }),
+        "Light crossbow" => Some(RangeBands {
+            band_0: 60.0,
+            band_4: 100.0,
+            band_6: 140.0,
+            band_8: 180.0,
+        }),
+        "Heavy crossbow" => Some(RangeBands {
+            band_0: 80.0,
+            band_4: 140.0,
+            band_6: 190.0,
+            band_8: 250.0,
+        }),
+        "Hand crossbow" => Some(RangeBands {
+            band_0: 40.0,
+            band_4: 70.0,
+            band_6: 100.0,
+            band_8: 120.0,
+        }),
+        "Arbalest" => Some(RangeBands {
+            band_0: 120.0,
+            band_4: 220.0,
+            band_6: 320.0,
+            band_8: 400.0,
+        }),
+        "Sling" => Some(RangeBands {
+            band_0: 40.0,
+            band_4: 80.0,
+            band_6: 120.0,
+            band_8: 160.0,
+        }),
+        "Throwing axe" => Some(RangeBands {
+            band_0: 20.0,
+            band_4: 30.0,
+            band_6: 40.0,
+            band_8: 60.0,
+        }),
+        "Throwing knife" => Some(RangeBands {
+            band_0: 20.0,
+            band_4: 30.0,
+            band_6: 40.0,
+            band_8: 50.0,
+        }),
+        "Dart" => Some(RangeBands {
+            band_0: 10.0,
+            band_4: 20.0,
+            band_6: 30.0,
+            band_8: 40.0,
+        }),
+        "Javelin" => Some(RangeBands {
+            band_0: 30.0,
+            band_4: 50.0,
+            band_6: 70.0,
+            band_8: 100.0,
+        }),
+        "Pilum" => Some(RangeBands {
+            band_0: 30.0,
+            band_4: 40.0,
+            band_6: 60.0,
+            band_8: 80.0,
+        }),
+        "Bola" | "Lasso" => Some(RangeBands {
+            band_0: 10.0,
+            band_4: 20.0,
+            band_6: 30.0,
+            band_8: 50.0,
+        }),
+        "Net" => Some(RangeBands {
+            band_0: 10.0,
+            band_4: 15.0,
+            band_6: 0.0,
+            band_8: 0.0,
+        }),
+        _ => None,
+    }
+}
+
+fn range_modifier_for_weapon(name: &str, distance: f32) -> Option<i32> {
+    let bands = ranged_bands_for_weapon(name)?;
+    if distance <= bands.band_0 {
+        Some(0)
+    } else if distance <= bands.band_4 {
+        Some(-4)
+    } else if distance <= bands.band_6 && bands.band_6 > 0.0 {
+        Some(-6)
+    } else if distance <= bands.band_8 && bands.band_8 > 0.0 {
+        Some(-8)
+    } else {
+        None
+    }
+}
+
+pub fn max_range_for_weapon(name: &str) -> Option<f32> {
+    ranged_bands_for_weapon(name).map(|bands| {
+        bands
+            .band_8
+            .max(bands.band_6)
+            .max(bands.band_4)
+            .max(bands.band_0)
+    })
+}
+
+fn defense_die_sides(is_ranged: bool, defender_moved_last_tick: bool) -> i32 {
+    if is_ranged && !defender_moved_last_tick {
+        12
+    } else {
+        20
     }
 }
 
@@ -185,14 +338,18 @@ impl SimState {
             return;
         }
         let distance = self.distance();
+        let old_positions = [self.actors[0].position, self.actors[1].position];
         let step_a = self.combatants[0].move_speed.max(0.0);
         let step_b = self.combatants[1].move_speed.max(0.0);
         let reach_a = self.combatants[0].reach_ft.max(1.0);
         let reach_b = self.combatants[1].reach_ft.max(1.0);
         let max_reach = self.config.stop_distance.max(1.0);
         let min_reach = reach_a.min(reach_b);
+        let ranged_a = max_range_for_weapon(&self.combatants[0].weapon_name).is_some();
+        let ranged_b = max_range_for_weapon(&self.combatants[1].weapon_name).is_some();
+        let any_ranged = ranged_a || ranged_b;
 
-        if distance > max_reach {
+        if distance > max_reach && !any_ranged {
             self.actors[0].position += step_a;
             self.actors[1].position -= step_b;
             for combatant in &mut self.combatants {
@@ -201,13 +358,48 @@ impl SimState {
         } else {
             self.resolve_combat_round();
             let distance = self.distance();
-            if distance > min_reach {
+            if any_ranged {
+                let backstep = 5.0;
+                let engaged = distance <= min_reach;
+                if !engaged {
+                    if ranged_a {
+                        if let Some(max_range) =
+                            max_range_for_weapon(&self.combatants[0].weapon_name)
+                        {
+                            if distance <= max_range {
+                                self.actors[0].position -= backstep;
+                            } else {
+                                self.actors[0].position += step_a;
+                            }
+                        }
+                    } else if distance > reach_a {
+                        self.actors[0].position += step_a;
+                    }
+                    if ranged_b {
+                        if let Some(max_range) =
+                            max_range_for_weapon(&self.combatants[1].weapon_name)
+                        {
+                            if distance <= max_range {
+                                self.actors[1].position += backstep;
+                            } else {
+                                self.actors[1].position -= step_b;
+                            }
+                        }
+                    } else if distance > reach_b {
+                        self.actors[1].position -= step_b;
+                    }
+                }
+            } else if distance > min_reach {
                 if reach_a < reach_b {
                     self.actors[0].position += step_a;
                 } else if reach_b < reach_a {
                     self.actors[1].position -= step_b;
                 }
             }
+        }
+        for (idx, combatant) in self.combatants.iter_mut().enumerate() {
+            combatant.moved_last_tick =
+                (self.actors[idx].position - old_positions[idx]).abs() > f32::EPSILON;
         }
         self.elapsed_seconds += 1;
     }
@@ -224,21 +416,41 @@ impl SimState {
             if self.combatants[attacker_idx].hp <= 0 || self.combatants[defender_idx].hp <= 0 {
                 continue;
             }
-            if distance > self.combatants[attacker_idx].reach_ft.max(1.0) {
+            let weapon_name = &self.combatants[attacker_idx].weapon_name;
+            let is_ranged_weapon = max_range_for_weapon(weapon_name).is_some();
+            let ranged_mod = if is_ranged_weapon {
+                range_modifier_for_weapon(weapon_name, distance)
+            } else {
+                None
+            };
+            if !is_ranged_weapon && distance > self.combatants[attacker_idx].reach_ft.max(1.0) {
+                continue;
+            }
+            if is_ranged_weapon && ranged_mod.is_none() {
                 continue;
             }
             if self.combatants[attacker_idx].next_attack_time.is_none() {
                 let attacker_reach = self.combatants[attacker_idx].reach_ft;
                 let defender_reach = self.combatants[defender_idx].reach_ft;
-                let delay = if attacker_reach < defender_reach { 1.0 } else { 0.0 };
+                let delay = if !is_ranged_weapon && attacker_reach < defender_reach {
+                    1.0
+                } else {
+                    0.0
+                };
                 self.combatants[attacker_idx].next_attack_time = Some(now + delay);
             }
             let next_attack = self.combatants[attacker_idx]
                 .next_attack_time
                 .unwrap_or(now);
             if now + 0.0001 >= next_attack {
-                let event =
-                    resolve_attack(&mut self.combatants, attacker_idx, defender_idx, &mut self.rng);
+                let event = resolve_attack(
+                    &mut self.combatants,
+                    attacker_idx,
+                    defender_idx,
+                    ranged_mod.unwrap_or(0),
+                    is_ranged_weapon,
+                    &mut self.rng,
+                );
                 events.push(event);
                 let speed = self.combatants[attacker_idx].weapon_speed.max(1.0);
                 self.combatants[attacker_idx].next_attack_time = Some(next_attack + speed);
@@ -260,9 +472,19 @@ fn resolve_attack(
     combatants: &mut [Combatant; 2],
     attacker_idx: usize,
     defender_idx: usize,
+    range_mod: i32,
+    is_ranged: bool,
     rng: &mut impl Rng,
 ) -> String {
-    let (attack_bonus, damage_expr, strength_damage, weapon_name, armor_penetration) = {
+    let (
+        attack_bonus,
+        damage_expr,
+        strength_damage,
+        weapon_name,
+        armor_penetration,
+        use_jab,
+        jab_special_expr,
+    ) = {
         let attacker = &combatants[attacker_idx];
         (
             attacker.attack_bonus,
@@ -270,11 +492,15 @@ fn resolve_attack(
             attacker.strength_damage,
             attacker.weapon_name.clone(),
             attacker.armor_penetration,
+            attacker.use_jab,
+            attacker.jab_special_expr.clone(),
         )
     };
-    let defense_mod = combatants[defender_idx].defense_mod;
+    let defense_mod = if is_ranged { 0 } else { combatants[defender_idx].defense_mod };
     let armor_dr = combatants[defender_idx].armor_dr;
-    let defense_bonus = if combatants[defender_idx].weapon_defense_always
+    let defense_bonus = if is_ranged {
+        0
+    } else if combatants[defender_idx].weapon_defense_always
         || (combatants[defender_idx].two_hand_grip
             && combatants[defender_idx].defense_plus_four_ready)
     {
@@ -284,8 +510,11 @@ fn resolve_attack(
     };
 
     let attack_die = penetrating_roll(20, rng);
-    let defense_die = penetrating_roll(20, rng);
-    let attack_roll = attack_die + attack_bonus;
+    let defense_die = penetrating_roll(
+        defense_die_sides(is_ranged, combatants[defender_idx].moved_last_tick),
+        rng,
+    );
+    let attack_roll = attack_die + attack_bonus + range_mod;
     let defense_roll = defense_die + defense_mod + defense_bonus;
         let mut damage = 0;
         let mut hit = false;
@@ -293,14 +522,22 @@ fn resolve_attack(
 
     if attack_roll >= defense_roll {
         hit = true;
-            let (rolled_damage, detail) = roll_damage_expr_with_detail(&damage_expr, rng);
+            let jab_expr = jab_special_expr.as_deref().unwrap_or(&damage_expr);
+            let (rolled_damage, detail) = if use_jab {
+                roll_damage_expr_with_detail_nonpenetrating(jab_expr, rng)
+            } else {
+                roll_damage_expr_with_detail(&damage_expr, rng)
+            };
             let mut raw = rolled_damage + strength_damage;
+            if use_jab && jab_special_expr.is_none() {
+                raw /= 2;
+            }
             if raw < 0 {
                 raw = 0;
             }
             damage_detail = detail;
         let mut effective_dr = armor_dr;
-        if armor_dr >= 5 {
+        if armor_dr >= 5 || combatants[defender_idx].armor_is_heavy {
             effective_dr = (armor_dr - armor_penetration).max(0);
         }
         damage = (raw - effective_dr).max(1);
@@ -309,18 +546,20 @@ fn resolve_attack(
 
     let attacker_name = combatants[attacker_idx].name.clone();
     let defender_name = combatants[defender_idx].name.clone();
-    if combatants[defender_idx].two_hand_grip
-        && combatants[defender_idx].defense_plus_four_ready
-        && combatants[defender_idx].has_weapon
-        && !combatants[defender_idx].weapon_defense_always
-    {
-        combatants[defender_idx].defense_plus_four_ready = false;
-    }
-    if combatants[attacker_idx].two_hand_grip
-        && combatants[attacker_idx].has_weapon
-        && !combatants[attacker_idx].weapon_defense_always
-    {
-        combatants[attacker_idx].defense_plus_four_ready = true;
+    if !is_ranged {
+        if combatants[defender_idx].two_hand_grip
+            && combatants[defender_idx].defense_plus_four_ready
+            && combatants[defender_idx].has_weapon
+            && !combatants[defender_idx].weapon_defense_always
+        {
+            combatants[defender_idx].defense_plus_four_ready = false;
+        }
+        if combatants[attacker_idx].two_hand_grip
+            && combatants[attacker_idx].has_weapon
+            && !combatants[attacker_idx].weapon_defense_always
+        {
+            combatants[attacker_idx].defense_plus_four_ready = true;
+        }
     }
     if hit {
         format!(
@@ -353,6 +592,13 @@ fn resolve_attack(
 fn roll_damage_expr_with_detail(expr: &str, rng: &mut impl Rng) -> (i32, String) {
     let cleaned = clean_damage_expr(expr);
     let (total, detail) = evaluate_expression_with_detail(&cleaned, rng);
+    (total, format!("[{}]", detail))
+}
+
+fn roll_damage_expr_with_detail_nonpenetrating(expr: &str, rng: &mut impl Rng) -> (i32, String) {
+    let cleaned = clean_damage_expr(expr);
+    let no_pen = cleaned.replace('p', "");
+    let (total, detail) = evaluate_expression_with_detail(&no_pen, rng);
     (total, format!("[{}]", detail))
 }
 
@@ -489,10 +735,26 @@ fn penetrating_roll(sides: i32, rng: &mut impl Rng) -> i32 {
     if sides <= 1 {
         return sides.max(0);
     }
+    penetrating_roll_with(sides, || rng.gen_range(1..=sides))
+}
+
+fn penetrating_roll_with(mut sides: i32, mut next_roll: impl FnMut() -> i32) -> i32 {
+    if sides <= 1 {
+        return sides.max(0);
+    }
+    if sides < 0 {
+        sides = 0;
+    }
     let mut total = 0;
+    let mut first = true;
     loop {
-        let roll = rng.gen_range(1..=sides);
-        total += roll;
+        let roll = next_roll().clamp(1, sides);
+        if first {
+            total += roll;
+            first = false;
+        } else {
+            total += roll - 1;
+        }
         if roll != sides {
             break;
         }
@@ -570,6 +832,7 @@ mod tests {
             0,
             0,
             0,
+            false,
             0,
             "1d1".to_string(),
             0,
@@ -577,6 +840,8 @@ mod tests {
             1.0,
             5.0,
             false,
+            false,
+            None,
             true,
             false,
             20,
@@ -587,6 +852,7 @@ mod tests {
             0,
             1000,
             0,
+            false,
             0,
             "1d1".to_string(),
             0,
@@ -594,13 +860,15 @@ mod tests {
             1.0,
             5.0,
             false,
+            false,
+            None,
             true,
             false,
             20,
         );
         let mut state = make_state(attacker, defender);
         let mut rng = rand::rngs::StdRng::seed_from_u64(1);
-        let _ = resolve_attack(&mut state.combatants, 0, 1, &mut rng);
+        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, &mut rng);
         assert_eq!(state.combatants[1].hp, 20);
     }
 
@@ -612,6 +880,7 @@ mod tests {
             100,
             0,
             0,
+            false,
             2,
             "1d1".to_string(),
             5,
@@ -619,6 +888,8 @@ mod tests {
             1.0,
             5.0,
             false,
+            false,
+            None,
             true,
             false,
             20,
@@ -629,6 +900,7 @@ mod tests {
             0,
             0,
             4,
+            false,
             0,
             "1d1".to_string(),
             0,
@@ -636,13 +908,15 @@ mod tests {
             1.0,
             5.0,
             false,
+            false,
+            None,
             true,
             false,
             20,
         );
         let mut state = make_state(attacker, defender);
         let mut rng = rand::rngs::StdRng::seed_from_u64(2);
-        let _ = resolve_attack(&mut state.combatants, 0, 1, &mut rng);
+        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, &mut rng);
         assert_eq!(state.combatants[1].hp, 18);
     }
 
@@ -654,6 +928,7 @@ mod tests {
             100,
             0,
             0,
+            false,
             2,
             "1d1".to_string(),
             5,
@@ -661,6 +936,8 @@ mod tests {
             1.0,
             5.0,
             false,
+            false,
+            None,
             true,
             false,
             20,
@@ -671,6 +948,7 @@ mod tests {
             0,
             0,
             6,
+            false,
             0,
             "1d1".to_string(),
             0,
@@ -678,13 +956,15 @@ mod tests {
             1.0,
             5.0,
             false,
+            false,
+            None,
             true,
             false,
             20,
         );
         let mut state = make_state(attacker, defender);
         let mut rng = rand::rngs::StdRng::seed_from_u64(3);
-        let _ = resolve_attack(&mut state.combatants, 0, 1, &mut rng);
+        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, &mut rng);
         assert_eq!(state.combatants[1].hp, 18);
     }
 
@@ -696,6 +976,7 @@ mod tests {
             100,
             0,
             0,
+            false,
             -1,
             "1d1".to_string(),
             5,
@@ -703,6 +984,8 @@ mod tests {
             1.0,
             5.0,
             false,
+            false,
+            None,
             true,
             false,
             20,
@@ -713,6 +996,7 @@ mod tests {
             0,
             0,
             6,
+            false,
             0,
             "1d1".to_string(),
             0,
@@ -720,13 +1004,15 @@ mod tests {
             1.0,
             5.0,
             false,
+            false,
+            None,
             true,
             false,
             20,
         );
         let mut state = make_state(attacker, defender);
         let mut rng = rand::rngs::StdRng::seed_from_u64(4);
-        let _ = resolve_attack(&mut state.combatants, 0, 1, &mut rng);
+        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, &mut rng);
         assert_eq!(state.combatants[1].hp, 19);
     }
 
@@ -738,6 +1024,7 @@ mod tests {
             100,
             0,
             0,
+            false,
             0,
             "1d1".to_string(),
             0,
@@ -745,6 +1032,8 @@ mod tests {
             1.0,
             5.0,
             false,
+            false,
+            None,
             true,
             false,
             20,
@@ -755,6 +1044,7 @@ mod tests {
             0,
             0,
             10,
+            false,
             0,
             "1d1".to_string(),
             0,
@@ -762,13 +1052,15 @@ mod tests {
             1.0,
             5.0,
             false,
+            false,
+            None,
             true,
             false,
             20,
         );
         let mut state = make_state(attacker, defender);
         let mut rng = rand::rngs::StdRng::seed_from_u64(5);
-        let _ = resolve_attack(&mut state.combatants, 0, 1, &mut rng);
+        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, &mut rng);
         assert_eq!(state.combatants[1].hp, 19);
     }
 
@@ -803,6 +1095,7 @@ mod tests {
             0,
             0,
             0,
+            false,
             0,
             "1d1".to_string(),
             0,
@@ -810,6 +1103,8 @@ mod tests {
             1.0,
             5.0,
             true,
+            false,
+            None,
             true,
             false,
             20,
@@ -820,6 +1115,7 @@ mod tests {
             0,
             0,
             0,
+            false,
             0,
             "1d1".to_string(),
             0,
@@ -827,17 +1123,19 @@ mod tests {
             1.0,
             5.0,
             false,
+            false,
+            None,
             true,
             false,
             20,
         );
         let mut state = make_state(attacker, defender);
         let mut rng = FixedRng(0);
-        let _ = resolve_attack(&mut state.combatants, 0, 1, &mut rng);
+        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, &mut rng);
         assert!(state.combatants[0].defense_plus_four_ready);
 
         let mut rng = FixedRng(0);
-        let _ = resolve_attack(&mut state.combatants, 1, 0, &mut rng);
+        let _ = resolve_attack(&mut state.combatants, 1, 0, 0, false, &mut rng);
         assert!(!state.combatants[0].defense_plus_four_ready);
     }
 
@@ -849,6 +1147,7 @@ mod tests {
             0,
             0,
             0,
+            false,
             0,
             "1d1".to_string(),
             0,
@@ -856,6 +1155,8 @@ mod tests {
             1.0,
             5.0,
             false,
+            false,
+            None,
             true,
             false,
             20,
@@ -866,6 +1167,7 @@ mod tests {
             0,
             0,
             0,
+            false,
             0,
             "1d1".to_string(),
             0,
@@ -873,14 +1175,98 @@ mod tests {
             1.0,
             5.0,
             false,
+            false,
+            None,
             true,
             true,
             20,
         );
         let mut state = make_state(attacker, defender);
         let mut rng = FixedRng(0);
-        let _ = resolve_attack(&mut state.combatants, 0, 1, &mut rng);
+        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, &mut rng);
         assert_eq!(state.combatants[1].hp, 20);
+    }
+
+    #[test]
+    fn ranged_stationary_uses_d12p_defense() {
+        assert_eq!(defense_die_sides(true, false), 12);
+    }
+
+    #[test]
+    fn ranged_moving_uses_d20p_defense() {
+        assert_eq!(defense_die_sides(true, true), 20);
+    }
+
+    #[test]
+    fn moving_flag_set_when_positions_change() {
+        let mut state = SimState::new(SimConfig::new(500.0, 1.0));
+        let ranged = Combatant::new(
+            "Archer".to_string(),
+            "Longbow".to_string(),
+            0,
+            0,
+            0,
+            false,
+            0,
+            "1d1".to_string(),
+            0,
+            10.0,
+            1.0,
+            5.0,
+            false,
+            false,
+            None,
+            true,
+            false,
+            10,
+        );
+        state.reset_with_combatants([ranged.clone(), ranged]);
+        state.tick();
+        assert!(state.combatants[0].moved_last_tick);
+        assert!(state.combatants[1].moved_last_tick);
+    }
+
+    #[test]
+    fn moving_flag_clear_when_no_movement() {
+        let mut state = SimState::new(SimConfig::new(20.0, 1.0));
+        let melee = Combatant::new(
+            "Fighter".to_string(),
+            "Sword".to_string(),
+            0,
+            0,
+            0,
+            false,
+            0,
+            "1d1".to_string(),
+            0,
+            10.0,
+            1.0,
+            0.0,
+            false,
+            false,
+            None,
+            true,
+            false,
+            10,
+        );
+        state.reset_with_combatants([melee.clone(), melee]);
+        state.tick();
+        assert!(!state.combatants[0].moved_last_tick);
+        assert!(!state.combatants[1].moved_last_tick);
+    }
+
+    #[test]
+    fn penetrating_roll_subtracts_one_on_extra_rolls() {
+        let mut rolls = vec![6, 2].into_iter();
+        let total = penetrating_roll_with(6, || rolls.next().unwrap_or(1));
+        assert_eq!(total, 7);
+    }
+
+    #[test]
+    fn penetrating_roll_can_chain_with_minus_one_each_time() {
+        let mut rolls = vec![6, 6, 3].into_iter();
+        let total = penetrating_roll_with(6, || rolls.next().unwrap_or(1));
+        assert_eq!(total, 13);
     }
 
     #[test]
@@ -891,6 +1277,7 @@ mod tests {
             0,
             0,
             0,
+            false,
             0,
             "1d1".to_string(),
             0,
@@ -898,6 +1285,8 @@ mod tests {
             1.0,
             5.0,
             false,
+            false,
+            None,
             true,
             false,
             20,
@@ -908,6 +1297,7 @@ mod tests {
             0,
             0,
             0,
+            false,
             0,
             "1d1".to_string(),
             0,
@@ -915,13 +1305,15 @@ mod tests {
             1.0,
             5.0,
             false,
+            false,
+            None,
             true,
             false,
             20,
         );
         let mut state = make_state(attacker, defender);
         let mut rng = FixedRng(0);
-        let _ = resolve_attack(&mut state.combatants, 0, 1, &mut rng);
+        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, &mut rng);
         assert!(!state.combatants[1].defense_plus_four_ready);
     }
 
@@ -933,6 +1325,7 @@ mod tests {
             0,
             0,
             0,
+            false,
             0,
             "1d1".to_string(),
             0,
@@ -940,6 +1333,8 @@ mod tests {
             1.0,
             5.0,
             false,
+            false,
+            None,
             true,
             false,
             20,
@@ -950,6 +1345,7 @@ mod tests {
             0,
             0,
             0,
+            false,
             0,
             "1d1".to_string(),
             0,
@@ -957,13 +1353,19 @@ mod tests {
             1.0,
             5.0,
             false,
+            false,
+            None,
             true,
             true,
             20,
         );
         let mut state = make_state(attacker, defender);
         let mut rng = FixedRng(0);
-        let _ = resolve_attack(&mut state.combatants, 0, 1, &mut rng);
+        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, &mut rng);
+        assert_eq!(state.combatants[1].hp, 20);
+
+        let mut rng = FixedRng(0);
+        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, &mut rng);
         assert_eq!(state.combatants[1].hp, 20);
     }
 }

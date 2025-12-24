@@ -64,10 +64,10 @@ impl Progression {
 impl Default for Progression {
     fn default() -> Self {
         Self::new(
-            ProgressionTier::III,
-            ProgressionTier::III,
-            ProgressionTier::III,
-            ProgressionTier::III,
+            ProgressionTier::I,
+            ProgressionTier::I,
+            ProgressionTier::I,
+            ProgressionTier::I,
         )
     }
 }
@@ -340,8 +340,9 @@ impl Character {
 
     pub fn derived(&self) -> DerivedStats {
         let ability = &self.ability_mods;
-        let attack_bonus =
-            attack_bonus_for(self.level, self.progression.attack) + ability.intelligence.attack;
+        let attack_bonus = attack_bonus_for(self.level, self.progression.attack)
+            + ability.intelligence.attack
+            + ability.dexterity.attack;
         let speed_mod = speed_mod_for(self.level, self.progression.speed);
         let initiative_mod =
             initiative_mod_for(self.level, self.progression.initiative)
@@ -1044,12 +1045,12 @@ mod tests {
     }
 
     #[test]
-    fn attack_bonus_includes_intelligence() {
+    fn attack_bonus_includes_intelligence_and_dexterity() {
         let abilities = AbilitySet {
             strength: AbilityScore::new(10, 1),
             intelligence: 12,
             wisdom: 10,
-            dexterity: AbilityScore::new(10, 1),
+            dexterity: AbilityScore::new(12, 1),
             constitution: 10,
             looks: 10,
             charisma: 10,
@@ -1067,7 +1068,7 @@ mod tests {
             .abilities(abilities)
             .build();
         let derived = character.derived();
-        assert_eq!(derived.attack_bonus, 3);
+        assert_eq!(derived.attack_bonus, 4);
     }
 
     #[test]
