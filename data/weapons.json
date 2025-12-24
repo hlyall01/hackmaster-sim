@@ -1670,65 +1670,73 @@
     {
       "name": "Buckler",
       "defense": "d20p+2",
-      "damage_reduction": "6 HP",
+      "damage_reduction": "6",
       "arc_of_defense": "one frontal attacker",
       "cover_value": "20",
+      "breakage_thresholds": [10, 15, 20, 25],
       "weight_lbs": 2.0
     },
     {
       "name": "Small wooden shield",
       "defense": "d20p+4",
-      "damage_reduction": "4 HP",
+      "damage_reduction": "4",
       "arc_of_defense": "two frontal attackers",
       "cover_value": "19",
+      "breakage_thresholds": [6, 9, 12, 15],
       "weight_lbs": 3.0
     },
     {
       "name": "Small metallic shield",
       "defense": "d20p+4",
-      "damage_reduction": "6 HP",
+      "damage_reduction": "6",
       "arc_of_defense": "two frontal attackers",
       "cover_value": "19",
+      "breakage_thresholds": [10, 15, 20, 25],
       "weight_lbs": 7.0
     },
     {
       "name": "Medium wooden shield",
       "defense": "d20p+6",
-      "damage_reduction": "4 HP",
+      "damage_reduction": "4",
       "arc_of_defense": "all frontal and flank attackers",
-      "cover_value": "16 (11 if actively crouching behind it)C",
+      "cover_value": "16C",
+      "breakage_thresholds": [8, 12, 16, 20],
       "weight_lbs": 6.0
     },
     {
       "name": "Medium metallic shield",
       "defense": "d20p+6",
-      "damage_reduction": "6 HP",
+      "damage_reduction": "6",
       "arc_of_defense": "all frontal and flank attackers",
-      "cover_value": "16 (11 if actively crouching behind it)C",
+      "cover_value": "16C",
+      "breakage_thresholds": [12, 18, 24, 30],
       "weight_lbs": 14.0
     },
     {
       "name": "Large wooden shield",
       "defense": "d20p+6",
-      "damage_reduction": "4 HP",
+      "damage_reduction": "4",
       "arc_of_defense": "all frontal and flank attackers",
-      "cover_value": "11 (6 if actively crouching behind it)C",
+      "cover_value": "11C",
+      "breakage_thresholds": [8, 12, 16, 20],
       "weight_lbs": 10.0
     },
     {
       "name": "Large metallic shield",
       "defense": "d20p+6",
-      "damage_reduction": "6 HP",
+      "damage_reduction": "6",
       "arc_of_defense": "all frontal and flank attackers",
-      "cover_value": "11 (6 if actively crouching behind it)C",
+      "cover_value": "11C",
+      "breakage_thresholds": [12, 18, 24, 30],
       "weight_lbs": 24.0
     },
     {
       "name": "Tower shield",
       "defense": "d20p+6",
-      "damage_reduction": "6 HP",
+      "damage_reduction": "6",
       "arc_of_defense": "all frontal and flank attackers",
-      "cover_value": "6 (1 if actively crouching behind it)C",
+      "cover_value": "6C",
+      "breakage_thresholds": [12, 18, 24, 30],
       "weight_lbs": 35.0
     }
   ]

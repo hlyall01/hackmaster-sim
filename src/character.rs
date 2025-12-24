@@ -220,8 +220,11 @@ pub struct Armor {
 #[derive(Clone, Debug)]
 pub struct Shield {
     pub name: &'static str,
-    pub defense_die: &'static str,
+    pub defense_bonus: i32,
     pub dr: i32,
+    pub cover_value: i32,
+    pub breakage_thresholds: [i32; 4],
+    pub weight_lbs: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -343,15 +346,27 @@ impl Character {
         let attack_bonus = attack_bonus_for(self.level, self.progression.attack)
             + ability.intelligence.attack
             + ability.dexterity.attack;
-        let speed_mod = speed_mod_for(self.level, self.progression.speed);
+        let armor_speed_mod = self
+            .equipment
+            .armor
+            .as_ref()
+            .map(|armor| armor.speed_mod)
+            .unwrap_or(0);
+        let speed_mod = speed_mod_for(self.level, self.progression.speed) + armor_speed_mod;
         let initiative_mod =
             initiative_mod_for(self.level, self.progression.initiative)
                 + ability.dexterity.initiative
-                + ability.wisdom.initiative;
+                + ability.wisdom.initiative
+                + self
+                    .equipment
+                    .armor
+                    .as_ref()
+                    .map(|armor| armor.initiative_mod)
+                    .unwrap_or(0);
         let initiative_die = initiative_die_for(self.level, self.progression.initiative);
         let health_mult = health_mult_for(self.level, self.progression.health);
-        let base_hp = self.base_hp + self.abilities.constitution as u32;
-        let hit_points = (base_hp as f32 * health_mult).round() as u32;
+        let hp_from_con = self.abilities.constitution as f32 * health_mult;
+        let hit_points = (self.base_hp as f32 + hp_from_con).round() as u32;
 
         let armor_dr = self
             .equipment
@@ -1116,14 +1131,14 @@ mod tests {
                     ProgressionTier::III,
                     ProgressionTier::III,
                     ProgressionTier::III,
-                    ProgressionTier::II,
+                    ProgressionTier::III,
                 ),
             )
-            .base_hp(10)
+            .base_hp(11)
             .abilities(abilities)
             .build();
         let derived = character.derived();
-        assert_eq!(derived.hit_points, 22);
+        assert_eq!(derived.hit_points, 24);
     }
 
     #[test]
@@ -1160,5 +1175,29 @@ mod tests {
             .build();
         let derived = character.derived();
         assert_eq!(derived.base_dv, -9);
+    }
+
+    #[test]
+    fn speed_advancement_matches_table() {
+        assert_eq!(speed_mod_for(1, ProgressionTier::I), 1);
+        assert_eq!(speed_mod_for(4, ProgressionTier::VI), -1);
+        assert_eq!(speed_mod_for(20, ProgressionTier::VI), -5);
+    }
+
+    #[test]
+    fn initiative_advancement_matches_table() {
+        assert_eq!(initiative_mod_for(1, ProgressionTier::I), 2);
+        assert_eq!(initiative_mod_for(4, ProgressionTier::IV), -1);
+        assert_eq!(initiative_mod_for(20, ProgressionTier::V), -4);
+    }
+
+    #[test]
+    fn health_advancement_matches_table() {
+        let low = health_mult_for(1, ProgressionTier::I);
+        let mid = health_mult_for(10, ProgressionTier::III);
+        let high = health_mult_for(20, ProgressionTier::V);
+        assert!((low - 0.8).abs() < 1e-6);
+        assert!((mid - 2.7).abs() < 1e-6);
+        assert!((high - 5.5).abs() < 1e-6);
     }
 }

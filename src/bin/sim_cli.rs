@@ -127,6 +127,7 @@ fn main() {
             .as_ref()
             .map(|weapon| weapon.damage_expr.clone())
             .unwrap_or_else(|| "d4p".to_string()),
+        None,
         strength_damage,
         character
             .equipment
@@ -152,6 +153,12 @@ fn main() {
             .map(|weapon| weapon.defense_bonus_always)
             .unwrap_or(false),
         derived.hit_points as i32,
+        None,
+        0,
+        0,
+        None,
+        false,
+        None,
     );
     sim.reset_with_combatants([combatant.clone(), combatant]);
     println!("--- Simulation (1s ticks) ---");

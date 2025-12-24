@@ -9,7 +9,7 @@ use character::ProgressionTier;
 use eframe::egui::{self, Color32, Pos2, Rect};
 use sim::{SimConfig, SimState};
 use game_logic::{
-    ArmorEntry, NpcPreset, PlayerConfig, WeaponHandedness, WeaponPreset, WeaponSize,
+    ArmorEntry, NpcPreset, PlayerConfig, ShieldEntry, WeaponHandedness, WeaponPreset, WeaponSize,
 };
 
 struct SimGuiApp {
@@ -18,6 +18,7 @@ struct SimGuiApp {
     players: [PlayerConfig; 2],
     weapon_catalog: Vec<WeaponPreset>,
     armor_catalog: Vec<ArmorEntry>,
+    shield_catalog: Vec<ShieldEntry>,
     npc_presets: Vec<NpcPreset>,
     show_player_editor: [bool; 2],
     last_screen_size: egui::Vec2,
@@ -25,13 +26,14 @@ struct SimGuiApp {
 
 impl SimGuiApp {
     fn new() -> Self {
-        let (weapon_catalog, armor_catalog) = match game_logic::load_catalogs() {
-            Ok((weapons, armors)) => (weapons, armors),
+        let (weapon_catalog, armor_catalog, shield_catalog) = match game_logic::load_catalogs() {
+            Ok((weapons, armors, shields)) => (weapons, armors, shields),
             Err(err) => {
                 eprintln!("Failed to load JSON catalogs: {err}");
                 (
                     game_logic::default_weapon_catalog(),
                     game_logic::default_armor_catalog(),
+                    game_logic::default_shield_catalog(),
                 )
             }
         };
@@ -42,7 +44,7 @@ impl SimGuiApp {
                 Vec::new()
             }
         };
-        let sim = SimState::new(SimConfig::new(20.0, 1.0));
+        let sim = SimState::new(SimConfig::new(200.0, 1.0));
         let mut app = Self {
             running: false,
             sim,
@@ -52,6 +54,7 @@ impl SimGuiApp {
             ],
             weapon_catalog,
             armor_catalog,
+            shield_catalog,
             npc_presets,
             show_player_editor: [false, false],
             last_screen_size: egui::vec2(0.0, 0.0),
@@ -65,6 +68,7 @@ impl SimGuiApp {
             &self.players,
             &self.weapon_catalog,
             &self.armor_catalog,
+            &self.shield_catalog,
             &self.npc_presets,
         );
         self.sim.reset_with_combatants(combatants);
@@ -233,6 +237,9 @@ impl eframe::App for SimGuiApp {
                 }
                 if !self.running {
                     if ui.button("Next second").clicked() {
+                        if self.sim.done || self.sim.elapsed_seconds == 0 {
+                            self.reset_positions();
+                        }
                         self.sim.tick();
                     }
                 }
@@ -344,20 +351,30 @@ impl eframe::App for SimGuiApp {
         });
 
         for idx in 0..self.players.len() {
+            let name = self.players[idx].name.clone();
             let mut open = self.show_player_editor[idx];
-            let title = format!("Customize {}", self.players[idx].name);
+            let title = format!("Customize {name}");
             egui::Window::new(title)
                 .id(egui::Id::new(format!("player_editor_{idx}")))
                 .open(&mut open)
                 .resizable(true)
                 .show(ctx, |ui| {
                     let id_prefix = if idx == 0 { "p1" } else { "p2" };
+                    let (player, opponent) = if idx == 0 {
+                        let (left, right) = self.players.split_at_mut(1);
+                        (&mut left[0], &right[0])
+                    } else {
+                        let (left, right) = self.players.split_at_mut(1);
+                        (&mut right[0], &left[0])
+                    };
                     render_player_editor(
                         ui,
                         id_prefix,
-                        &mut self.players[idx],
+                        player,
+                        opponent,
                         &self.weapon_catalog,
                         &self.armor_catalog,
+                        &self.shield_catalog,
                         &self.npc_presets,
                     );
                 });
@@ -374,8 +391,10 @@ fn render_player_editor(
     ui: &mut egui::Ui,
     id_prefix: &str,
     player: &mut PlayerConfig,
+    opponent: &PlayerConfig,
     weapon_catalog: &[WeaponPreset],
     armor_catalog: &[ArmorEntry],
+    shield_catalog: &[ShieldEntry],
     npc_presets: &[NpcPreset],
 ) {
     if weapon_catalog.is_empty() {
@@ -384,6 +403,7 @@ fn render_player_editor(
     }
     player.weapon_index = player.weapon_index.min(weapon_catalog.len() - 1);
     player.armor_index = player.armor_index.min(armor_catalog.len().saturating_sub(1));
+    player.shield_index = player.shield_index.min(shield_catalog.len().saturating_sub(1));
 
     if !npc_presets.is_empty() {
         ui.horizontal(|ui| {
@@ -605,6 +625,36 @@ fn render_player_editor(
                 &mut player.armor_material_tier,
             );
         });
+        ui.horizontal(|ui| {
+            ui.label("Shield");
+            let can_use_shield =
+                weapon.handedness == WeaponHandedness::OneHanded && !player.two_hand_grip;
+            if !can_use_shield {
+                player.shield_index = 0;
+                player.shield_material_tier = 0;
+            }
+            ui.add_enabled_ui(can_use_shield, |ui| {
+                egui::ComboBox::from_id_source(format!("{id_prefix}_shield"))
+                    .selected_text(shield_display_name(shield_catalog.get(player.shield_index)))
+                    .show_ui(ui, |ui| {
+                        for (idx, shield) in shield_catalog.iter().enumerate() {
+                            ui.selectable_value(&mut player.shield_index, idx, shield.label.clone());
+                        }
+                    });
+            });
+            if !can_use_shield {
+                ui.label("Unavailable");
+            }
+            let shield_enabled = can_use_shield && player.shield_index > 0;
+            ui.add_enabled_ui(shield_enabled, |ui| {
+                material_tier_combo(
+                    ui,
+                    format!("{id_prefix}_shield_material"),
+                    "Material",
+                    &mut player.shield_material_tier,
+                );
+            });
+        });
 
         ui.separator();
         ui.label("Abilities");
@@ -630,7 +680,7 @@ fn render_player_editor(
     });
 
     let game_logic::PlayerSummary { derived, roll } =
-        game_logic::player_summary(player, weapon_catalog, armor_catalog);
+        game_logic::player_summary(player, weapon_catalog, armor_catalog, shield_catalog);
     ui.separator();
     if npc_active {
         ui.label("Derived stats ignored while NPC preset is active.");
@@ -657,18 +707,60 @@ fn render_player_editor(
         ui.separator();
         ui.label("Rolls");
         ui.label(format!("Attack roll: d20p + {}", attack_bonus));
-        if roll.is_ranged_weapon {
-            ui.label("Defense roll (ranged): d12p if stationary, else d20p");
+        let shield_bonus = if player.shield_index > 0
+            && weapon.handedness == WeaponHandedness::OneHanded
+            && !player.two_hand_grip
+        {
+            shield_catalog
+                .get(player.shield_index)
+                .and_then(|entry| entry.shield.as_ref())
+                .map(|shield| shield.defense_bonus + player.shield_material_tier.clamp(0, 5))
         } else {
-            let defense_bonus = if weapon.defense_bonus_always { " (+4 weapon)" } else { "" };
-            ui.label(format!(
-                "Defense roll (melee): d20p + {}{}",
-                derived.base_dv, defense_bonus
-            ));
+            None
+        };
+        if roll.is_ranged_weapon {
+            if let Some(shield_bonus) = shield_bonus {
+                ui.label(format!(
+                    "Defense roll (ranged): d20p + {} (cover cap applies)",
+                    shield_bonus
+                ));
+            } else {
+                ui.label("Defense roll (ranged): d12p if stationary, else d20p");
+            }
+        } else {
+            let weapon_def = if weapon.defense_bonus_always { " (+4 weapon)" } else { "" };
+            if let Some(shield_bonus) = shield_bonus {
+                ui.label(format!(
+                    "Defense roll (melee): d20p + {} + {}{}",
+                    derived.base_dv + 4,
+                    shield_bonus,
+                    weapon_def
+                ));
+            } else {
+                ui.label(format!(
+                    "Defense roll (melee): d20p + {}{}",
+                    derived.base_dv, weapon_def
+                ));
+            }
         }
+        let target_dr = opponent
+            .npc_preset
+            .and_then(|idx| npc_presets.get(idx))
+            .map(|preset| preset.armor_dr)
+            .unwrap_or_else(|| {
+                game_logic::player_summary(
+                    opponent,
+                    weapon_catalog,
+                    armor_catalog,
+                    shield_catalog,
+                )
+                .derived
+                .armor_dr
+            });
+        ui.label(format!("Your armor DR: {}", derived.armor_dr));
         ui.label(format!(
-            "Damage roll: {} + {} vs DR {} (AP {})",
-            weapon.damage_expr, strength_damage, derived.armor_dr, weapon.armor_pen
+            "Damage roll: {} + {} vs target DR {} (AP {})",
+            weapon.damage_expr, strength_damage, target_dr, weapon.armor_pen
         ));
     }
 }
@@ -741,6 +833,12 @@ fn material_tier_combo(ui: &mut egui::Ui, id_source: String, label: &str, select
 fn armor_display_name(entry: Option<&ArmorEntry>) -> String {
     entry
         .map(|armor| armor.label.clone())
+        .unwrap_or_else(|| "None".to_string())
+}
+
+fn shield_display_name(entry: Option<&ShieldEntry>) -> String {
+    entry
+        .map(|shield| shield.label.clone())
         .unwrap_or_else(|| "None".to_string())
 }
 

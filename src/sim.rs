@@ -30,6 +30,7 @@ pub struct Combatant {
     pub armor_is_heavy: bool,
     pub armor_penetration: i32,
     pub damage_expr: String,
+    pub shield_damage_expr: Option<String>,
     pub strength_damage: i32,
     pub weapon_speed: f32,
     pub reach_ft: f32,
@@ -44,6 +45,18 @@ pub struct Combatant {
     pub next_attack_time: Option<f32>,
     pub defense_plus_four_ready: bool,
     pub moved_last_tick: bool,
+    pub shield_name: Option<String>,
+    pub shield_defense_bonus: i32,
+    pub shield_dr: i32,
+    pub shield_cover_value: Option<i32>,
+    pub shield_intact: bool,
+    pub shield_breakage: Option<[ShieldBreakageStep; 4]>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ShieldBreakageStep {
+    pub threshold: i32,
+    pub save_mod: Option<i32>,
 }
 
 impl Combatant {
@@ -56,6 +69,7 @@ impl Combatant {
         armor_is_heavy: bool,
         armor_penetration: i32,
         damage_expr: String,
+        shield_damage_expr: Option<String>,
         strength_damage: i32,
         weapon_speed: f32,
         reach_ft: f32,
@@ -66,6 +80,12 @@ impl Combatant {
         has_weapon: bool,
         weapon_defense_always: bool,
         max_hp: i32,
+        shield_name: Option<String>,
+        shield_defense_bonus: i32,
+        shield_dr: i32,
+        shield_cover_value: Option<i32>,
+        shield_intact: bool,
+        shield_breakage: Option<[ShieldBreakageStep; 4]>,
     ) -> Self {
         Self {
             name,
@@ -76,6 +96,7 @@ impl Combatant {
             armor_is_heavy,
             armor_penetration,
             damage_expr,
+            shield_damage_expr,
             strength_damage,
             weapon_speed,
             reach_ft,
@@ -90,6 +111,12 @@ impl Combatant {
             next_attack_time: None,
             defense_plus_four_ready: false,
             moved_last_tick: false,
+            shield_name,
+            shield_defense_bonus,
+            shield_dr,
+            shield_cover_value,
+            shield_intact,
+            shield_breakage,
         }
     }
 
@@ -98,6 +125,7 @@ impl Combatant {
         self.next_attack_time = None;
         self.defense_plus_four_ready = false;
         self.moved_last_tick = false;
+        self.shield_intact = self.shield_name.is_some();
     }
 }
 
@@ -112,6 +140,7 @@ impl Default for Combatant {
             armor_is_heavy: false,
             armor_penetration: 0,
             damage_expr: "d4p".to_string(),
+            shield_damage_expr: None,
             strength_damage: 0,
             weapon_speed: 10.0,
             reach_ft: 1.0,
@@ -126,6 +155,12 @@ impl Default for Combatant {
             next_attack_time: None,
             defense_plus_four_ready: false,
             moved_last_tick: false,
+            shield_name: None,
+            shield_defense_bonus: 0,
+            shield_dr: 0,
+            shield_cover_value: None,
+            shield_intact: false,
+            shield_breakage: None,
         }
     }
 }
@@ -259,9 +294,15 @@ pub fn max_range_for_weapon(name: &str) -> Option<f32> {
     })
 }
 
-fn defense_die_sides(is_ranged: bool, defender_moved_last_tick: bool) -> i32 {
-    if is_ranged && !defender_moved_last_tick {
-        12
+fn defense_die_sides(is_ranged: bool, defender_moved_last_tick: bool, has_shield: bool) -> i32 {
+    if is_ranged {
+        if has_shield {
+            20
+        } else if defender_moved_last_tick {
+            20
+        } else {
+            12
+        }
     } else {
         20
     }
@@ -479,6 +520,7 @@ fn resolve_attack(
     let (
         attack_bonus,
         damage_expr,
+        shield_damage_expr,
         strength_damage,
         weapon_name,
         armor_penetration,
@@ -489,6 +531,7 @@ fn resolve_attack(
         (
             attacker.attack_bonus,
             attacker.damage_expr.clone(),
+            attacker.shield_damage_expr.clone(),
             attacker.strength_damage,
             attacker.weapon_name.clone(),
             attacker.armor_penetration,
@@ -496,9 +539,10 @@ fn resolve_attack(
             attacker.jab_special_expr.clone(),
         )
     };
+    let shield_active = combatants[defender_idx].shield_intact;
     let defense_mod = if is_ranged { 0 } else { combatants[defender_idx].defense_mod };
     let armor_dr = combatants[defender_idx].armor_dr;
-    let defense_bonus = if is_ranged {
+    let weapon_defense_bonus = if is_ranged {
         0
     } else if combatants[defender_idx].weapon_defense_always
         || (combatants[defender_idx].two_hand_grip
@@ -508,40 +552,101 @@ fn resolve_attack(
     } else {
         0
     };
+    let shield_defense_bonus = if shield_active {
+        let base = if is_ranged { 0 } else { 4 };
+        base + combatants[defender_idx].shield_defense_bonus
+    } else {
+        0
+    };
 
     let attack_die = penetrating_roll(20, rng);
     let defense_die = penetrating_roll(
-        defense_die_sides(is_ranged, combatants[defender_idx].moved_last_tick),
+        defense_die_sides(
+            is_ranged,
+            combatants[defender_idx].moved_last_tick,
+            shield_active,
+        ),
         rng,
     );
-    let attack_roll = attack_die + attack_bonus + range_mod;
-    let defense_roll = defense_die + defense_mod + defense_bonus;
-        let mut damage = 0;
-        let mut hit = false;
-        let mut damage_detail = "[0]".to_string();
+    let mut attack_roll = attack_die + attack_bonus + range_mod;
+    if is_ranged && shield_active {
+        if let Some(cap) = combatants[defender_idx].shield_cover_value {
+            attack_roll = attack_roll.min(cap);
+        }
+    }
+    let defense_roll = defense_die + defense_mod + weapon_defense_bonus + shield_defense_bonus;
+    let mut damage = 0;
+    let mut hit = false;
+    let mut shield_block = false;
+    let mut damage_detail = "[0]".to_string();
+    let mut shield_damage_detail = "[0]".to_string();
+    let mut shield_damage = 0;
+    let mut shield_broken = false;
 
     if attack_roll >= defense_roll {
         hit = true;
-            let jab_expr = jab_special_expr.as_deref().unwrap_or(&damage_expr);
-            let (rolled_damage, detail) = if use_jab {
-                roll_damage_expr_with_detail_nonpenetrating(jab_expr, rng)
-            } else {
-                roll_damage_expr_with_detail(&damage_expr, rng)
-            };
-            let mut raw = rolled_damage + strength_damage;
-            if use_jab && jab_special_expr.is_none() {
-                raw /= 2;
-            }
-            if raw < 0 {
-                raw = 0;
-            }
-            damage_detail = detail;
+        let jab_expr = jab_special_expr.as_deref().unwrap_or(&damage_expr);
+        let (rolled_damage, detail) = if use_jab {
+            roll_damage_expr_with_detail_nonpenetrating(jab_expr, rng)
+        } else {
+            roll_damage_expr_with_detail(&damage_expr, rng)
+        };
+        let mut raw = rolled_damage + strength_damage;
+        if use_jab && jab_special_expr.is_none() {
+            raw /= 2;
+        }
+        if raw < 0 {
+            raw = 0;
+        }
+        damage_detail = detail;
         let mut effective_dr = armor_dr;
         if armor_dr >= 5 || combatants[defender_idx].armor_is_heavy {
             effective_dr = (armor_dr - armor_penetration).max(0);
         }
-        damage = (raw - effective_dr).max(1);
+        damage = (raw - effective_dr).max(0);
         combatants[defender_idx].hp -= damage;
+    } else if shield_active && !is_ranged {
+        let miss_margin = defense_roll - attack_roll;
+        if miss_margin < 10 {
+            shield_block = true;
+            let shield_expr = shield_damage_expr
+                .as_deref()
+                .filter(|expr| !expr.is_empty())
+                .unwrap_or(&damage_expr);
+            let (rolled_damage, detail) = roll_damage_expr_with_detail(shield_expr, rng);
+            let mut raw = rolled_damage + strength_damage;
+            if raw < 0 {
+                raw = 0;
+            }
+            shield_damage_detail = detail;
+            shield_damage = raw;
+            let shield_dr = combatants[defender_idx].shield_dr;
+            let shield_after_dr = (raw - shield_dr).max(0);
+
+            let mut effective_dr = armor_dr;
+            if armor_dr >= 5 || combatants[defender_idx].armor_is_heavy {
+                effective_dr = (armor_dr - armor_penetration).max(0);
+            }
+            let hp_damage = (shield_after_dr - effective_dr).max(0);
+            if hp_damage > 0 {
+                combatants[defender_idx].hp -= hp_damage;
+            }
+
+            if let Some(steps) = combatants[defender_idx].shield_breakage {
+                if raw >= steps[3].threshold {
+                    shield_broken = true;
+                } else if raw >= steps[2].threshold {
+                    shield_broken = breakage_roll(steps[2], rng);
+                } else if raw >= steps[1].threshold {
+                    shield_broken = breakage_roll(steps[1], rng);
+                } else if raw >= steps[0].threshold {
+                    shield_broken = breakage_roll(steps[0], rng);
+                }
+            }
+            if shield_broken {
+                combatants[defender_idx].shield_intact = false;
+            }
+        }
     }
 
     let attacker_name = combatants[attacker_idx].name.clone();
@@ -575,6 +680,30 @@ fn resolve_attack(
             damage_detail,
             combatants[defender_idx].hp.max(0)
         )
+    } else if shield_block {
+        let shield_name = combatants[defender_idx]
+            .shield_name
+            .clone()
+            .unwrap_or_else(|| "Shield".to_string());
+        let status = if shield_broken {
+            "shield broken".to_string()
+        } else {
+            "shield intact".to_string()
+        };
+        format!(
+            "{} blocks {} with {} (atk {} [d20p={}] vs def {} [d20p={}]); shield dmg {} {} ({}), hp {}",
+            defender_name,
+            attacker_name,
+            shield_name,
+            attack_roll,
+            attack_die,
+            defense_roll,
+            defense_die,
+            shield_damage,
+            shield_damage_detail,
+            status,
+            combatants[defender_idx].hp.max(0)
+        )
     } else {
         format!(
             "{} misses {} with {} (atk {} [d20p={}] vs def {} [d20p={}])",
@@ -586,6 +715,16 @@ fn resolve_attack(
             defense_roll,
             defense_die
         )
+    }
+}
+
+fn breakage_roll(step: ShieldBreakageStep, rng: &mut impl Rng) -> bool {
+    if let Some(modifier) = step.save_mod {
+        let attacker_roll = penetrating_roll(20, rng);
+        let defender_roll = penetrating_roll(20, rng) + modifier;
+        attacker_roll >= defender_roll
+    } else {
+        true
     }
 }
 
@@ -604,8 +743,14 @@ fn roll_damage_expr_with_detail_nonpenetrating(expr: &str, rng: &mut impl Rng) -
 
 fn clean_damage_expr(expr: &str) -> String {
     let first = expr.split(" and ").next().unwrap_or(expr);
+    let lower = first.to_ascii_lowercase();
+    let candidate = if let Some(pos) = lower.find("lower of") {
+        &first[pos + "lower of".len()..]
+    } else {
+        first
+    };
     let mut cleaned = String::new();
-    for ch in first.chars() {
+    for ch in candidate.chars() {
         if ch == '^' {
             break;
         }
@@ -818,6 +963,55 @@ mod tests {
     use super::*;
     use rand::SeedableRng;
 
+    fn combatant_basic(
+        name: String,
+        weapon_name: String,
+        attack_bonus: i32,
+        defense_mod: i32,
+        armor_dr: i32,
+        armor_is_heavy: bool,
+        armor_penetration: i32,
+        damage_expr: String,
+        strength_damage: i32,
+        weapon_speed: f32,
+        reach_ft: f32,
+        move_speed: f32,
+        two_hand_grip: bool,
+        use_jab: bool,
+        jab_special_expr: Option<String>,
+        has_weapon: bool,
+        weapon_defense_always: bool,
+        max_hp: i32,
+    ) -> Combatant {
+        Combatant::new(
+            name,
+            weapon_name,
+            attack_bonus,
+            defense_mod,
+            armor_dr,
+            armor_is_heavy,
+            armor_penetration,
+            damage_expr,
+            None,
+            strength_damage,
+            weapon_speed,
+            reach_ft,
+            move_speed,
+            two_hand_grip,
+            use_jab,
+            jab_special_expr,
+            has_weapon,
+            weapon_defense_always,
+            max_hp,
+            None,
+            0,
+            0,
+            None,
+            false,
+            None,
+        )
+    }
+
     fn make_state(attacker: Combatant, defender: Combatant) -> SimState {
         let mut state = SimState::new(SimConfig::new(10.0, 1.0));
         state.combatants = [attacker, defender];
@@ -826,7 +1020,7 @@ mod tests {
 
     #[test]
     fn attack_miss_does_no_damage() {
-        let attacker = Combatant::new(
+        let attacker = combatant_basic(
             "Attacker".to_string(),
             "Test Blade".to_string(),
             0,
@@ -846,7 +1040,7 @@ mod tests {
             false,
             20,
         );
-        let defender = Combatant::new(
+        let defender = combatant_basic(
             "Defender".to_string(),
             "Shield".to_string(),
             0,
@@ -874,7 +1068,7 @@ mod tests {
 
     #[test]
     fn damage_respects_dr_under_five() {
-        let attacker = Combatant::new(
+        let attacker = combatant_basic(
             "Attacker".to_string(),
             "Test Blade".to_string(),
             100,
@@ -894,7 +1088,7 @@ mod tests {
             false,
             20,
         );
-        let defender = Combatant::new(
+        let defender = combatant_basic(
             "Defender".to_string(),
             "Shield".to_string(),
             0,
@@ -922,7 +1116,7 @@ mod tests {
 
     #[test]
     fn damage_applies_armor_penetration_when_dr_high() {
-        let attacker = Combatant::new(
+        let attacker = combatant_basic(
             "Attacker".to_string(),
             "Test Blade".to_string(),
             100,
@@ -942,7 +1136,7 @@ mod tests {
             false,
             20,
         );
-        let defender = Combatant::new(
+        let defender = combatant_basic(
             "Defender".to_string(),
             "Shield".to_string(),
             0,
@@ -970,7 +1164,7 @@ mod tests {
 
     #[test]
     fn negative_penetration_increases_effective_dr() {
-        let attacker = Combatant::new(
+        let attacker = combatant_basic(
             "Attacker".to_string(),
             "Test Blade".to_string(),
             100,
@@ -990,7 +1184,7 @@ mod tests {
             false,
             20,
         );
-        let defender = Combatant::new(
+        let defender = combatant_basic(
             "Defender".to_string(),
             "Shield".to_string(),
             0,
@@ -1013,12 +1207,12 @@ mod tests {
         let mut state = make_state(attacker, defender);
         let mut rng = rand::rngs::StdRng::seed_from_u64(4);
         let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, &mut rng);
-        assert_eq!(state.combatants[1].hp, 19);
+        assert_eq!(state.combatants[1].hp, 20);
     }
 
     #[test]
-    fn damage_minimum_is_one_after_dr() {
-        let attacker = Combatant::new(
+    fn damage_can_reduce_to_zero_after_dr() {
+        let attacker = combatant_basic(
             "Attacker".to_string(),
             "Test Blade".to_string(),
             100,
@@ -1038,7 +1232,7 @@ mod tests {
             false,
             20,
         );
-        let defender = Combatant::new(
+        let defender = combatant_basic(
             "Defender".to_string(),
             "Shield".to_string(),
             0,
@@ -1061,7 +1255,7 @@ mod tests {
         let mut state = make_state(attacker, defender);
         let mut rng = rand::rngs::StdRng::seed_from_u64(5);
         let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, &mut rng);
-        assert_eq!(state.combatants[1].hp, 19);
+        assert_eq!(state.combatants[1].hp, 20);
     }
 
     struct FixedRng(u64);
@@ -1089,7 +1283,7 @@ mod tests {
 
     #[test]
     fn two_hand_grip_bonus_applies_once_between_attacks() {
-        let attacker = Combatant::new(
+        let attacker = combatant_basic(
             "Attacker".to_string(),
             "Test Blade".to_string(),
             0,
@@ -1109,7 +1303,7 @@ mod tests {
             false,
             20,
         );
-        let defender = Combatant::new(
+        let defender = combatant_basic(
             "Defender".to_string(),
             "Test Blade".to_string(),
             0,
@@ -1141,7 +1335,7 @@ mod tests {
 
     #[test]
     fn poleaxe_always_gets_defense_bonus() {
-        let attacker = Combatant::new(
+        let attacker = combatant_basic(
             "Attacker".to_string(),
             "Test Blade".to_string(),
             0,
@@ -1161,7 +1355,7 @@ mod tests {
             false,
             20,
         );
-        let defender = Combatant::new(
+        let defender = combatant_basic(
             "Defender".to_string(),
             "Poleaxe".to_string(),
             0,
@@ -1189,18 +1383,23 @@ mod tests {
 
     #[test]
     fn ranged_stationary_uses_d12p_defense() {
-        assert_eq!(defense_die_sides(true, false), 12);
+        assert_eq!(defense_die_sides(true, false, false), 12);
     }
 
     #[test]
     fn ranged_moving_uses_d20p_defense() {
-        assert_eq!(defense_die_sides(true, true), 20);
+        assert_eq!(defense_die_sides(true, true, false), 20);
+    }
+
+    #[test]
+    fn ranged_stationary_with_shield_uses_d20p_defense() {
+        assert_eq!(defense_die_sides(true, false, true), 20);
     }
 
     #[test]
     fn moving_flag_set_when_positions_change() {
         let mut state = SimState::new(SimConfig::new(500.0, 1.0));
-        let ranged = Combatant::new(
+        let ranged = combatant_basic(
             "Archer".to_string(),
             "Longbow".to_string(),
             0,
@@ -1229,7 +1428,7 @@ mod tests {
     #[test]
     fn moving_flag_clear_when_no_movement() {
         let mut state = SimState::new(SimConfig::new(20.0, 1.0));
-        let melee = Combatant::new(
+        let melee = combatant_basic(
             "Fighter".to_string(),
             "Sword".to_string(),
             0,
@@ -1271,7 +1470,7 @@ mod tests {
 
     #[test]
     fn one_handed_weapon_does_not_grant_defense_bonus() {
-        let attacker = Combatant::new(
+        let attacker = combatant_basic(
             "Attacker".to_string(),
             "Test Blade".to_string(),
             0,
@@ -1291,7 +1490,7 @@ mod tests {
             false,
             20,
         );
-        let defender = Combatant::new(
+        let defender = combatant_basic(
             "Defender".to_string(),
             "Short Sword".to_string(),
             0,
@@ -1319,7 +1518,7 @@ mod tests {
 
     #[test]
     fn defense_always_applies_without_two_hand_grip() {
-        let attacker = Combatant::new(
+        let attacker = combatant_basic(
             "Attacker".to_string(),
             "Test Blade".to_string(),
             0,
@@ -1339,7 +1538,7 @@ mod tests {
             false,
             20,
         );
-        let defender = Combatant::new(
+        let defender = combatant_basic(
             "Defender".to_string(),
             "Polehammer".to_string(),
             0,

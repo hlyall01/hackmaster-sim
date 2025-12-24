@@ -1,6 +1,6 @@
 use crate::character::{
-    AbilityScore, AbilitySet, Armor, Character, DerivedStats, Equipment, Progression, Weapon,
-    WeaponGroup, WeaponMastery,
+    AbilityScore, AbilitySet, Armor, Character, DerivedStats, Equipment, Progression, Shield,
+    Weapon, WeaponGroup, WeaponMastery,
 };
 use crate::sim::{self, Combatant};
 use eframe::egui::Color32;
@@ -22,6 +22,7 @@ pub struct WeaponPreset {
     pub jab_speed_label: Option<String>,
     pub jab_special_expr: Option<String>,
     pub damage_expr: String,
+    pub shield_damage_expr: Option<String>,
     pub reach_label: String,
     pub reach_ft: f32,
     pub armor_pen: i32,
@@ -48,6 +49,22 @@ pub enum WeaponHandedness {
 pub struct ArmorEntry {
     pub label: String,
     pub armor: Option<Armor>,
+}
+
+#[derive(Clone)]
+pub struct ShieldPreset {
+    pub name: String,
+    pub defense_bonus: i32,
+    pub dr: i32,
+    pub cover_value: i32,
+    pub breakage_thresholds: [i32; 4],
+    pub weight_lbs: f32,
+}
+
+#[derive(Clone)]
+pub struct ShieldEntry {
+    pub label: String,
+    pub shield: Option<ShieldPreset>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -88,6 +105,8 @@ pub struct PlayerConfig {
     pub weapon_material_tier: i32,
     pub armor_material_tier: i32,
     pub projectile_material_tier: i32,
+    pub shield_index: usize,
+    pub shield_material_tier: i32,
     pub npc_preset: Option<usize>,
     pub two_hand_grip: bool,
     pub use_jab: bool,
@@ -101,7 +120,7 @@ impl PlayerConfig {
             level: 1,
             progression: Progression::default(),
             base_hp: 10,
-            move_speed: 5.0,
+            move_speed: 20.0,
             strength_base: 10,
             strength_pct: 1,
             dex_base: 10,
@@ -116,6 +135,8 @@ impl PlayerConfig {
             weapon_material_tier: 0,
             armor_material_tier: 0,
             projectile_material_tier: 0,
+            shield_index: 0,
+            shield_material_tier: 0,
             npc_preset: None,
             two_hand_grip: false,
             use_jab: false,
@@ -148,9 +169,10 @@ pub fn player_summary(
     player: &PlayerConfig,
     weapon_catalog: &[WeaponPreset],
     armor_catalog: &[ArmorEntry],
+    shield_catalog: &[ShieldEntry],
 ) -> PlayerSummary {
     let weapon = &weapon_catalog[player.weapon_index];
-    let character = build_character(player, weapon_catalog, armor_catalog);
+    let character = build_character(player, weapon_catalog, armor_catalog, shield_catalog);
     let derived = character.derived();
     let roll = roll_summary(player, weapon, &character, &derived);
     PlayerSummary { derived, roll }
@@ -189,10 +211,19 @@ fn roll_summary(
     }
 }
 
+fn min_weapon_speed_for_size(size: WeaponSize) -> f32 {
+    match size {
+        WeaponSize::Small => 2.0,
+        WeaponSize::Medium => 3.0,
+        WeaponSize::Large => 4.0,
+    }
+}
+
 pub fn build_character(
     player: &PlayerConfig,
     weapon_catalog: &[WeaponPreset],
     armor_catalog: &[ArmorEntry],
+    shield_catalog: &[ShieldEntry],
 ) -> Character {
     let weapon_preset = &weapon_catalog[player.weapon_index];
     let weapon = Weapon {
@@ -208,6 +239,9 @@ pub fn build_character(
         .get(player.armor_index)
         .and_then(|entry| entry.armor.clone());
     let armor = armor.map(|armor| apply_armor_material_tier(armor, player.armor_material_tier));
+    let shield = shield_catalog
+        .get(player.shield_index)
+        .and_then(|entry| entry.shield.clone());
 
     let abilities = AbilitySet {
         strength: AbilityScore::new(player.strength_base, player.strength_pct),
@@ -225,9 +259,15 @@ pub fn build_character(
         base_threshold: base_weapon_threshold(weapon_preset.group),
     };
 
+    let shield = if can_equip_shield(player, weapon_preset) {
+        shield.map(|shield| apply_shield_material_tier(shield, player.shield_material_tier))
+    } else {
+        None
+    };
+
     let equipment = Equipment {
         weapon: Some(weapon),
-        shield: None,
+        shield,
         armor,
         weapon_material: None,
         armor_material: None,
@@ -247,11 +287,24 @@ pub fn build_combatants(
     players: &[PlayerConfig; 2],
     weapon_catalog: &[WeaponPreset],
     armor_catalog: &[ArmorEntry],
+    shield_catalog: &[ShieldEntry],
     npc_presets: &[NpcPreset],
 ) -> [Combatant; 2] {
     [
-        build_combatant(&players[0], weapon_catalog, armor_catalog, npc_presets),
-        build_combatant(&players[1], weapon_catalog, armor_catalog, npc_presets),
+        build_combatant(
+            &players[0],
+            weapon_catalog,
+            armor_catalog,
+            shield_catalog,
+            npc_presets,
+        ),
+        build_combatant(
+            &players[1],
+            weapon_catalog,
+            armor_catalog,
+            shield_catalog,
+            npc_presets,
+        ),
     ]
 }
 
@@ -259,10 +312,11 @@ pub fn build_combatant(
     player: &PlayerConfig,
     weapon_catalog: &[WeaponPreset],
     armor_catalog: &[ArmorEntry],
+    shield_catalog: &[ShieldEntry],
     npc_presets: &[NpcPreset],
 ) -> Combatant {
     let weapon_preset = &weapon_catalog[player.weapon_index];
-    let character = build_character(player, weapon_catalog, armor_catalog);
+    let character = build_character(player, weapon_catalog, armor_catalog, shield_catalog);
     let derived = character.derived();
     let weapon_name = character
         .equipment
@@ -276,6 +330,7 @@ pub fn build_combatant(
         .as_ref()
         .map(|weapon| weapon.speed)
         .unwrap_or(10.0);
+    let speed_mod = derived.speed_mod as f32;
     let weapon_reach = character
         .equipment
         .weapon
@@ -294,6 +349,7 @@ pub fn build_combatant(
         .as_ref()
         .map(|weapon| weapon.armor_pen)
         .unwrap_or(0);
+    let shield_data = character.equipment.shield.as_ref();
     let weapon_defense_always = character
         .equipment
         .weapon
@@ -307,6 +363,10 @@ pub fn build_combatant(
         .as_ref()
         .map(|weapon| weapon.damage_expr.clone())
         .unwrap_or_else(|| "d4p".to_string());
+    let shield_damage_expr = weapon_preset
+        .shield_damage_expr
+        .clone()
+        .filter(|expr| expr != "-" && !expr.is_empty());
 
     let is_two_handed = weapon_preset.handedness == WeaponHandedness::TwoHanded;
     let can_two_hand = weapon_preset.handedness == WeaponHandedness::OneHanded
@@ -315,7 +375,8 @@ pub fn build_combatant(
     let two_hand_damage_bonus = if effective_two_hand && can_two_hand { 3 } else { 0 };
     let two_hand_speed_bonus = if effective_two_hand && can_two_hand { 2.0 } else { 0.0 };
     let use_jab = player.use_jab && weapon_preset.jab_speed.is_some();
-    let jab_speed = weapon_preset.jab_speed.unwrap_or(weapon_speed);
+    let min_speed = min_weapon_speed_for_size(weapon_preset.size);
+    let jab_speed = (weapon_preset.jab_speed.unwrap_or(weapon_speed) + speed_mod).max(min_speed);
     let jab_special_expr = if use_jab {
         weapon_preset.jab_special_expr.clone()
     } else {
@@ -341,6 +402,13 @@ pub fn build_combatant(
     ) + two_hand_damage_bonus
         + material_damage_bonus;
     let mut max_hp = derived.hit_points as i32;
+    let mut shield_name = shield_data.map(|shield| shield.name.to_string());
+    let mut shield_defense_bonus = shield_data.map(|shield| shield.defense_bonus).unwrap_or(0);
+    let mut shield_dr = shield_data.map(|shield| shield.dr).unwrap_or(0);
+    let mut shield_cover_value = shield_data.map(|shield| shield.cover_value);
+    let mut shield_intact = shield_name.is_some();
+    let mut shield_breakage =
+        shield_data.map(|shield| breakage_steps_from_thresholds(shield.breakage_thresholds));
     if let Some(preset) = player.npc_preset.and_then(|idx| npc_presets.get(idx)) {
         name = preset.name.clone();
         attack_bonus = preset.attack_bonus;
@@ -348,6 +416,12 @@ pub fn build_combatant(
         armor_dr = preset.armor_dr;
         strength_damage = preset.damage_bonus;
         max_hp = preset.hp.max(1);
+        shield_name = None;
+        shield_defense_bonus = 0;
+        shield_dr = 0;
+        shield_cover_value = None;
+        shield_intact = false;
+        shield_breakage = None;
     }
 
     Combatant::new(
@@ -359,11 +433,12 @@ pub fn build_combatant(
         armor_is_heavy,
         armor_penetration,
         weapon_damage,
+        shield_damage_expr,
         strength_damage,
         if use_jab {
             jab_speed
         } else {
-            weapon_speed + two_hand_speed_bonus
+            (weapon_speed + two_hand_speed_bonus + speed_mod).max(min_speed)
         },
         weapon_reach,
         player.move_speed,
@@ -373,6 +448,12 @@ pub fn build_combatant(
         has_weapon,
         weapon_defense_always,
         max_hp,
+        shield_name,
+        shield_defense_bonus,
+        shield_dr,
+        shield_cover_value,
+        shield_intact,
+        shield_breakage,
     )
 }
 
@@ -894,11 +975,19 @@ pub fn default_armor_catalog() -> Vec<ArmorEntry> {
     }]
 }
 
-pub fn load_catalogs() -> Result<(Vec<WeaponPreset>, Vec<ArmorEntry>), String> {
+pub fn default_shield_catalog() -> Vec<ShieldEntry> {
+    vec![ShieldEntry {
+        label: "None".to_string(),
+        shield: None,
+    }]
+}
+
+pub fn load_catalogs() -> Result<(Vec<WeaponPreset>, Vec<ArmorEntry>, Vec<ShieldEntry>), String> {
     let weapons = load_weapon_catalog("data/weapons.json")?;
     let armor = load_armor_catalog("data/armor.json")?;
+    let shields = load_shield_catalog("data/weapons.json")?;
     let _materials = load_materials("data/materials.json")?;
-    Ok((weapons, armor))
+    Ok((weapons, armor, shields))
 }
 
 pub fn load_npc_presets(path: &str) -> Result<Vec<NpcPreset>, String> {
@@ -910,7 +999,6 @@ pub fn load_npc_presets(path: &str) -> Result<Vec<NpcPreset>, String> {
 #[derive(Deserialize)]
 struct WeaponsFile {
     weapons: Vec<WeaponJson>,
-    #[allow(dead_code)]
     shields: Vec<ShieldJson>,
 }
 
@@ -922,6 +1010,7 @@ struct WeaponJson {
     jab_speed: Option<String>,
     jab_special: Option<String>,
     damage: Option<String>,
+    shield_damage: Option<String>,
     ammunition: Option<String>,
     armor_penetration: Option<i32>,
     defense_bonus_always: Option<bool>,
@@ -933,8 +1022,14 @@ struct WeaponJson {
 
 #[derive(Deserialize)]
 struct ShieldJson {
-    #[allow(dead_code)]
     name: String,
+    defense: String,
+    damage_reduction: String,
+    #[allow(dead_code)]
+    arc_of_defense: String,
+    cover_value: String,
+    breakage_thresholds: Vec<i32>,
+    weight_lbs: f32,
 }
 
 #[derive(Deserialize)]
@@ -1011,6 +1106,7 @@ fn load_weapon_catalog(path: &str) -> Result<Vec<WeaponPreset>, String> {
             jab_speed_label: jab_label,
             jab_special_expr: entry.jab_special.clone(),
             damage_expr,
+            shield_damage_expr: entry.shield_damage.clone(),
             reach_label,
             reach_ft,
             armor_pen: entry.armor_penetration.unwrap_or(0),
@@ -1061,6 +1157,36 @@ fn load_armor_catalog(path: &str) -> Result<Vec<ArmorEntry>, String> {
         catalog.push(ArmorEntry {
             label,
             armor: Some(armor),
+        });
+    }
+    Ok(catalog)
+}
+
+fn load_shield_catalog(path: &str) -> Result<Vec<ShieldEntry>, String> {
+    let data = fs::read_to_string(path).unwrap_or_else(|_| EMBEDDED_WEAPONS_JSON.to_string());
+    let parsed: WeaponsFile = serde_json::from_str(&data).map_err(|err| err.to_string())?;
+    let mut catalog = Vec::new();
+    catalog.push(ShieldEntry {
+        label: "None".to_string(),
+        shield: None,
+    });
+    for entry in parsed.shields {
+        let defense_bonus = parse_shield_defense_bonus(&entry.defense);
+        let dr = parse_leading_number(&entry.damage_reduction) as i32;
+        let cover_value = parse_cover_value(&entry.cover_value);
+        let breakage_thresholds = parse_breakage_thresholds(&entry.breakage_thresholds)
+            .map_err(|err| format!("shield {}: {err}", entry.name))?;
+        let shield = ShieldPreset {
+            name: entry.name.clone(),
+            defense_bonus,
+            dr,
+            cover_value,
+            breakage_thresholds,
+            weight_lbs: entry.weight_lbs,
+        };
+        catalog.push(ShieldEntry {
+            label: entry.name,
+            shield: Some(shield),
         });
     }
     Ok(catalog)
@@ -1158,6 +1284,30 @@ fn parse_leading_number(value: &str) -> f32 {
     buf.parse::<f32>().unwrap_or(0.0)
 }
 
+fn parse_shield_defense_bonus(value: &str) -> i32 {
+    if let Some(idx) = value.rfind('+') {
+        return value[idx + 1..].trim().parse::<i32>().unwrap_or(0);
+    }
+    if let Some(idx) = value.rfind('-') {
+        return value[idx..].trim().parse::<i32>().unwrap_or(0);
+    }
+    0
+}
+
+fn parse_cover_value(value: &str) -> i32 {
+    parse_leading_number(value) as i32
+}
+
+fn parse_breakage_thresholds(values: &[i32]) -> Result<[i32; 4], String> {
+    if values.len() != 4 {
+        return Err(format!(
+            "expected 4 breakage thresholds, got {}",
+            values.len()
+        ));
+    }
+    Ok([values[0], values[1], values[2], values[3]])
+}
+
 fn parse_reach_ft(value: &str) -> f32 {
     if value.contains('/') {
         return 0.0;
@@ -1167,6 +1317,49 @@ fn parse_reach_ft(value: &str) -> f32 {
 
 fn leak_str(value: String) -> &'static str {
     Box::leak(value.into_boxed_str())
+}
+
+fn can_equip_shield(player: &PlayerConfig, weapon: &WeaponPreset) -> bool {
+    weapon.handedness == WeaponHandedness::OneHanded && !player.two_hand_grip
+}
+
+fn apply_shield_material_tier(shield: ShieldPreset, tier: i32) -> Shield {
+    let tier = tier.clamp(0, 5);
+    let mut defense_bonus = shield.defense_bonus;
+    let mut dr = shield.dr;
+    if tier > 0 {
+        defense_bonus += tier;
+        dr += tier;
+    }
+    Shield {
+        name: leak_str(shield.name),
+        defense_bonus,
+        dr,
+        cover_value: shield.cover_value,
+        breakage_thresholds: shield.breakage_thresholds,
+        weight_lbs: shield.weight_lbs,
+    }
+}
+
+fn breakage_steps_from_thresholds(thresholds: [i32; 4]) -> [sim::ShieldBreakageStep; 4] {
+    [
+        sim::ShieldBreakageStep {
+            threshold: thresholds[0],
+            save_mod: Some(6),
+        },
+        sim::ShieldBreakageStep {
+            threshold: thresholds[1],
+            save_mod: Some(0),
+        },
+        sim::ShieldBreakageStep {
+            threshold: thresholds[2],
+            save_mod: Some(-6),
+        },
+        sim::ShieldBreakageStep {
+            threshold: thresholds[3],
+            save_mod: None,
+        },
+    ]
 }
 
 fn weapon_preset(
@@ -1186,6 +1379,7 @@ fn weapon_preset(
         jab_speed_label: None,
         jab_special_expr: None,
         damage_expr: damage_expr.to_string(),
+        shield_damage_expr: None,
         reach_label: reach_label.to_string(),
         reach_ft,
         armor_pen: 0,
