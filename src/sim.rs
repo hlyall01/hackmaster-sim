@@ -275,17 +275,22 @@ fn resolve_attack(
         0
     };
 
-    let attack_roll = penetrating_roll(20, rng) + attack_bonus;
-    let defense_roll = penetrating_roll(20, rng) + defense_mod + defense_bonus;
-    let mut damage = 0;
-    let mut hit = false;
+    let attack_die = penetrating_roll(20, rng);
+    let defense_die = penetrating_roll(20, rng);
+    let attack_roll = attack_die + attack_bonus;
+    let defense_roll = defense_die + defense_mod + defense_bonus;
+        let mut damage = 0;
+        let mut hit = false;
+        let mut damage_detail = "[0]".to_string();
 
     if attack_roll >= defense_roll {
         hit = true;
-        let mut raw = roll_damage_expr(&damage_expr, rng) + strength_damage;
-        if raw < 0 {
-            raw = 0;
-        }
+            let (rolled_damage, detail) = roll_damage_expr_with_detail(&damage_expr, rng);
+            let mut raw = rolled_damage + strength_damage;
+            if raw < 0 {
+                raw = 0;
+            }
+            damage_detail = detail;
         let mut effective_dr = armor_dr;
         if armor_dr >= 5 {
             effective_dr = (armor_dr - armor_penetration).max(0);
@@ -304,26 +309,36 @@ fn resolve_attack(
     }
     if hit {
         format!(
-            "{} hits {} with {} (atk {} vs def {}) for {} dmg (hp {})",
+            "{} hits {} with {} (atk {} [d20p={}] vs def {} [d20p={}]) for {} dmg {} (hp {})",
             attacker_name,
             defender_name,
             weapon_name,
             attack_roll,
+            attack_die,
             defense_roll,
+            defense_die,
             damage,
+            damage_detail,
             combatants[defender_idx].hp.max(0)
         )
     } else {
         format!(
-            "{} misses {} with {} (atk {} vs def {})",
-            attacker_name, defender_name, weapon_name, attack_roll, defense_roll
+            "{} misses {} with {} (atk {} [d20p={}] vs def {} [d20p={}])",
+            attacker_name,
+            defender_name,
+            weapon_name,
+            attack_roll,
+            attack_die,
+            defense_roll,
+            defense_die
         )
     }
 }
 
-fn roll_damage_expr(expr: &str, rng: &mut impl Rng) -> i32 {
+fn roll_damage_expr_with_detail(expr: &str, rng: &mut impl Rng) -> (i32, String) {
     let cleaned = clean_damage_expr(expr);
-    evaluate_expression(&cleaned, rng)
+    let (total, detail) = evaluate_expression_with_detail(&cleaned, rng);
+    (total, format!("[{}]", detail))
 }
 
 fn clean_damage_expr(expr: &str) -> String {
@@ -344,16 +359,19 @@ fn clean_damage_expr(expr: &str) -> String {
     }
 }
 
-fn evaluate_expression(expr: &str, rng: &mut impl Rng) -> i32 {
+fn evaluate_expression_with_detail(expr: &str, rng: &mut impl Rng) -> (i32, String) {
     let mut total = 0;
+    let mut detail = String::new();
     let mut idx = 0;
     let chars: Vec<char> = expr.chars().collect();
     while idx < chars.len() {
         let mut sign = 1;
+        let mut sign_char = '+';
         if chars[idx] == '+' {
             idx += 1;
         } else if chars[idx] == '-' {
             sign = -1;
+            sign_char = '-';
             idx += 1;
         }
 
@@ -380,17 +398,26 @@ fn evaluate_expression(expr: &str, rng: &mut impl Rng) -> i32 {
 
         let term = &expr[start..idx];
         if !term.is_empty() {
-            total += sign * evaluate_term(term, rng);
+            let (term_value, term_detail) = evaluate_term_with_detail(term, rng);
+            total += sign * term_value;
+            if !detail.is_empty() {
+                detail.push(' ');
+                detail.push(sign_char);
+                detail.push(' ');
+            } else if sign_char == '-' {
+                detail.push('-');
+            }
+            detail.push_str(&term_detail);
         }
     }
-    total
+    (total, detail)
 }
 
-fn evaluate_term(term: &str, rng: &mut impl Rng) -> i32 {
+fn evaluate_term_with_detail(term: &str, rng: &mut impl Rng) -> (i32, String) {
     let trimmed = strip_outer_parens(term);
 
     if has_top_level_operator(trimmed) {
-        return evaluate_expression(trimmed, rng);
+        return evaluate_expression_with_detail(trimmed, rng);
     }
 
     if let Some(d_pos) = trimmed.find('d') {
@@ -415,19 +442,34 @@ fn evaluate_term(term: &str, rng: &mut impl Rng) -> i32 {
         let penetrating = rest.starts_with('p');
 
         let mut subtotal = 0;
+        let mut rolls = Vec::new();
         for _ in 0..count {
-            if penetrating {
-                subtotal += penetrating_roll(sides, rng);
+            let roll = if penetrating {
+                penetrating_roll(sides, rng)
             } else {
-                subtotal += standard_roll(sides, rng);
-            }
+                standard_roll(sides, rng)
+            };
+            rolls.push(roll);
+            subtotal += roll;
         }
-        subtotal
+        let kind = if penetrating { "d" } else { "d" };
+        let detail = format!(
+            "{}{}{}={}",
+            count,
+            kind,
+            sides,
+            rolls
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join("+")
+        );
+        (subtotal, detail)
     } else {
-        trimmed.parse::<i32>().unwrap_or(0)
+        let value = trimmed.parse::<i32>().unwrap_or(0);
+        (value, value.to_string())
     }
 }
-
 fn penetrating_roll(sides: i32, rng: &mut impl Rng) -> i32 {
     if sides <= 1 {
         return sides.max(0);

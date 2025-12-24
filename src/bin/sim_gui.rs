@@ -122,13 +122,21 @@ impl SimGuiApp {
     }
 
     fn draw_arena(&self, ui: &mut egui::Ui, rect: Rect) {
-        let painter = ui.painter();
         let padding = 20.0;
+        if rect.width() <= padding * 2.0 || rect.height() <= 0.0 {
+            return;
+        }
+        let hud_bottom = self.draw_hud(ui, rect, padding);
+        self.draw_timeline(ui, rect, padding, hud_bottom + 25.0);
+        let painter = ui.painter();
         let ground_y = rect.center().y + rect.height() * 0.15;
         let left = rect.left() + padding;
         let right = rect.right() - padding;
         let arena_width = (right - left).max(1.0);
         let scale = arena_width / self.sim.config.start_distance.max(1.0);
+        if !scale.is_finite() {
+            return;
+        }
 
         painter.line_segment(
             [Pos2::new(left, ground_y), Pos2::new(right, ground_y)],
@@ -137,6 +145,8 @@ impl SimGuiApp {
 
         let mut x0 = left + self.sim.actors[0].position * scale;
         let mut x1 = left + self.sim.actors[1].position * scale;
+        x0 = x0.clamp(left, right);
+        x1 = x1.clamp(left, right);
         let gap = (x1 - x0).abs();
         let min_gap = 28.0;
         if gap < min_gap {
@@ -148,25 +158,10 @@ impl SimGuiApp {
             }
         }
 
-        for (idx, (x, player)) in [(x0, &self.players[0]), (x1, &self.players[1])]
+        for (_idx, (x, player)) in [(x0, &self.players[0]), (x1, &self.players[1])]
             .into_iter()
             .enumerate()
         {
-            let hp = self.sim.combatants[idx].hp.max(0) as f32;
-            let max_hp = self.sim.combatants[idx].max_hp.max(1) as f32;
-            let hp_ratio = (hp / max_hp).clamp(0.0, 1.0);
-            let bar_width = 48.0;
-            let bar_height = 6.0;
-            let bar_y = ground_y - 56.0;
-            let bar_x = x - bar_width * 0.5;
-            let bg_rect = Rect::from_min_size(Pos2::new(bar_x, bar_y), egui::vec2(bar_width, bar_height));
-            painter.rect_filled(bg_rect, 2.0, Color32::from_gray(40));
-            let fill_rect = Rect::from_min_size(
-                Pos2::new(bar_x, bar_y),
-                egui::vec2(bar_width * hp_ratio, bar_height),
-            );
-            painter.rect_filled(fill_rect, 2.0, Color32::from_rgb(82, 180, 76));
-
             let pos = Pos2::new(x, ground_y - 20.0);
             painter.circle_filled(pos, 12.0, player.color);
             painter.text(
@@ -176,6 +171,84 @@ impl SimGuiApp {
                 egui::TextStyle::Body.resolve(ui.style()),
                 Color32::from_gray(220),
             );
+        }
+    }
+
+    fn draw_hud(&self, ui: &mut egui::Ui, rect: Rect, padding: f32) -> f32 {
+        let painter = ui.painter();
+        let left = rect.left() + padding;
+        let right = rect.right() - padding;
+        let y = rect.top() + padding * 0.5;
+        let total_width = (right - left).max(1.0);
+        let bar_height = 10.0;
+        let gap = 16.0;
+        let bar_width = (total_width - gap).max(1.0) * 0.5;
+
+        for (idx, player) in self.players.iter().enumerate() {
+            let hp = self.sim.combatants[idx].hp.max(0) as f32;
+            let max_hp = self.sim.combatants[idx].max_hp.max(1) as f32;
+            let hp_ratio = (hp / max_hp).clamp(0.0, 1.0);
+            let bar_x = if idx == 0 {
+                left
+            } else {
+                right - bar_width
+            };
+            let bg_rect = Rect::from_min_size(Pos2::new(bar_x, y), egui::vec2(bar_width, bar_height));
+            painter.rect_filled(bg_rect, 3.0, Color32::from_gray(40));
+            let fill_width = bar_width * hp_ratio;
+            let fill_x = if idx == 0 { bar_x } else { bar_x + (bar_width - fill_width) };
+            let fill_rect = Rect::from_min_size(
+                Pos2::new(fill_x, y),
+                egui::vec2(fill_width, bar_height),
+            );
+            painter.rect_filled(fill_rect, 3.0, player.color);
+            let name_x = if idx == 0 { bar_x } else { bar_x + bar_width };
+            let align = if idx == 0 {
+                egui::Align2::LEFT_CENTER
+            } else {
+                egui::Align2::RIGHT_CENTER
+            };
+            painter.text(
+                Pos2::new(name_x, y - 4.0),
+                align,
+                &player.name,
+                egui::TextStyle::Body.resolve(ui.style()),
+                Color32::from_gray(220),
+            );
+        }
+        y + bar_height
+    }
+
+    fn draw_timeline(&self, ui: &mut egui::Ui, rect: Rect, padding: f32, y: f32) {
+        let painter = ui.painter();
+        let left = rect.left() + padding;
+        let right = rect.right() - padding;
+        if right <= left {
+            return;
+        }
+
+        let horizon = 8.0;
+        let now = self.sim.elapsed_seconds as f32;
+        let scale = (right - left) / horizon;
+        let line_color = Color32::from_gray(70);
+        painter.line_segment([Pos2::new(left, y), Pos2::new(right, y)], (2.0, line_color));
+
+        for tick in 0..=8 {
+            let x = left + tick as f32 * scale;
+            let tick_h = if tick % 2 == 0 { 6.0 } else { 4.0 };
+            painter.line_segment(
+                [Pos2::new(x, y - tick_h), Pos2::new(x, y + tick_h)],
+                (1.0, line_color),
+            );
+        }
+
+        for (idx, player) in self.players.iter().enumerate() {
+            if let Some(next) = self.sim.combatants[idx].next_attack_time {
+                let t = (next - now).max(0.0).min(horizon);
+                let x = left + t * scale;
+                let pos = Pos2::new(x, y - 14.0);
+                painter.circle_filled(pos, 6.0, player.color);
+            }
         }
     }
 }
@@ -198,6 +271,11 @@ impl eframe::App for SimGuiApp {
                 if ui.button("Reset").clicked() {
                     self.running = false;
                     self.reset_positions();
+                }
+                if !self.running {
+                    if ui.button("Next second").clicked() {
+                        self.sim.tick();
+                    }
                 }
                 ui.separator();
                 ui.label("Start distance (ft)");
