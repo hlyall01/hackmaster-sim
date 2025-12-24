@@ -3,15 +3,13 @@ use rand::{Rng, SeedableRng};
 #[derive(Clone, Copy, Debug)]
 pub struct SimConfig {
     pub start_distance: f32,
-    pub walk_speed: f32,
     pub stop_distance: f32,
 }
 
 impl SimConfig {
-    pub fn new(start_distance: f32, walk_speed: f32, stop_distance: f32) -> Self {
+    pub fn new(start_distance: f32, stop_distance: f32) -> Self {
         Self {
             start_distance,
-            walk_speed,
             stop_distance,
         }
     }
@@ -34,6 +32,8 @@ pub struct Combatant {
     pub strength_damage: i32,
     pub weapon_speed: f32,
     pub reach_ft: f32,
+    pub move_speed: f32,
+    pub two_hand_grip: bool,
     pub has_weapon: bool,
     pub weapon_defense_always: bool,
     pub max_hp: i32,
@@ -54,6 +54,8 @@ impl Combatant {
         strength_damage: i32,
         weapon_speed: f32,
         reach_ft: f32,
+        move_speed: f32,
+        two_hand_grip: bool,
         has_weapon: bool,
         weapon_defense_always: bool,
         max_hp: i32,
@@ -69,19 +71,21 @@ impl Combatant {
             strength_damage,
             weapon_speed,
             reach_ft,
+            move_speed,
+            two_hand_grip,
             has_weapon,
             weapon_defense_always,
             max_hp,
             hp: max_hp,
             next_attack_time: None,
-            defense_plus_four_ready: weapon_defense_always,
+            defense_plus_four_ready: false,
         }
     }
 
     fn reset_hp(&mut self) {
         self.hp = self.max_hp;
         self.next_attack_time = None;
-        self.defense_plus_four_ready = self.weapon_defense_always;
+        self.defense_plus_four_ready = false;
     }
 }
 
@@ -98,6 +102,8 @@ impl Default for Combatant {
             strength_damage: 0,
             weapon_speed: 10.0,
             reach_ft: 1.0,
+            move_speed: 5.0,
+            two_hand_grip: false,
             has_weapon: false,
             weapon_defense_always: false,
             max_hp: 10,
@@ -179,15 +185,16 @@ impl SimState {
             return;
         }
         let distance = self.distance();
-        let step = self.config.walk_speed;
+        let step_a = self.combatants[0].move_speed.max(0.0);
+        let step_b = self.combatants[1].move_speed.max(0.0);
         let reach_a = self.combatants[0].reach_ft.max(1.0);
         let reach_b = self.combatants[1].reach_ft.max(1.0);
         let max_reach = self.config.stop_distance.max(1.0);
         let min_reach = reach_a.min(reach_b);
 
         if distance > max_reach {
-            self.actors[0].position += step;
-            self.actors[1].position -= step;
+            self.actors[0].position += step_a;
+            self.actors[1].position -= step_b;
             for combatant in &mut self.combatants {
                 combatant.next_attack_time = None;
             }
@@ -196,9 +203,9 @@ impl SimState {
             let distance = self.distance();
             if distance > min_reach {
                 if reach_a < reach_b {
-                    self.actors[0].position += step;
+                    self.actors[0].position += step_a;
                 } else if reach_b < reach_a {
-                    self.actors[1].position -= step;
+                    self.actors[1].position -= step_b;
                 }
             }
         }
@@ -268,7 +275,8 @@ fn resolve_attack(
     let defense_mod = combatants[defender_idx].defense_mod;
     let armor_dr = combatants[defender_idx].armor_dr;
     let defense_bonus = if combatants[defender_idx].weapon_defense_always
-        || combatants[defender_idx].defense_plus_four_ready
+        || (combatants[defender_idx].two_hand_grip
+            && combatants[defender_idx].defense_plus_four_ready)
     {
         4
     } else {
@@ -301,11 +309,18 @@ fn resolve_attack(
 
     let attacker_name = combatants[attacker_idx].name.clone();
     let defender_name = combatants[defender_idx].name.clone();
-    if combatants[attacker_idx].has_weapon && !combatants[attacker_idx].weapon_defense_always {
-        combatants[attacker_idx].defense_plus_four_ready = false;
+    if combatants[defender_idx].two_hand_grip
+        && combatants[defender_idx].defense_plus_four_ready
+        && combatants[defender_idx].has_weapon
+        && !combatants[defender_idx].weapon_defense_always
+    {
+        combatants[defender_idx].defense_plus_four_ready = false;
     }
-    if combatants[defender_idx].has_weapon && !combatants[defender_idx].weapon_defense_always {
-        combatants[defender_idx].defense_plus_four_ready = true;
+    if combatants[attacker_idx].two_hand_grip
+        && combatants[attacker_idx].has_weapon
+        && !combatants[attacker_idx].weapon_defense_always
+    {
+        combatants[attacker_idx].defense_plus_four_ready = true;
     }
     if hit {
         format!(
@@ -542,7 +557,7 @@ mod tests {
     use rand::SeedableRng;
 
     fn make_state(attacker: Combatant, defender: Combatant) -> SimState {
-        let mut state = SimState::new(SimConfig::new(10.0, 5.0, 1.0));
+        let mut state = SimState::new(SimConfig::new(10.0, 1.0));
         state.combatants = [attacker, defender];
         state
     }
@@ -560,6 +575,8 @@ mod tests {
             0,
             10.0,
             1.0,
+            5.0,
+            false,
             true,
             false,
             20,
@@ -575,6 +592,8 @@ mod tests {
             0,
             10.0,
             1.0,
+            5.0,
+            false,
             true,
             false,
             20,
@@ -598,6 +617,8 @@ mod tests {
             5,
             10.0,
             1.0,
+            5.0,
+            false,
             true,
             false,
             20,
@@ -613,6 +634,8 @@ mod tests {
             0,
             10.0,
             1.0,
+            5.0,
+            false,
             true,
             false,
             20,
@@ -636,6 +659,8 @@ mod tests {
             5,
             10.0,
             1.0,
+            5.0,
+            false,
             true,
             false,
             20,
@@ -651,6 +676,8 @@ mod tests {
             0,
             10.0,
             1.0,
+            5.0,
+            false,
             true,
             false,
             20,
@@ -674,6 +701,8 @@ mod tests {
             5,
             10.0,
             1.0,
+            5.0,
+            false,
             true,
             false,
             20,
@@ -689,6 +718,8 @@ mod tests {
             0,
             10.0,
             1.0,
+            5.0,
+            false,
             true,
             false,
             20,
@@ -712,6 +743,8 @@ mod tests {
             0,
             10.0,
             1.0,
+            5.0,
+            false,
             true,
             false,
             20,
@@ -727,6 +760,8 @@ mod tests {
             0,
             10.0,
             1.0,
+            5.0,
+            false,
             true,
             false,
             20,
@@ -761,7 +796,7 @@ mod tests {
     }
 
     #[test]
-    fn weapon_defense_bonus_applies_after_defending() {
+    fn two_hand_grip_bonus_applies_once_between_attacks() {
         let attacker = Combatant::new(
             "Attacker".to_string(),
             "Test Blade".to_string(),
@@ -773,6 +808,8 @@ mod tests {
             0,
             10.0,
             1.0,
+            5.0,
+            true,
             true,
             false,
             20,
@@ -788,6 +825,8 @@ mod tests {
             0,
             10.0,
             1.0,
+            5.0,
+            false,
             true,
             false,
             20,
@@ -795,12 +834,11 @@ mod tests {
         let mut state = make_state(attacker, defender);
         let mut rng = FixedRng(0);
         let _ = resolve_attack(&mut state.combatants, 0, 1, &mut rng);
-        assert_eq!(state.combatants[1].hp, 19);
-        assert!(state.combatants[1].defense_plus_four_ready);
+        assert!(state.combatants[0].defense_plus_four_ready);
 
         let mut rng = FixedRng(0);
-        let _ = resolve_attack(&mut state.combatants, 0, 1, &mut rng);
-        assert_eq!(state.combatants[1].hp, 19);
+        let _ = resolve_attack(&mut state.combatants, 1, 0, &mut rng);
+        assert!(!state.combatants[0].defense_plus_four_ready);
     }
 
     #[test]
@@ -816,6 +854,8 @@ mod tests {
             0,
             10.0,
             1.0,
+            5.0,
+            false,
             true,
             false,
             20,
@@ -831,6 +871,8 @@ mod tests {
             0,
             10.0,
             1.0,
+            5.0,
+            false,
             true,
             true,
             20,
@@ -839,6 +881,89 @@ mod tests {
         let mut rng = FixedRng(0);
         let _ = resolve_attack(&mut state.combatants, 0, 1, &mut rng);
         assert_eq!(state.combatants[1].hp, 20);
-        assert!(state.combatants[1].defense_plus_four_ready);
+    }
+
+    #[test]
+    fn one_handed_weapon_does_not_grant_defense_bonus() {
+        let attacker = Combatant::new(
+            "Attacker".to_string(),
+            "Test Blade".to_string(),
+            0,
+            0,
+            0,
+            0,
+            "1d1".to_string(),
+            0,
+            10.0,
+            1.0,
+            5.0,
+            false,
+            true,
+            false,
+            20,
+        );
+        let defender = Combatant::new(
+            "Defender".to_string(),
+            "Short Sword".to_string(),
+            0,
+            0,
+            0,
+            0,
+            "1d1".to_string(),
+            0,
+            10.0,
+            1.0,
+            5.0,
+            false,
+            true,
+            false,
+            20,
+        );
+        let mut state = make_state(attacker, defender);
+        let mut rng = FixedRng(0);
+        let _ = resolve_attack(&mut state.combatants, 0, 1, &mut rng);
+        assert!(!state.combatants[1].defense_plus_four_ready);
+    }
+
+    #[test]
+    fn defense_always_applies_without_two_hand_grip() {
+        let attacker = Combatant::new(
+            "Attacker".to_string(),
+            "Test Blade".to_string(),
+            0,
+            0,
+            0,
+            0,
+            "1d1".to_string(),
+            0,
+            10.0,
+            1.0,
+            5.0,
+            false,
+            true,
+            false,
+            20,
+        );
+        let defender = Combatant::new(
+            "Defender".to_string(),
+            "Polehammer".to_string(),
+            0,
+            0,
+            0,
+            0,
+            "1d1".to_string(),
+            0,
+            10.0,
+            1.0,
+            5.0,
+            false,
+            true,
+            true,
+            20,
+        );
+        let mut state = make_state(attacker, defender);
+        let mut rng = FixedRng(0);
+        let _ = resolve_attack(&mut state.combatants, 0, 1, &mut rng);
+        assert_eq!(state.combatants[1].hp, 20);
     }
 }

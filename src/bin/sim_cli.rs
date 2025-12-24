@@ -90,7 +90,7 @@ fn main() {
     );
     println!("Load category: {}", derived.load_category);
 
-    let mut sim = SimState::new(SimConfig::new(20.0, 5.0, reach_ft));
+    let mut sim = SimState::new(SimConfig::new(20.0, reach_ft));
     let combatant = Combatant::new(
         character.name.clone(),
         character
@@ -127,6 +127,8 @@ fn main() {
             .as_ref()
             .map(|weapon| weapon.reach_ft)
             .unwrap_or(1.0),
+        5.0,
+        false,
         character.equipment.weapon.is_some(),
         character
             .equipment

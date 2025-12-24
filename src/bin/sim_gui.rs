@@ -23,12 +23,43 @@ struct WeaponPreset {
     reach_ft: f32,
     armor_pen: i32,
     defense_bonus_always: bool,
+    size: WeaponSize,
+    handedness: WeaponHandedness,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WeaponSize {
+    Small,
+    Medium,
+    Large,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WeaponHandedness {
+    OneHanded,
+    TwoHanded,
 }
 
 #[derive(Clone)]
 struct ArmorEntry {
     label: String,
     armor: Option<Armor>,
+}
+
+#[derive(Clone, Deserialize)]
+struct NpcPreset {
+    name: String,
+    hp: i32,
+    attack_bonus: i32,
+    damage_bonus: i32,
+    defense_mod: i32,
+    armor_dr: i32,
+    top: i32,
+}
+
+#[derive(Deserialize)]
+struct NpcPresetsFile {
+    presets: Vec<NpcPreset>,
 }
 
 #[derive(Clone)]
@@ -38,6 +69,7 @@ struct PlayerConfig {
     level: u8,
     progression: Progression,
     base_hp: u32,
+    move_speed: f32,
     strength_base: u8,
     strength_pct: u8,
     dex_base: u8,
@@ -49,6 +81,8 @@ struct PlayerConfig {
     charisma: u8,
     weapon_index: usize,
     armor_index: usize,
+    npc_preset: Option<usize>,
+    two_hand_grip: bool,
 }
 
 impl PlayerConfig {
@@ -59,6 +93,7 @@ impl PlayerConfig {
             level: 1,
             progression: Progression::default(),
             base_hp: 10,
+            move_speed: 5.0,
             strength_base: 10,
             strength_pct: 1,
             dex_base: 10,
@@ -70,6 +105,8 @@ impl PlayerConfig {
             charisma: 10,
             weapon_index,
             armor_index: 0,
+            npc_preset: None,
+            two_hand_grip: false,
         }
     }
 }
@@ -80,6 +117,8 @@ struct SimGuiApp {
     players: [PlayerConfig; 2],
     weapon_catalog: Vec<WeaponPreset>,
     armor_catalog: Vec<ArmorEntry>,
+    npc_presets: Vec<NpcPreset>,
+    show_player_editor: [bool; 2],
 }
 
 impl SimGuiApp {
@@ -91,7 +130,14 @@ impl SimGuiApp {
                 (default_weapon_catalog(), default_armor_catalog())
             }
         };
-        let sim = SimState::new(SimConfig::new(20.0, 5.0, 1.0));
+        let npc_presets = match load_npc_presets("data/npc_presets.json") {
+            Ok(presets) => presets,
+            Err(err) => {
+                eprintln!("Failed to load NPC presets: {err}");
+                Vec::new()
+            }
+        };
+        let sim = SimState::new(SimConfig::new(20.0, 1.0));
         let mut app = Self {
             running: false,
             sim,
@@ -101,13 +147,20 @@ impl SimGuiApp {
             ],
             weapon_catalog,
             armor_catalog,
+            npc_presets,
+            show_player_editor: [false, false],
         };
         app.reset_positions();
         app
     }
 
     fn reset_positions(&mut self) {
-        let combatants = build_combatants(&self.players, &self.weapon_catalog, &self.armor_catalog);
+        let combatants = build_combatants(
+            &self.players,
+            &self.weapon_catalog,
+            &self.armor_catalog,
+            &self.npc_presets,
+        );
         self.sim.reset_with_combatants(combatants);
     }
 
@@ -281,8 +334,8 @@ impl eframe::App for SimGuiApp {
                 ui.label("Start distance (ft)");
                 if ui
                     .add(
-                        egui::Slider::new(&mut self.sim.config.start_distance, 5.0..=60.0)
-                            .step_by(1.0),
+                        egui::Slider::new(&mut self.sim.config.start_distance, 0.0..=400.0)
+                            .step_by(5.0),
                     )
                     .changed()
                 {
@@ -290,40 +343,38 @@ impl eframe::App for SimGuiApp {
                         self.reset_positions();
                     }
                 }
-                ui.label("Walk speed (ft/s)");
-                ui.add(
-                    egui::Slider::new(&mut self.sim.config.walk_speed, 1.0..=15.0).step_by(0.5),
-                );
             });
         });
 
         egui::SidePanel::left("players")
             .resizable(true)
-            .min_width(280.0)
+            .min_width(220.0)
             .show(ctx, |ui| {
-                egui::CollapsingHeader::new("Player 1")
-                    .default_open(true)
-                    .show(ui, |ui| {
-                        render_player_editor(
-                            ui,
-                            "p1",
-                            &mut self.players[0],
-                            &self.weapon_catalog,
-                            &self.armor_catalog,
-                        );
-                    });
+                ui.heading("Characters");
                 ui.separator();
-                egui::CollapsingHeader::new("Player 2")
-                    .default_open(true)
-                    .show(ui, |ui| {
-                        render_player_editor(
-                            ui,
-                            "p2",
-                            &mut self.players[1],
-                            &self.weapon_catalog,
-                            &self.armor_catalog,
-                        );
+                for idx in 0..self.players.len() {
+                    let weapon_name = self
+                        .weapon_catalog
+                        .get(self.players[idx].weapon_index)
+                        .map(|weapon| weapon.name.as_str())
+                        .unwrap_or("Unarmed");
+                    ui.horizontal(|ui| {
+                        ui.label(format!(
+                            "{} ({})",
+                            self.players[idx].name, weapon_name
+                        ));
+                        if ui.button("Customize").clicked() {
+                            self.show_player_editor[idx] = true;
+                        }
                     });
+                    ui.label(format!(
+                        "Move: {:.0} ft/s",
+                        self.players[idx].move_speed
+                    ));
+                    if idx == 0 {
+                        ui.separator();
+                    }
+                }
             });
 
         egui::SidePanel::right("status")
@@ -386,6 +437,27 @@ impl eframe::App for SimGuiApp {
             self.draw_arena(ui, rect);
         });
 
+        for idx in 0..self.players.len() {
+            let mut open = self.show_player_editor[idx];
+            let title = format!("Customize {}", self.players[idx].name);
+            egui::Window::new(title)
+                .id(egui::Id::new(format!("player_editor_{idx}")))
+                .open(&mut open)
+                .resizable(true)
+                .show(ctx, |ui| {
+                    let id_prefix = if idx == 0 { "p1" } else { "p2" };
+                    render_player_editor(
+                        ui,
+                        id_prefix,
+                        &mut self.players[idx],
+                        &self.weapon_catalog,
+                        &self.armor_catalog,
+                        &self.npc_presets,
+                    );
+                });
+            self.show_player_editor[idx] = open;
+        }
+
         if self.running {
             ctx.request_repaint();
         }
@@ -398,6 +470,7 @@ fn render_player_editor(
     player: &mut PlayerConfig,
     weapon_catalog: &[WeaponPreset],
     armor_catalog: &[ArmorEntry],
+    npc_presets: &[NpcPreset],
 ) {
     if weapon_catalog.is_empty() {
         ui.label("Weapon catalog is empty.");
@@ -406,83 +479,125 @@ fn render_player_editor(
     player.weapon_index = player.weapon_index.min(weapon_catalog.len() - 1);
     player.armor_index = player.armor_index.min(armor_catalog.len().saturating_sub(1));
 
-    ui.horizontal(|ui| {
-        ui.label("Name");
-        ui.text_edit_singleline(&mut player.name);
+    if !npc_presets.is_empty() {
+        ui.horizontal(|ui| {
+            ui.label("NPC preset");
+            let mut selection = player.npc_preset.map_or(usize::MAX, |idx| idx);
+            egui::ComboBox::from_id_source(format!("{id_prefix}_npc_preset"))
+                .selected_text(match player.npc_preset.and_then(|idx| npc_presets.get(idx)) {
+                    Some(preset) => preset.name.as_str(),
+                    None => "None",
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut selection, usize::MAX, "None");
+                    for (idx, preset) in npc_presets.iter().enumerate() {
+                        ui.selectable_value(&mut selection, idx, preset.name.as_str());
+                    }
+                });
+            player.npc_preset = if selection == usize::MAX {
+                None
+            } else {
+                Some(selection)
+            };
+        });
+        if let Some(preset) = player.npc_preset.and_then(|idx| npc_presets.get(idx)) {
+            ui.label(format!(
+                "Preset: HP {} | ATT {} | DEF {} | DR {} | DMG +{} | TOP {}",
+                preset.hp,
+                preset.attack_bonus,
+                preset.defense_mod,
+                preset.armor_dr,
+                preset.damage_bonus,
+                preset.top
+            ));
+        }
+    }
+    let npc_active = player.npc_preset.is_some();
+    ui.add_enabled_ui(!npc_active, |ui| {
+        ui.horizontal(|ui| {
+            ui.label("Name");
+            ui.text_edit_singleline(&mut player.name);
+        });
+        ui.horizontal(|ui| {
+            ui.label("Level");
+            ui.add(egui::Slider::new(&mut player.level, 1..=20).step_by(1.0));
+        });
+        ui.horizontal(|ui| {
+            ui.label("Base HP");
+            ui.add(egui::Slider::new(&mut player.base_hp, 1..=200).step_by(1.0));
+        });
     });
     ui.horizontal(|ui| {
         ui.label("Color");
         ui.color_edit_button_srgba(&mut player.color);
     });
     ui.horizontal(|ui| {
-        ui.label("Level");
-        ui.add(egui::Slider::new(&mut player.level, 1..=20).step_by(1.0));
+        ui.label("Move speed (ft/s)");
+        ui.add(egui::Slider::new(&mut player.move_speed, 0.0..=40.0).step_by(5.0));
     });
-    ui.horizontal(|ui| {
-        ui.label("Base HP");
-        ui.add(egui::Slider::new(&mut player.base_hp, 1..=200).step_by(1.0));
-    });
-    ui.horizontal(|ui| {
-        tier_combo(
-            ui,
-            format!("{id_prefix}_attack_tier"),
-            "Attack Tier",
-            &mut player.progression.attack,
-            &[
-                ProgressionTier::I,
-                ProgressionTier::II,
-                ProgressionTier::III,
-                ProgressionTier::IV,
-                ProgressionTier::V,
-                ProgressionTier::VI,
-            ],
-        );
-    });
-    ui.horizontal(|ui| {
-        tier_combo(
-            ui,
-            format!("{id_prefix}_speed_tier"),
-            "Speed Tier",
-            &mut player.progression.speed,
-            &[
-                ProgressionTier::I,
-                ProgressionTier::II,
-                ProgressionTier::III,
-                ProgressionTier::IV,
-                ProgressionTier::V,
-                ProgressionTier::VI,
-            ],
-        );
-    });
-    ui.horizontal(|ui| {
-        tier_combo(
-            ui,
-            format!("{id_prefix}_initiative_tier"),
-            "Initiative Tier",
-            &mut player.progression.initiative,
-            &[
-                ProgressionTier::I,
-                ProgressionTier::II,
-                ProgressionTier::III,
-                ProgressionTier::IV,
-                ProgressionTier::V,
-            ],
-        );
-    });
-    ui.horizontal(|ui| {
-        tier_combo(
-            ui,
-            format!("{id_prefix}_health_tier"),
-            "Health Tier",
-            &mut player.progression.health,
-            &[
-                ProgressionTier::I,
-                ProgressionTier::II,
-                ProgressionTier::III,
-                ProgressionTier::IV,
-                ProgressionTier::V,
-            ],
-        );
+    ui.add_enabled_ui(!npc_active, |ui| {
+        ui.horizontal(|ui| {
+            tier_combo(
+                ui,
+                format!("{id_prefix}_attack_tier"),
+                "Attack Tier",
+                &mut player.progression.attack,
+                &[
+                    ProgressionTier::I,
+                    ProgressionTier::II,
+                    ProgressionTier::III,
+                    ProgressionTier::IV,
+                    ProgressionTier::V,
+                    ProgressionTier::VI,
+                ],
+            );
+        });
+        ui.horizontal(|ui| {
+            tier_combo(
+                ui,
+                format!("{id_prefix}_speed_tier"),
+                "Speed Tier",
+                &mut player.progression.speed,
+                &[
+                    ProgressionTier::I,
+                    ProgressionTier::II,
+                    ProgressionTier::III,
+                    ProgressionTier::IV,
+                    ProgressionTier::V,
+                    ProgressionTier::VI,
+                ],
+            );
+        });
+        ui.horizontal(|ui| {
+            tier_combo(
+                ui,
+                format!("{id_prefix}_initiative_tier"),
+                "Initiative Tier",
+                &mut player.progression.initiative,
+                &[
+                    ProgressionTier::I,
+                    ProgressionTier::II,
+                    ProgressionTier::III,
+                    ProgressionTier::IV,
+                    ProgressionTier::V,
+                ],
+            );
+        });
+        ui.horizontal(|ui| {
+            tier_combo(
+                ui,
+                format!("{id_prefix}_health_tier"),
+                "Health Tier",
+                &mut player.progression.health,
+                &[
+                    ProgressionTier::I,
+                    ProgressionTier::II,
+                    ProgressionTier::III,
+                    ProgressionTier::IV,
+                    ProgressionTier::V,
+                ],
+            );
+        });
     });
 
     ui.horizontal(|ui| {
@@ -497,62 +612,90 @@ fn render_player_editor(
     });
 
     let weapon = &weapon_catalog[player.weapon_index];
+    let is_two_handed = weapon.handedness == WeaponHandedness::TwoHanded;
+    let can_two_hand = weapon.handedness == WeaponHandedness::OneHanded
+        && (weapon.size == WeaponSize::Medium || weapon.size == WeaponSize::Large);
+    if is_two_handed {
+        player.two_hand_grip = true;
+    } else if !can_two_hand {
+        player.two_hand_grip = false;
+    }
     ui.label(format!(
         "Speed {} | Damage {} | Reach/Range {}",
         weapon.speed_label, weapon.damage_expr, weapon.reach_label
     ));
-
+    if player.two_hand_grip && can_two_hand {
+        ui.label("Two-hand grip: +3 damage, +2 speed");
+    }
     ui.horizontal(|ui| {
-        ui.label("Armor");
-        egui::ComboBox::from_id_source(format!("{id_prefix}_armor"))
-            .selected_text(armor_display_name(armor_catalog.get(player.armor_index)))
-            .show_ui(ui, |ui| {
-                for (idx, armor) in armor_catalog.iter().enumerate() {
-                    ui.selectable_value(&mut player.armor_index, idx, armor.label.clone());
-                }
-            });
+        let enabled = can_two_hand && !is_two_handed;
+        ui.add_enabled_ui(enabled, |ui| {
+            ui.checkbox(&mut player.two_hand_grip, "Two-hand grip");
+        });
+        if is_two_handed {
+            ui.label("Required");
+        } else if !can_two_hand {
+            ui.label("Unavailable");
+        }
     });
 
-    ui.separator();
-    ui.label("Abilities");
-    ability_percentile_editor(
-        ui,
-        &format!("{id_prefix}_str"),
-        "STR",
-        &mut player.strength_base,
-        &mut player.strength_pct,
-    );
-    ability_percentile_editor(
-        ui,
-        &format!("{id_prefix}_dex"),
-        "DEX",
-        &mut player.dex_base,
-        &mut player.dex_pct,
-    );
-    ability_slider(ui, "INT", &mut player.intelligence);
-    ability_slider(ui, "WIS", &mut player.wisdom);
-    ability_slider(ui, "CON", &mut player.constitution);
-    ability_slider(ui, "LKS", &mut player.looks);
-    ability_slider(ui, "CHA", &mut player.charisma);
+    ui.add_enabled_ui(!npc_active, |ui| {
+        ui.horizontal(|ui| {
+            ui.label("Armor");
+            egui::ComboBox::from_id_source(format!("{id_prefix}_armor"))
+                .selected_text(armor_display_name(armor_catalog.get(player.armor_index)))
+                .show_ui(ui, |ui| {
+                    for (idx, armor) in armor_catalog.iter().enumerate() {
+                        ui.selectable_value(&mut player.armor_index, idx, armor.label.clone());
+                    }
+                });
+        });
+
+        ui.separator();
+        ui.label("Abilities");
+        ability_percentile_editor(
+            ui,
+            &format!("{id_prefix}_str"),
+            "STR",
+            &mut player.strength_base,
+            &mut player.strength_pct,
+        );
+        ability_percentile_editor(
+            ui,
+            &format!("{id_prefix}_dex"),
+            "DEX",
+            &mut player.dex_base,
+            &mut player.dex_pct,
+        );
+        ability_slider(ui, "INT", &mut player.intelligence);
+        ability_slider(ui, "WIS", &mut player.wisdom);
+        ability_slider(ui, "CON", &mut player.constitution);
+        ability_slider(ui, "LKS", &mut player.looks);
+        ability_slider(ui, "CHA", &mut player.charisma);
+    });
 
     let character = build_character(player, weapon_catalog, armor_catalog);
     let derived = character.derived();
     ui.separator();
-    ui.label("Derived");
-    ui.label(format!(
-        "Hit points: {} (x{:.1})",
-        derived.hit_points, derived.health_mult
-    ));
-    ui.label(format!("Attack bonus: {}", derived.attack_bonus));
-    ui.label(format!("Speed mod: {}", derived.speed_mod));
-    ui.label(format!("Initiative mod: {}", derived.initiative_mod));
-    ui.label(format!("Base DV: {}", derived.base_dv));
-    ui.label(format!("Armor DR: {}", derived.armor_dr));
-    ui.label(format!(
-        "Carry (none/light/med/heavy): {:?}",
-        derived.carry_capacity
-    ));
-    ui.label(format!("Load: {}", derived.load_category));
+    if npc_active {
+        ui.label("Derived stats ignored while NPC preset is active.");
+    } else {
+        ui.label("Derived");
+        ui.label(format!(
+            "Hit points: {} (x{:.1})",
+            derived.hit_points, derived.health_mult
+        ));
+        ui.label(format!("Attack bonus: {}", derived.attack_bonus));
+        ui.label(format!("Speed mod: {}", derived.speed_mod));
+        ui.label(format!("Initiative mod: {}", derived.initiative_mod));
+        ui.label(format!("Base DV: {}", derived.base_dv));
+        ui.label(format!("Armor DR: {}", derived.armor_dr));
+        ui.label(format!(
+            "Carry (none/light/med/heavy): {:?}",
+            derived.carry_capacity
+        ));
+        ui.label(format!("Load: {}", derived.load_category));
+    }
 }
 
 fn ability_percentile_editor(
@@ -641,6 +784,8 @@ fn weapon_preset(
         reach_ft,
         armor_pen: 0,
         defense_bonus_always: false,
+        size: WeaponSize::Medium,
+        handedness: WeaponHandedness::OneHanded,
     }
 }
 
@@ -701,10 +846,11 @@ fn build_combatants(
     players: &[PlayerConfig; 2],
     weapon_catalog: &[WeaponPreset],
     armor_catalog: &[ArmorEntry],
+    npc_presets: &[NpcPreset],
 ) -> [Combatant; 2] {
     [
-        build_combatant(&players[0], weapon_catalog, armor_catalog),
-        build_combatant(&players[1], weapon_catalog, armor_catalog),
+        build_combatant(&players[0], weapon_catalog, armor_catalog, npc_presets),
+        build_combatant(&players[1], weapon_catalog, armor_catalog, npc_presets),
     ]
 }
 
@@ -712,7 +858,9 @@ fn build_combatant(
     player: &PlayerConfig,
     weapon_catalog: &[WeaponPreset],
     armor_catalog: &[ArmorEntry],
+    npc_presets: &[NpcPreset],
 ) -> Combatant {
+    let weapon_preset = &weapon_catalog[player.weapon_index];
     let character = build_character(player, weapon_catalog, armor_catalog);
     let derived = character.derived();
     let weapon_name = character
@@ -753,20 +901,44 @@ fn build_combatant(
         .map(|weapon| weapon.damage_expr.clone())
         .unwrap_or_else(|| "d4p".to_string());
 
+    let is_two_handed = weapon_preset.handedness == WeaponHandedness::TwoHanded;
+    let can_two_hand = weapon_preset.handedness == WeaponHandedness::OneHanded
+        && (weapon_preset.size == WeaponSize::Medium || weapon_preset.size == WeaponSize::Large);
+    let effective_two_hand = is_two_handed || (player.two_hand_grip && can_two_hand);
+    let two_hand_damage_bonus = if effective_two_hand && can_two_hand { 3 } else { 0 };
+    let two_hand_speed_bonus = if effective_two_hand && can_two_hand { 2.0 } else { 0.0 };
+
+    let mut name = character.name;
+    let mut attack_bonus = derived.attack_bonus;
+    let mut defense_mod = derived.base_dv;
+    let mut armor_dr = derived.armor_dr;
+    let mut strength_damage = character.ability_mods.strength.damage + two_hand_damage_bonus;
+    let mut max_hp = derived.hit_points as i32;
+    if let Some(preset) = player.npc_preset.and_then(|idx| npc_presets.get(idx)) {
+        name = preset.name.clone();
+        attack_bonus = preset.attack_bonus;
+        defense_mod = preset.defense_mod;
+        armor_dr = preset.armor_dr;
+        strength_damage = preset.damage_bonus;
+        max_hp = preset.hp.max(1);
+    }
+
     Combatant::new(
-        character.name,
+        name,
         weapon_name,
-        derived.attack_bonus,
-        derived.base_dv,
-        derived.armor_dr,
+        attack_bonus,
+        defense_mod,
+        armor_dr,
         armor_penetration,
         weapon_damage,
-        character.ability_mods.strength.damage,
-        weapon_speed,
+        strength_damage,
+        weapon_speed + two_hand_speed_bonus,
         weapon_reach,
+        player.move_speed,
+        effective_two_hand,
         has_weapon,
         weapon_defense_always,
-        derived.hit_points as i32,
+        max_hp,
     )
 }
 
@@ -1246,6 +1418,12 @@ fn load_catalogs() -> Result<(Vec<WeaponPreset>, Vec<ArmorEntry>), String> {
     Ok((weapons, armor))
 }
 
+fn load_npc_presets(path: &str) -> Result<Vec<NpcPreset>, String> {
+    let data = fs::read_to_string(path).map_err(|err| err.to_string())?;
+    let parsed: NpcPresetsFile = serde_json::from_str(&data).map_err(|err| err.to_string())?;
+    Ok(parsed.presets)
+}
+
 #[derive(Deserialize)]
 struct WeaponsFile {
     weapons: Vec<WeaponJson>,
@@ -1263,6 +1441,8 @@ struct WeaponJson {
     defense_bonus_always: Option<bool>,
     #[serde(rename = "reach_or_range")]
     reach_or_range: Option<String>,
+    size: String,
+    handedness: String,
 }
 
 #[derive(Deserialize)]
@@ -1316,6 +1496,14 @@ fn load_weapon_catalog(path: &str) -> Result<Vec<WeaponPreset>, String> {
             Some(group) => group,
             None => continue,
         };
+        let size = match weapon_size_from_str(&entry.size) {
+            Some(size) => size,
+            None => continue,
+        };
+        let handedness = match weapon_handedness_from_str(&entry.handedness) {
+            Some(handedness) => handedness,
+            None => continue,
+        };
         let speed_value = parse_leading_number(&entry.speed);
         let reach_label = entry
             .reach_or_range
@@ -1333,6 +1521,8 @@ fn load_weapon_catalog(path: &str) -> Result<Vec<WeaponPreset>, String> {
             reach_ft,
             armor_pen: entry.armor_penetration.unwrap_or(0),
             defense_bonus_always: entry.defense_bonus_always.unwrap_or(false),
+            size,
+            handedness,
         });
     }
     if catalog.is_empty() {
@@ -1424,6 +1614,23 @@ fn armor_type_from_str(kind: &str) -> Option<character::ArmorType> {
     }
 }
 
+fn weapon_size_from_str(size: &str) -> Option<WeaponSize> {
+    match size {
+        "S" => Some(WeaponSize::Small),
+        "M" => Some(WeaponSize::Medium),
+        "L" => Some(WeaponSize::Large),
+        _ => None,
+    }
+}
+
+fn weapon_handedness_from_str(handedness: &str) -> Option<WeaponHandedness> {
+    match handedness {
+        "1h" => Some(WeaponHandedness::OneHanded),
+        "2h" => Some(WeaponHandedness::TwoHanded),
+        _ => None,
+    }
+}
+
 fn parse_leading_number(value: &str) -> f32 {
     let mut started = false;
     let mut buf = String::new();
@@ -1451,7 +1658,9 @@ fn leak_str(value: String) -> &'static str {
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([980.0, 560.0]),
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([980.0, 560.0])
+            .with_min_inner_size([640.0, 360.0]),
         ..Default::default()
     };
     eframe::run_native(

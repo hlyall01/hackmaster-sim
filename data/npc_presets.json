@@ -1,0 +1,49 @@
+{
+  "presets": [
+    {
+      "name": "Hobgoblin",
+      "hp": 27,
+      "attack_bonus": 5,
+      "damage_bonus": 1,
+      "defense_mod": -2,
+      "armor_dr": 4,
+      "top": 6
+    },
+    {
+      "name": "Hobgoblin 2",
+      "hp": 32,
+      "attack_bonus": 5,
+      "damage_bonus": 2,
+      "defense_mod": -2,
+      "armor_dr": 5,
+      "top": 6
+    },
+    {
+      "name": "Hobgoblin 3",
+      "hp": 37,
+      "attack_bonus": 6,
+      "damage_bonus": 2,
+      "defense_mod": -1,
+      "armor_dr": 6,
+      "top": 6
+    },
+    {
+      "name": "Hobgoblin 4",
+      "hp": 43,
+      "attack_bonus": 7,
+      "damage_bonus": 3,
+      "defense_mod": 0,
+      "armor_dr": 7,
+      "top": 7
+    },
+    {
+      "name": "Hobgoblin 5",
+      "hp": 48,
+      "attack_bonus": 8,
+      "damage_bonus": 4,
+      "defense_mod": 1,
+      "armor_dr": 8,
+      "top": 8
+    }
+  ]
+}
