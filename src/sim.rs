@@ -1018,16 +1018,36 @@ fn breakage_roll(step: ShieldBreakageStep, rng: &mut impl Rng) -> bool {
 }
 
 fn roll_damage_expr_with_detail(expr: &str, rng: &mut impl Rng) -> (i32, String) {
-    let cleaned = clean_damage_expr(expr);
-    let (total, detail) = evaluate_expression_with_detail(&cleaned, rng);
-    (total, format!("[{}]", detail))
+    roll_damage_expr_with_detail_inner(expr, rng, false)
 }
 
 fn roll_damage_expr_with_detail_nonpenetrating(expr: &str, rng: &mut impl Rng) -> (i32, String) {
+    roll_damage_expr_with_detail_inner(expr, rng, true)
+}
+
+fn roll_damage_expr_with_detail_inner(
+    expr: &str,
+    rng: &mut impl Rng,
+    nonpenetrating: bool,
+) -> (i32, String) {
+    let lower = expr.to_ascii_lowercase();
+    let is_lower_of = lower.contains("lower of");
     let cleaned = clean_damage_expr(expr);
-    let no_pen = cleaned.replace('p', "");
-    let (total, detail) = evaluate_expression_with_detail(&no_pen, rng);
-    (total, format!("[{}]", detail))
+    let cleaned = if nonpenetrating {
+        cleaned.replace('p', "")
+    } else {
+        cleaned
+    };
+    if is_lower_of {
+        let (a_total, a_detail) = evaluate_expression_with_detail(&cleaned, rng);
+        let (b_total, b_detail) = evaluate_expression_with_detail(&cleaned, rng);
+        let total = a_total.min(b_total);
+        let detail = format!("lower of {} vs {}", a_detail, b_detail);
+        (total, format!("[{}]", detail))
+    } else {
+        let (total, detail) = evaluate_expression_with_detail(&cleaned, rng);
+        (total, format!("[{}]", detail))
+    }
 }
 
 fn clean_damage_expr(expr: &str) -> String {
@@ -1315,6 +1335,59 @@ mod tests {
         let mut state = SimState::new(SimConfig::new(10.0, 1.0));
         state.combatants = [attacker, defender];
         state
+    }
+
+    #[test]
+    fn lower_of_damage_expr_is_parsed_for_shield_damage() {
+        assert_eq!(clean_damage_expr("lower of 2d6p"), "2d6p");
+    }
+
+    struct SeqRng {
+        values: Vec<u32>,
+        idx: usize,
+    }
+
+    impl SeqRng {
+        fn new(values: Vec<u32>) -> Self {
+            Self { values, idx: 0 }
+        }
+    }
+
+    impl rand::RngCore for SeqRng {
+        fn next_u32(&mut self) -> u32 {
+            let value = self.values[self.idx % self.values.len()];
+            self.idx += 1;
+            value
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            self.next_u32() as u64
+        }
+
+        fn fill_bytes(&mut self, dest: &mut [u8]) {
+            for byte in dest.iter_mut() {
+                *byte = self.next_u32() as u8;
+            }
+        }
+
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand::Error> {
+            self.fill_bytes(dest);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn lower_of_damage_expr_uses_lower_total() {
+        let cleaned = clean_damage_expr("lower of 2d6p");
+        let mut expected_rng = SeqRng::new(vec![0, 5, 1, 4]);
+        let (a_total, _) = evaluate_expression_with_detail(&cleaned, &mut expected_rng);
+        let (b_total, _) = evaluate_expression_with_detail(&cleaned, &mut expected_rng);
+        let expected = a_total.min(b_total);
+
+        let mut rng = SeqRng::new(vec![0, 5, 1, 4]);
+        let (total, detail) = roll_damage_expr_with_detail("lower of 2d6p", &mut rng);
+        assert_eq!(total, expected);
+        assert!(detail.contains("lower of"));
     }
 
     #[test]
