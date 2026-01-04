@@ -139,6 +139,8 @@ pub struct FighterPreset {
     pub shield_material_tier: i32,
     pub two_hand_grip: bool,
     pub use_jab: bool,
+    #[serde(default)]
+    pub hold_at_bay: bool,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -180,6 +182,7 @@ pub struct PlayerConfig {
     pub shield_mastery_speed: i32,
     pub two_hand_grip: bool,
     pub use_jab: bool,
+    pub hold_at_bay: bool,
 }
 
 impl PlayerConfig {
@@ -217,6 +220,7 @@ impl PlayerConfig {
             shield_mastery_speed: 0,
             two_hand_grip: false,
             use_jab: false,
+            hold_at_bay: false,
         }
     }
 }
@@ -592,6 +596,9 @@ pub fn build_combatant(
             max_hp,
             constitution: player.constitution,
             threshold_of_pain,
+        },
+        maneuvers: sim::ManeuverProfile {
+            hold_at_bay: player.hold_at_bay,
         },
     };
 
@@ -1506,16 +1513,23 @@ fn apply_shield_material_tier(shield: ShieldPreset, tier: i32) -> Shield {
     let tier = tier.clamp(0, 5);
     let mut defense_bonus = shield.defense_bonus;
     let mut dr = shield.dr;
+    let mut breakage_thresholds = shield.breakage_thresholds;
     if tier > 0 {
         defense_bonus += tier;
         dr += tier;
+        breakage_thresholds = [
+            breakage_thresholds[0] + tier * 2,
+            breakage_thresholds[1] + tier * 3,
+            breakage_thresholds[2] + tier * 4,
+            breakage_thresholds[3] + tier * 5,
+        ];
     }
     Shield {
         name: leak_str(shield.name),
         defense_bonus,
         dr,
         cover_value: shield.cover_value,
-        breakage_thresholds: shield.breakage_thresholds,
+        breakage_thresholds,
         weight_lbs: shield.weight_lbs,
     }
 }
@@ -1690,6 +1704,20 @@ mod tests {
         let adjusted = apply_armor_material_tier(armor, 3);
         assert_eq!(adjusted.damage_reduction, 7);
         assert_eq!(adjusted.defense_adj, 0);
+    }
+
+    #[test]
+    fn shield_material_increases_breakage_thresholds() {
+        let shield = ShieldPreset {
+            name: "Test".to_string(),
+            defense_bonus: 4,
+            dr: 4,
+            cover_value: 16,
+            breakage_thresholds: [6, 9, 12, 15],
+            weight_lbs: 6.0,
+        };
+        let adjusted = apply_shield_material_tier(shield, 2);
+        assert_eq!(adjusted.breakage_thresholds, [10, 15, 20, 25]);
     }
 
     #[test]

@@ -1015,6 +1015,7 @@ fn render_player_editor(
         if !has_jab {
             ui.label("Unavailable");
         }
+        ui.checkbox(&mut player.hold_at_bay, "Hold at bay");
     });
     if player.use_jab {
         if let Some(jab_special) = weapon.jab_special_expr.as_ref() {
@@ -1251,6 +1252,7 @@ fn apply_fighter_preset(
     player.shield_material_tier = preset.shield_material_tier;
     player.two_hand_grip = preset.two_hand_grip;
     player.use_jab = preset.use_jab;
+    player.hold_at_bay = preset.hold_at_bay;
     player.weapon_index =
         find_weapon_index_by_name(weapon_catalog, &preset.weapon).unwrap_or(0);
     player.armor_index = find_armor_index_by_name(armor_catalog, &preset.armor).unwrap_or(0);
@@ -1316,6 +1318,7 @@ fn fighter_preset_from_player(
         shield_material_tier: player.shield_material_tier,
         two_hand_grip: player.two_hand_grip,
         use_jab: player.use_jab,
+        hold_at_bay: player.hold_at_bay,
     }
 }
 

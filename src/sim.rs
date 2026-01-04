@@ -37,6 +37,11 @@ pub struct WeaponProfile {
     pub uses_projectiles: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ManeuverProfile {
+    pub hold_at_bay: bool,
+}
+
 #[derive(Clone, Debug)]
 pub struct OffenseProfile {
     pub attack_bonus: i32,
@@ -75,6 +80,7 @@ pub struct CombatantSheet {
     pub defense: DefenseProfile,
     pub mobility: MobilityProfile,
     pub vitals: Vitals,
+    pub maneuvers: ManeuverProfile,
 }
 
 #[derive(Clone, Debug)]
@@ -106,6 +112,7 @@ struct AttackOutcome {
     attacker_idx: usize,
     defender_idx: usize,
     knockback_ft: f32,
+    hit: bool,
 }
 
 impl Default for WeaponProfile {
@@ -177,6 +184,7 @@ impl Default for CombatantSheet {
             defense: DefenseProfile::default(),
             mobility: MobilityProfile::default(),
             vitals: Vitals::default(),
+            maneuvers: ManeuverProfile::default(),
         }
     }
 }
@@ -456,6 +464,21 @@ pub struct SimState {
     pub combat_log: Vec<String>,
     rng: FreshSeedRng,
     tick_accum: f32,
+    hold_at_bay: HoldAtBayState,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct HoldAtBayState {
+    pending: bool,
+    active: bool,
+    holder_idx: usize,
+    target_idx: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AttackMode {
+    Normal,
+    HoldAtBay,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -500,6 +523,7 @@ impl SimState {
             combat_log: Vec::new(),
             rng: FreshSeedRng::default(),
             tick_accum: 0.0,
+            hold_at_bay: HoldAtBayState::default(),
         }
     }
 
@@ -515,6 +539,7 @@ impl SimState {
             combatant.reset_state();
         }
         self.tick_accum = 0.0;
+        self.hold_at_bay = HoldAtBayState::default();
     }
 
     pub fn reset_with_combatants(&mut self, combatants: [Combatant; 2]) {
@@ -618,12 +643,18 @@ impl SimState {
                 }
             } else if distance > min_reach {
                 if reach_a < reach_b {
-                    self.actors[0].position += step_a;
+                    if !self.hold_at_bay.blocks_advance(0) {
+                        self.actors[0].position += step_a;
+                    }
                 } else if reach_b < reach_a {
-                    self.actors[1].position -= step_b;
+                    if !self.hold_at_bay.blocks_advance(1) {
+                        self.actors[1].position -= step_b;
+                    }
                 }
             }
         }
+        let distance_after_combat = self.distance();
+        self.maybe_start_hold_at_bay(distance_before_combat, distance_after_combat, reach_a, reach_b);
         if self
             .combatants
             .iter()
@@ -682,23 +713,76 @@ impl SimState {
         let distance = self.distance();
         let mut events = Vec::new();
         for (attacker_idx, defender_idx) in [(0usize, 1usize), (1usize, 0usize)] {
+            if self.hold_at_bay.active && self.hold_at_bay.holder_idx == attacker_idx {
+                if self.combatants[attacker_idx].state.trauma_remaining_seconds > 0 {
+                    self.combatants[attacker_idx].state.next_attack_time = None;
+                    continue;
+                }
+            }
             if self.combatants[attacker_idx].state.hp <= 0
                 || self.combatants[defender_idx].state.hp <= 0
             {
+                self.clear_hold_at_bay_if_involves(attacker_idx, defender_idx);
                 continue;
             }
             if self.combatants[attacker_idx].state.trauma_remaining_seconds > 0 {
                 self.combatants[attacker_idx].state.next_attack_time = None;
                 continue;
             }
+            if self.hold_at_bay.active && self.hold_at_bay.target_idx == attacker_idx {
+                let weapon_speed = self.combatants[attacker_idx]
+                    .sheet
+                    .offense
+                    .weapon
+                    .speed
+                    .max(1.0);
+                if self.combatants[attacker_idx].state.next_attack_time.is_none() {
+                    self.combatants[attacker_idx].state.next_attack_time = Some(now);
+                }
+                let next_attack = self.combatants[attacker_idx]
+                    .state
+                    .next_attack_time
+                    .unwrap_or(now);
+                if now + 0.0001 >= next_attack {
+                    let event = resolve_knock_aside(
+                        &mut self.combatants,
+                        attacker_idx,
+                        defender_idx,
+                        &mut self.rng,
+                    );
+                    if event.success {
+                        self.hold_at_bay = HoldAtBayState::default();
+                        self.combatants[attacker_idx].state.next_attack_time = Some(now + 1.0);
+                    } else {
+                        self.combatants[attacker_idx].state.next_attack_time =
+                            Some(next_attack + weapon_speed);
+                    }
+                    events.push(event.log);
+                }
+                continue;
+            }
             let weapon = &self.combatants[attacker_idx].sheet.offense.weapon;
             let has_range = max_range_for_weapon(weapon).is_some();
             let attacker_reach = weapon.reach_ft.max(1.0);
-            let use_ranged = if has_range && !weapon.uses_projectiles {
+            let mut use_ranged = if has_range && !weapon.uses_projectiles {
                 distance > attacker_reach
             } else {
                 has_range
             };
+            let mut attack_mode = AttackMode::Normal;
+            if self.hold_at_bay.pending && self.hold_at_bay.holder_idx == attacker_idx {
+                let defender_reach =
+                    self.combatants[defender_idx].sheet.offense.weapon.reach_ft.max(1.0);
+                if attacker_reach > defender_reach && distance <= attacker_reach {
+                    attack_mode = AttackMode::HoldAtBay;
+                    use_ranged = false;
+                } else {
+                    self.hold_at_bay = HoldAtBayState::default();
+                }
+            } else if self.hold_at_bay.active && self.hold_at_bay.holder_idx == attacker_idx {
+                attack_mode = AttackMode::HoldAtBay;
+                use_ranged = false;
+            }
             let ranged_mod = if use_ranged {
                 range_modifier_for_weapon(weapon, distance)
             } else {
@@ -731,9 +815,18 @@ impl SimState {
                     defender_idx,
                     ranged_mod.unwrap_or(0),
                     use_ranged,
+                    attack_mode,
                     now,
                     &mut self.rng,
                 );
+                if attack_mode == AttackMode::HoldAtBay && self.hold_at_bay.pending {
+                    if event.hit {
+                        self.hold_at_bay.active = true;
+                        self.hold_at_bay.pending = false;
+                    } else {
+                        self.hold_at_bay = HoldAtBayState::default();
+                    }
+                }
                 self.apply_knockback(
                     event.attacker_idx,
                     event.defender_idx,
@@ -765,12 +858,64 @@ impl SimState {
     }
 }
 
+impl HoldAtBayState {
+    fn blocks_advance(self, idx: usize) -> bool {
+        self.active && self.target_idx == idx
+    }
+}
+
+impl SimState {
+    fn clear_hold_at_bay_if_involves(&mut self, attacker_idx: usize, defender_idx: usize) {
+        if !self.hold_at_bay.active && !self.hold_at_bay.pending {
+            return;
+        }
+        if self.hold_at_bay.holder_idx == attacker_idx
+            || self.hold_at_bay.holder_idx == defender_idx
+            || self.hold_at_bay.target_idx == attacker_idx
+            || self.hold_at_bay.target_idx == defender_idx
+        {
+            self.hold_at_bay = HoldAtBayState::default();
+        }
+    }
+
+    fn maybe_start_hold_at_bay(
+        &mut self,
+        distance_before: f32,
+        distance_after: f32,
+        reach_a: f32,
+        reach_b: f32,
+    ) {
+        if self.hold_at_bay.active || self.hold_at_bay.pending {
+            return;
+        }
+        let (holder_idx, target_idx, holder_reach) = if reach_a > reach_b {
+            (0usize, 1usize, reach_a)
+        } else if reach_b > reach_a {
+            (1usize, 0usize, reach_b)
+        } else {
+            return;
+        };
+        if !self.combatants[holder_idx].sheet.maneuvers.hold_at_bay {
+            return;
+        }
+        if distance_before > holder_reach && distance_after <= holder_reach {
+            self.hold_at_bay = HoldAtBayState {
+                pending: true,
+                active: false,
+                holder_idx,
+                target_idx,
+            };
+        }
+    }
+}
+
 fn resolve_attack(
     combatants: &mut [Combatant; 2],
     attacker_idx: usize,
     defender_idx: usize,
     range_mod: i32,
     is_ranged: bool,
+    attack_mode: AttackMode,
     now: f32,
     rng: &mut impl Rng,
 ) -> AttackOutcome {
@@ -919,15 +1064,20 @@ fn resolve_attack(
             raw = 0;
         }
         damage_detail = detail;
-        let mut effective_dr = armor_dr;
-        if armor_dr >= 5 || armor_is_heavy {
-            effective_dr = (armor_dr - armor_penetration).max(0);
-        }
-        damage = (raw - effective_dr).max(0);
-        combatants[defender_idx].state.hp -= damage;
-        knockback_ft = knockback_distance_ft(raw);
+        if attack_mode == AttackMode::HoldAtBay && !use_jab {
+            damage = 0;
+            knockback_ft = 0.0;
+        } else {
+            let mut effective_dr = armor_dr;
+            if armor_dr >= 5 || armor_is_heavy {
+                effective_dr = (armor_dr - armor_penetration).max(0);
+            }
+            damage = (raw - effective_dr).max(0);
+            combatants[defender_idx].state.hp -= damage;
+            knockback_ft = knockback_distance_ft(raw);
 
-        trauma_note = maybe_apply_trauma(combatants, defender_idx, damage, rng);
+            trauma_note = maybe_apply_trauma(combatants, defender_idx, damage, rng);
+        }
     } else if shield_active && !is_ranged {
         let miss_margin = defense_roll - attack_roll;
         if miss_margin < 10 {
@@ -1000,20 +1150,52 @@ fn resolve_attack(
         }
     }
     let mut log = if hit {
-        format!(
-            "{} hits {} with {} (atk {} [d20p={}] vs def {} [d20p={} + {}]) for {} dmg {} (hp {})",
-            attacker_name,
-            defender_name,
-            weapon_name,
-            attack_roll,
-            attack_die,
-            defense_roll,
-            defense_die,
-            defense_breakdown,
-            damage,
-            damage_detail,
-            combatants[defender_idx].state.hp.max(0)
-        )
+        if attack_mode == AttackMode::HoldAtBay {
+            if use_jab {
+                format!(
+                    "{} holds {} at bay with {} (atk {} [d20p={}] vs def {} [d20p={} + {}]) for {} dmg {} (hp {})",
+                    attacker_name,
+                    defender_name,
+                    weapon_name,
+                    attack_roll,
+                    attack_die,
+                    defense_roll,
+                    defense_die,
+                    defense_breakdown,
+                    damage,
+                    damage_detail,
+                    combatants[defender_idx].state.hp.max(0)
+                )
+            } else {
+                format!(
+                    "{} holds {} at bay with {} (atk {} [d20p={}] vs def {} [d20p={} + {}]) no damage (hp {})",
+                    attacker_name,
+                    defender_name,
+                    weapon_name,
+                    attack_roll,
+                    attack_die,
+                    defense_roll,
+                    defense_die,
+                    defense_breakdown,
+                    combatants[defender_idx].state.hp.max(0)
+                )
+            }
+        } else {
+            format!(
+                "{} hits {} with {} (atk {} [d20p={}] vs def {} [d20p={} + {}]) for {} dmg {} (hp {})",
+                attacker_name,
+                defender_name,
+                weapon_name,
+                attack_roll,
+                attack_die,
+                defense_roll,
+                defense_die,
+                defense_breakdown,
+                damage,
+                damage_detail,
+                combatants[defender_idx].state.hp.max(0)
+            )
+        }
     } else if shield_block {
         let shield_name = shield_name.clone().unwrap_or_else(|| "Shield".to_string());
         let status = if shield_broken {
@@ -1037,17 +1219,31 @@ fn resolve_attack(
             combatants[defender_idx].state.hp.max(0)
         )
     } else {
-        format!(
-            "{} misses {} with {} (atk {} [d20p={}] vs def {} [d20p={} + {}])",
-            attacker_name,
-            defender_name,
-            weapon_name,
-            attack_roll,
-            attack_die,
-            defense_roll,
-            defense_die,
-            defense_breakdown
-        )
+        if attack_mode == AttackMode::HoldAtBay {
+            format!(
+                "{} fails to hold {} at bay with {} (atk {} [d20p={}] vs def {} [d20p={} + {}])",
+                attacker_name,
+                defender_name,
+                weapon_name,
+                attack_roll,
+                attack_die,
+                defense_roll,
+                defense_die,
+                defense_breakdown
+            )
+        } else {
+            format!(
+                "{} misses {} with {} (atk {} [d20p={}] vs def {} [d20p={} + {}])",
+                attacker_name,
+                defender_name,
+                weapon_name,
+                attack_roll,
+                attack_die,
+                defense_roll,
+                defense_die,
+                defense_breakdown
+            )
+        }
     };
     if let Some(note) = trauma_note {
         log = format!("{log} | {note}");
@@ -1060,7 +1256,76 @@ fn resolve_attack(
         attacker_idx,
         defender_idx,
         knockback_ft,
+        hit,
     }
+}
+
+struct KnockAsideOutcome {
+    log: String,
+    success: bool,
+}
+
+fn resolve_knock_aside(
+    combatants: &mut [Combatant; 2],
+    attacker_idx: usize,
+    defender_idx: usize,
+    rng: &mut impl Rng,
+) -> KnockAsideOutcome {
+    let attacker = &combatants[attacker_idx];
+    let defender = &combatants[defender_idx];
+    let attack_die = penetrating_roll(20, rng);
+    let attack_roll = attack_die + attacker.sheet.offense.attack_bonus;
+    let defense_die = penetrating_roll(
+        defense_die_sides(
+            false,
+            defender.state.moved_last_tick,
+            false,
+            defender.state.trauma_remaining_seconds > 0,
+        ),
+        rng,
+    );
+    let weapon_defense_bonus = if defender.sheet.offense.weapon.defense_bonus_always
+        || (defender.sheet.offense.weapon.two_hand_grip
+            && defender.state.defense_plus_four_ready)
+    {
+        4
+    } else {
+        0
+    };
+    let defense_roll = defense_die + defender.sheet.defense.defense_mod + weapon_defense_bonus;
+    let defense_breakdown = {
+        let mut parts = Vec::new();
+        parts.push(format!("base {}", defender.sheet.defense.defense_mod));
+        if weapon_defense_bonus != 0 {
+            parts.push(format!("weapon {}", weapon_defense_bonus));
+        }
+        parts.join(" + ")
+    };
+    let success = attack_roll >= defense_roll;
+    let log = if success {
+        format!(
+            "{} knocks aside {}'s weapon (atk {} [d20p={}] vs def {} [d20p={} + {}])",
+            attacker.sheet.name,
+            defender.sheet.name,
+            attack_roll,
+            attack_die,
+            defense_roll,
+            defense_die,
+            defense_breakdown
+        )
+    } else {
+        format!(
+            "{} fails to knock aside {}'s weapon (atk {} [d20p={}] vs def {} [d20p={} + {}])",
+            attacker.sheet.name,
+            defender.sheet.name,
+            attack_roll,
+            attack_die,
+            defense_roll,
+            defense_die,
+            defense_breakdown
+        )
+    };
+    KnockAsideOutcome { log, success }
 }
 
 fn breakage_roll(step: ShieldBreakageStep, rng: &mut impl Rng) -> bool {
@@ -1397,6 +1662,7 @@ mod tests {
                 constitution: 10,
                 threshold_of_pain: 3,
             },
+            maneuvers: ManeuverProfile::default(),
         };
         Combatant::new(sheet)
     }
@@ -1504,8 +1770,131 @@ mod tests {
         );
         let mut state = make_state(attacker, defender);
         let mut rng = rand::rngs::StdRng::seed_from_u64(1);
-        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, 0.0, &mut rng);
+        let _ = resolve_attack(
+            &mut state.combatants,
+            0,
+            1,
+            0,
+            false,
+            AttackMode::Normal,
+            0.0,
+            &mut rng,
+        );
         assert_eq!(state.combatants[1].state.hp, 20);
+    }
+
+    #[test]
+    fn hold_at_bay_hit_without_jab_deals_no_damage() {
+        let attacker = combatant_basic(
+            "Attacker".to_string(),
+            "Test Spear".to_string(),
+            100,
+            0,
+            0,
+            false,
+            0,
+            "1d1".to_string(),
+            0,
+            10.0,
+            6.0,
+            5.0,
+            false,
+            false,
+            None,
+            true,
+            false,
+            20,
+        );
+        let defender = combatant_basic(
+            "Defender".to_string(),
+            "Short Sword".to_string(),
+            0,
+            0,
+            0,
+            false,
+            0,
+            "1d1".to_string(),
+            0,
+            10.0,
+            3.0,
+            5.0,
+            false,
+            false,
+            None,
+            true,
+            false,
+            20,
+        );
+        let mut rng = SeqRng::new(vec![0]);
+        let mut state = make_state(attacker, defender);
+        let _ = resolve_attack(
+            &mut state.combatants,
+            0,
+            1,
+            0,
+            false,
+            AttackMode::HoldAtBay,
+            0.0,
+            &mut rng,
+        );
+        assert_eq!(state.combatants[1].state.hp, 20);
+    }
+
+    #[test]
+    fn hold_at_bay_hit_with_jab_deals_damage() {
+        let attacker = combatant_basic(
+            "Attacker".to_string(),
+            "Test Spear".to_string(),
+            100,
+            0,
+            0,
+            false,
+            0,
+            "1d1".to_string(),
+            0,
+            10.0,
+            6.0,
+            5.0,
+            false,
+            true,
+            Some("1d1".to_string()),
+            true,
+            false,
+            20,
+        );
+        let defender = combatant_basic(
+            "Defender".to_string(),
+            "Short Sword".to_string(),
+            0,
+            0,
+            0,
+            false,
+            0,
+            "1d1".to_string(),
+            0,
+            10.0,
+            3.0,
+            5.0,
+            false,
+            false,
+            None,
+            true,
+            false,
+            20,
+        );
+        let mut rng = SeqRng::new(vec![0]);
+        let mut state = make_state(attacker, defender);
+        let _ = resolve_attack(
+            &mut state.combatants,
+            0,
+            1,
+            0,
+            false,
+            AttackMode::HoldAtBay,
+            0.0,
+            &mut rng,
+        );
+        assert_eq!(state.combatants[1].state.hp, 19);
     }
 
     #[test]
@@ -1552,7 +1941,16 @@ mod tests {
         );
         let mut state = make_state(attacker, defender);
         let mut rng = rand::rngs::StdRng::seed_from_u64(2);
-        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, 0.0, &mut rng);
+        let _ = resolve_attack(
+            &mut state.combatants,
+            0,
+            1,
+            0,
+            false,
+            AttackMode::Normal,
+            0.0,
+            &mut rng,
+        );
         assert_eq!(state.combatants[1].state.hp, 18);
     }
 
@@ -1600,7 +1998,16 @@ mod tests {
         );
         let mut state = make_state(attacker, defender);
         let mut rng = rand::rngs::StdRng::seed_from_u64(3);
-        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, 0.0, &mut rng);
+        let _ = resolve_attack(
+            &mut state.combatants,
+            0,
+            1,
+            0,
+            false,
+            AttackMode::Normal,
+            0.0,
+            &mut rng,
+        );
         assert_eq!(state.combatants[1].state.hp, 18);
     }
 
@@ -1648,7 +2055,16 @@ mod tests {
         );
         let mut state = make_state(attacker, defender);
         let mut rng = rand::rngs::StdRng::seed_from_u64(4);
-        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, 0.0, &mut rng);
+        let _ = resolve_attack(
+            &mut state.combatants,
+            0,
+            1,
+            0,
+            false,
+            AttackMode::Normal,
+            0.0,
+            &mut rng,
+        );
         assert_eq!(state.combatants[1].state.hp, 20);
     }
 
@@ -1696,7 +2112,16 @@ mod tests {
         );
         let mut state = make_state(attacker, defender);
         let mut rng = rand::rngs::StdRng::seed_from_u64(5);
-        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, 0.0, &mut rng);
+        let _ = resolve_attack(
+            &mut state.combatants,
+            0,
+            1,
+            0,
+            false,
+            AttackMode::Normal,
+            0.0,
+            &mut rng,
+        );
         assert_eq!(state.combatants[1].state.hp, 20);
     }
 
@@ -1767,11 +2192,29 @@ mod tests {
         );
         let mut state = make_state(attacker, defender);
         let mut rng = FixedRng(0);
-        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, 0.0, &mut rng);
+        let _ = resolve_attack(
+            &mut state.combatants,
+            0,
+            1,
+            0,
+            false,
+            AttackMode::Normal,
+            0.0,
+            &mut rng,
+        );
         assert!(state.combatants[0].state.defense_plus_four_ready);
 
         let mut rng = FixedRng(0);
-        let _ = resolve_attack(&mut state.combatants, 1, 0, 0, false, 0.0, &mut rng);
+        let _ = resolve_attack(
+            &mut state.combatants,
+            1,
+            0,
+            0,
+            false,
+            AttackMode::Normal,
+            0.0,
+            &mut rng,
+        );
         assert!(!state.combatants[0].state.defense_plus_four_ready);
     }
 
@@ -1819,7 +2262,16 @@ mod tests {
         );
         let mut state = make_state(attacker, defender);
         let mut rng = FixedRng(0);
-        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, 0.0, &mut rng);
+        let _ = resolve_attack(
+            &mut state.combatants,
+            0,
+            1,
+            0,
+            false,
+            AttackMode::Normal,
+            0.0,
+            &mut rng,
+        );
         assert_eq!(state.combatants[1].state.hp, 20);
     }
 
@@ -1954,7 +2406,16 @@ mod tests {
         );
         let mut state = make_state(attacker, defender);
         let mut rng = FixedRng(0);
-        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, 0.0, &mut rng);
+        let _ = resolve_attack(
+            &mut state.combatants,
+            0,
+            1,
+            0,
+            false,
+            AttackMode::Normal,
+            0.0,
+            &mut rng,
+        );
         assert!(!state.combatants[1].state.defense_plus_four_ready);
     }
 
@@ -2002,11 +2463,29 @@ mod tests {
         );
         let mut state = make_state(attacker, defender);
         let mut rng = FixedRng(0);
-        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, 0.0, &mut rng);
+        let _ = resolve_attack(
+            &mut state.combatants,
+            0,
+            1,
+            0,
+            false,
+            AttackMode::Normal,
+            0.0,
+            &mut rng,
+        );
         assert_eq!(state.combatants[1].state.hp, 20);
 
         let mut rng = FixedRng(0);
-        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, 0.0, &mut rng);
+        let _ = resolve_attack(
+            &mut state.combatants,
+            0,
+            1,
+            0,
+            false,
+            AttackMode::Normal,
+            0.0,
+            &mut rng,
+        );
         assert_eq!(state.combatants[1].state.hp, 20);
     }
 }

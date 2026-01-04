@@ -194,6 +194,7 @@ fn main() {
                 character.level,
             ),
         },
+        maneuvers: sim::ManeuverProfile { hold_at_bay: false },
     };
     let combatant = Combatant::new(sheet);
     sim.reset_with_combatants([combatant.clone(), combatant]);
