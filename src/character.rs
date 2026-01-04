@@ -376,6 +376,7 @@ impl Character {
             .unwrap_or(0);
         let base_dv = BASE_DV
             + ability.dexterity.defense
+            + ability.wisdom.defense
             + self
                 .equipment
                 .armor

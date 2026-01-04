@@ -9,8 +9,8 @@ use character::{Progression, ProgressionTier, WeaponGroup};
 use eframe::egui::{self, Color32, Pos2, Rect};
 use sim::{SimConfig, SimState};
 use game_logic::{
-    ArmorEntry, FighterPreset, FighterProgression, NpcPreset, PlayerConfig, ShieldEntry,
-    WeaponHandedness, WeaponPreset, WeaponSize,
+    ArmorEntry, FighterMasteries, FighterPreset, FighterProgression, NpcPreset, PlayerConfig,
+    ShieldEntry, WeaponHandedness, WeaponPreset, WeaponSize,
 };
 
 #[derive(Clone, Copy)]
@@ -44,6 +44,7 @@ struct SimGuiApp {
     npc_presets: Vec<NpcPreset>,
     fighter_presets: Vec<FighterPreset>,
     fighter_preset_names: [String; 2],
+    time_scale: f32,
     show_player_editor: [bool; 2],
     last_screen_size: egui::Vec2,
 }
@@ -89,6 +90,7 @@ impl SimGuiApp {
             npc_presets,
             fighter_presets,
             fighter_preset_names: ["Fighter A".to_string(), "Fighter B".to_string()],
+            time_scale: 1.0,
             show_player_editor: [false, false],
             last_screen_size: egui::vec2(0.0, 0.0),
         };
@@ -438,11 +440,11 @@ fn draw_weapon_icon(painter: &egui::Painter, pos: Pos2, facing: f32, icon: Weapo
             );
         }
         WeaponIcon::Bow => {
-            let center = Pos2::new(pos.x + facing * 4.0, pos.y - 2.0);
-            let top = Pos2::new(center.x, center.y - 8.0);
-            let mid = Pos2::new(center.x + facing * 2.0, center.y);
-            let bottom = Pos2::new(center.x, center.y + 8.0);
-            painter.line_segment([pos, center], (1.0, accent));
+            let grip = Pos2::new(pos.x + facing * 2.0, pos.y - 4.0);
+            let top = Pos2::new(grip.x, grip.y - 8.0);
+            let mid = Pos2::new(grip.x + facing * 4.0, grip.y);
+            let bottom = Pos2::new(grip.x, grip.y + 8.0);
+            painter.line_segment([pos, grip], stroke);
             painter.line_segment([top, mid], stroke);
             painter.line_segment([mid, bottom], stroke);
             painter.line_segment([top, bottom], (1.0, accent));
@@ -537,7 +539,7 @@ fn draw_weapon_icon(painter: &egui::Painter, pos: Pos2, facing: f32, icon: Weapo
 
 impl eframe::App for SimGuiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let dt = ctx.input(|i| i.unstable_dt).min(0.05);
+        let dt = ctx.input(|i| i.unstable_dt).min(0.05) * self.time_scale;
         let screen_rect = ctx.input(|i| i.screen_rect);
         if screen_rect.size() != self.last_screen_size {
             self.last_screen_size = screen_rect.size();
@@ -580,6 +582,8 @@ impl eframe::App for SimGuiApp {
                         self.reset_positions();
                     }
                 }
+                ui.label("Timescale");
+                ui.add(egui::Slider::new(&mut self.time_scale, 0.25..=4.0).step_by(0.25));
             });
         });
 
@@ -621,7 +625,11 @@ impl eframe::App for SimGuiApp {
                 ui.heading("Status");
                 ui.separator();
                 ui.label(format!("Elapsed: {}s", self.sim.elapsed_seconds));
-                ui.label(format!("Distance: {:.1} ft", self.sim.distance()));
+                ui.label(format!(
+                    "Distance: {:.1} ft | Timescale: {:.2}x",
+                    self.sim.distance(),
+                    self.time_scale
+                ));
                 ui.label(format!(
                     "Stop distance: {:.1} ft",
                     self.sim.config.stop_distance
@@ -968,6 +976,17 @@ fn render_player_editor(
     });
 
     let weapon = &weapon_catalog[player.weapon_index];
+    let shield_bonus = if player.shield_index > 0
+        && weapon.handedness == WeaponHandedness::OneHanded
+        && !player.two_hand_grip
+    {
+        shield_catalog
+            .get(player.shield_index)
+            .and_then(|entry| entry.shield.as_ref())
+            .map(|shield| shield.defense_bonus + player.shield_material_tier.clamp(0, 5))
+    } else {
+        None
+    };
     let is_two_handed = weapon.handedness == WeaponHandedness::TwoHanded;
     let can_two_hand = weapon.handedness == WeaponHandedness::OneHanded
         && (weapon.size == WeaponSize::Medium || weapon.size == WeaponSize::Large);
@@ -1088,10 +1107,33 @@ fn render_player_editor(
         ability_slider(ui, "CON", &mut player.constitution);
         ability_slider(ui, "LKS", &mut player.looks);
         ability_slider(ui, "CHA", &mut player.charisma);
+
+        ui.separator();
+        let shield_active = player.shield_index > 0
+            && weapon.handedness == WeaponHandedness::OneHanded
+            && !player.two_hand_grip;
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.label("Weapon masteries");
+                mastery_slider(ui, "Attack", &mut player.mastery_attack);
+                mastery_slider(ui, "Defense", &mut player.mastery_defense);
+                mastery_slider(ui, "Damage", &mut player.mastery_damage);
+                mastery_slider(ui, "Speed", &mut player.mastery_speed);
+            });
+            ui.separator();
+            ui.add_enabled_ui(shield_active, |ui| {
+                ui.vertical(|ui| {
+                    ui.label("Shield masteries");
+                    mastery_slider(ui, "Defense", &mut player.shield_mastery_defense);
+                    mastery_slider(ui, "Speed", &mut player.shield_mastery_speed);
+                });
+            });
+        });
     });
 
     let game_logic::PlayerSummary { derived, roll } =
         game_logic::player_summary(player, weapon_catalog, armor_catalog, shield_catalog);
+    let defense_mastery = game_logic::effective_defense_mastery(player, weapon);
     ui.separator();
     if npc_active {
         ui.label("Derived stats ignored while NPC preset is active.");
@@ -1105,6 +1147,12 @@ fn render_player_editor(
         ui.label(format!("Speed mod: {}", derived.speed_mod));
         ui.label(format!("Initiative mod: {}", derived.initiative_mod));
         ui.label(format!("Base DV: {}", derived.base_dv));
+        if let Some(shield_bonus) = shield_bonus {
+            let weapon_defense = if weapon.defense_bonus_always { 4 } else { 0 };
+            let dv_with_shield =
+                derived.base_dv + defense_mastery + weapon_defense + 4 + shield_bonus;
+            ui.label(format!("DV (melee + shield): {}", dv_with_shield));
+        }
         ui.label(format!("Armor DR: {}", derived.armor_dr));
         ui.label(format!(
             "Carry (none/light/med/heavy): {:?}",
@@ -1118,17 +1166,6 @@ fn render_player_editor(
         ui.separator();
         ui.label("Rolls");
         ui.label(format!("Attack roll: d20p + {}", attack_bonus));
-        let shield_bonus = if player.shield_index > 0
-            && weapon.handedness == WeaponHandedness::OneHanded
-            && !player.two_hand_grip
-        {
-            shield_catalog
-                .get(player.shield_index)
-                .and_then(|entry| entry.shield.as_ref())
-                .map(|shield| shield.defense_bonus + player.shield_material_tier.clamp(0, 5))
-        } else {
-            None
-        };
         if roll.is_ranged_weapon {
             if let Some(shield_bonus) = shield_bonus {
                 ui.label(format!(
@@ -1143,14 +1180,15 @@ fn render_player_editor(
             if let Some(shield_bonus) = shield_bonus {
                 ui.label(format!(
                     "Defense roll (melee): d20p + {} + {}{}",
-                    derived.base_dv + 4,
+                    derived.base_dv + defense_mastery + 4,
                     shield_bonus,
                     weapon_def
                 ));
             } else {
                 ui.label(format!(
                     "Defense roll (melee): d20p + {}{}",
-                    derived.base_dv, weapon_def
+                    derived.base_dv + defense_mastery,
+                    weapon_def
                 ));
             }
         }
@@ -1190,12 +1228,18 @@ fn apply_fighter_preset(
     player.name = preset.name.clone();
     player.level = preset.level;
     player.progression = Progression::new(attack, speed, initiative, health);
+    player.mastery_attack = game_logic::clamp_mastery(preset.masteries.attack);
+    player.mastery_defense = game_logic::clamp_mastery(preset.masteries.defense);
+    player.mastery_damage = game_logic::clamp_mastery(preset.masteries.damage);
+    player.mastery_speed = game_logic::clamp_mastery(preset.masteries.speed);
+    player.shield_mastery_defense = game_logic::clamp_mastery(preset.masteries.shield_defense);
+    player.shield_mastery_speed = game_logic::clamp_mastery(preset.masteries.shield_speed);
     player.base_hp = preset.base_hp;
     player.move_speed = preset.move_speed;
     player.strength_base = preset.strength_base;
-    player.strength_pct = preset.strength_pct;
+    player.strength_pct = game_logic::normalize_percentile(preset.strength_pct);
     player.dex_base = preset.dex_base;
-    player.dex_pct = preset.dex_pct;
+    player.dex_pct = game_logic::normalize_percentile(preset.dex_pct);
     player.intelligence = preset.intelligence;
     player.wisdom = preset.wisdom;
     player.constitution = preset.constitution;
@@ -1243,6 +1287,14 @@ fn fighter_preset_from_player(
             speed: tier_label(player.progression.speed).to_string(),
             initiative: tier_label(player.progression.initiative).to_string(),
             health: tier_label(player.progression.health).to_string(),
+        },
+        masteries: FighterMasteries {
+            attack: game_logic::clamp_mastery(player.mastery_attack),
+            defense: game_logic::clamp_mastery(player.mastery_defense),
+            damage: game_logic::clamp_mastery(player.mastery_damage),
+            speed: game_logic::clamp_mastery(player.mastery_speed),
+            shield_defense: game_logic::clamp_mastery(player.shield_mastery_defense),
+            shield_speed: game_logic::clamp_mastery(player.shield_mastery_speed),
         },
         base_hp: player.base_hp,
         move_speed: player.move_speed,
@@ -1334,6 +1386,13 @@ fn ability_slider(ui: &mut egui::Ui, label: &str, value: &mut u8) {
     ui.horizontal(|ui| {
         ui.label(label);
         ui.add(egui::Slider::new(value, 1..=25).step_by(1.0));
+    });
+}
+
+fn mastery_slider(ui: &mut egui::Ui, label: &str, value: &mut i32) {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        ui.add(egui::Slider::new(value, 0..=6).step_by(1.0));
     });
 }
 

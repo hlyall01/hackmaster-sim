@@ -95,11 +95,29 @@ pub struct FighterProgression {
     pub health: String,
 }
 
+#[derive(Clone, Default, Deserialize, Serialize)]
+pub struct FighterMasteries {
+    #[serde(default)]
+    pub attack: i32,
+    #[serde(default)]
+    pub defense: i32,
+    #[serde(default)]
+    pub damage: i32,
+    #[serde(default)]
+    pub speed: i32,
+    #[serde(default)]
+    pub shield_defense: i32,
+    #[serde(default)]
+    pub shield_speed: i32,
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 pub struct FighterPreset {
     pub name: String,
     pub level: u8,
     pub progression: FighterProgression,
+    #[serde(default)]
+    pub masteries: FighterMasteries,
     pub base_hp: u32,
     pub move_speed: f32,
     pub strength_base: u8,
@@ -153,6 +171,12 @@ pub struct PlayerConfig {
     pub shield_material_tier: i32,
     pub npc_preset: Option<usize>,
     pub fighter_preset: Option<usize>,
+    pub mastery_attack: i32,
+    pub mastery_defense: i32,
+    pub mastery_damage: i32,
+    pub mastery_speed: i32,
+    pub shield_mastery_defense: i32,
+    pub shield_mastery_speed: i32,
     pub two_hand_grip: bool,
     pub use_jab: bool,
 }
@@ -184,6 +208,12 @@ impl PlayerConfig {
             shield_material_tier: 0,
             npc_preset: None,
             fighter_preset: None,
+            mastery_attack: 0,
+            mastery_defense: 0,
+            mastery_damage: 0,
+            mastery_speed: 0,
+            shield_mastery_defense: 0,
+            shield_mastery_speed: 0,
             two_hand_grip: false,
             use_jab: false,
         }
@@ -197,6 +227,44 @@ pub fn weapon_uses_projectiles(weapon: &WeaponPreset) -> bool {
 pub fn sanitize_projectile_tier(player: &mut PlayerConfig, weapon: &WeaponPreset) {
     if !weapon_uses_projectiles(weapon) {
         player.projectile_material_tier = 0;
+    }
+}
+
+pub fn normalize_percentile(value: u8) -> u8 {
+    if value >= 51 { 51 } else { 1 }
+}
+
+pub fn clamp_mastery(value: i32) -> i32 {
+    value.clamp(0, 6)
+}
+
+pub fn shield_equipped(player: &PlayerConfig, weapon: &WeaponPreset) -> bool {
+    can_equip_shield(player, weapon) && player.shield_index > 0
+}
+
+pub fn effective_attack_mastery(player: &PlayerConfig) -> i32 {
+    clamp_mastery(player.mastery_attack)
+}
+
+pub fn effective_defense_mastery(player: &PlayerConfig, weapon: &WeaponPreset) -> i32 {
+    if shield_equipped(player, weapon) {
+        clamp_mastery(player.shield_mastery_defense)
+    } else {
+        clamp_mastery(player.mastery_defense)
+    }
+}
+
+pub fn effective_damage_mastery(player: &PlayerConfig) -> i32 {
+    clamp_mastery(player.mastery_damage)
+}
+
+pub fn effective_speed_mastery(player: &PlayerConfig, weapon: &WeaponPreset) -> i32 {
+    let weapon_speed = clamp_mastery(player.mastery_speed);
+    if shield_equipped(player, weapon) {
+        let shield_speed = clamp_mastery(player.shield_mastery_speed);
+        weapon_speed.min(shield_speed)
+    } else {
+        weapon_speed
     }
 }
 
@@ -238,7 +306,9 @@ fn roll_summary(
         is_ranged_weapon,
         uses_projectiles,
     );
-    let attack_bonus = derived.attack_bonus + material_attack_bonus;
+    let attack_mastery = effective_attack_mastery(player);
+    let damage_mastery = effective_damage_mastery(player);
+    let attack_bonus = derived.attack_bonus + material_attack_bonus + attack_mastery;
     let is_two_handed = weapon.handedness == WeaponHandedness::TwoHanded;
     let can_two_hand = weapon.handedness == WeaponHandedness::OneHanded
         && (weapon.size == WeaponSize::Medium || weapon.size == WeaponSize::Large);
@@ -248,7 +318,8 @@ fn roll_summary(
         &weapon.name,
         character.ability_mods.strength.damage,
     ) + two_hand_bonus
-        + material_damage_bonus;
+        + material_damage_bonus
+        + damage_mastery;
 
     RollSummary {
         attack_bonus,
@@ -290,10 +361,13 @@ pub fn build_character(
         .and_then(|entry| entry.shield.clone());
 
     let abilities = AbilitySet {
-        strength: AbilityScore::new(player.strength_base, player.strength_pct),
+        strength: AbilityScore::new(
+            player.strength_base,
+            normalize_percentile(player.strength_pct),
+        ),
         intelligence: player.intelligence,
         wisdom: player.wisdom,
-        dexterity: AbilityScore::new(player.dex_base, player.dex_pct),
+        dexterity: AbilityScore::new(player.dex_base, normalize_percentile(player.dex_pct)),
         constitution: player.constitution,
         looks: player.looks,
         charisma: player.charisma,
@@ -422,7 +496,10 @@ pub fn build_combatant(
     let two_hand_speed_bonus = if effective_two_hand && can_two_hand { 2.0 } else { 0.0 };
     let use_jab = player.use_jab && weapon_preset.jab_speed.is_some();
     let min_speed = min_weapon_speed_for_size(weapon_preset.size);
-    let jab_speed = (weapon_preset.jab_speed.unwrap_or(weapon_speed) + speed_mod).max(min_speed);
+    let speed_mastery = effective_speed_mastery(player, weapon_preset) as f32;
+    let jab_speed =
+        (weapon_preset.jab_speed.unwrap_or(weapon_speed) + speed_mod - speed_mastery)
+            .max(min_speed);
     let jab_special_expr = if use_jab {
         weapon_preset.jab_special_expr.clone()
     } else {
@@ -439,14 +516,18 @@ pub fn build_combatant(
         is_ranged_weapon,
         uses_projectiles,
     );
-    let mut attack_bonus = derived.attack_bonus + material_attack_bonus;
-    let mut defense_mod = derived.base_dv;
+    let attack_mastery = effective_attack_mastery(player);
+    let defense_mastery = effective_defense_mastery(player, weapon_preset);
+    let damage_mastery = effective_damage_mastery(player);
+    let mut attack_bonus = derived.attack_bonus + material_attack_bonus + attack_mastery;
+    let mut defense_mod = derived.base_dv + defense_mastery;
     let mut armor_dr = derived.armor_dr;
     let mut strength_damage = strength_damage_for_weapon(
         &weapon_name,
         character.ability_mods.strength.damage,
     ) + two_hand_damage_bonus
-        + material_damage_bonus;
+        + material_damage_bonus
+        + damage_mastery;
     let mut max_hp = derived.hit_points as i32;
     let mut threshold_of_pain = threshold_of_pain(max_hp, player.level);
     let mut shield_name = shield_data.map(|shield| shield.name.to_string());
@@ -473,7 +554,7 @@ pub fn build_combatant(
     let weapon_speed = if use_jab {
         jab_speed
     } else {
-        (weapon_speed + two_hand_speed_bonus + speed_mod).max(min_speed)
+        (weapon_speed + two_hand_speed_bonus + speed_mod - speed_mastery).max(min_speed)
     };
     let sheet = CombatantSheet {
         name,
@@ -1538,6 +1619,24 @@ pub fn threshold_of_pain(max_hp: i32, level: u8) -> i32 {
 mod tests {
     use super::*;
     use crate::character;
+    use eframe::egui::Color32;
+
+    fn sample_catalogs() -> (Vec<WeaponPreset>, Vec<ArmorEntry>, Vec<ShieldEntry>) {
+        load_catalogs().unwrap_or_else(|_| {
+            (
+                default_weapon_catalog(),
+                default_armor_catalog(),
+                default_shield_catalog(),
+            )
+        })
+    }
+
+    fn one_handed_weapon_index(weapons: &[WeaponPreset]) -> usize {
+        weapons
+            .iter()
+            .position(|weapon| weapon.handedness == WeaponHandedness::OneHanded)
+            .unwrap_or(0)
+    }
 
     #[test]
     fn material_bonuses_melee_use_weapon_tier() {
@@ -1566,5 +1665,109 @@ mod tests {
         let adjusted = apply_armor_material_tier(armor, 3);
         assert_eq!(adjusted.damage_reduction, 7);
         assert_eq!(adjusted.defense_adj, 0);
+    }
+
+    #[test]
+    fn mastery_attack_bonus_applies_to_roll() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let mut player = PlayerConfig::new("Test", Color32::from_rgb(0, 0, 0), 0);
+        player.weapon_index = one_handed_weapon_index(&weapons);
+        player.mastery_attack = 3;
+        let summary = player_summary(&player, &weapons, &armor, &shields);
+        let mut baseline = player.clone();
+        baseline.mastery_attack = 0;
+        let baseline_summary = player_summary(&baseline, &weapons, &armor, &shields);
+        assert_eq!(
+            summary.roll.attack_bonus - baseline_summary.roll.attack_bonus,
+            3
+        );
+    }
+
+    #[test]
+    fn mastery_damage_applies_to_roll() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let mut player = PlayerConfig::new("Test", Color32::from_rgb(0, 0, 0), 0);
+        player.weapon_index = one_handed_weapon_index(&weapons);
+        player.mastery_damage = 4;
+        let summary = player_summary(&player, &weapons, &armor, &shields);
+        let mut baseline = player.clone();
+        baseline.mastery_damage = 0;
+        let baseline_summary = player_summary(&baseline, &weapons, &armor, &shields);
+        assert_eq!(
+            summary.roll.strength_damage - baseline_summary.roll.strength_damage,
+            4
+        );
+    }
+
+    #[test]
+    fn mastery_defense_applies_without_shield() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let mut player = PlayerConfig::new("Test", Color32::from_rgb(0, 0, 0), 0);
+        player.weapon_index = one_handed_weapon_index(&weapons);
+        player.mastery_defense = 2;
+        let combatant =
+            build_combatant(&player, &weapons, &armor, &shields, &[]);
+        let mut baseline = player.clone();
+        baseline.mastery_defense = 0;
+        let baseline_combatant =
+            build_combatant(&baseline, &weapons, &armor, &shields, &[]);
+        assert_eq!(
+            combatant.sheet.defense.defense_mod - baseline_combatant.sheet.defense.defense_mod,
+            2
+        );
+    }
+
+    #[test]
+    fn mastery_speed_reduces_weapon_speed() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let mut player = PlayerConfig::new("Test", Color32::from_rgb(0, 0, 0), 0);
+        player.weapon_index = one_handed_weapon_index(&weapons);
+        player.mastery_speed = 3;
+        let combatant =
+            build_combatant(&player, &weapons, &armor, &shields, &[]);
+        let mut baseline = player.clone();
+        baseline.mastery_speed = 0;
+        let baseline_combatant =
+            build_combatant(&baseline, &weapons, &armor, &shields, &[]);
+        assert_eq!(
+            baseline_combatant.sheet.offense.weapon.speed - combatant.sheet.offense.weapon.speed,
+            3.0
+        );
+    }
+
+    #[test]
+    fn shield_mastery_defense_overrides_weapon_mastery() {
+        let (weapons, _armor, _shields) = sample_catalogs();
+        let mut player = PlayerConfig::new("Test", Color32::from_rgb(0, 0, 0), 0);
+        player.weapon_index = one_handed_weapon_index(&weapons);
+        player.mastery_defense = 5;
+        player.shield_mastery_defense = 1;
+        player.shield_index = 1;
+        let mastery = effective_defense_mastery(&player, &weapons[player.weapon_index]);
+        assert_eq!(mastery, 1);
+    }
+
+    #[test]
+    fn shield_mastery_speed_uses_lower_when_shielded() {
+        let (weapons, _armor, _shields) = sample_catalogs();
+        let mut player = PlayerConfig::new("Test", Color32::from_rgb(0, 0, 0), 0);
+        player.weapon_index = one_handed_weapon_index(&weapons);
+        player.mastery_speed = 5;
+        player.shield_mastery_speed = 2;
+        player.shield_index = 1;
+        let mastery = effective_speed_mastery(&player, &weapons[player.weapon_index]);
+        assert_eq!(mastery, 2);
+    }
+
+    #[test]
+    fn shield_mastery_speed_ignored_without_shield() {
+        let (weapons, _armor, _shields) = sample_catalogs();
+        let mut player = PlayerConfig::new("Test", Color32::from_rgb(0, 0, 0), 0);
+        player.weapon_index = one_handed_weapon_index(&weapons);
+        player.mastery_speed = 4;
+        player.shield_mastery_speed = 1;
+        player.shield_index = 0;
+        let mastery = effective_speed_mastery(&player, &weapons[player.weapon_index]);
+        assert_eq!(mastery, 4);
     }
 }

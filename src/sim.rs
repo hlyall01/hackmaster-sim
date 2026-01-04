@@ -826,6 +826,17 @@ fn resolve_attack(
         }
     }
     let defense_roll = defense_die + defense_mod + weapon_defense_bonus + shield_defense_bonus;
+    let defense_breakdown = {
+        let mut parts = Vec::new();
+        parts.push(format!("base {}", defense_mod));
+        if weapon_defense_bonus != 0 {
+            parts.push(format!("weapon {}", weapon_defense_bonus));
+        }
+        if shield_defense_bonus != 0 {
+            parts.push(format!("shield {}", shield_defense_bonus));
+        }
+        parts.join(" + ")
+    };
     let mut damage = 0;
     let mut hit = false;
     let mut shield_block = false;
@@ -934,7 +945,7 @@ fn resolve_attack(
     }
     let mut log = if hit {
         format!(
-            "{} hits {} with {} (atk {} [d20p={}] vs def {} [d20p={}]) for {} dmg {} (hp {})",
+            "{} hits {} with {} (atk {} [d20p={}] vs def {} [d20p={} + {}]) for {} dmg {} (hp {})",
             attacker_name,
             defender_name,
             weapon_name,
@@ -942,6 +953,7 @@ fn resolve_attack(
             attack_die,
             defense_roll,
             defense_die,
+            defense_breakdown,
             damage,
             damage_detail,
             combatants[defender_idx].state.hp.max(0)
@@ -954,7 +966,7 @@ fn resolve_attack(
             "shield intact".to_string()
         };
         format!(
-            "{} blocks {} with {} (atk {} [d20p={}] vs def {} [d20p={}]); shield dmg {} {} ({}), hp {}",
+            "{} blocks {} with {} (atk {} [d20p={}] vs def {} [d20p={} + {}]); shield dmg {} {} ({}), hp {}",
             defender_name,
             attacker_name,
             shield_name,
@@ -962,6 +974,7 @@ fn resolve_attack(
             attack_die,
             defense_roll,
             defense_die,
+            defense_breakdown,
             shield_damage,
             shield_damage_detail,
             status,
@@ -969,14 +982,15 @@ fn resolve_attack(
         )
     } else {
         format!(
-            "{} misses {} with {} (atk {} [d20p={}] vs def {} [d20p={}])",
+            "{} misses {} with {} (atk {} [d20p={}] vs def {} [d20p={} + {}])",
             attacker_name,
             defender_name,
             weapon_name,
             attack_roll,
             attack_die,
             defense_roll,
-            defense_die
+            defense_die,
+            defense_breakdown
         )
     };
     if let Some(note) = trauma_note {

@@ -2,12 +2,20 @@
   "presets": [
     {
       "name": "Arthur Du Randt",
-      "level": 1,
+      "level": 2,
       "progression": {
         "attack": "I",
         "speed": "II",
         "initiative": "I",
         "health": "III"
+      },
+      "masteries": {
+        "attack": 0,
+        "defense": 0,
+        "damage": 0,
+        "speed": 0,
+        "shield_defense": 0,
+        "shield_speed": 0
       },
       "base_hp": 10,
       "move_speed": 20.0,
@@ -28,6 +36,82 @@
       "projectile_material_tier": 0,
       "shield_material_tier": 0,
       "two_hand_grip": true,
+      "use_jab": false
+    },
+    {
+      "name": "Zorya",
+      "level": 2,
+      "progression": {
+        "attack": "I",
+        "speed": "II",
+        "initiative": "III",
+        "health": "II"
+      },
+      "masteries": {
+        "attack": 0,
+        "defense": 0,
+        "damage": 0,
+        "speed": 0,
+        "shield_defense": 0,
+        "shield_speed": 0
+      },
+      "base_hp": 10,
+      "move_speed": 20.0,
+      "strength_base": 10,
+      "strength_pct": 73,
+      "dex_base": 16,
+      "dex_pct": 26,
+      "intelligence": 11,
+      "wisdom": 15,
+      "constitution": 12,
+      "looks": 7,
+      "charisma": 8,
+      "weapon": "Battle Axe",
+      "armor": "Quilted",
+      "shield": "Small metallic shield",
+      "weapon_material_tier": 0,
+      "armor_material_tier": 1,
+      "projectile_material_tier": 0,
+      "shield_material_tier": 0,
+      "two_hand_grip": false,
+      "use_jab": false
+    },
+    {
+      "name": "Volfango Drakos",
+      "level": 2,
+      "progression": {
+        "attack": "I",
+        "speed": "II",
+        "initiative": "III",
+        "health": "III"
+      },
+      "masteries": {
+        "attack": 0,
+        "defense": 0,
+        "damage": 0,
+        "speed": 0,
+        "shield_defense": 0,
+        "shield_speed": 0
+      },
+      "base_hp": 10,
+      "move_speed": 20.0,
+      "strength_base": 10,
+      "strength_pct": 21,
+      "dex_base": 19,
+      "dex_pct": 75,
+      "intelligence": 14,
+      "wisdom": 12,
+      "constitution": 10,
+      "looks": 8,
+      "charisma": 5,
+      "weapon": "Short sword",
+      "armor": "Gambeson",
+      "shield": "None",
+      "weapon_material_tier": 1,
+      "armor_material_tier": 0,
+      "projectile_material_tier": 0,
+      "shield_material_tier": 0,
+      "two_hand_grip": false,
       "use_jab": false
     }
   ]
