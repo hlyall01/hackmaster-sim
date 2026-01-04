@@ -28,11 +28,13 @@ pub struct WeaponProfile {
     pub armor_penetration: i32,
     pub speed: f32,
     pub reach_ft: f32,
+    pub range_bands_feet: Option<[f32; 4]>,
     pub two_hand_grip: bool,
     pub use_jab: bool,
     pub jab_special_expr: Option<String>,
     pub has_weapon: bool,
     pub defense_bonus_always: bool,
+    pub uses_projectiles: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -115,11 +117,13 @@ impl Default for WeaponProfile {
             armor_penetration: 0,
             speed: 10.0,
             reach_ft: 1.0,
+            range_bands_feet: None,
             two_hand_grip: false,
             use_jab: false,
             jab_special_expr: None,
             has_weapon: false,
             defense_bonus_always: false,
+            uses_projectiles: false,
         }
     }
 }
@@ -217,7 +221,18 @@ struct RangeBands {
     band_8: f32,
 }
 
-fn ranged_bands_for_weapon(name: &str) -> Option<RangeBands> {
+impl RangeBands {
+    fn from_array(values: [f32; 4]) -> Self {
+        Self {
+            band_0: values[0],
+            band_4: values[1],
+            band_6: values[2],
+            band_8: values[3],
+        }
+    }
+}
+
+fn ranged_bands_for_weapon_name(name: &str) -> Option<RangeBands> {
     match name {
         "Shortbow" | "Recurve bow" => Some(RangeBands {
             band_0: 50.0,
@@ -313,8 +328,15 @@ fn ranged_bands_for_weapon(name: &str) -> Option<RangeBands> {
     }
 }
 
-fn range_modifier_for_weapon(name: &str, distance: f32) -> Option<i32> {
-    let bands = ranged_bands_for_weapon(name)?;
+fn ranged_bands_for_weapon(weapon: &WeaponProfile) -> Option<RangeBands> {
+    weapon
+        .range_bands_feet
+        .map(RangeBands::from_array)
+        .or_else(|| ranged_bands_for_weapon_name(&weapon.name))
+}
+
+fn range_modifier_for_weapon(weapon: &WeaponProfile, distance: f32) -> Option<i32> {
+    let bands = ranged_bands_for_weapon(weapon)?;
     if distance <= bands.band_0 {
         Some(0)
     } else if distance <= bands.band_4 {
@@ -328,8 +350,27 @@ fn range_modifier_for_weapon(name: &str, distance: f32) -> Option<i32> {
     }
 }
 
-pub fn max_range_for_weapon(name: &str) -> Option<f32> {
-    ranged_bands_for_weapon(name).map(|bands| {
+pub fn max_range_for_bands(bands: [f32; 4]) -> f32 {
+    let bands = RangeBands::from_array(bands);
+    bands
+        .band_8
+        .max(bands.band_6)
+        .max(bands.band_4)
+        .max(bands.band_0)
+}
+
+pub fn max_range_for_weapon_name(name: &str) -> Option<f32> {
+    ranged_bands_for_weapon_name(name).map(|bands| {
+        bands
+            .band_8
+            .max(bands.band_6)
+            .max(bands.band_4)
+            .max(bands.band_0)
+    })
+}
+
+fn max_range_for_weapon(weapon: &WeaponProfile) -> Option<f32> {
+    ranged_bands_for_weapon(weapon).map(|bands| {
         bands
             .band_8
             .max(bands.band_6)
@@ -515,10 +556,24 @@ impl SimState {
         let reach_b = self.combatants[1].sheet.offense.weapon.reach_ft.max(1.0);
         let max_reach = self.config.stop_distance.max(1.0);
         let min_reach = reach_a.min(reach_b);
-        let ranged_a =
-            max_range_for_weapon(&self.combatants[0].sheet.offense.weapon.name).is_some();
-        let ranged_b =
-            max_range_for_weapon(&self.combatants[1].sheet.offense.weapon.name).is_some();
+        let weapon_a = &self.combatants[0].sheet.offense.weapon;
+        let weapon_b = &self.combatants[1].sheet.offense.weapon;
+        let range_bands_a = weapon_a.range_bands_feet;
+        let range_bands_b = weapon_b.range_bands_feet;
+        let weapon_name_a = weapon_a.name.clone();
+        let weapon_name_b = weapon_b.name.clone();
+        let ranged_projectile_a = weapon_a.uses_projectiles;
+        let ranged_projectile_b = weapon_b.uses_projectiles;
+        let max_range_a = range_bands_a
+            .map(max_range_for_bands)
+            .or_else(|| max_range_for_weapon_name(&weapon_name_a));
+        let max_range_b = range_bands_b
+            .map(max_range_for_bands)
+            .or_else(|| max_range_for_weapon_name(&weapon_name_b));
+        let ranged_a = max_range_a.is_some();
+        let ranged_b = max_range_b.is_some();
+        let ranged_projectile_a = ranged_a && ranged_projectile_a;
+        let ranged_projectile_b = ranged_b && ranged_projectile_b;
         let any_ranged = ranged_a || ranged_b;
 
         if distance > max_reach && !any_ranged {
@@ -538,10 +593,8 @@ impl SimState {
                 let backstep = 5.0;
                 let engaged = distance <= min_reach;
                 if !engaged {
-                    if ranged_a {
-                        if let Some(max_range) =
-                            max_range_for_weapon(&self.combatants[0].sheet.offense.weapon.name)
-                        {
+                    if ranged_projectile_a {
+                        if let Some(max_range) = max_range_a {
                             if distance <= max_range {
                                 self.actors[0].position -= backstep;
                             } else {
@@ -551,10 +604,8 @@ impl SimState {
                     } else if distance > reach_a {
                         self.actors[0].position += step_a;
                     }
-                    if ranged_b {
-                        if let Some(max_range) =
-                            max_range_for_weapon(&self.combatants[1].sheet.offense.weapon.name)
-                        {
+                    if ranged_projectile_b {
+                        if let Some(max_range) = max_range_b {
                             if distance <= max_range {
                                 self.actors[1].position += backstep;
                             } else {
@@ -640,31 +691,29 @@ impl SimState {
                 self.combatants[attacker_idx].state.next_attack_time = None;
                 continue;
             }
-            let weapon_name = &self.combatants[attacker_idx].sheet.offense.weapon.name;
-            let is_ranged_weapon = max_range_for_weapon(weapon_name).is_some();
-            let ranged_mod = if is_ranged_weapon {
-                range_modifier_for_weapon(weapon_name, distance)
+            let weapon = &self.combatants[attacker_idx].sheet.offense.weapon;
+            let has_range = max_range_for_weapon(weapon).is_some();
+            let attacker_reach = weapon.reach_ft.max(1.0);
+            let use_ranged = if has_range && !weapon.uses_projectiles {
+                distance > attacker_reach
+            } else {
+                has_range
+            };
+            let ranged_mod = if use_ranged {
+                range_modifier_for_weapon(weapon, distance)
             } else {
                 None
             };
-            if !is_ranged_weapon
-                && distance
-                    > self.combatants[attacker_idx]
-                        .sheet
-                        .offense
-                        .weapon
-                        .reach_ft
-                        .max(1.0)
-            {
+            if !use_ranged && distance > attacker_reach {
                 continue;
             }
-            if is_ranged_weapon && ranged_mod.is_none() {
+            if use_ranged && ranged_mod.is_none() {
                 continue;
             }
             if self.combatants[attacker_idx].state.next_attack_time.is_none() {
-                let attacker_reach = self.combatants[attacker_idx].sheet.offense.weapon.reach_ft;
-                let defender_reach = self.combatants[defender_idx].sheet.offense.weapon.reach_ft;
-                let delay = if !is_ranged_weapon && attacker_reach < defender_reach {
+                let defender_reach =
+                    self.combatants[defender_idx].sheet.offense.weapon.reach_ft;
+                let delay = if !use_ranged && attacker_reach < defender_reach {
                     1.0
                 } else {
                     0.0
@@ -681,7 +730,7 @@ impl SimState {
                     attacker_idx,
                     defender_idx,
                     ranged_mod.unwrap_or(0),
-                    is_ranged_weapon,
+                    use_ranged,
                     now,
                     &mut self.rng,
                 );
@@ -737,6 +786,7 @@ fn resolve_attack(
         attacker_two_hand_grip,
         attacker_has_weapon,
         attacker_weapon_defense_always,
+        attacker_uses_projectiles,
     ) = {
         let attacker = &combatants[attacker_idx];
         let weapon = &attacker.sheet.offense.weapon;
@@ -752,7 +802,13 @@ fn resolve_attack(
             weapon.two_hand_grip,
             weapon.has_weapon,
             weapon.defense_bonus_always,
+            weapon.uses_projectiles,
         )
+    };
+    let strength_damage = if is_ranged && attacker_uses_projectiles {
+        0
+    } else {
+        strength_damage
     };
     let (
         defense_mod,
@@ -1292,6 +1348,18 @@ mod tests {
         weapon_defense_always: bool,
         max_hp: i32,
     ) -> Combatant {
+        let uses_projectiles = matches!(
+            weapon_name.as_str(),
+            "Shortbow"
+                | "Recurve bow"
+                | "Longbow"
+                | "Warbow"
+                | "Light crossbow"
+                | "Heavy crossbow"
+                | "Hand crossbow"
+                | "Arbalest"
+                | "Sling"
+        );
         let sheet = CombatantSheet {
             name,
             offense: OffenseProfile {
@@ -1304,11 +1372,13 @@ mod tests {
                     armor_penetration,
                     speed: weapon_speed,
                     reach_ft,
+                    range_bands_feet: None,
                     two_hand_grip,
                     use_jab,
                     jab_special_expr,
                     has_weapon,
                     defense_bonus_always: weapon_defense_always,
+                    uses_projectiles,
                 },
             },
             defense: DefenseProfile {

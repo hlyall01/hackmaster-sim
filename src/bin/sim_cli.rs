@@ -96,11 +96,16 @@ fn main() {
     );
     println!("Load category: {}", derived.load_category);
 
-    let mut sim = SimState::new(SimConfig::new(20.0, reach_ft));
-    let strength_damage = game_logic::strength_damage_for_weapon(
-        &weapon.name,
-        character.ability_mods.strength.damage,
-    );
+    let weapon_catalog = game_logic::load_catalogs()
+        .ok()
+        .map(|(weapons, _, _)| weapons)
+        .unwrap_or_else(game_logic::default_weapon_catalog);
+    let weapon_preset = weapon_catalog.iter().find(|preset| preset.name == weapon.name);
+    let strength_damage = weapon_preset
+        .map(|preset| {
+            game_logic::strength_damage_for_weapon(preset, character.ability_mods.strength.damage)
+        })
+        .unwrap_or(character.ability_mods.strength.damage);
     let weapon_name = character
         .equipment
         .weapon
@@ -138,12 +143,17 @@ fn main() {
         .map(|weapon| weapon.defense_bonus_always)
         .unwrap_or(false);
     let has_weapon = character.equipment.weapon.is_some();
+    let range_bands_feet = weapon_preset.and_then(|preset| preset.range_bands_feet);
+    let uses_projectiles = weapon_preset
+        .map(|preset| game_logic::weapon_uses_projectiles(preset))
+        .unwrap_or(false);
     let armor_is_heavy = character
         .equipment
         .armor
         .as_ref()
         .map(|armor| matches!(armor.armor_type, character::ArmorType::Heavy))
         .unwrap_or(false);
+    let mut sim = SimState::new(SimConfig::new(20.0, reach_ft));
     let sheet = CombatantSheet {
         name: character.name.clone(),
         offense: OffenseProfile {
@@ -156,11 +166,13 @@ fn main() {
                 armor_penetration,
                 speed: weapon_speed,
                 reach_ft: weapon_reach,
+                range_bands_feet,
                 two_hand_grip: false,
                 use_jab: false,
                 jab_special_expr: None,
                 has_weapon,
                 defense_bonus_always: weapon_defense_always,
+                uses_projectiles,
             },
         },
         defense: DefenseProfile {

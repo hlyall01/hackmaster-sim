@@ -29,6 +29,7 @@ pub struct WeaponPreset {
     pub shield_damage_expr: Option<String>,
     pub reach_label: String,
     pub reach_ft: f32,
+    pub range_bands_feet: Option<[f32; 4]>,
     pub armor_pen: i32,
     pub defense_bonus_always: bool,
     pub size: WeaponSize,
@@ -298,7 +299,7 @@ fn roll_summary(
     character: &Character,
     derived: &DerivedStats,
 ) -> RollSummary {
-    let is_ranged_weapon = is_ranged_weapon(&weapon.name);
+    let is_ranged_weapon = is_ranged_weapon(weapon);
     let uses_projectiles = uses_projectiles(&weapon.name, weapon.ammunition.is_some());
     let (material_attack_bonus, material_damage_bonus) = material_bonuses(
         player.weapon_material_tier,
@@ -314,10 +315,8 @@ fn roll_summary(
         && (weapon.size == WeaponSize::Medium || weapon.size == WeaponSize::Large);
     let effective_two_hand = is_two_handed || (player.two_hand_grip && can_two_hand);
     let two_hand_bonus = if effective_two_hand && can_two_hand { 3 } else { 0 };
-    let strength_damage = strength_damage_for_weapon(
-        &weapon.name,
-        character.ability_mods.strength.damage,
-    ) + two_hand_bonus
+    let strength_damage = strength_damage_for_weapon(weapon, character.ability_mods.strength.damage)
+        + two_hand_bonus
         + material_damage_bonus
         + damage_mastery;
 
@@ -507,7 +506,7 @@ pub fn build_combatant(
     };
 
     let mut name = character.name;
-    let is_ranged_weapon = is_ranged_weapon(&weapon_name);
+    let is_ranged_weapon = is_ranged_weapon(weapon_preset);
     let uses_projectiles =
         uses_projectiles(&weapon_preset.name, weapon_preset.ammunition.is_some());
     let (material_attack_bonus, material_damage_bonus) = material_bonuses(
@@ -522,10 +521,9 @@ pub fn build_combatant(
     let mut attack_bonus = derived.attack_bonus + material_attack_bonus + attack_mastery;
     let mut defense_mod = derived.base_dv + defense_mastery;
     let mut armor_dr = derived.armor_dr;
-    let mut strength_damage = strength_damage_for_weapon(
-        &weapon_name,
-        character.ability_mods.strength.damage,
-    ) + two_hand_damage_bonus
+    let mut strength_damage =
+        strength_damage_for_weapon(weapon_preset, character.ability_mods.strength.damage)
+            + two_hand_damage_bonus
         + material_damage_bonus
         + damage_mastery;
     let mut max_hp = derived.hit_points as i32;
@@ -568,11 +566,13 @@ pub fn build_combatant(
                 armor_penetration,
                 speed: weapon_speed,
                 reach_ft: weapon_reach,
+                range_bands_feet: weapon_preset.range_bands_feet,
                 two_hand_grip: effective_two_hand,
                 use_jab,
                 jab_special_expr,
                 has_weapon,
                 defense_bonus_always: weapon_defense_always,
+                uses_projectiles,
             },
         },
         defense: DefenseProfile {
@@ -598,17 +598,28 @@ pub fn build_combatant(
     Combatant::new(sheet)
 }
 
-pub fn stop_distance_for_players(players: &[PlayerConfig; 2], weapon_catalog: &[WeaponPreset]) -> f32 {
+pub fn stop_distance_for_players(
+    players: &[PlayerConfig; 2],
+    weapon_catalog: &[WeaponPreset],
+) -> f32 {
     let reach_a = weapon_catalog
         .get(players[0].weapon_index)
         .map(|weapon| {
-            sim::max_range_for_weapon(&weapon.name).unwrap_or_else(|| weapon.reach_ft.max(1.0))
+            weapon
+                .range_bands_feet
+                .map(sim::max_range_for_bands)
+                .or_else(|| sim::max_range_for_weapon_name(&weapon.name))
+                .unwrap_or_else(|| weapon.reach_ft.max(1.0))
         })
         .unwrap_or(1.0);
     let reach_b = weapon_catalog
         .get(players[1].weapon_index)
         .map(|weapon| {
-            sim::max_range_for_weapon(&weapon.name).unwrap_or_else(|| weapon.reach_ft.max(1.0))
+            weapon
+                .range_bands_feet
+                .map(sim::max_range_for_bands)
+                .or_else(|| sim::max_range_for_weapon_name(&weapon.name))
+                .unwrap_or_else(|| weapon.reach_ft.max(1.0))
         })
         .unwrap_or(1.0);
     reach_a.max(reach_b)
@@ -1167,6 +1178,7 @@ struct WeaponJson {
     damage: Option<String>,
     shield_damage: Option<String>,
     ammunition: Option<String>,
+    range_bands_feet: Option<Vec<f32>>,
     armor_penetration: Option<i32>,
     defense_bonus_always: Option<bool>,
     #[serde(rename = "reach_or_range")]
@@ -1252,6 +1264,10 @@ fn load_weapon_catalog(path: &str) -> Result<Vec<WeaponPreset>, String> {
             .unwrap_or_else(|| "-".to_string());
         let reach_ft = parse_reach_ft(&reach_label);
         let damage_expr = entry.damage.unwrap_or_else(|| "-".to_string());
+        let range_bands_feet = entry
+            .range_bands_feet
+            .as_deref()
+            .and_then(parse_range_bands_feet);
         catalog.push(WeaponPreset {
             name: entry.name,
             group,
@@ -1264,6 +1280,7 @@ fn load_weapon_catalog(path: &str) -> Result<Vec<WeaponPreset>, String> {
             shield_damage_expr: entry.shield_damage.clone(),
             reach_label,
             reach_ft,
+            range_bands_feet,
             armor_pen: entry.armor_penetration.unwrap_or(0),
             defense_bonus_always: entry.defense_bonus_always.unwrap_or(false),
             size,
@@ -1470,6 +1487,13 @@ fn parse_reach_ft(value: &str) -> f32 {
     parse_leading_number(value)
 }
 
+fn parse_range_bands_feet(values: &[f32]) -> Option<[f32; 4]> {
+    if values.len() != 4 {
+        return None;
+    }
+    Some([values[0], values[1], values[2], values[3]])
+}
+
 fn leak_str(value: String) -> &'static str {
     Box::leak(value.into_boxed_str())
 }
@@ -1537,6 +1561,7 @@ fn weapon_preset(
         shield_damage_expr: None,
         reach_label: reach_label.to_string(),
         reach_ft,
+        range_bands_feet: None,
         armor_pen: 0,
         defense_bonus_always: false,
         size: WeaponSize::Medium,
@@ -1560,8 +1585,8 @@ fn weapon_preset_with_ammo(
 }
 
 
-pub fn is_ranged_weapon(name: &str) -> bool {
-    sim::max_range_for_weapon(name).is_some()
+pub fn is_ranged_weapon(weapon: &WeaponPreset) -> bool {
+    weapon.range_bands_feet.is_some() || sim::max_range_for_weapon_name(&weapon.name).is_some()
 }
 
 pub fn uses_projectiles(weapon_name: &str, has_ammo: bool) -> bool {
@@ -1594,8 +1619,8 @@ pub fn apply_armor_material_tier(mut armor: Armor, tier: i32) -> Armor {
     armor
 }
 
-pub fn strength_damage_for_weapon(weapon_name: &str, base: i32) -> i32 {
-    if is_ranged_weapon(weapon_name) {
+pub fn strength_damage_for_weapon(weapon: &WeaponPreset, base: i32) -> i32 {
+    if is_ranged_weapon(weapon) && uses_projectiles(&weapon.name, weapon.ammunition.is_some()) {
         0
     } else {
         base
