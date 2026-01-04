@@ -10,7 +10,10 @@ use character::{
     AbilityScore, AbilitySet, ArmorRegion, Character, Equipment, MaterialKind, Progression,
     ProgressionTier, Weapon, WeaponGroup, WeaponMastery,
 };
-use sim::{Combatant, SimConfig, SimState};
+use sim::{
+    Combatant, CombatantSheet, DefenseProfile, MobilityProfile, OffenseProfile, SimConfig,
+    SimState, Vitals, WeaponProfile,
+};
 
 fn main() {
     let abilities = AbilitySet {
@@ -98,68 +101,89 @@ fn main() {
         &weapon.name,
         character.ability_mods.strength.damage,
     );
-    let combatant = Combatant::new(
-        character.name.clone(),
-        character
-            .equipment
-            .weapon
-            .as_ref()
-            .map(|weapon| weapon.name.clone())
-            .unwrap_or_else(|| "Unarmed".to_string()),
-        derived.attack_bonus,
-        derived.base_dv,
-        derived.armor_dr,
-        character
-            .equipment
-            .armor
-            .as_ref()
-            .map(|armor| matches!(armor.armor_type, character::ArmorType::Heavy))
-            .unwrap_or(false),
-        character
-            .equipment
-            .weapon
-            .as_ref()
-            .map(|weapon| weapon.armor_pen)
-            .unwrap_or(0),
-        character
-            .equipment
-            .weapon
-            .as_ref()
-            .map(|weapon| weapon.damage_expr.clone())
-            .unwrap_or_else(|| "d4p".to_string()),
-        None,
-        strength_damage,
-        character
-            .equipment
-            .weapon
-            .as_ref()
-            .map(|weapon| weapon.speed)
-            .unwrap_or(10.0),
-        character
-            .equipment
-            .weapon
-            .as_ref()
-            .map(|weapon| weapon.reach_ft)
-            .unwrap_or(1.0),
-        5.0,
-        false,
-        false,
-        None,
-        character.equipment.weapon.is_some(),
-        character
-            .equipment
-            .weapon
-            .as_ref()
-            .map(|weapon| weapon.defense_bonus_always)
-            .unwrap_or(false),
-        derived.hit_points as i32,
-        None,
-        0,
-        0,
-        None,
-        false,
-        None,
-    );
+    let weapon_name = character
+        .equipment
+        .weapon
+        .as_ref()
+        .map(|weapon| weapon.name.clone())
+        .unwrap_or_else(|| "Unarmed".to_string());
+    let weapon_damage_expr = character
+        .equipment
+        .weapon
+        .as_ref()
+        .map(|weapon| weapon.damage_expr.clone())
+        .unwrap_or_else(|| "d4p".to_string());
+    let weapon_speed = character
+        .equipment
+        .weapon
+        .as_ref()
+        .map(|weapon| weapon.speed)
+        .unwrap_or(10.0);
+    let weapon_reach = character
+        .equipment
+        .weapon
+        .as_ref()
+        .map(|weapon| weapon.reach_ft)
+        .unwrap_or(1.0);
+    let armor_penetration = character
+        .equipment
+        .weapon
+        .as_ref()
+        .map(|weapon| weapon.armor_pen)
+        .unwrap_or(0);
+    let weapon_defense_always = character
+        .equipment
+        .weapon
+        .as_ref()
+        .map(|weapon| weapon.defense_bonus_always)
+        .unwrap_or(false);
+    let has_weapon = character.equipment.weapon.is_some();
+    let armor_is_heavy = character
+        .equipment
+        .armor
+        .as_ref()
+        .map(|armor| matches!(armor.armor_type, character::ArmorType::Heavy))
+        .unwrap_or(false);
+    let sheet = CombatantSheet {
+        name: character.name.clone(),
+        offense: OffenseProfile {
+            attack_bonus: derived.attack_bonus,
+            strength_damage,
+            weapon: WeaponProfile {
+                name: weapon_name,
+                damage_expr: weapon_damage_expr,
+                shield_damage_expr: None,
+                armor_penetration,
+                speed: weapon_speed,
+                reach_ft: weapon_reach,
+                two_hand_grip: false,
+                use_jab: false,
+                jab_special_expr: None,
+                has_weapon,
+                defense_bonus_always: weapon_defense_always,
+            },
+        },
+        defense: DefenseProfile {
+            defense_mod: derived.base_dv,
+            armor_dr: derived.armor_dr,
+            armor_is_heavy,
+            shield_name: None,
+            shield_defense_bonus: 0,
+            shield_dr: 0,
+            shield_cover_value: None,
+            shield_breakage: None,
+        },
+        mobility: MobilityProfile { move_speed: 5.0 },
+        vitals: Vitals {
+            max_hp: derived.hit_points as i32,
+            constitution: character.abilities.constitution,
+            threshold_of_pain: game_logic::threshold_of_pain(
+                derived.hit_points as i32,
+                character.level,
+            ),
+        },
+    };
+    let combatant = Combatant::new(sheet);
     sim.reset_with_combatants([combatant.clone(), combatant]);
     println!("--- Simulation (1s ticks) ---");
     while !sim.done {

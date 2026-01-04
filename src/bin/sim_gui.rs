@@ -5,12 +5,34 @@ mod sim;
 #[path = "../game_logic.rs"]
 mod game_logic;
 
-use character::ProgressionTier;
+use character::{Progression, ProgressionTier, WeaponGroup};
 use eframe::egui::{self, Color32, Pos2, Rect};
 use sim::{SimConfig, SimState};
 use game_logic::{
-    ArmorEntry, NpcPreset, PlayerConfig, ShieldEntry, WeaponHandedness, WeaponPreset, WeaponSize,
+    ArmorEntry, FighterPreset, FighterProgression, NpcPreset, PlayerConfig, ShieldEntry,
+    WeaponHandedness, WeaponPreset, WeaponSize,
 };
+
+#[derive(Clone, Copy)]
+enum WeaponIcon {
+    Sword,
+    Dagger,
+    Axe,
+    Spear,
+    Polearm,
+    Bow,
+    Crossbow,
+    Blunt,
+    Lash,
+    Basic,
+    Double,
+    Ensnaring,
+    Shield,
+    Unarmed,
+    Other,
+}
+
+const FIGHTER_PRESETS_PATH: &str = "data/fighter_presets.json";
 
 struct SimGuiApp {
     running: bool,
@@ -20,6 +42,8 @@ struct SimGuiApp {
     armor_catalog: Vec<ArmorEntry>,
     shield_catalog: Vec<ShieldEntry>,
     npc_presets: Vec<NpcPreset>,
+    fighter_presets: Vec<FighterPreset>,
+    fighter_preset_names: [String; 2],
     show_player_editor: [bool; 2],
     last_screen_size: egui::Vec2,
 }
@@ -44,6 +68,13 @@ impl SimGuiApp {
                 Vec::new()
             }
         };
+        let fighter_presets = match game_logic::load_fighter_presets(FIGHTER_PRESETS_PATH) {
+            Ok(presets) => presets,
+            Err(err) => {
+                eprintln!("Failed to load fighter presets: {err}");
+                Vec::new()
+            }
+        };
         let sim = SimState::new(SimConfig::new(200.0, 1.0));
         let mut app = Self {
             running: false,
@@ -56,6 +87,8 @@ impl SimGuiApp {
             armor_catalog,
             shield_catalog,
             npc_presets,
+            fighter_presets,
+            fighter_preset_names: ["Fighter A".to_string(), "Fighter B".to_string()],
             show_player_editor: [false, false],
             last_screen_size: egui::vec2(0.0, 0.0),
         };
@@ -116,19 +149,45 @@ impl SimGuiApp {
         let min_gap = 28.0;
         if gap < min_gap {
             let dir = if x1 >= x0 { 1.0 } else { -1.0 };
-            if self.sim.combatants[0].reach_ft >= self.sim.combatants[1].reach_ft {
+            if self.sim.combatants[0].sheet.offense.weapon.reach_ft
+                >= self.sim.combatants[1].sheet.offense.weapon.reach_ft
+            {
                 x1 = x0 + dir * min_gap;
             } else {
                 x0 = x1 - dir * min_gap;
             }
         }
 
-        for (_idx, (x, player)) in [(x0, &self.players[0]), (x1, &self.players[1])]
-            .into_iter()
-            .enumerate()
-        {
-            let pos = Pos2::new(x, ground_y - 20.0);
-            painter.circle_filled(pos, 12.0, player.color);
+        let fighter_positions = [(0usize, x0, 1.0_f32), (1usize, x1, -1.0_f32)];
+        for (idx, x, facing) in fighter_positions {
+            let combatant = &self.sim.combatants[idx];
+            let player = &self.players[idx];
+            let knocked_back = combatant.state.knockback_immobile_seconds > 0;
+            let downed =
+                combatant.state.hp <= 0 || combatant.state.trauma_remaining_seconds > 0;
+            let weapon_icon = self
+                .weapon_catalog
+                .get(player.weapon_index)
+                .map(|weapon| weapon_icon_kind(weapon.group))
+                .unwrap_or(WeaponIcon::Other);
+            self.draw_person(
+                painter,
+                Pos2::new(x, ground_y),
+                facing,
+                player.color,
+                downed,
+                knocked_back,
+                weapon_icon,
+            );
+            if knocked_back && !downed {
+                painter.text(
+                    Pos2::new(x, ground_y - 56.0),
+                    egui::Align2::CENTER_CENTER,
+                    "knocked",
+                    egui::TextStyle::Small.resolve(ui.style()),
+                    Color32::from_rgb(230, 160, 90),
+                );
+            }
         }
     }
 
@@ -143,8 +202,8 @@ impl SimGuiApp {
         let bar_width = (total_width - gap).max(1.0) * 0.5;
 
         for (idx, player) in self.players.iter().enumerate() {
-            let hp = self.sim.combatants[idx].hp.max(0) as f32;
-            let max_hp = self.sim.combatants[idx].max_hp.max(1) as f32;
+            let hp = self.sim.combatants[idx].state.hp.max(0) as f32;
+            let max_hp = self.sim.combatants[idx].sheet.vitals.max_hp.max(1) as f32;
             let hp_ratio = (hp / max_hp).clamp(0.0, 1.0);
             let bar_x = if idx == 0 {
                 left
@@ -201,12 +260,277 @@ impl SimGuiApp {
         }
 
         for (idx, player) in self.players.iter().enumerate() {
-            if let Some(next) = self.sim.combatants[idx].next_attack_time {
+            if let Some(next) = self.sim.combatants[idx].state.next_attack_time {
                 let t = (next - now).max(0.0).min(horizon);
                 let x = left + t * scale;
                 let pos = Pos2::new(x, y - 14.0);
                 painter.circle_filled(pos, 6.0, player.color);
             }
+        }
+    }
+
+    fn draw_person(
+        &self,
+        painter: &egui::Painter,
+        base: Pos2,
+        facing: f32,
+        color: Color32,
+        downed: bool,
+        knocked_back: bool,
+        weapon_icon: WeaponIcon,
+    ) {
+        let head_color = color;
+        let body_color = Color32::from_gray(230);
+        let stroke = (2.0, body_color);
+
+        if downed {
+            let torso_start = Pos2::new(base.x - facing * 2.0, base.y - 4.0);
+            let torso_end = Pos2::new(base.x + facing * 16.0, base.y - 4.0);
+            let head = Pos2::new(base.x + facing * 22.0, base.y - 6.0);
+            painter.line_segment([torso_start, torso_end], stroke);
+            painter.line_segment(
+                [torso_start, Pos2::new(base.x - facing * 6.0, base.y - 1.0)],
+                stroke,
+            );
+            painter.line_segment(
+                [torso_start, Pos2::new(base.x + facing * 4.0, base.y - 10.0)],
+                stroke,
+            );
+            painter.circle_filled(head, 6.0, head_color);
+            painter.line_segment(
+                [torso_end, Pos2::new(base.x + facing * 10.0, base.y - 12.0)],
+                stroke,
+            );
+            draw_weapon_icon(
+                painter,
+                Pos2::new(base.x + facing * 6.0, base.y - 10.0),
+                facing,
+                weapon_icon,
+            );
+            return;
+        }
+
+        if knocked_back {
+            let torso_start = Pos2::new(base.x, base.y - 8.0);
+            let torso_end = Pos2::new(base.x + facing * 16.0, base.y - 20.0);
+            let head = Pos2::new(base.x + facing * 20.0, base.y - 24.0);
+            painter.line_segment([torso_start, torso_end], stroke);
+            painter.line_segment(
+                [torso_start, Pos2::new(base.x - facing * 6.0, base.y - 2.0)],
+                stroke,
+            );
+            painter.line_segment(
+                [torso_start, Pos2::new(base.x + facing * 6.0, base.y - 2.0)],
+                stroke,
+            );
+            painter.circle_filled(head, 6.0, head_color);
+            painter.line_segment(
+                [torso_end, Pos2::new(base.x + facing * 26.0, base.y - 14.0)],
+                stroke,
+            );
+            draw_weapon_icon(
+                painter,
+                Pos2::new(base.x + facing * 26.0, base.y - 14.0),
+                facing,
+                weapon_icon,
+            );
+            return;
+        }
+
+        let head = Pos2::new(base.x, base.y - 34.0);
+        let neck = Pos2::new(base.x, base.y - 26.0);
+        let torso = Pos2::new(base.x, base.y - 14.0);
+        painter.circle_filled(head, 6.5, head_color);
+        painter.line_segment([neck, torso], stroke);
+        painter.line_segment(
+            [torso, Pos2::new(base.x - 6.0, base.y - 2.0)],
+            stroke,
+        );
+        painter.line_segment(
+            [torso, Pos2::new(base.x + 6.0, base.y - 2.0)],
+            stroke,
+        );
+        let arm_start = Pos2::new(base.x, base.y - 22.0);
+        let arm_end = Pos2::new(base.x + facing * 12.0, base.y - 18.0);
+        painter.line_segment([arm_start, arm_end], stroke);
+        draw_weapon_icon(painter, arm_end, facing, weapon_icon);
+    }
+}
+
+fn weapon_icon_kind(group: WeaponGroup) -> WeaponIcon {
+    match group {
+        WeaponGroup::Unarmed => WeaponIcon::Unarmed,
+        WeaponGroup::Axes => WeaponIcon::Axe,
+        WeaponGroup::Basic => WeaponIcon::Basic,
+        WeaponGroup::Blunt => WeaponIcon::Blunt,
+        WeaponGroup::Bows => WeaponIcon::Bow,
+        WeaponGroup::Crossbows => WeaponIcon::Crossbow,
+        WeaponGroup::Double => WeaponIcon::Double,
+        WeaponGroup::Ensnaring => WeaponIcon::Ensnaring,
+        WeaponGroup::Lashes => WeaponIcon::Lash,
+        WeaponGroup::LargeSwords => WeaponIcon::Sword,
+        WeaponGroup::SmallSwords => WeaponIcon::Dagger,
+        WeaponGroup::Polearms => WeaponIcon::Polearm,
+        WeaponGroup::Spears => WeaponIcon::Spear,
+        WeaponGroup::Shields => WeaponIcon::Shield,
+    }
+}
+
+fn draw_weapon_icon(painter: &egui::Painter, pos: Pos2, facing: f32, icon: WeaponIcon) {
+    let stroke = (2.0, Color32::from_gray(220));
+    let accent = Color32::from_gray(170);
+    match icon {
+        WeaponIcon::Sword => {
+            let tip = Pos2::new(pos.x + facing * 12.0, pos.y - 10.0);
+            let guard = Pos2::new(pos.x + facing * 3.0, pos.y - 2.0);
+            painter.line_segment([pos, tip], stroke);
+            painter.line_segment(
+                [
+                    Pos2::new(guard.x - facing * 3.0, guard.y + 2.0),
+                    Pos2::new(guard.x + facing * 3.0, guard.y - 2.0),
+                ],
+                stroke,
+            );
+            painter.circle_filled(
+                Pos2::new(pos.x - facing * 1.0, pos.y + 1.0),
+                1.5,
+                accent,
+            );
+        }
+        WeaponIcon::Dagger => {
+            let tip = Pos2::new(pos.x + facing * 8.0, pos.y - 6.0);
+            let guard = Pos2::new(pos.x + facing * 2.0, pos.y - 1.0);
+            painter.line_segment([pos, tip], stroke);
+            painter.line_segment(
+                [
+                    Pos2::new(guard.x - facing * 2.0, guard.y + 1.5),
+                    Pos2::new(guard.x + facing * 2.0, guard.y - 1.5),
+                ],
+                stroke,
+            );
+        }
+        WeaponIcon::Axe => {
+            let handle_end = Pos2::new(pos.x + facing * 8.0, pos.y - 6.0);
+            painter.line_segment([pos, handle_end], stroke);
+            let blade_top = Pos2::new(handle_end.x + facing * 3.0, handle_end.y - 3.0);
+            let blade_bottom = Pos2::new(handle_end.x + facing * 3.0, handle_end.y + 3.0);
+            painter.line_segment([handle_end, blade_top], stroke);
+            painter.line_segment([handle_end, blade_bottom], stroke);
+        }
+        WeaponIcon::Spear => {
+            let tip = Pos2::new(pos.x + facing * 16.0, pos.y - 10.0);
+            let base = Pos2::new(pos.x + facing * 11.0, pos.y - 7.0);
+            painter.line_segment([pos, tip], stroke);
+            painter.line_segment([tip, Pos2::new(base.x, base.y + 3.0)], stroke);
+            painter.line_segment([tip, Pos2::new(base.x, base.y - 3.0)], stroke);
+        }
+        WeaponIcon::Polearm => {
+            let tip = Pos2::new(pos.x + facing * 18.0, pos.y - 12.0);
+            let blade_back = Pos2::new(tip.x - facing * 4.0, tip.y + 2.0);
+            let blade_low = Pos2::new(tip.x - facing * 2.0, tip.y + 7.0);
+            painter.line_segment([pos, tip], stroke);
+            painter.line_segment([tip, blade_back], stroke);
+            painter.line_segment([blade_back, blade_low], stroke);
+            painter.line_segment([blade_low, tip], stroke);
+            painter.line_segment(
+                [blade_back, Pos2::new(blade_back.x - facing * 3.0, blade_back.y - 2.0)],
+                stroke,
+            );
+        }
+        WeaponIcon::Bow => {
+            let center = Pos2::new(pos.x + facing * 4.0, pos.y - 2.0);
+            let top = Pos2::new(center.x, center.y - 8.0);
+            let mid = Pos2::new(center.x + facing * 2.0, center.y);
+            let bottom = Pos2::new(center.x, center.y + 8.0);
+            painter.line_segment([pos, center], (1.0, accent));
+            painter.line_segment([top, mid], stroke);
+            painter.line_segment([mid, bottom], stroke);
+            painter.line_segment([top, bottom], (1.0, accent));
+        }
+        WeaponIcon::Crossbow => {
+            let stock_end = Pos2::new(pos.x + facing * 10.0, pos.y - 2.0);
+            let limb_center = Pos2::new(pos.x + facing * 6.0, pos.y - 4.0);
+            painter.line_segment([pos, stock_end], stroke);
+            painter.line_segment(
+                [
+                    Pos2::new(limb_center.x, limb_center.y - 4.0),
+                    Pos2::new(limb_center.x, limb_center.y + 4.0),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(limb_center.x - facing * 3.0, limb_center.y - 4.0),
+                    Pos2::new(limb_center.x - facing * 3.0, limb_center.y + 4.0),
+                ],
+                (1.0, accent),
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(pos.x + facing * 5.0, pos.y - 4.0),
+                    Pos2::new(pos.x + facing * 9.0, pos.y - 4.0),
+                ],
+                (1.0, accent),
+            );
+        }
+        WeaponIcon::Blunt => {
+            let end = Pos2::new(pos.x + facing * 8.0, pos.y - 6.0);
+            painter.line_segment([pos, end], stroke);
+            let head = Rect::from_center_size(end, egui::vec2(5.0, 5.0));
+            painter.rect_filled(head, 1.0, accent);
+        }
+        WeaponIcon::Lash => {
+            let p1 = Pos2::new(pos.x + facing * 4.0, pos.y - 6.0);
+            let p2 = Pos2::new(pos.x + facing * 8.0, pos.y - 2.0);
+            let p3 = Pos2::new(pos.x + facing * 12.0, pos.y - 8.0);
+            painter.line_segment([pos, p1], stroke);
+            painter.line_segment([p1, p2], stroke);
+            painter.line_segment([p2, p3], stroke);
+            painter.circle_filled(p3, 2.0, accent);
+        }
+        WeaponIcon::Basic => {
+            let end = Pos2::new(pos.x + facing * 9.0, pos.y - 7.0);
+            painter.line_segment([pos, end], stroke);
+            painter.circle_filled(Pos2::new(end.x - facing * 1.0, end.y), 1.5, accent);
+        }
+        WeaponIcon::Double => {
+            let end = Pos2::new(pos.x + facing * 14.0, pos.y - 10.0);
+            painter.line_segment([pos, end], stroke);
+            painter.line_segment(
+                [pos, Pos2::new(pos.x + facing * 2.5, pos.y - 4.0)],
+                stroke,
+            );
+            painter.line_segment(
+                [end, Pos2::new(end.x - facing * 2.5, end.y + 4.0)],
+                stroke,
+            );
+        }
+        WeaponIcon::Ensnaring => {
+            let end = Pos2::new(pos.x + facing * 10.0, pos.y - 6.0);
+            painter.line_segment([pos, end], stroke);
+            let ring = Rect::from_center_size(end, egui::vec2(6.0, 6.0));
+            painter.rect_stroke(ring, 3.0, (1.0, accent));
+            painter.line_segment(
+                [Pos2::new(ring.left(), ring.center().y), Pos2::new(ring.right(), ring.center().y)],
+                (1.0, accent),
+            );
+        }
+        WeaponIcon::Shield => {
+            let rect = Rect::from_center_size(
+                Pos2::new(pos.x + facing * 6.0, pos.y - 6.0),
+                egui::vec2(8.0, 12.0),
+            );
+            painter.rect_filled(rect, 2.0, Color32::from_gray(180));
+            painter.line_segment(
+                [
+                    Pos2::new(rect.center().x, rect.top() + 2.0),
+                    Pos2::new(rect.center().x, rect.bottom() - 2.0),
+                ],
+                (1.0, Color32::from_gray(120)),
+            );
+        }
+        WeaponIcon::Unarmed | WeaponIcon::Other => {
+            painter.circle_filled(pos, 2.5, Color32::from_gray(200));
         }
     }
 }
@@ -305,11 +629,11 @@ impl eframe::App for SimGuiApp {
                 ui.separator();
                 ui.label(format!(
                     "{} HP: {}",
-                    self.sim.combatants[0].name, self.sim.combatants[0].hp
+                    self.sim.combatants[0].sheet.name, self.sim.combatants[0].state.hp
                 ));
                 ui.label(format!(
                     "{} HP: {}",
-                    self.sim.combatants[1].name, self.sim.combatants[1].hp
+                    self.sim.combatants[1].sheet.name, self.sim.combatants[1].state.hp
                 ));
                 if let Some(event) = &self.sim.last_event {
                     ui.separator();
@@ -360,6 +684,7 @@ impl eframe::App for SimGuiApp {
                 .resizable(true)
                 .show(ctx, |ui| {
                     let id_prefix = if idx == 0 { "p1" } else { "p2" };
+                    let fighter_preset_name = &mut self.fighter_preset_names[idx];
                     let (player, opponent) = if idx == 0 {
                         let (left, right) = self.players.split_at_mut(1);
                         (&mut left[0], &right[0])
@@ -376,6 +701,8 @@ impl eframe::App for SimGuiApp {
                         &self.armor_catalog,
                         &self.shield_catalog,
                         &self.npc_presets,
+                        &mut self.fighter_presets,
+                        fighter_preset_name,
                     );
                 });
             self.show_player_editor[idx] = open;
@@ -396,6 +723,8 @@ fn render_player_editor(
     armor_catalog: &[ArmorEntry],
     shield_catalog: &[ShieldEntry],
     npc_presets: &[NpcPreset],
+    fighter_presets: &mut Vec<FighterPreset>,
+    fighter_preset_name: &mut String,
 ) {
     if weapon_catalog.is_empty() {
         ui.label("Weapon catalog is empty.");
@@ -404,6 +733,88 @@ fn render_player_editor(
     player.weapon_index = player.weapon_index.min(weapon_catalog.len() - 1);
     player.armor_index = player.armor_index.min(armor_catalog.len().saturating_sub(1));
     player.shield_index = player.shield_index.min(shield_catalog.len().saturating_sub(1));
+
+    if !fighter_presets.is_empty() {
+        ui.horizontal(|ui| {
+            ui.label("Fighter preset");
+            let mut selection = player.fighter_preset.map_or(usize::MAX, |idx| idx);
+            egui::ComboBox::from_id_source(format!("{id_prefix}_fighter_preset"))
+                .selected_text(
+                    player
+                        .fighter_preset
+                        .and_then(|idx| fighter_presets.get(idx))
+                        .map(|preset| preset.name.as_str())
+                        .unwrap_or("None"),
+                )
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut selection, usize::MAX, "None");
+                    for (idx, preset) in fighter_presets.iter().enumerate() {
+                        ui.selectable_value(&mut selection, idx, preset.name.as_str());
+                    }
+                });
+            let selection = if selection == usize::MAX {
+                None
+            } else {
+                Some(selection)
+            };
+            if selection != player.fighter_preset {
+                player.fighter_preset = selection;
+                if let Some(idx) = selection {
+                    if let Some(preset) = fighter_presets.get(idx) {
+                        apply_fighter_preset(
+                            player,
+                            preset,
+                            weapon_catalog,
+                            armor_catalog,
+                            shield_catalog,
+                        );
+                        player.npc_preset = None;
+                        fighter_preset_name.clear();
+                        fighter_preset_name.push_str(preset.name.as_str());
+                    }
+                }
+            }
+        });
+        let save_enabled =
+            !fighter_preset_name.trim().is_empty() && player.npc_preset.is_none();
+        ui.horizontal(|ui| {
+            ui.label("Save as");
+            ui.text_edit_singleline(fighter_preset_name);
+            if ui
+                .add_enabled(save_enabled, egui::Button::new("Save preset"))
+                .clicked()
+            {
+                let name = fighter_preset_name.trim();
+                if !name.is_empty() {
+                    let preset = fighter_preset_from_player(
+                        player,
+                        weapon_catalog,
+                        armor_catalog,
+                        shield_catalog,
+                        name,
+                    );
+                    if let Some(existing) = fighter_presets
+                        .iter()
+                        .position(|entry| entry.name.eq_ignore_ascii_case(name))
+                    {
+                        fighter_presets[existing] = preset;
+                        player.fighter_preset = Some(existing);
+                    } else {
+                        player.fighter_preset = Some(fighter_presets.len());
+                        fighter_presets.push(preset);
+                    }
+                    if let Err(err) =
+                        game_logic::save_fighter_presets(FIGHTER_PRESETS_PATH, fighter_presets)
+                    {
+                        eprintln!("Failed to save fighter presets: {err}");
+                    }
+                }
+            }
+            if player.npc_preset.is_some() {
+                ui.label("Disabled while NPC preset is active.");
+            }
+        });
+    }
 
     if !npc_presets.is_empty() {
         ui.horizontal(|ui| {
@@ -763,6 +1174,141 @@ fn render_player_editor(
             weapon.damage_expr, strength_damage, target_dr, weapon.armor_pen
         ));
     }
+}
+
+fn apply_fighter_preset(
+    player: &mut PlayerConfig,
+    preset: &FighterPreset,
+    weapon_catalog: &[WeaponPreset],
+    armor_catalog: &[ArmorEntry],
+    shield_catalog: &[ShieldEntry],
+) {
+    let attack = tier_from_label(&preset.progression.attack).unwrap_or(ProgressionTier::I);
+    let speed = tier_from_label(&preset.progression.speed).unwrap_or(ProgressionTier::I);
+    let initiative = tier_from_label(&preset.progression.initiative).unwrap_or(ProgressionTier::I);
+    let health = tier_from_label(&preset.progression.health).unwrap_or(ProgressionTier::I);
+    player.name = preset.name.clone();
+    player.level = preset.level;
+    player.progression = Progression::new(attack, speed, initiative, health);
+    player.base_hp = preset.base_hp;
+    player.move_speed = preset.move_speed;
+    player.strength_base = preset.strength_base;
+    player.strength_pct = preset.strength_pct;
+    player.dex_base = preset.dex_base;
+    player.dex_pct = preset.dex_pct;
+    player.intelligence = preset.intelligence;
+    player.wisdom = preset.wisdom;
+    player.constitution = preset.constitution;
+    player.looks = preset.looks;
+    player.charisma = preset.charisma;
+    player.weapon_material_tier = preset.weapon_material_tier;
+    player.armor_material_tier = preset.armor_material_tier;
+    player.projectile_material_tier = preset.projectile_material_tier;
+    player.shield_material_tier = preset.shield_material_tier;
+    player.two_hand_grip = preset.two_hand_grip;
+    player.use_jab = preset.use_jab;
+    player.weapon_index =
+        find_weapon_index_by_name(weapon_catalog, &preset.weapon).unwrap_or(0);
+    player.armor_index = find_armor_index_by_name(armor_catalog, &preset.armor).unwrap_or(0);
+    player.shield_index = find_shield_index_by_name(shield_catalog, &preset.shield).unwrap_or(0);
+    if let Some(weapon) = weapon_catalog.get(player.weapon_index) {
+        game_logic::sanitize_projectile_tier(player, weapon);
+    }
+}
+
+fn fighter_preset_from_player(
+    player: &PlayerConfig,
+    weapon_catalog: &[WeaponPreset],
+    armor_catalog: &[ArmorEntry],
+    shield_catalog: &[ShieldEntry],
+    name: &str,
+) -> FighterPreset {
+    let weapon = weapon_catalog
+        .get(player.weapon_index)
+        .map(|weapon| weapon.name.clone())
+        .unwrap_or_else(|| "Fist".to_string());
+    let armor = armor_catalog
+        .get(player.armor_index)
+        .and_then(|entry| entry.armor.as_ref().map(|armor| armor.name.to_string()))
+        .unwrap_or_else(|| "None".to_string());
+    let shield = shield_catalog
+        .get(player.shield_index)
+        .and_then(|entry| entry.shield.as_ref().map(|shield| shield.name.to_string()))
+        .unwrap_or_else(|| "None".to_string());
+    FighterPreset {
+        name: name.to_string(),
+        level: player.level,
+        progression: FighterProgression {
+            attack: tier_label(player.progression.attack).to_string(),
+            speed: tier_label(player.progression.speed).to_string(),
+            initiative: tier_label(player.progression.initiative).to_string(),
+            health: tier_label(player.progression.health).to_string(),
+        },
+        base_hp: player.base_hp,
+        move_speed: player.move_speed,
+        strength_base: player.strength_base,
+        strength_pct: player.strength_pct,
+        dex_base: player.dex_base,
+        dex_pct: player.dex_pct,
+        intelligence: player.intelligence,
+        wisdom: player.wisdom,
+        constitution: player.constitution,
+        looks: player.looks,
+        charisma: player.charisma,
+        weapon,
+        armor,
+        shield,
+        weapon_material_tier: player.weapon_material_tier,
+        armor_material_tier: player.armor_material_tier,
+        projectile_material_tier: player.projectile_material_tier,
+        shield_material_tier: player.shield_material_tier,
+        two_hand_grip: player.two_hand_grip,
+        use_jab: player.use_jab,
+    }
+}
+
+fn tier_from_label(label: &str) -> Option<ProgressionTier> {
+    match label.trim() {
+        "I" | "1" => Some(ProgressionTier::I),
+        "II" | "2" => Some(ProgressionTier::II),
+        "III" | "3" => Some(ProgressionTier::III),
+        "IV" | "4" => Some(ProgressionTier::IV),
+        "V" | "5" => Some(ProgressionTier::V),
+        "VI" | "6" => Some(ProgressionTier::VI),
+        _ => None,
+    }
+}
+
+fn find_weapon_index_by_name(catalog: &[WeaponPreset], name: &str) -> Option<usize> {
+    catalog
+        .iter()
+        .position(|weapon| weapon.name.eq_ignore_ascii_case(name))
+}
+
+fn find_armor_index_by_name(catalog: &[ArmorEntry], name: &str) -> Option<usize> {
+    if name.eq_ignore_ascii_case("None") {
+        return Some(0);
+    }
+    catalog.iter().position(|entry| {
+        entry
+            .armor
+            .as_ref()
+            .map(|armor| armor.name.eq_ignore_ascii_case(name))
+            .unwrap_or(false)
+    })
+}
+
+fn find_shield_index_by_name(catalog: &[ShieldEntry], name: &str) -> Option<usize> {
+    if name.eq_ignore_ascii_case("None") {
+        return Some(0);
+    }
+    catalog.iter().position(|entry| {
+        entry
+            .shield
+            .as_ref()
+            .map(|shield| shield.name.eq_ignore_ascii_case(name))
+            .unwrap_or(false)
+    })
 }
 
 fn ability_percentile_editor(

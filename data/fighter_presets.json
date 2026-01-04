@@ -1,0 +1,34 @@
+{
+  "presets": [
+    {
+      "name": "Arthur Du Randt",
+      "level": 1,
+      "progression": {
+        "attack": "I",
+        "speed": "II",
+        "initiative": "I",
+        "health": "III"
+      },
+      "base_hp": 10,
+      "move_speed": 20.0,
+      "strength_base": 16,
+      "strength_pct": 1,
+      "dex_base": 14,
+      "dex_pct": 51,
+      "intelligence": 10,
+      "wisdom": 10,
+      "constitution": 12,
+      "looks": 10,
+      "charisma": 10,
+      "weapon": "Glaive",
+      "armor": "Chainshirt",
+      "shield": "None",
+      "weapon_material_tier": 0,
+      "armor_material_tier": 1,
+      "projectile_material_tier": 0,
+      "shield_material_tier": 0,
+      "two_hand_grip": true,
+      "use_jab": false
+    }
+  ]
+}

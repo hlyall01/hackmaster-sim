@@ -2,15 +2,19 @@ use crate::character::{
     AbilityScore, AbilitySet, Armor, Character, DerivedStats, Equipment, Progression, Shield,
     Weapon, WeaponGroup, WeaponMastery,
 };
-use crate::sim::{self, Combatant};
+use crate::sim::{
+    self, Combatant, CombatantSheet, DefenseProfile, MobilityProfile, OffenseProfile, Vitals,
+    WeaponProfile,
+};
 use eframe::egui::Color32;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 
 const EMBEDDED_WEAPONS_JSON: &str = include_str!("../data/weapons.json");
 const EMBEDDED_ARMOR_JSON: &str = include_str!("../data/armor.json");
 const EMBEDDED_MATERIALS_JSON: &str = include_str!("../data/materials.json");
 const EMBEDDED_NPC_PRESETS_JSON: &str = include_str!("../data/npc_presets.json");
+const EMBEDDED_FIGHTER_PRESETS_JSON: &str = include_str!("../data/fighter_presets.json");
 
 #[derive(Clone)]
 pub struct WeaponPreset {
@@ -83,6 +87,46 @@ struct NpcPresetsFile {
     presets: Vec<NpcPreset>,
 }
 
+#[derive(Clone, Deserialize, Serialize)]
+pub struct FighterProgression {
+    pub attack: String,
+    pub speed: String,
+    pub initiative: String,
+    pub health: String,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct FighterPreset {
+    pub name: String,
+    pub level: u8,
+    pub progression: FighterProgression,
+    pub base_hp: u32,
+    pub move_speed: f32,
+    pub strength_base: u8,
+    pub strength_pct: u8,
+    pub dex_base: u8,
+    pub dex_pct: u8,
+    pub intelligence: u8,
+    pub wisdom: u8,
+    pub constitution: u8,
+    pub looks: u8,
+    pub charisma: u8,
+    pub weapon: String,
+    pub armor: String,
+    pub shield: String,
+    pub weapon_material_tier: i32,
+    pub armor_material_tier: i32,
+    pub projectile_material_tier: i32,
+    pub shield_material_tier: i32,
+    pub two_hand_grip: bool,
+    pub use_jab: bool,
+}
+
+#[derive(Deserialize, Serialize)]
+struct FighterPresetsFile {
+    presets: Vec<FighterPreset>,
+}
+
 #[derive(Clone)]
 pub struct PlayerConfig {
     pub name: String,
@@ -108,6 +152,7 @@ pub struct PlayerConfig {
     pub shield_index: usize,
     pub shield_material_tier: i32,
     pub npc_preset: Option<usize>,
+    pub fighter_preset: Option<usize>,
     pub two_hand_grip: bool,
     pub use_jab: bool,
 }
@@ -138,6 +183,7 @@ impl PlayerConfig {
             shield_index: 0,
             shield_material_tier: 0,
             npc_preset: None,
+            fighter_preset: None,
             two_hand_grip: false,
             use_jab: false,
         }
@@ -402,11 +448,11 @@ pub fn build_combatant(
     ) + two_hand_damage_bonus
         + material_damage_bonus;
     let mut max_hp = derived.hit_points as i32;
+    let mut threshold_of_pain = threshold_of_pain(max_hp, player.level);
     let mut shield_name = shield_data.map(|shield| shield.name.to_string());
     let mut shield_defense_bonus = shield_data.map(|shield| shield.defense_bonus).unwrap_or(0);
     let mut shield_dr = shield_data.map(|shield| shield.dr).unwrap_or(0);
     let mut shield_cover_value = shield_data.map(|shield| shield.cover_value);
-    let mut shield_intact = shield_name.is_some();
     let mut shield_breakage =
         shield_data.map(|shield| breakage_steps_from_thresholds(shield.breakage_thresholds));
     if let Some(preset) = player.npc_preset.and_then(|idx| npc_presets.get(idx)) {
@@ -416,45 +462,59 @@ pub fn build_combatant(
         armor_dr = preset.armor_dr;
         strength_damage = preset.damage_bonus;
         max_hp = preset.hp.max(1);
+        threshold_of_pain = preset.top.max(1);
         shield_name = None;
         shield_defense_bonus = 0;
         shield_dr = 0;
         shield_cover_value = None;
-        shield_intact = false;
         shield_breakage = None;
     }
 
-    Combatant::new(
+    let weapon_speed = if use_jab {
+        jab_speed
+    } else {
+        (weapon_speed + two_hand_speed_bonus + speed_mod).max(min_speed)
+    };
+    let sheet = CombatantSheet {
         name,
-        weapon_name,
-        attack_bonus,
-        defense_mod,
-        armor_dr,
-        armor_is_heavy,
-        armor_penetration,
-        weapon_damage,
-        shield_damage_expr,
-        strength_damage,
-        if use_jab {
-            jab_speed
-        } else {
-            (weapon_speed + two_hand_speed_bonus + speed_mod).max(min_speed)
+        offense: OffenseProfile {
+            attack_bonus,
+            strength_damage,
+            weapon: WeaponProfile {
+                name: weapon_name,
+                damage_expr: weapon_damage,
+                shield_damage_expr,
+                armor_penetration,
+                speed: weapon_speed,
+                reach_ft: weapon_reach,
+                two_hand_grip: effective_two_hand,
+                use_jab,
+                jab_special_expr,
+                has_weapon,
+                defense_bonus_always: weapon_defense_always,
+            },
         },
-        weapon_reach,
-        player.move_speed,
-        effective_two_hand,
-        use_jab,
-        jab_special_expr,
-        has_weapon,
-        weapon_defense_always,
-        max_hp,
-        shield_name,
-        shield_defense_bonus,
-        shield_dr,
-        shield_cover_value,
-        shield_intact,
-        shield_breakage,
-    )
+        defense: DefenseProfile {
+            defense_mod,
+            armor_dr,
+            armor_is_heavy,
+            shield_name,
+            shield_defense_bonus,
+            shield_dr,
+            shield_cover_value,
+            shield_breakage,
+        },
+        mobility: MobilityProfile {
+            move_speed: player.move_speed,
+        },
+        vitals: Vitals {
+            max_hp,
+            constitution: player.constitution,
+            threshold_of_pain,
+        },
+    };
+
+    Combatant::new(sheet)
 }
 
 pub fn stop_distance_for_players(players: &[PlayerConfig; 2], weapon_catalog: &[WeaponPreset]) -> f32 {
@@ -996,6 +1056,20 @@ pub fn load_npc_presets(path: &str) -> Result<Vec<NpcPreset>, String> {
     Ok(parsed.presets)
 }
 
+pub fn load_fighter_presets(path: &str) -> Result<Vec<FighterPreset>, String> {
+    let data = fs::read_to_string(path).unwrap_or_else(|_| EMBEDDED_FIGHTER_PRESETS_JSON.to_string());
+    let parsed: FighterPresetsFile = serde_json::from_str(&data).map_err(|err| err.to_string())?;
+    Ok(parsed.presets)
+}
+
+pub fn save_fighter_presets(path: &str, presets: &[FighterPreset]) -> Result<(), String> {
+    let data = serde_json::to_string_pretty(&FighterPresetsFile {
+        presets: presets.to_vec(),
+    })
+    .map_err(|err| err.to_string())?;
+    fs::write(path, data).map_err(|err| err.to_string())
+}
+
 #[derive(Deserialize)]
 struct WeaponsFile {
     weapons: Vec<WeaponJson>,
@@ -1453,6 +1527,11 @@ pub fn base_weapon_threshold(group: WeaponGroup) -> f32 {
         WeaponGroup::Shields => 200.0,
         _ => 100.0,
     }
+}
+
+pub fn threshold_of_pain(max_hp: i32, level: u8) -> i32 {
+    let pct = 0.30 + (level as f32 * 0.01);
+    ((max_hp as f32) * pct).ceil() as i32
 }
 
 #[cfg(test)]

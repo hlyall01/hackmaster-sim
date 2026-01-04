@@ -21,36 +21,76 @@ pub struct SimActor {
 }
 
 #[derive(Clone, Debug)]
-pub struct Combatant {
+pub struct WeaponProfile {
     pub name: String,
-    pub weapon_name: String,
-    pub attack_bonus: i32,
-    pub defense_mod: i32,
-    pub armor_dr: i32,
-    pub armor_is_heavy: bool,
-    pub armor_penetration: i32,
     pub damage_expr: String,
     pub shield_damage_expr: Option<String>,
-    pub strength_damage: i32,
-    pub weapon_speed: f32,
+    pub armor_penetration: i32,
+    pub speed: f32,
     pub reach_ft: f32,
-    pub move_speed: f32,
     pub two_hand_grip: bool,
     pub use_jab: bool,
     pub jab_special_expr: Option<String>,
     pub has_weapon: bool,
-    pub weapon_defense_always: bool,
-    pub max_hp: i32,
-    pub hp: i32,
-    pub next_attack_time: Option<f32>,
-    pub defense_plus_four_ready: bool,
-    pub moved_last_tick: bool,
+    pub defense_bonus_always: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct OffenseProfile {
+    pub attack_bonus: i32,
+    pub strength_damage: i32,
+    pub weapon: WeaponProfile,
+}
+
+#[derive(Clone, Debug)]
+pub struct DefenseProfile {
+    pub defense_mod: i32,
+    pub armor_dr: i32,
+    pub armor_is_heavy: bool,
     pub shield_name: Option<String>,
     pub shield_defense_bonus: i32,
     pub shield_dr: i32,
     pub shield_cover_value: Option<i32>,
-    pub shield_intact: bool,
     pub shield_breakage: Option<[ShieldBreakageStep; 4]>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct MobilityProfile {
+    pub move_speed: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Vitals {
+    pub max_hp: i32,
+    pub constitution: u8,
+    pub threshold_of_pain: i32,
+}
+
+#[derive(Clone, Debug)]
+pub struct CombatantSheet {
+    pub name: String,
+    pub offense: OffenseProfile,
+    pub defense: DefenseProfile,
+    pub mobility: MobilityProfile,
+    pub vitals: Vitals,
+}
+
+#[derive(Clone, Debug)]
+pub struct CombatantState {
+    pub hp: i32,
+    pub next_attack_time: Option<f32>,
+    pub defense_plus_four_ready: bool,
+    pub moved_last_tick: bool,
+    pub trauma_remaining_seconds: i32,
+    pub knockback_immobile_seconds: i32,
+    pub knockback_applied_this_tick: bool,
+    pub shield_intact: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct Combatant {
+    pub sheet: CombatantSheet,
+    pub state: CombatantState,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -59,109 +99,113 @@ pub struct ShieldBreakageStep {
     pub save_mod: Option<i32>,
 }
 
-impl Combatant {
-    pub fn new(
-        name: String,
-        weapon_name: String,
-        attack_bonus: i32,
-        defense_mod: i32,
-        armor_dr: i32,
-        armor_is_heavy: bool,
-        armor_penetration: i32,
-        damage_expr: String,
-        shield_damage_expr: Option<String>,
-        strength_damage: i32,
-        weapon_speed: f32,
-        reach_ft: f32,
-        move_speed: f32,
-        two_hand_grip: bool,
-        use_jab: bool,
-        jab_special_expr: Option<String>,
-        has_weapon: bool,
-        weapon_defense_always: bool,
-        max_hp: i32,
-        shield_name: Option<String>,
-        shield_defense_bonus: i32,
-        shield_dr: i32,
-        shield_cover_value: Option<i32>,
-        shield_intact: bool,
-        shield_breakage: Option<[ShieldBreakageStep; 4]>,
-    ) -> Self {
+struct AttackOutcome {
+    log: String,
+    attacker_idx: usize,
+    defender_idx: usize,
+    knockback_ft: f32,
+}
+
+impl Default for WeaponProfile {
+    fn default() -> Self {
         Self {
-            name,
-            weapon_name,
-            attack_bonus,
-            defense_mod,
-            armor_dr,
-            armor_is_heavy,
-            armor_penetration,
-            damage_expr,
-            shield_damage_expr,
-            strength_damage,
-            weapon_speed,
-            reach_ft,
-            move_speed,
-            two_hand_grip,
-            use_jab,
-            jab_special_expr,
-            has_weapon,
-            weapon_defense_always,
-            max_hp,
-            hp: max_hp,
+            name: "Weapon".to_string(),
+            damage_expr: "d4p".to_string(),
+            shield_damage_expr: None,
+            armor_penetration: 0,
+            speed: 10.0,
+            reach_ft: 1.0,
+            two_hand_grip: false,
+            use_jab: false,
+            jab_special_expr: None,
+            has_weapon: false,
+            defense_bonus_always: false,
+        }
+    }
+}
+
+impl Default for OffenseProfile {
+    fn default() -> Self {
+        Self {
+            attack_bonus: 0,
+            strength_damage: 0,
+            weapon: WeaponProfile::default(),
+        }
+    }
+}
+
+impl Default for DefenseProfile {
+    fn default() -> Self {
+        Self {
+            defense_mod: 0,
+            armor_dr: 0,
+            armor_is_heavy: false,
+            shield_name: None,
+            shield_defense_bonus: 0,
+            shield_dr: 0,
+            shield_cover_value: None,
+            shield_breakage: None,
+        }
+    }
+}
+
+impl Default for MobilityProfile {
+    fn default() -> Self {
+        Self { move_speed: 5.0 }
+    }
+}
+
+impl Default for Vitals {
+    fn default() -> Self {
+        Self {
+            max_hp: 10,
+            constitution: 10,
+            threshold_of_pain: 3,
+        }
+    }
+}
+
+impl Default for CombatantSheet {
+    fn default() -> Self {
+        Self {
+            name: "Combatant".to_string(),
+            offense: OffenseProfile::default(),
+            defense: DefenseProfile::default(),
+            mobility: MobilityProfile::default(),
+            vitals: Vitals::default(),
+        }
+    }
+}
+
+impl CombatantState {
+    fn new(sheet: &CombatantSheet) -> Self {
+        Self {
+            hp: sheet.vitals.max_hp,
             next_attack_time: None,
             defense_plus_four_ready: false,
             moved_last_tick: false,
-            shield_name,
-            shield_defense_bonus,
-            shield_dr,
-            shield_cover_value,
-            shield_intact,
-            shield_breakage,
+            trauma_remaining_seconds: 0,
+            knockback_immobile_seconds: 0,
+            knockback_applied_this_tick: false,
+            shield_intact: sheet.defense.shield_name.is_some(),
         }
     }
+}
 
-    fn reset_hp(&mut self) {
-        self.hp = self.max_hp;
-        self.next_attack_time = None;
-        self.defense_plus_four_ready = false;
-        self.moved_last_tick = false;
-        self.shield_intact = self.shield_name.is_some();
+impl Combatant {
+    pub fn new(sheet: CombatantSheet) -> Self {
+        let state = CombatantState::new(&sheet);
+        Self { sheet, state }
+    }
+
+    fn reset_state(&mut self) {
+        self.state = CombatantState::new(&self.sheet);
     }
 }
 
 impl Default for Combatant {
     fn default() -> Self {
-        Self {
-            name: "Combatant".to_string(),
-            weapon_name: "Weapon".to_string(),
-            attack_bonus: 0,
-            defense_mod: 0,
-            armor_dr: 0,
-            armor_is_heavy: false,
-            armor_penetration: 0,
-            damage_expr: "d4p".to_string(),
-            shield_damage_expr: None,
-            strength_damage: 0,
-            weapon_speed: 10.0,
-            reach_ft: 1.0,
-            move_speed: 5.0,
-            two_hand_grip: false,
-            use_jab: false,
-            jab_special_expr: None,
-            has_weapon: false,
-            weapon_defense_always: false,
-            max_hp: 10,
-            hp: 10,
-            next_attack_time: None,
-            defense_plus_four_ready: false,
-            moved_last_tick: false,
-            shield_name: None,
-            shield_defense_bonus: 0,
-            shield_dr: 0,
-            shield_cover_value: None,
-            shield_intact: false,
-            shield_breakage: None,
-        }
+        Self::new(CombatantSheet::default())
     }
 }
 
@@ -294,7 +338,15 @@ pub fn max_range_for_weapon(name: &str) -> Option<f32> {
     })
 }
 
-fn defense_die_sides(is_ranged: bool, defender_moved_last_tick: bool, has_shield: bool) -> i32 {
+fn defense_die_sides(
+    is_ranged: bool,
+    defender_moved_last_tick: bool,
+    has_shield: bool,
+    trauma_incapacitated: bool,
+) -> i32 {
+    if trauma_incapacitated {
+        return 8;
+    }
     if is_ranged {
         if has_shield {
             20
@@ -308,6 +360,50 @@ fn defense_die_sides(is_ranged: bool, defender_moved_last_tick: bool, has_shield
     }
 }
 
+fn roll_die(sides: i32, rng: &mut impl Rng) -> i32 {
+    rng.gen_range(1..=sides)
+}
+
+fn knockback_distance_ft(raw_damage: i32) -> f32 {
+    if raw_damage <= 0 {
+        0.0
+    } else {
+        let steps = raw_damage / 15;
+        (steps * 5) as f32
+    }
+}
+
+fn maybe_apply_trauma(
+    combatants: &mut [Combatant; 2],
+    defender_idx: usize,
+    damage: i32,
+    rng: &mut impl Rng,
+) -> Option<String> {
+    let pain_threshold = combatants[defender_idx].sheet.vitals.threshold_of_pain;
+    if damage <= pain_threshold {
+        return None;
+    }
+    let con_half = (combatants[defender_idx].sheet.vitals.constitution as i32) / 2;
+    let trauma_roll = roll_die(20, rng);
+    if trauma_roll <= con_half {
+        return None;
+    }
+    let duration = if trauma_roll == 20 {
+        let (roll, _) = roll_damage_expr_with_detail("5d6p", rng);
+        roll * 60
+    } else {
+        (trauma_roll - con_half) * 5
+    };
+    let duration = duration.max(1);
+    let remaining = combatants[defender_idx].state.trauma_remaining_seconds;
+    combatants[defender_idx].state.trauma_remaining_seconds = remaining.max(duration as i32);
+    combatants[defender_idx].state.next_attack_time = None;
+    Some(format!(
+        "trauma {}s (roll {} vs {})",
+        duration, trauma_roll, con_half
+    ))
+}
+
 #[derive(Clone, Debug)]
 pub struct SimState {
     pub config: SimConfig,
@@ -317,8 +413,33 @@ pub struct SimState {
     pub done: bool,
     pub last_event: Option<String>,
     pub combat_log: Vec<String>,
-    rng: rand::rngs::StdRng,
+    rng: FreshSeedRng,
     tick_accum: f32,
+}
+
+#[derive(Clone, Debug, Default)]
+struct FreshSeedRng;
+
+impl rand::RngCore for FreshSeedRng {
+    fn next_u32(&mut self) -> u32 {
+        let mut rng = rand::rngs::StdRng::from_entropy();
+        rng.next_u32()
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        let mut rng = rand::rngs::StdRng::from_entropy();
+        rng.next_u64()
+    }
+
+    fn fill_bytes(&mut self, dest: &mut [u8]) {
+        let mut rng = rand::rngs::StdRng::from_entropy();
+        rng.fill_bytes(dest);
+    }
+
+    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand::Error> {
+        let mut rng = rand::rngs::StdRng::from_entropy();
+        rng.try_fill_bytes(dest)
+    }
 }
 
 impl SimState {
@@ -336,7 +457,7 @@ impl SimState {
             done: false,
             last_event: None,
             combat_log: Vec::new(),
-            rng: rand::rngs::StdRng::seed_from_u64(1),
+            rng: FreshSeedRng::default(),
             tick_accum: 0.0,
         }
     }
@@ -348,9 +469,9 @@ impl SimState {
         self.done = false;
         self.last_event = None;
         self.combat_log.clear();
-        self.rng = rand::rngs::StdRng::seed_from_u64(1);
+        self.rng = FreshSeedRng::default();
         for combatant in &mut self.combatants {
-            combatant.reset_hp();
+            combatant.reset_state();
         }
         self.tick_accum = 0.0;
     }
@@ -378,34 +499,48 @@ impl SimState {
         if self.done {
             return;
         }
-        let distance = self.distance();
+        for combatant in &mut self.combatants {
+            combatant.state.knockback_applied_this_tick = false;
+            if combatant.state.trauma_remaining_seconds > 0 {
+                combatant.state.trauma_remaining_seconds -= 1;
+            }
+            if combatant.state.knockback_immobile_seconds > 0 {
+                combatant.state.knockback_immobile_seconds -= 1;
+            }
+        }
         let old_positions = [self.actors[0].position, self.actors[1].position];
-        let step_a = self.combatants[0].move_speed.max(0.0);
-        let step_b = self.combatants[1].move_speed.max(0.0);
-        let reach_a = self.combatants[0].reach_ft.max(1.0);
-        let reach_b = self.combatants[1].reach_ft.max(1.0);
+        let distance = self.distance();
+        let distance_before_combat = distance;
+        let reach_a = self.combatants[0].sheet.offense.weapon.reach_ft.max(1.0);
+        let reach_b = self.combatants[1].sheet.offense.weapon.reach_ft.max(1.0);
         let max_reach = self.config.stop_distance.max(1.0);
         let min_reach = reach_a.min(reach_b);
-        let ranged_a = max_range_for_weapon(&self.combatants[0].weapon_name).is_some();
-        let ranged_b = max_range_for_weapon(&self.combatants[1].weapon_name).is_some();
+        let ranged_a =
+            max_range_for_weapon(&self.combatants[0].sheet.offense.weapon.name).is_some();
+        let ranged_b =
+            max_range_for_weapon(&self.combatants[1].sheet.offense.weapon.name).is_some();
         let any_ranged = ranged_a || ranged_b;
 
         if distance > max_reach && !any_ranged {
+            let step_a = self.move_step(0);
+            let step_b = self.move_step(1);
             self.actors[0].position += step_a;
             self.actors[1].position -= step_b;
             for combatant in &mut self.combatants {
-                combatant.next_attack_time = None;
+                combatant.state.next_attack_time = None;
             }
         } else {
             self.resolve_combat_round();
             let distance = self.distance();
+            let step_a = self.move_step(0);
+            let step_b = self.move_step(1);
             if any_ranged {
                 let backstep = 5.0;
                 let engaged = distance <= min_reach;
                 if !engaged {
                     if ranged_a {
                         if let Some(max_range) =
-                            max_range_for_weapon(&self.combatants[0].weapon_name)
+                            max_range_for_weapon(&self.combatants[0].sheet.offense.weapon.name)
                         {
                             if distance <= max_range {
                                 self.actors[0].position -= backstep;
@@ -418,7 +553,7 @@ impl SimState {
                     }
                     if ranged_b {
                         if let Some(max_range) =
-                            max_range_for_weapon(&self.combatants[1].weapon_name)
+                            max_range_for_weapon(&self.combatants[1].sheet.offense.weapon.name)
                         {
                             if distance <= max_range {
                                 self.actors[1].position += backstep;
@@ -438,8 +573,21 @@ impl SimState {
                 }
             }
         }
+        if self
+            .combatants
+            .iter()
+            .any(|combatant| combatant.state.knockback_applied_this_tick)
+            && self.distance() < distance_before_combat
+        {
+            self.actors[1].position = self.actors[0].position + distance_before_combat;
+        }
+        if self.actors[0].position > self.actors[1].position {
+            let midpoint = (self.actors[0].position + self.actors[1].position) * 0.5;
+            self.actors[0].position = midpoint;
+            self.actors[1].position = midpoint;
+        }
         for (idx, combatant) in self.combatants.iter_mut().enumerate() {
-            combatant.moved_last_tick =
+            combatant.state.moved_last_tick =
                 (self.actors[idx].position - old_positions[idx]).abs() > f32::EPSILON;
         }
         self.elapsed_seconds += 1;
@@ -449,38 +597,82 @@ impl SimState {
         (self.actors[1].position - self.actors[0].position).max(0.0)
     }
 
+    fn move_step(&self, idx: usize) -> f32 {
+        let combatant = &self.combatants[idx];
+        if combatant.state.trauma_remaining_seconds > 0
+            || combatant.state.knockback_immobile_seconds > 0
+        {
+            0.0
+        } else {
+            combatant.sheet.mobility.move_speed.max(0.0)
+        }
+    }
+
+    fn apply_knockback(&mut self, attacker_idx: usize, defender_idx: usize, knockback_ft: f32) {
+        if knockback_ft <= 0.0 {
+            return;
+        }
+        if let Some(defender) = self.combatants.get_mut(defender_idx) {
+            defender.state.knockback_applied_this_tick = true;
+        }
+        match (attacker_idx, defender_idx) {
+            (0, 1) => {
+                self.actors[1].position += knockback_ft;
+            }
+            (1, 0) => {
+                self.actors[0].position = (self.actors[0].position - knockback_ft).max(0.0);
+            }
+            _ => {}
+        }
+    }
+
     fn resolve_combat_round(&mut self) {
         let now = self.elapsed_seconds as f32;
         let distance = self.distance();
         let mut events = Vec::new();
         for (attacker_idx, defender_idx) in [(0usize, 1usize), (1usize, 0usize)] {
-            if self.combatants[attacker_idx].hp <= 0 || self.combatants[defender_idx].hp <= 0 {
+            if self.combatants[attacker_idx].state.hp <= 0
+                || self.combatants[defender_idx].state.hp <= 0
+            {
                 continue;
             }
-            let weapon_name = &self.combatants[attacker_idx].weapon_name;
+            if self.combatants[attacker_idx].state.trauma_remaining_seconds > 0 {
+                self.combatants[attacker_idx].state.next_attack_time = None;
+                continue;
+            }
+            let weapon_name = &self.combatants[attacker_idx].sheet.offense.weapon.name;
             let is_ranged_weapon = max_range_for_weapon(weapon_name).is_some();
             let ranged_mod = if is_ranged_weapon {
                 range_modifier_for_weapon(weapon_name, distance)
             } else {
                 None
             };
-            if !is_ranged_weapon && distance > self.combatants[attacker_idx].reach_ft.max(1.0) {
+            if !is_ranged_weapon
+                && distance
+                    > self.combatants[attacker_idx]
+                        .sheet
+                        .offense
+                        .weapon
+                        .reach_ft
+                        .max(1.0)
+            {
                 continue;
             }
             if is_ranged_weapon && ranged_mod.is_none() {
                 continue;
             }
-            if self.combatants[attacker_idx].next_attack_time.is_none() {
-                let attacker_reach = self.combatants[attacker_idx].reach_ft;
-                let defender_reach = self.combatants[defender_idx].reach_ft;
+            if self.combatants[attacker_idx].state.next_attack_time.is_none() {
+                let attacker_reach = self.combatants[attacker_idx].sheet.offense.weapon.reach_ft;
+                let defender_reach = self.combatants[defender_idx].sheet.offense.weapon.reach_ft;
                 let delay = if !is_ranged_weapon && attacker_reach < defender_reach {
                     1.0
                 } else {
                     0.0
                 };
-                self.combatants[attacker_idx].next_attack_time = Some(now + delay);
+                self.combatants[attacker_idx].state.next_attack_time = Some(now + delay);
             }
             let next_attack = self.combatants[attacker_idx]
+                .state
                 .next_attack_time
                 .unwrap_or(now);
             if now + 0.0001 >= next_attack {
@@ -490,12 +682,27 @@ impl SimState {
                     defender_idx,
                     ranged_mod.unwrap_or(0),
                     is_ranged_weapon,
+                    now,
                     &mut self.rng,
                 );
-                events.push(event);
-                let speed = self.combatants[attacker_idx].weapon_speed.max(1.0);
-                self.combatants[attacker_idx].next_attack_time = Some(next_attack + speed);
-                if self.combatants[defender_idx].hp <= 0 {
+                self.apply_knockback(
+                    event.attacker_idx,
+                    event.defender_idx,
+                    event.knockback_ft,
+                );
+                events.push(event.log);
+                let mut speed = self.combatants[attacker_idx]
+                    .sheet
+                    .offense
+                    .weapon
+                    .speed
+                    .max(1.0);
+                if self.combatants[defender_idx].state.trauma_remaining_seconds > 0 {
+                    speed = (speed / 2.0).ceil().max(1.0);
+                }
+                self.combatants[attacker_idx].state.next_attack_time =
+                    Some(next_attack + speed);
+                if self.combatants[defender_idx].state.hp <= 0 {
                     self.done = true;
                     break;
                 }
@@ -515,38 +722,81 @@ fn resolve_attack(
     defender_idx: usize,
     range_mod: i32,
     is_ranged: bool,
+    now: f32,
     rng: &mut impl Rng,
-) -> String {
+) -> AttackOutcome {
     let (
         attack_bonus,
+        strength_damage,
         damage_expr,
         shield_damage_expr,
-        strength_damage,
         weapon_name,
         armor_penetration,
         use_jab,
         jab_special_expr,
+        attacker_two_hand_grip,
+        attacker_has_weapon,
+        attacker_weapon_defense_always,
     ) = {
         let attacker = &combatants[attacker_idx];
+        let weapon = &attacker.sheet.offense.weapon;
         (
-            attacker.attack_bonus,
-            attacker.damage_expr.clone(),
-            attacker.shield_damage_expr.clone(),
-            attacker.strength_damage,
-            attacker.weapon_name.clone(),
-            attacker.armor_penetration,
-            attacker.use_jab,
-            attacker.jab_special_expr.clone(),
+            attacker.sheet.offense.attack_bonus,
+            attacker.sheet.offense.strength_damage,
+            weapon.damage_expr.clone(),
+            weapon.shield_damage_expr.clone(),
+            weapon.name.clone(),
+            weapon.armor_penetration,
+            weapon.use_jab,
+            weapon.jab_special_expr.clone(),
+            weapon.two_hand_grip,
+            weapon.has_weapon,
+            weapon.defense_bonus_always,
         )
     };
-    let shield_active = combatants[defender_idx].shield_intact;
-    let defense_mod = if is_ranged { 0 } else { combatants[defender_idx].defense_mod };
-    let armor_dr = combatants[defender_idx].armor_dr;
+    let (
+        defense_mod,
+        armor_dr,
+        armor_is_heavy,
+        shield_active,
+        shield_defense_bonus,
+        shield_cover_value,
+        shield_dr,
+        shield_breakage,
+        trauma_incapacitated,
+        defender_two_hand_grip,
+        defender_has_weapon,
+        defender_weapon_defense_always,
+        defender_weapon_speed,
+        shield_name,
+    ) = {
+        let defender = &combatants[defender_idx];
+        (
+            if is_ranged {
+                0
+            } else {
+                defender.sheet.defense.defense_mod
+            },
+            defender.sheet.defense.armor_dr,
+            defender.sheet.defense.armor_is_heavy,
+            defender.state.shield_intact,
+            defender.sheet.defense.shield_defense_bonus,
+            defender.sheet.defense.shield_cover_value,
+            defender.sheet.defense.shield_dr,
+            defender.sheet.defense.shield_breakage,
+            defender.state.trauma_remaining_seconds > 0,
+            defender.sheet.offense.weapon.two_hand_grip,
+            defender.sheet.offense.weapon.has_weapon,
+            defender.sheet.offense.weapon.defense_bonus_always,
+            defender.sheet.offense.weapon.speed,
+            defender.sheet.defense.shield_name.clone(),
+        )
+    };
     let weapon_defense_bonus = if is_ranged {
         0
-    } else if combatants[defender_idx].weapon_defense_always
-        || (combatants[defender_idx].two_hand_grip
-            && combatants[defender_idx].defense_plus_four_ready)
+    } else if defender_weapon_defense_always
+        || (defender_two_hand_grip
+            && combatants[defender_idx].state.defense_plus_four_ready)
     {
         4
     } else {
@@ -554,7 +804,7 @@ fn resolve_attack(
     };
     let shield_defense_bonus = if shield_active {
         let base = if is_ranged { 0 } else { 4 };
-        base + combatants[defender_idx].shield_defense_bonus
+        base + shield_defense_bonus
     } else {
         0
     };
@@ -563,14 +813,15 @@ fn resolve_attack(
     let defense_die = penetrating_roll(
         defense_die_sides(
             is_ranged,
-            combatants[defender_idx].moved_last_tick,
+            combatants[defender_idx].state.moved_last_tick,
             shield_active,
+            trauma_incapacitated,
         ),
         rng,
     );
     let mut attack_roll = attack_die + attack_bonus + range_mod;
     if is_ranged && shield_active {
-        if let Some(cap) = combatants[defender_idx].shield_cover_value {
+        if let Some(cap) = shield_cover_value {
             attack_roll = attack_roll.min(cap);
         }
     }
@@ -582,6 +833,8 @@ fn resolve_attack(
     let mut shield_damage_detail = "[0]".to_string();
     let mut shield_damage = 0;
     let mut shield_broken = false;
+    let mut knockback_ft = 0.0;
+    let mut trauma_note = None;
 
     if attack_roll >= defense_roll {
         hit = true;
@@ -600,11 +853,14 @@ fn resolve_attack(
         }
         damage_detail = detail;
         let mut effective_dr = armor_dr;
-        if armor_dr >= 5 || combatants[defender_idx].armor_is_heavy {
+        if armor_dr >= 5 || armor_is_heavy {
             effective_dr = (armor_dr - armor_penetration).max(0);
         }
         damage = (raw - effective_dr).max(0);
-        combatants[defender_idx].hp -= damage;
+        combatants[defender_idx].state.hp -= damage;
+        knockback_ft = knockback_distance_ft(raw);
+
+        trauma_note = maybe_apply_trauma(combatants, defender_idx, damage, rng);
     } else if shield_active && !is_ranged {
         let miss_margin = defense_roll - attack_roll;
         if miss_margin < 10 {
@@ -620,19 +876,21 @@ fn resolve_attack(
             }
             shield_damage_detail = detail;
             shield_damage = raw;
-            let shield_dr = combatants[defender_idx].shield_dr;
             let shield_after_dr = (raw - shield_dr).max(0);
 
             let mut effective_dr = armor_dr;
-            if armor_dr >= 5 || combatants[defender_idx].armor_is_heavy {
+            if armor_dr >= 5 || armor_is_heavy {
                 effective_dr = (armor_dr - armor_penetration).max(0);
             }
             let hp_damage = (shield_after_dr - effective_dr).max(0);
             if hp_damage > 0 {
-                combatants[defender_idx].hp -= hp_damage;
+                combatants[defender_idx].state.hp -= hp_damage;
+                trauma_note = trauma_note.or_else(|| {
+                    maybe_apply_trauma(combatants, defender_idx, hp_damage, rng)
+                });
             }
 
-            if let Some(steps) = combatants[defender_idx].shield_breakage {
+            if let Some(steps) = shield_breakage {
                 if raw >= steps[3].threshold {
                     shield_broken = true;
                 } else if raw >= steps[2].threshold {
@@ -644,29 +902,37 @@ fn resolve_attack(
                 }
             }
             if shield_broken {
-                combatants[defender_idx].shield_intact = false;
+                combatants[defender_idx].state.shield_intact = false;
             }
         }
     }
 
-    let attacker_name = combatants[attacker_idx].name.clone();
-    let defender_name = combatants[defender_idx].name.clone();
+    if hit && knockback_ft >= 10.0 {
+        combatants[defender_idx].state.knockback_immobile_seconds =
+            combatants[defender_idx]
+                .state
+                .knockback_immobile_seconds
+                .max(1);
+        let reset_time = now + defender_weapon_speed.max(1.0);
+        combatants[defender_idx].state.next_attack_time = Some(reset_time);
+    }
+
+    let attacker_name = combatants[attacker_idx].sheet.name.clone();
+    let defender_name = combatants[defender_idx].sheet.name.clone();
     if !is_ranged {
-        if combatants[defender_idx].two_hand_grip
-            && combatants[defender_idx].defense_plus_four_ready
-            && combatants[defender_idx].has_weapon
-            && !combatants[defender_idx].weapon_defense_always
+        if defender_two_hand_grip
+            && combatants[defender_idx].state.defense_plus_four_ready
+            && defender_has_weapon
+            && !defender_weapon_defense_always
         {
-            combatants[defender_idx].defense_plus_four_ready = false;
+            combatants[defender_idx].state.defense_plus_four_ready = false;
         }
-        if combatants[attacker_idx].two_hand_grip
-            && combatants[attacker_idx].has_weapon
-            && !combatants[attacker_idx].weapon_defense_always
+        if attacker_two_hand_grip && attacker_has_weapon && !attacker_weapon_defense_always
         {
-            combatants[attacker_idx].defense_plus_four_ready = true;
+            combatants[attacker_idx].state.defense_plus_four_ready = true;
         }
     }
-    if hit {
+    let mut log = if hit {
         format!(
             "{} hits {} with {} (atk {} [d20p={}] vs def {} [d20p={}]) for {} dmg {} (hp {})",
             attacker_name,
@@ -678,13 +944,10 @@ fn resolve_attack(
             defense_die,
             damage,
             damage_detail,
-            combatants[defender_idx].hp.max(0)
+            combatants[defender_idx].state.hp.max(0)
         )
     } else if shield_block {
-        let shield_name = combatants[defender_idx]
-            .shield_name
-            .clone()
-            .unwrap_or_else(|| "Shield".to_string());
+        let shield_name = shield_name.clone().unwrap_or_else(|| "Shield".to_string());
         let status = if shield_broken {
             "shield broken".to_string()
         } else {
@@ -702,7 +965,7 @@ fn resolve_attack(
             shield_damage,
             shield_damage_detail,
             status,
-            combatants[defender_idx].hp.max(0)
+            combatants[defender_idx].state.hp.max(0)
         )
     } else {
         format!(
@@ -715,6 +978,18 @@ fn resolve_attack(
             defense_roll,
             defense_die
         )
+    };
+    if let Some(note) = trauma_note {
+        log = format!("{log} | {note}");
+    }
+    if hit && knockback_ft > 0.0 {
+        log = format!("{log} | knockback {:.0}ft", knockback_ft);
+    }
+    AttackOutcome {
+        log,
+        attacker_idx,
+        defender_idx,
+        knockback_ft,
     }
 }
 
@@ -983,33 +1258,43 @@ mod tests {
         weapon_defense_always: bool,
         max_hp: i32,
     ) -> Combatant {
-        Combatant::new(
+        let sheet = CombatantSheet {
             name,
-            weapon_name,
-            attack_bonus,
-            defense_mod,
-            armor_dr,
-            armor_is_heavy,
-            armor_penetration,
-            damage_expr,
-            None,
-            strength_damage,
-            weapon_speed,
-            reach_ft,
-            move_speed,
-            two_hand_grip,
-            use_jab,
-            jab_special_expr,
-            has_weapon,
-            weapon_defense_always,
-            max_hp,
-            None,
-            0,
-            0,
-            None,
-            false,
-            None,
-        )
+            offense: OffenseProfile {
+                attack_bonus,
+                strength_damage,
+                weapon: WeaponProfile {
+                    name: weapon_name,
+                    damage_expr,
+                    shield_damage_expr: None,
+                    armor_penetration,
+                    speed: weapon_speed,
+                    reach_ft,
+                    two_hand_grip,
+                    use_jab,
+                    jab_special_expr,
+                    has_weapon,
+                    defense_bonus_always: weapon_defense_always,
+                },
+            },
+            defense: DefenseProfile {
+                defense_mod,
+                armor_dr,
+                armor_is_heavy,
+                shield_name: None,
+                shield_defense_bonus: 0,
+                shield_dr: 0,
+                shield_cover_value: None,
+                shield_breakage: None,
+            },
+            mobility: MobilityProfile { move_speed },
+            vitals: Vitals {
+                max_hp,
+                constitution: 10,
+                threshold_of_pain: 3,
+            },
+        };
+        Combatant::new(sheet)
     }
 
     fn make_state(attacker: Combatant, defender: Combatant) -> SimState {
@@ -1062,8 +1347,8 @@ mod tests {
         );
         let mut state = make_state(attacker, defender);
         let mut rng = rand::rngs::StdRng::seed_from_u64(1);
-        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, &mut rng);
-        assert_eq!(state.combatants[1].hp, 20);
+        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, 0.0, &mut rng);
+        assert_eq!(state.combatants[1].state.hp, 20);
     }
 
     #[test]
@@ -1110,8 +1395,8 @@ mod tests {
         );
         let mut state = make_state(attacker, defender);
         let mut rng = rand::rngs::StdRng::seed_from_u64(2);
-        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, &mut rng);
-        assert_eq!(state.combatants[1].hp, 18);
+        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, 0.0, &mut rng);
+        assert_eq!(state.combatants[1].state.hp, 18);
     }
 
     #[test]
@@ -1158,8 +1443,8 @@ mod tests {
         );
         let mut state = make_state(attacker, defender);
         let mut rng = rand::rngs::StdRng::seed_from_u64(3);
-        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, &mut rng);
-        assert_eq!(state.combatants[1].hp, 18);
+        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, 0.0, &mut rng);
+        assert_eq!(state.combatants[1].state.hp, 18);
     }
 
     #[test]
@@ -1206,8 +1491,8 @@ mod tests {
         );
         let mut state = make_state(attacker, defender);
         let mut rng = rand::rngs::StdRng::seed_from_u64(4);
-        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, &mut rng);
-        assert_eq!(state.combatants[1].hp, 20);
+        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, 0.0, &mut rng);
+        assert_eq!(state.combatants[1].state.hp, 20);
     }
 
     #[test]
@@ -1254,8 +1539,8 @@ mod tests {
         );
         let mut state = make_state(attacker, defender);
         let mut rng = rand::rngs::StdRng::seed_from_u64(5);
-        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, &mut rng);
-        assert_eq!(state.combatants[1].hp, 20);
+        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, 0.0, &mut rng);
+        assert_eq!(state.combatants[1].state.hp, 20);
     }
 
     struct FixedRng(u64);
@@ -1325,12 +1610,12 @@ mod tests {
         );
         let mut state = make_state(attacker, defender);
         let mut rng = FixedRng(0);
-        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, &mut rng);
-        assert!(state.combatants[0].defense_plus_four_ready);
+        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, 0.0, &mut rng);
+        assert!(state.combatants[0].state.defense_plus_four_ready);
 
         let mut rng = FixedRng(0);
-        let _ = resolve_attack(&mut state.combatants, 1, 0, 0, false, &mut rng);
-        assert!(!state.combatants[0].defense_plus_four_ready);
+        let _ = resolve_attack(&mut state.combatants, 1, 0, 0, false, 0.0, &mut rng);
+        assert!(!state.combatants[0].state.defense_plus_four_ready);
     }
 
     #[test]
@@ -1377,23 +1662,23 @@ mod tests {
         );
         let mut state = make_state(attacker, defender);
         let mut rng = FixedRng(0);
-        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, &mut rng);
-        assert_eq!(state.combatants[1].hp, 20);
+        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, 0.0, &mut rng);
+        assert_eq!(state.combatants[1].state.hp, 20);
     }
 
     #[test]
     fn ranged_stationary_uses_d12p_defense() {
-        assert_eq!(defense_die_sides(true, false, false), 12);
+        assert_eq!(defense_die_sides(true, false, false, false), 12);
     }
 
     #[test]
     fn ranged_moving_uses_d20p_defense() {
-        assert_eq!(defense_die_sides(true, true, false), 20);
+        assert_eq!(defense_die_sides(true, true, false, false), 20);
     }
 
     #[test]
     fn ranged_stationary_with_shield_uses_d20p_defense() {
-        assert_eq!(defense_die_sides(true, false, true), 20);
+        assert_eq!(defense_die_sides(true, false, true, false), 20);
     }
 
     #[test]
@@ -1421,8 +1706,8 @@ mod tests {
         );
         state.reset_with_combatants([ranged.clone(), ranged]);
         state.tick();
-        assert!(state.combatants[0].moved_last_tick);
-        assert!(state.combatants[1].moved_last_tick);
+        assert!(state.combatants[0].state.moved_last_tick);
+        assert!(state.combatants[1].state.moved_last_tick);
     }
 
     #[test]
@@ -1450,8 +1735,8 @@ mod tests {
         );
         state.reset_with_combatants([melee.clone(), melee]);
         state.tick();
-        assert!(!state.combatants[0].moved_last_tick);
-        assert!(!state.combatants[1].moved_last_tick);
+        assert!(!state.combatants[0].state.moved_last_tick);
+        assert!(!state.combatants[1].state.moved_last_tick);
     }
 
     #[test]
@@ -1512,8 +1797,8 @@ mod tests {
         );
         let mut state = make_state(attacker, defender);
         let mut rng = FixedRng(0);
-        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, &mut rng);
-        assert!(!state.combatants[1].defense_plus_four_ready);
+        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, 0.0, &mut rng);
+        assert!(!state.combatants[1].state.defense_plus_four_ready);
     }
 
     #[test]
@@ -1560,11 +1845,11 @@ mod tests {
         );
         let mut state = make_state(attacker, defender);
         let mut rng = FixedRng(0);
-        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, &mut rng);
-        assert_eq!(state.combatants[1].hp, 20);
+        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, 0.0, &mut rng);
+        assert_eq!(state.combatants[1].state.hp, 20);
 
         let mut rng = FixedRng(0);
-        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, &mut rng);
-        assert_eq!(state.combatants[1].hp, 20);
+        let _ = resolve_attack(&mut state.combatants, 0, 1, 0, false, 0.0, &mut rng);
+        assert_eq!(state.combatants[1].state.hp, 20);
     }
 }
