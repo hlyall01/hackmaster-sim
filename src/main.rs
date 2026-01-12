@@ -1,6 +1,10 @@
 use eframe::egui::epaint::Hsva;
 use eframe::egui::{self, Color32};
 use egui_plot::{GridInput, GridMark, Legend, Line, Plot, PlotPoints, Points, VLine};
+use hackmaster_sim::character::WeaponGroup;
+use hackmaster_sim::core::rules::{effective_armor_value, expected_damage_expr};
+use hackmaster_sim::data;
+use hackmaster_sim::game_logic::{self, WeaponCatalog, WeaponHandedness, WeaponPreset, WeaponSize};
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
@@ -9,9 +13,6 @@ use std::path::Path;
 const ARMOR_MAX: i32 = 15;
 const DEFAULT_SIM_DURATION: f64 = 60.0;
 const MIN_DURATION: f64 = 1e-3;
-
-const TWO_HANDED_DAMAGE_BONUS: f64 = 3.0;
-const TWO_HANDED_SPEED_PENALTY: f64 = 2.0;
 
 #[derive(Clone, Copy)]
 struct GlobalAdjustments {
@@ -29,23 +30,23 @@ impl GlobalAdjustments {
         }
     }
 
-    fn adjusted_speed(&self, weapon: &WeaponSpec) -> f64 {
-        let min_speed = weapon.size.min_speed();
-        let mut base_speed = weapon.speed;
-        if self.enable_two_handed && weapon_allows_two_handed_mode(weapon) {
-            base_speed += TWO_HANDED_SPEED_PENALTY;
+    fn adjusted_speed(&self, weapon: &WeaponPreset) -> f64 {
+        let min_speed = weapon.size.min_speed() as f64;
+        let mut base_speed = weapon.speed as f64;
+        if self.enable_two_handed && game_logic::weapon_allows_two_handed_mode(weapon) {
+            base_speed += game_logic::TWO_HANDED_SPEED_PENALTY as f64;
         }
         let max_reduction = (base_speed - min_speed).max(0.0);
         let applied_reduction = self.speed_reduction.min(max_reduction);
         (base_speed - applied_reduction).max(min_speed)
     }
 
-    fn two_handed_damage_bonus(&self, weapon: &WeaponSpec) -> f64 {
+    fn two_handed_damage_bonus(&self, weapon: &WeaponPreset) -> f64 {
         if self.enable_two_handed
-            && weapon_allows_two_handed_mode(weapon)
+            && game_logic::weapon_allows_two_handed_mode(weapon)
             && !weapon_has_flat_three_bonus(weapon)
         {
-            TWO_HANDED_DAMAGE_BONUS
+            game_logic::TWO_HANDED_DAMAGE_BONUS as f64
         } else {
             0.0
         }
@@ -58,114 +59,63 @@ impl Default for GlobalAdjustments {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum WeaponCategory {
-    Unarmed,
-    Axes,
-    Blunt,
-    Basic,
-    Bows,
-    Crossbows,
-    Double,
-    Ensnaring,
-    Lashes,
-    LargeSwords,
-    SmallSwords,
-    Polearms,
-    Spears,
-}
+const WEAPON_GROUPS: [WeaponGroup; 13] = [
+    WeaponGroup::Unarmed,
+    WeaponGroup::Axes,
+    WeaponGroup::Blunt,
+    WeaponGroup::Basic,
+    WeaponGroup::Bows,
+    WeaponGroup::Crossbows,
+    WeaponGroup::Double,
+    WeaponGroup::Ensnaring,
+    WeaponGroup::Lashes,
+    WeaponGroup::LargeSwords,
+    WeaponGroup::SmallSwords,
+    WeaponGroup::Polearms,
+    WeaponGroup::Spears,
+];
 
-impl WeaponCategory {
-    const ALL: [WeaponCategory; 13] = [
-        WeaponCategory::Unarmed,
-        WeaponCategory::Axes,
-        WeaponCategory::Blunt,
-        WeaponCategory::Basic,
-        WeaponCategory::Bows,
-        WeaponCategory::Crossbows,
-        WeaponCategory::Double,
-        WeaponCategory::Ensnaring,
-        WeaponCategory::Lashes,
-        WeaponCategory::LargeSwords,
-        WeaponCategory::SmallSwords,
-        WeaponCategory::Polearms,
-        WeaponCategory::Spears,
-    ];
-
-    fn label(&self) -> &'static str {
-        match self {
-            WeaponCategory::Unarmed => "Unarmed",
-            WeaponCategory::Axes => "Axes",
-            WeaponCategory::Blunt => "Blunt Weapons",
-            WeaponCategory::Basic => "Basic Weapons",
-            WeaponCategory::Bows => "Bows",
-            WeaponCategory::Crossbows => "Crossbows",
-            WeaponCategory::Double => "Double Weapons",
-            WeaponCategory::Ensnaring => "Ensnaring",
-            WeaponCategory::Lashes => "Lashes",
-            WeaponCategory::LargeSwords => "Large Swords",
-            WeaponCategory::SmallSwords => "Small Swords",
-            WeaponCategory::Polearms => "Polearms",
-            WeaponCategory::Spears => "Spears",
-        }
-    }
-
-    fn slug(&self) -> &'static str {
-        match self {
-            WeaponCategory::Unarmed => "unarmed",
-            WeaponCategory::Axes => "axes",
-            WeaponCategory::Blunt => "blunt",
-            WeaponCategory::Basic => "basic",
-            WeaponCategory::Bows => "bows",
-            WeaponCategory::Crossbows => "crossbows",
-            WeaponCategory::Double => "double",
-            WeaponCategory::Ensnaring => "ensnaring",
-            WeaponCategory::Lashes => "lashes",
-            WeaponCategory::LargeSwords => "large_swords",
-            WeaponCategory::SmallSwords => "small_swords",
-            WeaponCategory::Polearms => "polearms",
-            WeaponCategory::Spears => "spears",
-        }
+fn weapon_group_label(group: WeaponGroup) -> &'static str {
+    match group {
+        WeaponGroup::Unarmed => "Unarmed",
+        WeaponGroup::Axes => "Axes",
+        WeaponGroup::Blunt => "Blunt Weapons",
+        WeaponGroup::Basic => "Basic Weapons",
+        WeaponGroup::Bows => "Bows",
+        WeaponGroup::Crossbows => "Crossbows",
+        WeaponGroup::Double => "Double Weapons",
+        WeaponGroup::Ensnaring => "Ensnaring",
+        WeaponGroup::Lashes => "Lashes",
+        WeaponGroup::LargeSwords => "Large Swords",
+        WeaponGroup::SmallSwords => "Small Swords",
+        WeaponGroup::Polearms => "Polearms",
+        WeaponGroup::Spears => "Spears",
+        WeaponGroup::Shields => "Shields",
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum WeaponSize {
-    Small,
-    Medium,
-    Large,
-}
-
-impl WeaponSize {
-    const fn min_speed(self) -> f64 {
-        match self {
-            WeaponSize::Small => 2.0,
-            WeaponSize::Medium => 3.0,
-            WeaponSize::Large => 4.0,
-        }
+fn weapon_group_slug(group: WeaponGroup) -> &'static str {
+    match group {
+        WeaponGroup::Unarmed => "unarmed",
+        WeaponGroup::Axes => "axes",
+        WeaponGroup::Blunt => "blunt",
+        WeaponGroup::Basic => "basic",
+        WeaponGroup::Bows => "bows",
+        WeaponGroup::Crossbows => "crossbows",
+        WeaponGroup::Double => "double",
+        WeaponGroup::Ensnaring => "ensnaring",
+        WeaponGroup::Lashes => "lashes",
+        WeaponGroup::LargeSwords => "large_swords",
+        WeaponGroup::SmallSwords => "small_swords",
+        WeaponGroup::Polearms => "polearms",
+        WeaponGroup::Spears => "spears",
+        WeaponGroup::Shields => "shields",
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct WeaponSpec {
-    name: &'static str,
-    damage_expr: &'static str,
-    speed: f64,
-    armor_pen: i32,
-    size: WeaponSize,
-    category: WeaponCategory,
-}
-
-fn weapon_allows_two_handed_mode(weapon: &WeaponSpec) -> bool {
-    if weapon.name == "Spear" {
-        return true;
-    }
-    weapon.size == WeaponSize::Medium && weapon.category != WeaponCategory::Bows
 }
 
 #[derive(Debug, Clone)]
 struct WeaponLine {
-    name: &'static str,
+    name: String,
     color: Color32,
     points: Vec<[f64; 2]>,
     values: Vec<f64>,
@@ -180,7 +130,7 @@ struct WeaponPlotData {
 #[derive(Debug, Clone)]
 struct HoverEntry {
     color: Color32,
-    name: &'static str,
+    name: String,
     value: f64,
 }
 
@@ -201,8 +151,9 @@ impl Default for HoverDetails {
 }
 
 struct WeaponPlotApp {
-    datasets: HashMap<WeaponCategory, WeaponPlotData>,
-    current_category: WeaponCategory,
+    weapon_catalog: WeaponCatalog,
+    datasets: HashMap<WeaponGroup, WeaponPlotData>,
+    current_group: WeaponGroup,
     speed_reduction: f64,
     damage_bonus: f64,
     two_handed: bool,
@@ -211,13 +162,15 @@ struct WeaponPlotApp {
 
 impl WeaponPlotApp {
     fn with_datasets(
-        datasets: HashMap<WeaponCategory, WeaponPlotData>,
+        weapon_catalog: WeaponCatalog,
+        datasets: HashMap<WeaponGroup, WeaponPlotData>,
         adjustments: GlobalAdjustments,
         sim_duration: f64,
     ) -> Self {
         Self {
+            weapon_catalog,
             datasets,
-            current_category: WeaponCategory::Unarmed,
+            current_group: WeaponGroup::Unarmed,
             speed_reduction: adjustments.speed_reduction,
             damage_bonus: adjustments.damage_bonus,
             two_handed: adjustments.enable_two_handed,
@@ -228,21 +181,23 @@ impl WeaponPlotApp {
     fn rebuild_datasets(&mut self) {
         let adjustments =
             GlobalAdjustments::new(self.damage_bonus, self.speed_reduction, self.two_handed);
-        self.datasets = build_datasets(adjustments, self.sim_duration);
+        self.datasets = build_datasets(&self.weapon_catalog, adjustments, self.sim_duration);
     }
 }
 
 fn build_datasets(
+    weapon_catalog: &WeaponCatalog,
     adjustments: GlobalAdjustments,
     sim_duration: f64,
-) -> HashMap<WeaponCategory, WeaponPlotData> {
+) -> HashMap<WeaponGroup, WeaponPlotData> {
     let armor_values: Vec<f64> = (0..=ARMOR_MAX).map(|v| v as f64).collect();
     let mut datasets = HashMap::new();
 
-    for &category in WeaponCategory::ALL.iter() {
-        let specs: Vec<&WeaponSpec> = WEAPONS
+    for &group in WEAPON_GROUPS.iter() {
+        let specs: Vec<&WeaponPreset> = weapon_catalog
+            .entries()
             .iter()
-            .filter(|weapon| weapon.category == category)
+            .filter(|weapon| weapon.group == group)
             .collect();
 
         if specs.is_empty() {
@@ -267,7 +222,7 @@ fn build_datasets(
             let color: Color32 = hsv.into();
 
             lines.push(WeaponLine {
-                name: weapon.name,
+                name: weapon.name.clone(),
                 color,
                 points,
                 values,
@@ -276,7 +231,7 @@ fn build_datasets(
         }
 
         datasets.insert(
-            category,
+            group,
             WeaponPlotData {
                 lines,
                 y_max: y_max.max(0.01),
@@ -327,14 +282,14 @@ impl eframe::App for WeaponPlotApp {
 
             ui.horizontal(|ui| {
                 ui.label("Weapon group:");
-                for category in WeaponCategory::ALL.iter() {
-                    ui.selectable_value(&mut self.current_category, *category, category.label());
+                for group in WEAPON_GROUPS.iter() {
+                    ui.selectable_value(&mut self.current_group, *group, weapon_group_label(*group));
                 }
             });
 
             ui.separator();
 
-            if let Some(dataset) = self.datasets.get(&self.current_category) {
+            if let Some(dataset) = self.datasets.get(&self.current_group) {
                 show_weapon_plot(
                     ui,
                     "avg_damage_plot",
@@ -358,13 +313,8 @@ impl eframe::App for WeaponPlotApp {
     }
 }
 
-fn expected_damage(expr: &str) -> f64 {
-    let cleaned = expr.replace(' ', "");
-    evaluate_expression(cleaned.as_str())
-}
-
-fn weapon_has_flat_three_bonus(weapon: &WeaponSpec) -> bool {
-    damage_expr_has_flat_three(weapon.damage_expr)
+fn weapon_has_flat_three_bonus(weapon: &WeaponPreset) -> bool {
+    damage_expr_has_flat_three(&weapon.damage_expr)
 }
 
 fn damage_expr_has_flat_three(expr: &str) -> bool {
@@ -387,145 +337,6 @@ fn damage_expr_has_flat_three(expr: &str) -> bool {
             idx += 1;
         }
         idx += 1;
-    }
-    false
-}
-
-fn evaluate_expression(expr: &str) -> f64 {
-    if expr.is_empty() {
-        return 0.0;
-    }
-
-    let mut total = 0.0;
-    let mut idx = 0;
-    let chars: Vec<char> = expr.chars().collect();
-    while idx < chars.len() {
-        let mut sign = 1.0;
-        if chars[idx] == '+' {
-            idx += 1;
-        } else if chars[idx] == '-' {
-            sign = -1.0;
-            idx += 1;
-        }
-
-        let start = idx;
-        let mut depth = 0;
-        while idx < chars.len() {
-            match chars[idx] {
-                '(' => {
-                    depth += 1;
-                    idx += 1;
-                }
-                ')' => {
-                    if depth > 0 {
-                        depth -= 1;
-                        idx += 1;
-                    } else {
-                        panic!("Mismatched parentheses in expression: {}", expr);
-                    }
-                }
-                '+' | '-' if depth == 0 => break,
-                _ => idx += 1,
-            }
-        }
-
-        let term = &expr[start..idx];
-        if !term.is_empty() {
-            total += sign * evaluate_term(term);
-        }
-    }
-
-    total
-}
-
-fn evaluate_term(term: &str) -> f64 {
-    let trimmed = strip_outer_parens(term);
-
-    if has_top_level_operator(trimmed) {
-        return evaluate_expression(trimmed);
-    }
-
-    if let Some(d_pos) = trimmed.find('d') {
-        let count = if d_pos == 0 {
-            1.0
-        } else {
-            trimmed[..d_pos].parse::<f64>().unwrap_or(1.0)
-        };
-
-        let after_d = &trimmed[d_pos + 1..];
-        let mut digits_end = 0;
-        for ch in after_d.chars() {
-            if ch.is_ascii_digit() {
-                digits_end += ch.len_utf8();
-            } else {
-                break;
-            }
-        }
-
-        let (sides_str, rest) = after_d.split_at(digits_end);
-        let sides = sides_str
-            .parse::<f64>()
-            .expect("Failed to parse die sides for term");
-        let penetrating = rest.starts_with('p');
-
-        let single = if penetrating {
-            (sides + 2.0) / 2.0
-        } else {
-            (sides + 1.0) / 2.0
-        };
-
-        count * single
-    } else {
-        trimmed
-            .parse::<f64>()
-            .expect("Failed to parse constant damage modifier")
-    }
-}
-
-fn strip_outer_parens(mut s: &str) -> &str {
-    loop {
-        let bytes = s.as_bytes();
-        if bytes.len() >= 2 && bytes[0] == b'(' && bytes[bytes.len() - 1] == b')' {
-            let mut depth = 0;
-            let mut balanced = true;
-            for (i, ch) in s.chars().enumerate() {
-                match ch {
-                    '(' => depth += 1,
-                    ')' => {
-                        depth -= 1;
-                        if depth == 0 && i != s.len() - 1 {
-                            balanced = false;
-                            break;
-                        }
-                    }
-                    _ => (),
-                }
-            }
-            if balanced && depth == 0 {
-                s = &s[1..s.len() - 1];
-            } else {
-                break;
-            }
-        } else {
-            break;
-        }
-    }
-    s
-}
-
-fn has_top_level_operator(s: &str) -> bool {
-    let mut depth = 0;
-    for (i, ch) in s.chars().enumerate() {
-        match ch {
-            '(' => depth += 1,
-            ')' => {
-                if depth > 0 {
-                    depth -= 1;
-                }
-            }
-            '+' | '-' if depth == 0 && i != 0 => return true,
-            _ => {}
-        }
     }
     false
 }
@@ -573,7 +384,7 @@ fn show_weapon_plot(
         for line in lines {
             let points = PlotPoints::from_iter(line.points.iter().copied());
             let plot_line = Line::new(points)
-                .name(line.name)
+                .name(line.name.clone())
                 .color(line.color)
                 .highlight(true);
             plot_space.line(plot_line);
@@ -588,7 +399,7 @@ fn show_weapon_plot(
                     let marker = Points::new(vec![[snapped_x, value]])
                         .radius(4.0)
                         .color(line.color)
-                        .name(line.name);
+                        .name(line.name.clone());
                     plot_space.points(marker);
                 }
             }
@@ -604,7 +415,7 @@ fn show_weapon_plot(
             if let Some(&value) = line.values.get(idx) {
                 details.entries.push(HoverEntry {
                     color: line.color,
-                    name: line.name,
+                    name: line.name.clone(),
                     value,
                 });
             }
@@ -653,12 +464,12 @@ fn integer_grid_marks(input: GridInput) -> Vec<GridMark> {
 }
 
 fn compute_weapon_curve(
-    weapon: &WeaponSpec,
+    weapon: &WeaponPreset,
     armor_values: &[f64],
     adjustments: GlobalAdjustments,
     sim_duration: f64,
 ) -> (Vec<[f64; 2]>, Vec<f64>, f64) {
-    let avg_damage = expected_damage(weapon.damage_expr);
+    let avg_damage = expected_damage_expr(&weapon.damage_expr);
     let mut points = Vec::with_capacity(armor_values.len());
     let mut values = Vec::with_capacity(armor_values.len());
     let mut max_val = 0.0f64;
@@ -699,25 +510,15 @@ fn average_damage_per_second(net_damage: f64, speed: f64, duration: f64) -> f64 
     (net_damage * hits) / duration_for_avg
 }
 
-fn effective_armor_value(raw: f64, armor_pen: i32) -> f64 {
-    if raw < 5.0 || armor_pen <= 0 {
-        return raw;
-    }
-
-    let extra = raw - 5.0;
-    let reduced_extra = (extra - armor_pen as f64).max(0.0);
-    5.0 + reduced_extra
-}
-
 fn export_headless_report(
-    datasets: &HashMap<WeaponCategory, WeaponPlotData>,
+    datasets: &HashMap<WeaponGroup, WeaponPlotData>,
 ) -> std::io::Result<()> {
     let out_dir = Path::new("headless_output");
     fs::create_dir_all(out_dir)?;
 
-    for category in WeaponCategory::ALL.iter() {
-        if let Some(data) = datasets.get(category) {
-            let avg_path = out_dir.join(format!("{}_avg.csv", category.slug()));
+    for group in WEAPON_GROUPS.iter() {
+        if let Some(data) = datasets.get(group) {
+            let avg_path = out_dir.join(format!("{}_avg.csv", weapon_group_slug(*group)));
             write_dataset_csv(&avg_path, &data.lines)?;
         }
     }
@@ -739,749 +540,11 @@ fn write_dataset_csv(path: &Path, lines: &[WeaponLine]) -> std::io::Result<()> {
     Ok(())
 }
 
-const WEAPONS: &[WeaponSpec] = &[
-    // Unarmed
-    WeaponSpec {
-        name: "Fist",
-        damage_expr: "(d4p-2)+(d4p-2)",
-        speed: 10.0,
-        armor_pen: 0,
-        size: WeaponSize::Small,
-        category: WeaponCategory::Unarmed,
-    },
-    WeaponSpec {
-        name: "Antler",
-        damage_expr: "2d6p",
-        speed: 10.0,
-        armor_pen: 0,
-        size: WeaponSize::Medium,
-        category: WeaponCategory::Unarmed,
-    },
-    WeaponSpec {
-        name: "Claw",
-        damage_expr: "1d8p",
-        speed: 5.0,
-        armor_pen: 0,
-        size: WeaponSize::Small,
-        category: WeaponCategory::Unarmed,
-    },
-    WeaponSpec {
-        name: "Fang",
-        damage_expr: "1d10p",
-        speed: 10.0,
-        armor_pen: 0,
-        size: WeaponSize::Small,
-        category: WeaponCategory::Unarmed,
-    },
-    WeaponSpec {
-        name: "Cestus",
-        damage_expr: "2d4p",
-        speed: 10.0,
-        armor_pen: 0,
-        size: WeaponSize::Small,
-        category: WeaponCategory::Unarmed,
-    },
-    WeaponSpec {
-        name: "Gauntlet",
-        damage_expr: "(d4p-1)+(d4p-1)",
-        speed: 10.0,
-        armor_pen: 0,
-        size: WeaponSize::Small,
-        category: WeaponCategory::Unarmed,
-    },
-    WeaponSpec {
-        name: "Spiked Gauntlet",
-        damage_expr: "1d8p",
-        speed: 10.0,
-        armor_pen: 0,
-        size: WeaponSize::Small,
-        category: WeaponCategory::Unarmed,
-    },
-    // Axes
-    WeaponSpec {
-        name: "Battle Axe",
-        damage_expr: "4d3p",
-        speed: 12.0,
-        armor_pen: 2,
-        size: WeaponSize::Medium,
-        category: WeaponCategory::Axes,
-    },
-    WeaponSpec {
-        name: "Executioner's Axe",
-        damage_expr: "3d8p+3",
-        speed: 18.0,
-        armor_pen: 2,
-        size: WeaponSize::Large,
-        category: WeaponCategory::Axes,
-    },
-    WeaponSpec {
-        name: "Greataxe",
-        damage_expr: "3d6p+3",
-        speed: 14.0,
-        armor_pen: 2,
-        size: WeaponSize::Large,
-        category: WeaponCategory::Axes,
-    },
-    WeaponSpec {
-        name: "Hand Axe",
-        damage_expr: "d4p+d6p",
-        speed: 8.0,
-        armor_pen: 0,
-        size: WeaponSize::Small,
-        category: WeaponCategory::Axes,
-    },
-    WeaponSpec {
-        name: "Khopesh",
-        damage_expr: "2d6p",
-        speed: 8.0,
-        armor_pen: 0,
-        size: WeaponSize::Medium,
-        category: WeaponCategory::Axes,
-    },
-    WeaponSpec {
-        name: "Military Pick",
-        damage_expr: "3d4p",
-        speed: 12.0,
-        armor_pen: 2,
-        size: WeaponSize::Medium,
-        category: WeaponCategory::Axes,
-    },
-    WeaponSpec {
-        name: "Horseman's Pick",
-        damage_expr: "d4p+d6p",
-        speed: 8.0,
-        armor_pen: 1,
-        size: WeaponSize::Small,
-        category: WeaponCategory::Axes,
-    },
-    WeaponSpec {
-        name: "Scythe",
-        damage_expr: "2d6p+3",
-        speed: 15.0,
-        armor_pen: 0,
-        size: WeaponSize::Large,
-        category: WeaponCategory::Axes,
-    },
-    WeaponSpec {
-        name: "Sickle",
-        damage_expr: "d6p+d3p",
-        speed: 8.0,
-        armor_pen: 0,
-        size: WeaponSize::Small,
-        category: WeaponCategory::Axes,
-    },
-    WeaponSpec {
-        name: "Throwing Axe",
-        damage_expr: "d4p+d6p",
-        speed: 7.0,
-        armor_pen: 0,
-        size: WeaponSize::Small,
-        category: WeaponCategory::Axes,
-    },
-    // Blunt
-    WeaponSpec {
-        name: "Greatclub",
-        damage_expr: "d20p+3",
-        speed: 16.0,
-        armor_pen: 1,
-        size: WeaponSize::Large,
-        category: WeaponCategory::Blunt,
-    },
-    WeaponSpec {
-        name: "Greathammer",
-        damage_expr: "d8p+2d10p+3",
-        speed: 20.0,
-        armor_pen: 2,
-        size: WeaponSize::Large,
-        category: WeaponCategory::Blunt,
-    },
-    WeaponSpec {
-        name: "Hammer",
-        damage_expr: "2d6p",
-        speed: 8.0,
-        armor_pen: 1,
-        size: WeaponSize::Small,
-        category: WeaponCategory::Blunt,
-    },
-    WeaponSpec {
-        name: "Warhammer",
-        damage_expr: "d8p+d10p",
-        speed: 12.0,
-        armor_pen: 1,
-        size: WeaponSize::Medium,
-        category: WeaponCategory::Blunt,
-    },
-    WeaponSpec {
-        name: "Mace",
-        damage_expr: "d6p+d8p",
-        speed: 11.0,
-        armor_pen: 2,
-        size: WeaponSize::Medium,
-        category: WeaponCategory::Blunt,
-    },
-    WeaponSpec {
-        name: "Horseman's Mace",
-        damage_expr: "2d6p",
-        speed: 10.0,
-        armor_pen: 1,
-        size: WeaponSize::Medium,
-        category: WeaponCategory::Blunt,
-    },
-    WeaponSpec {
-        name: "Maul",
-        damage_expr: "2d12p+3",
-        speed: 15.0,
-        armor_pen: 2,
-        size: WeaponSize::Large,
-        category: WeaponCategory::Blunt,
-    },
-    WeaponSpec {
-        name: "Morning Star",
-        damage_expr: "2d8p",
-        speed: 11.0,
-        armor_pen: 0,
-        size: WeaponSize::Medium,
-        category: WeaponCategory::Blunt,
-    },
-    // Basic
-    WeaponSpec {
-        name: "Club",
-        damage_expr: "d6p+d4p",
-        speed: 10.0,
-        armor_pen: 0,
-        size: WeaponSize::Medium,
-        category: WeaponCategory::Basic,
-    },
-    WeaponSpec {
-        name: "Dart",
-        damage_expr: "d4p",
-        speed: 5.0,
-        armor_pen: 0,
-        size: WeaponSize::Small,
-        category: WeaponCategory::Basic,
-    },
-    WeaponSpec {
-        name: "Sling",
-        damage_expr: "d4p+d6p",
-        speed: 10.0,
-        armor_pen: 0,
-        size: WeaponSize::Small,
-        category: WeaponCategory::Basic,
-    },
-    WeaponSpec {
-        name: "Staff",
-        damage_expr: "2d4p+3",
-        speed: 13.0,
-        armor_pen: 0,
-        size: WeaponSize::Large,
-        category: WeaponCategory::Basic,
-    },
-    // Bows
-    WeaponSpec {
-        name: "Longbow",
-        damage_expr: "2d8p",
-        speed: 12.0,
-        armor_pen: 0,
-        size: WeaponSize::Large,
-        category: WeaponCategory::Bows,
-    },
-    WeaponSpec {
-        name: "Recurve Bow",
-        damage_expr: "3d4p",
-        speed: 11.0,
-        armor_pen: 0,
-        size: WeaponSize::Medium,
-        category: WeaponCategory::Bows,
-    },
-    WeaponSpec {
-        name: "Shortbow",
-        damage_expr: "2d6p",
-        speed: 12.0,
-        armor_pen: 0,
-        size: WeaponSize::Medium,
-        category: WeaponCategory::Bows,
-    },
-    WeaponSpec {
-        name: "Warbow",
-        damage_expr: "3d6p",
-        speed: 20.0,
-        armor_pen: 1,
-        size: WeaponSize::Large,
-        category: WeaponCategory::Bows,
-    },
-    // Crossbows
-    WeaponSpec {
-        name: "Arbalest",
-        damage_expr: "3d8p",
-        speed: 90.0,
-        armor_pen: 1,
-        size: WeaponSize::Large,
-        category: WeaponCategory::Crossbows,
-    },
-    WeaponSpec {
-        name: "Light Crossbow",
-        damage_expr: "2d6p",
-        speed: 20.0,
-        armor_pen: 0,
-        size: WeaponSize::Medium,
-        category: WeaponCategory::Crossbows,
-    },
-    WeaponSpec {
-        name: "Hand Crossbow",
-        damage_expr: "2d4p",
-        speed: 15.0,
-        armor_pen: 0,
-        size: WeaponSize::Small,
-        category: WeaponCategory::Crossbows,
-    },
-    WeaponSpec {
-        name: "Heavy Crossbow",
-        damage_expr: "2d10p",
-        speed: 60.0,
-        armor_pen: 0,
-        size: WeaponSize::Large,
-        category: WeaponCategory::Crossbows,
-    },
-    // Double Weapons
-    WeaponSpec {
-        name: "Double Axe",
-        damage_expr: "4d3p",
-        speed: 13.0,
-        armor_pen: 2,
-        size: WeaponSize::Large,
-        category: WeaponCategory::Double,
-    },
-    WeaponSpec {
-        name: "Double Scimitar",
-        damage_expr: "2d8p",
-        speed: 10.0,
-        armor_pen: 0,
-        size: WeaponSize::Large,
-        category: WeaponCategory::Double,
-    },
-    WeaponSpec {
-        name: "Dual Scythe",
-        damage_expr: "2d6p",
-        speed: 16.0,
-        armor_pen: 0,
-        size: WeaponSize::Large,
-        category: WeaponCategory::Double,
-    },
-    WeaponSpec {
-        name: "Hooked Hammer",
-        damage_expr: "d8p+d10p",
-        speed: 14.0,
-        armor_pen: 1,
-        size: WeaponSize::Large,
-        category: WeaponCategory::Double,
-    },
-    WeaponSpec {
-        name: "Monk's Spade",
-        damage_expr: "2d4p",
-        speed: 9.0,
-        armor_pen: 0,
-        size: WeaponSize::Large,
-        category: WeaponCategory::Double,
-    },
-    WeaponSpec {
-        name: "Spear-Axe",
-        damage_expr: "2d6p",
-        speed: 13.0,
-        armor_pen: 0,
-        size: WeaponSize::Large,
-        category: WeaponCategory::Double,
-    },
-    WeaponSpec {
-        name: "Two-Bladed Sword",
-        damage_expr: "2d8p",
-        speed: 11.0,
-        armor_pen: 0,
-        size: WeaponSize::Large,
-        category: WeaponCategory::Double,
-    },
-    // Ensnaring (only damaging weapons)
-    WeaponSpec {
-        name: "Bola",
-        damage_expr: "d4p",
-        speed: 10.0,
-        armor_pen: 0,
-        size: WeaponSize::Medium,
-        category: WeaponCategory::Ensnaring,
-    },
-    // Lashes
-    WeaponSpec {
-        name: "Flail",
-        damage_expr: "2d8p",
-        speed: 13.0,
-        armor_pen: 1,
-        size: WeaponSize::Medium,
-        category: WeaponCategory::Lashes,
-    },
-    WeaponSpec {
-        name: "Horseman's Flail",
-        damage_expr: "d4p+d6p",
-        speed: 11.0,
-        armor_pen: 0,
-        size: WeaponSize::Small,
-        category: WeaponCategory::Lashes,
-    },
-    WeaponSpec {
-        name: "Scourge",
-        damage_expr: "2d4p",
-        speed: 9.0,
-        armor_pen: 0,
-        size: WeaponSize::Small,
-        category: WeaponCategory::Lashes,
-    },
-    WeaponSpec {
-        name: "Spiked Chain",
-        damage_expr: "2d6p+3",
-        speed: 14.0,
-        armor_pen: 0,
-        size: WeaponSize::Large,
-        category: WeaponCategory::Lashes,
-    },
-    WeaponSpec {
-        name: "Whip",
-        damage_expr: "1d6p",
-        speed: 8.0,
-        armor_pen: 0,
-        size: WeaponSize::Small,
-        category: WeaponCategory::Lashes,
-    },
-    // Large Swords
-    WeaponSpec {
-        name: "Broadsword",
-        damage_expr: "2d6p+d3p",
-        speed: 11.0,
-        armor_pen: 0,
-        size: WeaponSize::Medium,
-        category: WeaponCategory::LargeSwords,
-    },
-    WeaponSpec {
-        name: "Bastard Sword",
-        damage_expr: "d8p+d10p",
-        speed: 12.0,
-        armor_pen: 0,
-        size: WeaponSize::Medium,
-        category: WeaponCategory::LargeSwords,
-    },
-    WeaponSpec {
-        name: "Claymore",
-        damage_expr: "2d10p+3",
-        speed: 13.0,
-        armor_pen: 1,
-        size: WeaponSize::Large,
-        category: WeaponCategory::LargeSwords,
-    },
-    WeaponSpec {
-        name: "Flamberge",
-        damage_expr: "6d3p+3",
-        speed: 16.0,
-        armor_pen: 2,
-        size: WeaponSize::Large,
-        category: WeaponCategory::LargeSwords,
-    },
-    WeaponSpec {
-        name: "Greatsword",
-        damage_expr: "d10p+d12p+3",
-        speed: 14.0,
-        armor_pen: 2,
-        size: WeaponSize::Large,
-        category: WeaponCategory::LargeSwords,
-    },
-    WeaponSpec {
-        name: "Longsword",
-        damage_expr: "2d8p",
-        speed: 10.0,
-        armor_pen: 0,
-        size: WeaponSize::Medium,
-        category: WeaponCategory::LargeSwords,
-    },
-    WeaponSpec {
-        name: "Greatknife",
-        damage_expr: "3d6p+3",
-        speed: 12.0,
-        armor_pen: 1,
-        size: WeaponSize::Large,
-        category: WeaponCategory::LargeSwords,
-    },
-    WeaponSpec {
-        name: "Sabre",
-        damage_expr: "d6p+d8p",
-        speed: 8.0,
-        armor_pen: 0,
-        size: WeaponSize::Medium,
-        category: WeaponCategory::LargeSwords,
-    },
-    WeaponSpec {
-        name: "Scimitar",
-        damage_expr: "2d8p",
-        speed: 9.0,
-        armor_pen: 0,
-        size: WeaponSize::Medium,
-        category: WeaponCategory::LargeSwords,
-    },
-    WeaponSpec {
-        name: "Spatha",
-        damage_expr: "d6p+d8p",
-        speed: 9.0,
-        armor_pen: 0,
-        size: WeaponSize::Medium,
-        category: WeaponCategory::LargeSwords,
-    },
-    WeaponSpec {
-        name: "Thrusting Sword",
-        damage_expr: "3d4p+3",
-        speed: 9.0,
-        armor_pen: 0,
-        size: WeaponSize::Large,
-        category: WeaponCategory::LargeSwords,
-    },
-    WeaponSpec {
-        name: "Two-Handed Sword",
-        damage_expr: "2d12p+3",
-        speed: 16.0,
-        armor_pen: 2,
-        size: WeaponSize::Large,
-        category: WeaponCategory::LargeSwords,
-    },
-    // Small Swords
-    WeaponSpec {
-        name: "Dagger",
-        damage_expr: "2d4p",
-        speed: 7.0,
-        armor_pen: 0,
-        size: WeaponSize::Small,
-        category: WeaponCategory::SmallSwords,
-    },
-    WeaponSpec {
-        name: "Dueling Sword",
-        damage_expr: "3d4p",
-        speed: 7.0,
-        armor_pen: 0,
-        size: WeaponSize::Medium,
-        category: WeaponCategory::SmallSwords,
-    },
-    WeaponSpec {
-        name: "Falx",
-        damage_expr: "2d3p+d6p",
-        speed: 9.0,
-        armor_pen: 0,
-        size: WeaponSize::Medium,
-        category: WeaponCategory::SmallSwords,
-    },
-    WeaponSpec {
-        name: "Knife",
-        damage_expr: "d6p",
-        speed: 7.0,
-        armor_pen: 0,
-        size: WeaponSize::Small,
-        category: WeaponCategory::SmallSwords,
-    },
-    WeaponSpec {
-        name: "Gladius",
-        damage_expr: "d4p+d8p",
-        speed: 9.0,
-        armor_pen: 0,
-        size: WeaponSize::Small,
-        category: WeaponCategory::SmallSwords,
-    },
-    WeaponSpec {
-        name: "Long Knife",
-        damage_expr: "1d10p",
-        speed: 6.0,
-        armor_pen: 0,
-        size: WeaponSize::Small,
-        category: WeaponCategory::SmallSwords,
-    },
-    WeaponSpec {
-        name: "Short Sword",
-        damage_expr: "2d6p",
-        speed: 8.0,
-        armor_pen: 0,
-        size: WeaponSize::Small,
-        category: WeaponCategory::SmallSwords,
-    },
-    WeaponSpec {
-        name: "Throwing Knife",
-        damage_expr: "d6p",
-        speed: 6.0,
-        armor_pen: 0,
-        size: WeaponSize::Small,
-        category: WeaponCategory::SmallSwords,
-    },
-    // Polearms
-    WeaponSpec {
-        name: "Bardiche",
-        damage_expr: "4d4p+3",
-        speed: 14.0,
-        armor_pen: 0,
-        size: WeaponSize::Large,
-        category: WeaponCategory::Polearms,
-    },
-    WeaponSpec {
-        name: "Fauchard",
-        damage_expr: "2d6p+3",
-        speed: 13.0,
-        armor_pen: 0,
-        size: WeaponSize::Large,
-        category: WeaponCategory::Polearms,
-    },
-    WeaponSpec {
-        name: "Glaive",
-        damage_expr: "5d4p+3",
-        speed: 14.0,
-        armor_pen: 0,
-        size: WeaponSize::Large,
-        category: WeaponCategory::Polearms,
-    },
-    WeaponSpec {
-        name: "Guisarme",
-        damage_expr: "2d6p+3",
-        speed: 13.0,
-        armor_pen: 0,
-        size: WeaponSize::Large,
-        category: WeaponCategory::Polearms,
-    },
-    WeaponSpec {
-        name: "Halberd",
-        damage_expr: "2d10p+3",
-        speed: 14.0,
-        armor_pen: 2,
-        size: WeaponSize::Large,
-        category: WeaponCategory::Polearms,
-    },
-    WeaponSpec {
-        name: "Poleaxe",
-        damage_expr: "3d6p+3",
-        speed: 13.0,
-        armor_pen: 2,
-        size: WeaponSize::Large,
-        category: WeaponCategory::Polearms,
-    },
-    WeaponSpec {
-        name: "Polehammer",
-        damage_expr: "d10p+d12p+3",
-        speed: 15.0,
-        armor_pen: 2,
-        size: WeaponSize::Large,
-        category: WeaponCategory::Polearms,
-    },
-    WeaponSpec {
-        name: "Raven's Beak",
-        damage_expr: "2d6p+3",
-        speed: 14.0,
-        armor_pen: 2,
-        size: WeaponSize::Large,
-        category: WeaponCategory::Polearms,
-    },
-    WeaponSpec {
-        name: "Swordstaff",
-        damage_expr: "2d8p+3",
-        speed: 11.0,
-        armor_pen: 0,
-        size: WeaponSize::Large,
-        category: WeaponCategory::Polearms,
-    },
-    WeaponSpec {
-        name: "Voulge",
-        damage_expr: "4d4p+3",
-        speed: 15.0,
-        armor_pen: 0,
-        size: WeaponSize::Large,
-        category: WeaponCategory::Polearms,
-    },
-    // Spears
-    WeaponSpec {
-        name: "Hasta",
-        damage_expr: "2d6p",
-        speed: 12.0,
-        armor_pen: 0,
-        size: WeaponSize::Medium,
-        category: WeaponCategory::Spears,
-    },
-    WeaponSpec {
-        name: "Javelin",
-        damage_expr: "d12p",
-        speed: 7.0,
-        armor_pen: 0,
-        size: WeaponSize::Medium,
-        category: WeaponCategory::Spears,
-    },
-    WeaponSpec {
-        name: "Lance",
-        damage_expr: "2d8p",
-        speed: 12.0,
-        armor_pen: 2,
-        size: WeaponSize::Large,
-        category: WeaponCategory::Spears,
-    },
-    WeaponSpec {
-        name: "Partisan",
-        damage_expr: "2d8p+3",
-        speed: 14.0,
-        armor_pen: 0,
-        size: WeaponSize::Large,
-        category: WeaponCategory::Spears,
-    },
-    WeaponSpec {
-        name: "Pike",
-        damage_expr: "2d6p+3",
-        speed: 18.0,
-        armor_pen: 0,
-        size: WeaponSize::Large,
-        category: WeaponCategory::Spears,
-    },
-    WeaponSpec {
-        name: "Pilum",
-        damage_expr: "2d6p",
-        speed: 8.0,
-        armor_pen: 0,
-        size: WeaponSize::Medium,
-        category: WeaponCategory::Spears,
-    },
-    WeaponSpec {
-        name: "Ranseur",
-        damage_expr: "2d6p+3",
-        speed: 13.0,
-        armor_pen: 3,
-        size: WeaponSize::Large,
-        category: WeaponCategory::Spears,
-    },
-    WeaponSpec {
-        name: "Short Spear",
-        damage_expr: "d4p+d6p",
-        speed: 12.0,
-        armor_pen: 0,
-        size: WeaponSize::Medium,
-        category: WeaponCategory::Spears,
-    },
-    WeaponSpec {
-        name: "Spear",
-        damage_expr: "2d6p",
-        speed: 12.0,
-        armor_pen: 0,
-        size: WeaponSize::Large,
-        category: WeaponCategory::Spears,
-    },
-    WeaponSpec {
-        name: "Spetum",
-        damage_expr: "2d8p+3",
-        speed: 13.0,
-        armor_pen: 0,
-        size: WeaponSize::Large,
-        category: WeaponCategory::Spears,
-    },
-    WeaponSpec {
-        name: "Trident",
-        damage_expr: "d6p+d8p+3",
-        speed: 12.0,
-        armor_pen: 0,
-        size: WeaponSize::Large,
-        category: WeaponCategory::Spears,
-    },
-];
+fn load_weapon_catalog() -> WeaponCatalog {
+    data::load_catalogs()
+        .map(|(weapons, _, _)| weapons)
+        .unwrap_or_else(|_| game_logic::default_weapon_catalog())
+}
 
 #[cfg(test)]
 mod tests {
@@ -1489,33 +552,64 @@ mod tests {
 
     const EPS: f64 = 1e-6;
 
+    fn make_weapon(
+        name: &str,
+        damage_expr: &str,
+        speed: f64,
+        armor_pen: i32,
+        size: WeaponSize,
+        group: WeaponGroup,
+        handedness: WeaponHandedness,
+    ) -> WeaponPreset {
+        WeaponPreset {
+            name: name.to_string(),
+            group,
+            speed: speed as f32,
+            speed_label: speed.to_string(),
+            jab_speed: None,
+            jab_speed_label: None,
+            jab_special_expr: None,
+            damage_expr: damage_expr.to_string(),
+            shield_damage_expr: None,
+            reach_label: "-".to_string(),
+            reach_ft: 1.0,
+            range_bands_feet: None,
+            armor_pen,
+            defense_bonus_always: false,
+            size,
+            handedness,
+            ammunition: None,
+        }
+    }
+
     #[test]
     fn expected_damage_penetrating_die() {
-        let avg = expected_damage("d6p");
+        let avg = expected_damage_expr("d6p");
         assert!((avg - 4.0).abs() < EPS);
     }
     #[test]
     fn expected_damage_complex_expression() {
-        let avg = expected_damage("d8p+2d10p+3");
+        let avg = expected_damage_expr("d8p+2d10p+3");
         assert!((avg - 20.0).abs() < EPS);
     }
 
     #[test]
     fn expected_damage_with_parentheses() {
-        let avg = expected_damage("(d4p-2)+(d4p-2)");
+        let avg = expected_damage_expr("(d4p-2)+(d4p-2)");
         assert!((avg - 2.0).abs() < EPS);
     }
 
     #[test]
     fn armor_penetration_reduces_effective_armor() {
-        let weapon = WeaponSpec {
-            name: "Test Warhammer",
-            damage_expr: "d8p+d10p",
-            speed: 12.0,
-            armor_pen: 1,
-            size: WeaponSize::Medium,
-            category: WeaponCategory::Blunt,
-        };
+        let weapon = make_weapon(
+            "Test Warhammer",
+            "d8p+d10p",
+            12.0,
+            1,
+            WeaponSize::Medium,
+            WeaponGroup::Blunt,
+            WeaponHandedness::OneHanded,
+        );
         let armor_values = vec![7.0];
         let (_, values, _) = compute_weapon_curve(
             &weapon,
@@ -1523,23 +617,24 @@ mod tests {
             GlobalAdjustments::default(),
             DEFAULT_SIM_DURATION,
         );
-        let avg = expected_damage(weapon.damage_expr);
+        let avg = expected_damage_expr(&weapon.damage_expr);
         let effective = effective_armor_value(armor_values[0], weapon.armor_pen);
         let net = (avg - effective).max(0.0);
-        let expected = average_damage_per_second(net, weapon.speed, DEFAULT_SIM_DURATION);
+        let expected = average_damage_per_second(net, weapon.speed as f64, DEFAULT_SIM_DURATION);
         assert!((values[0] - expected).abs() < EPS);
     }
 
     #[test]
     fn armor_penetration_does_not_increase_damage_past_zero_armor() {
-        let weapon = WeaponSpec {
-            name: "Piercing Club",
-            damage_expr: "d6p",
-            speed: 10.0,
-            armor_pen: 3,
-            size: WeaponSize::Medium,
-            category: WeaponCategory::Basic,
-        };
+        let weapon = make_weapon(
+            "Piercing Club",
+            "d6p",
+            10.0,
+            3,
+            WeaponSize::Medium,
+            WeaponGroup::Basic,
+            WeaponHandedness::OneHanded,
+        );
         let armor_values = vec![1.0];
         let (_, values, _) = compute_weapon_curve(
             &weapon,
@@ -1547,10 +642,10 @@ mod tests {
             GlobalAdjustments::default(),
             DEFAULT_SIM_DURATION,
         );
-        let avg = expected_damage(weapon.damage_expr);
+        let avg = expected_damage_expr(&weapon.damage_expr);
         let net =
             (avg - effective_armor_value(armor_values[0], weapon.armor_pen)).max(0.0);
-        let expected = average_damage_per_second(net, weapon.speed, DEFAULT_SIM_DURATION);
+        let expected = average_damage_per_second(net, weapon.speed as f64, DEFAULT_SIM_DURATION);
         assert!((values[0] - expected).abs() < EPS);
     }
 
@@ -1569,10 +664,11 @@ mod tests {
     #[test]
     fn speed_floor_respected_for_all_weapons() {
         let adjustments = GlobalAdjustments::new(0.0, 10.0, false);
-        for weapon in WEAPONS {
+        let weapon_catalog = load_weapon_catalog();
+        for weapon in weapon_catalog.entries() {
             let adjusted = adjustments.adjusted_speed(weapon);
             assert!(
-                adjusted >= weapon.size.min_speed() - EPS,
+                adjusted >= weapon.size.min_speed() as f64 - EPS,
                 "Weapon {} dropped below its floor",
                 weapon.name
             );
@@ -1581,14 +677,12 @@ mod tests {
 
     #[test]
     fn two_handed_eligibility_matches_rules() {
-        for weapon in WEAPONS {
-            let expected = if weapon.name == "Spear" {
-                true
-            } else {
-                weapon.size == WeaponSize::Medium && weapon.category != WeaponCategory::Bows
-            };
+        let weapon_catalog = load_weapon_catalog();
+        for weapon in weapon_catalog.entries() {
+            let expected = weapon.handedness == WeaponHandedness::OneHanded
+                && matches!(weapon.size, WeaponSize::Medium | WeaponSize::Large);
             assert_eq!(
-                weapon_allows_two_handed_mode(weapon),
+                game_logic::weapon_allows_two_handed_mode(weapon),
                 expected,
                 "Weapon {} did not match the eligibility rules",
                 weapon.name
@@ -1601,7 +695,8 @@ fn main() -> eframe::Result<()> {
     apply_wsl_winit_workaround();
     let adjustments = GlobalAdjustments::default();
     let sim_duration = DEFAULT_SIM_DURATION;
-    let datasets = build_datasets(adjustments, sim_duration);
+    let weapon_catalog = load_weapon_catalog();
+    let datasets = build_datasets(&weapon_catalog, adjustments, sim_duration);
     let lacks_display = cfg!(target_family = "unix")
         && std::env::var("DISPLAY").is_err()
         && std::env::var("WAYLAND_DISPLAY").is_err();
@@ -1625,12 +720,14 @@ fn main() -> eframe::Result<()> {
     };
 
     let datasets_for_app = datasets.clone();
+    let weapon_catalog_for_app = weapon_catalog.clone();
     let ui_adjustments = adjustments;
     match eframe::run_native(
         "Hackmaster Blunt Weapon Damage per Speed",
         native_options,
         Box::new(move |_| {
             Ok(Box::new(WeaponPlotApp::with_datasets(
+                weapon_catalog_for_app,
                 datasets_for_app.clone(),
                 ui_adjustments,
                 sim_duration,

@@ -3,17 +3,6 @@
 version = 4
 
 [[package]]
-name = "HackmasterSim"
-version = "0.1.0"
-dependencies = [
- "eframe",
- "egui_plot",
- "rand",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "ab_glyph"
 version = "0.2.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1471,6 +1460,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fdf242682df893b86f33a73828fb09ca4b2d3bb6cc95249707fc684d27484b91"
 dependencies = [
  "bitflags 2.10.0",
+]
+
+[[package]]
+name = "hackmaster_sim"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "egui_plot",
+ "rand",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

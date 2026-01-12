@@ -2,19 +2,22 @@ use crate::character::{
     AbilityScore, AbilitySet, Armor, Character, DerivedStats, Equipment, Progression, Shield,
     Weapon, WeaponGroup, WeaponMastery,
 };
+use crate::core::catalog::Catalog;
+pub use crate::core::ids::{
+    ArmorId, ArmorTag, FighterPresetId, FighterPresetTag, NpcPresetId, NpcPresetTag, ShieldId,
+    ShieldTag, WeaponId, WeaponTag,
+};
 use crate::sim::{
     self, Combatant, CombatantSheet, DefenseProfile, MobilityProfile, OffenseProfile, Vitals,
     WeaponProfile,
 };
-use eframe::egui::Color32;
 use serde::{Deserialize, Serialize};
-use std::fs;
 
-const EMBEDDED_WEAPONS_JSON: &str = include_str!("../data/weapons.json");
-const EMBEDDED_ARMOR_JSON: &str = include_str!("../data/armor.json");
-const EMBEDDED_MATERIALS_JSON: &str = include_str!("../data/materials.json");
-const EMBEDDED_NPC_PRESETS_JSON: &str = include_str!("../data/npc_presets.json");
-const EMBEDDED_FIGHTER_PRESETS_JSON: &str = include_str!("../data/fighter_presets.json");
+pub type WeaponCatalog = Catalog<WeaponTag, WeaponPreset>;
+pub type ArmorCatalog = Catalog<ArmorTag, ArmorEntry>;
+pub type ShieldCatalog = Catalog<ShieldTag, ShieldEntry>;
+pub type NpcPresetCatalog = Catalog<NpcPresetTag, NpcPreset>;
+pub type FighterPresetCatalog = Catalog<FighterPresetTag, FighterPreset>;
 
 #[derive(Clone)]
 pub struct WeaponPreset {
@@ -44,10 +47,49 @@ pub enum WeaponSize {
     Large,
 }
 
+impl WeaponSize {
+    pub fn min_speed(self) -> f32 {
+        match self {
+            WeaponSize::Small => 2.0,
+            WeaponSize::Medium => 3.0,
+            WeaponSize::Large => 4.0,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WeaponHandedness {
     OneHanded,
     TwoHanded,
+}
+
+pub const TWO_HANDED_DAMAGE_BONUS: i32 = 3;
+pub const TWO_HANDED_SPEED_PENALTY: f32 = 2.0;
+
+pub fn weapon_allows_two_handed_mode(weapon: &WeaponPreset) -> bool {
+    weapon.handedness == WeaponHandedness::OneHanded
+        && matches!(weapon.size, WeaponSize::Medium | WeaponSize::Large)
+}
+
+fn effective_two_hand_grip(weapon: &WeaponPreset, two_hand_grip: bool) -> bool {
+    weapon.handedness == WeaponHandedness::TwoHanded
+        || (two_hand_grip && weapon_allows_two_handed_mode(weapon))
+}
+
+fn two_hand_damage_bonus(weapon: &WeaponPreset, two_hand_grip: bool) -> i32 {
+    if effective_two_hand_grip(weapon, two_hand_grip) && weapon_allows_two_handed_mode(weapon) {
+        TWO_HANDED_DAMAGE_BONUS
+    } else {
+        0
+    }
+}
+
+fn two_hand_speed_penalty(weapon: &WeaponPreset, two_hand_grip: bool) -> f32 {
+    if effective_two_hand_grip(weapon, two_hand_grip) && weapon_allows_two_handed_mode(weapon) {
+        TWO_HANDED_SPEED_PENALTY
+    } else {
+        0.0
+    }
 }
 
 #[derive(Clone)]
@@ -81,11 +123,6 @@ pub struct NpcPreset {
     pub defense_mod: i32,
     pub armor_dr: i32,
     pub top: i32,
-}
-
-#[derive(Deserialize)]
-struct NpcPresetsFile {
-    presets: Vec<NpcPreset>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -143,15 +180,9 @@ pub struct FighterPreset {
     pub hold_at_bay: bool,
 }
 
-#[derive(Deserialize, Serialize)]
-struct FighterPresetsFile {
-    presets: Vec<FighterPreset>,
-}
-
 #[derive(Clone)]
 pub struct PlayerConfig {
     pub name: String,
-    pub color: Color32,
     pub level: u8,
     pub progression: Progression,
     pub base_hp: u32,
@@ -165,15 +196,15 @@ pub struct PlayerConfig {
     pub constitution: u8,
     pub looks: u8,
     pub charisma: u8,
-    pub weapon_index: usize,
-    pub armor_index: usize,
+    pub weapon_id: WeaponId,
+    pub armor_id: ArmorId,
     pub weapon_material_tier: i32,
     pub armor_material_tier: i32,
     pub projectile_material_tier: i32,
-    pub shield_index: usize,
+    pub shield_id: ShieldId,
     pub shield_material_tier: i32,
-    pub npc_preset: Option<usize>,
-    pub fighter_preset: Option<usize>,
+    pub npc_preset: Option<NpcPresetId>,
+    pub fighter_preset: Option<FighterPresetId>,
     pub mastery_attack: i32,
     pub mastery_defense: i32,
     pub mastery_damage: i32,
@@ -186,10 +217,9 @@ pub struct PlayerConfig {
 }
 
 impl PlayerConfig {
-    pub fn new(name: &str, color: Color32, weapon_index: usize) -> Self {
+    pub fn new(name: &str, weapon_id: WeaponId) -> Self {
         Self {
             name: name.to_string(),
-            color,
             level: 1,
             progression: Progression::default(),
             base_hp: 10,
@@ -203,12 +233,12 @@ impl PlayerConfig {
             constitution: 10,
             looks: 10,
             charisma: 10,
-            weapon_index,
-            armor_index: 0,
+            weapon_id,
+            armor_id: ArmorId::new(0),
             weapon_material_tier: 0,
             armor_material_tier: 0,
             projectile_material_tier: 0,
-            shield_index: 0,
+            shield_id: ShieldId::new(0),
             shield_material_tier: 0,
             npc_preset: None,
             fighter_preset: None,
@@ -221,6 +251,29 @@ impl PlayerConfig {
             two_hand_grip: false,
             use_jab: false,
             hold_at_bay: false,
+        }
+    }
+}
+
+pub fn sanitize_player_ids(
+    player: &mut PlayerConfig,
+    weapon_catalog: &WeaponCatalog,
+    armor_catalog: &ArmorCatalog,
+    shield_catalog: &ShieldCatalog,
+) {
+    if weapon_catalog.get(player.weapon_id).is_none() {
+        if let Some(id) = weapon_catalog.first_id() {
+            player.weapon_id = id;
+        }
+    }
+    if armor_catalog.get(player.armor_id).is_none() {
+        if let Some(id) = armor_catalog.first_id() {
+            player.armor_id = id;
+        }
+    }
+    if shield_catalog.get(player.shield_id).is_none() {
+        if let Some(id) = shield_catalog.first_id() {
+            player.shield_id = id;
         }
     }
 }
@@ -244,7 +297,7 @@ pub fn clamp_mastery(value: i32) -> i32 {
 }
 
 pub fn shield_equipped(player: &PlayerConfig, weapon: &WeaponPreset) -> bool {
-    can_equip_shield(player, weapon) && player.shield_index > 0
+    can_equip_shield(player, weapon) && player.shield_id.index() > 0
 }
 
 pub fn effective_attack_mastery(player: &PlayerConfig) -> i32 {
@@ -284,13 +337,23 @@ pub struct PlayerSummary {
     pub roll: RollSummary,
 }
 
+fn weapon_for_player<'a>(
+    player: &PlayerConfig,
+    weapon_catalog: &'a WeaponCatalog,
+) -> &'a WeaponPreset {
+    weapon_catalog
+        .get(player.weapon_id)
+        .or_else(|| weapon_catalog.entries().first())
+        .expect("weapon catalog is empty")
+}
+
 pub fn player_summary(
     player: &PlayerConfig,
-    weapon_catalog: &[WeaponPreset],
-    armor_catalog: &[ArmorEntry],
-    shield_catalog: &[ShieldEntry],
+    weapon_catalog: &WeaponCatalog,
+    armor_catalog: &ArmorCatalog,
+    shield_catalog: &ShieldCatalog,
 ) -> PlayerSummary {
-    let weapon = &weapon_catalog[player.weapon_index];
+    let weapon = weapon_for_player(player, weapon_catalog);
     let character = build_character(player, weapon_catalog, armor_catalog, shield_catalog);
     let derived = character.derived();
     let roll = roll_summary(player, weapon, &character, &derived);
@@ -314,11 +377,7 @@ fn roll_summary(
     let attack_mastery = effective_attack_mastery(player);
     let damage_mastery = effective_damage_mastery(player);
     let attack_bonus = derived.attack_bonus + material_attack_bonus + attack_mastery;
-    let is_two_handed = weapon.handedness == WeaponHandedness::TwoHanded;
-    let can_two_hand = weapon.handedness == WeaponHandedness::OneHanded
-        && (weapon.size == WeaponSize::Medium || weapon.size == WeaponSize::Large);
-    let effective_two_hand = is_two_handed || (player.two_hand_grip && can_two_hand);
-    let two_hand_bonus = if effective_two_hand && can_two_hand { 3 } else { 0 };
+    let two_hand_bonus = two_hand_damage_bonus(weapon, player.two_hand_grip);
     let strength_damage = strength_damage_for_weapon(weapon, character.ability_mods.strength.damage)
         + two_hand_bonus
         + material_damage_bonus
@@ -331,21 +390,13 @@ fn roll_summary(
     }
 }
 
-fn min_weapon_speed_for_size(size: WeaponSize) -> f32 {
-    match size {
-        WeaponSize::Small => 2.0,
-        WeaponSize::Medium => 3.0,
-        WeaponSize::Large => 4.0,
-    }
-}
-
 pub fn build_character(
     player: &PlayerConfig,
-    weapon_catalog: &[WeaponPreset],
-    armor_catalog: &[ArmorEntry],
-    shield_catalog: &[ShieldEntry],
+    weapon_catalog: &WeaponCatalog,
+    armor_catalog: &ArmorCatalog,
+    shield_catalog: &ShieldCatalog,
 ) -> Character {
-    let weapon_preset = &weapon_catalog[player.weapon_index];
+    let weapon_preset = weapon_for_player(player, weapon_catalog);
     let weapon = Weapon {
         name: weapon_preset.name.clone(),
         group: weapon_preset.group,
@@ -356,11 +407,11 @@ pub fn build_character(
         defense_bonus_always: weapon_preset.defense_bonus_always,
     };
     let armor = armor_catalog
-        .get(player.armor_index)
+        .get(player.armor_id)
         .and_then(|entry| entry.armor.clone());
     let armor = armor.map(|armor| apply_armor_material_tier(armor, player.armor_material_tier));
     let shield = shield_catalog
-        .get(player.shield_index)
+        .get(player.shield_id)
         .and_then(|entry| entry.shield.clone());
 
     let abilities = AbilitySet {
@@ -408,10 +459,10 @@ pub fn build_character(
 
 pub fn build_combatants(
     players: &[PlayerConfig; 2],
-    weapon_catalog: &[WeaponPreset],
-    armor_catalog: &[ArmorEntry],
-    shield_catalog: &[ShieldEntry],
-    npc_presets: &[NpcPreset],
+    weapon_catalog: &WeaponCatalog,
+    armor_catalog: &ArmorCatalog,
+    shield_catalog: &ShieldCatalog,
+    npc_presets: &NpcPresetCatalog,
 ) -> [Combatant; 2] {
     [
         build_combatant(
@@ -433,12 +484,12 @@ pub fn build_combatants(
 
 pub fn build_combatant(
     player: &PlayerConfig,
-    weapon_catalog: &[WeaponPreset],
-    armor_catalog: &[ArmorEntry],
-    shield_catalog: &[ShieldEntry],
-    npc_presets: &[NpcPreset],
+    weapon_catalog: &WeaponCatalog,
+    armor_catalog: &ArmorCatalog,
+    shield_catalog: &ShieldCatalog,
+    npc_presets: &NpcPresetCatalog,
 ) -> Combatant {
-    let weapon_preset = &weapon_catalog[player.weapon_index];
+    let weapon_preset = weapon_for_player(player, weapon_catalog);
     let character = build_character(player, weapon_catalog, armor_catalog, shield_catalog);
     let derived = character.derived();
     let weapon_name = character
@@ -491,14 +542,11 @@ pub fn build_combatant(
         .clone()
         .filter(|expr| expr != "-" && !expr.is_empty());
 
-    let is_two_handed = weapon_preset.handedness == WeaponHandedness::TwoHanded;
-    let can_two_hand = weapon_preset.handedness == WeaponHandedness::OneHanded
-        && (weapon_preset.size == WeaponSize::Medium || weapon_preset.size == WeaponSize::Large);
-    let effective_two_hand = is_two_handed || (player.two_hand_grip && can_two_hand);
-    let two_hand_damage_bonus = if effective_two_hand && can_two_hand { 3 } else { 0 };
-    let two_hand_speed_bonus = if effective_two_hand && can_two_hand { 2.0 } else { 0.0 };
+    let effective_two_hand = effective_two_hand_grip(weapon_preset, player.two_hand_grip);
+    let two_hand_damage_bonus = two_hand_damage_bonus(weapon_preset, player.two_hand_grip);
+    let two_hand_speed_penalty = two_hand_speed_penalty(weapon_preset, player.two_hand_grip);
     let use_jab = player.use_jab && weapon_preset.jab_speed.is_some();
-    let min_speed = min_weapon_speed_for_size(weapon_preset.size);
+    let min_speed = weapon_preset.size.min_speed();
     let speed_mastery = effective_speed_mastery(player, weapon_preset) as f32;
     let jab_speed =
         (weapon_preset.jab_speed.unwrap_or(weapon_speed) + speed_mod - speed_mastery)
@@ -538,7 +586,7 @@ pub fn build_combatant(
     let mut shield_cover_value = shield_data.map(|shield| shield.cover_value);
     let mut shield_breakage =
         shield_data.map(|shield| breakage_steps_from_thresholds(shield.breakage_thresholds));
-    if let Some(preset) = player.npc_preset.and_then(|idx| npc_presets.get(idx)) {
+    if let Some(preset) = player.npc_preset.and_then(|id| npc_presets.get(id)) {
         name = preset.name.clone();
         attack_bonus = preset.attack_bonus;
         defense_mod = preset.defense_mod;
@@ -556,7 +604,7 @@ pub fn build_combatant(
     let weapon_speed = if use_jab {
         jab_speed
     } else {
-        (weapon_speed + two_hand_speed_bonus + speed_mod - speed_mastery).max(min_speed)
+        (weapon_speed + two_hand_speed_penalty + speed_mod - speed_mastery).max(min_speed)
     };
     let sheet = CombatantSheet {
         name,
@@ -607,10 +655,10 @@ pub fn build_combatant(
 
 pub fn stop_distance_for_players(
     players: &[PlayerConfig; 2],
-    weapon_catalog: &[WeaponPreset],
+    weapon_catalog: &WeaponCatalog,
 ) -> f32 {
     let reach_a = weapon_catalog
-        .get(players[0].weapon_index)
+        .get(players[0].weapon_id)
         .map(|weapon| {
             weapon
                 .range_bands_feet
@@ -620,7 +668,7 @@ pub fn stop_distance_for_players(
         })
         .unwrap_or(1.0);
     let reach_b = weapon_catalog
-        .get(players[1].weapon_index)
+        .get(players[1].weapon_id)
         .map(|weapon| {
             weapon
                 .range_bands_feet
@@ -632,8 +680,8 @@ pub fn stop_distance_for_players(
     reach_a.max(reach_b)
 }
 
-pub fn default_weapon_catalog() -> Vec<WeaponPreset> {
-    vec![
+pub fn default_weapon_catalog() -> WeaponCatalog {
+    Catalog::new(vec![
         // Unarmed
         weapon_preset("Fist", WeaponGroup::Unarmed, 10.0, "(d4p-2)+(d4p-2)", "1 foot", 1.0),
         weapon_preset("Antler", WeaponGroup::Unarmed, 10.0, "2d6p", "3 feet", 3.0),
@@ -1124,382 +1172,23 @@ pub fn default_weapon_catalog() -> Vec<WeaponPreset> {
             "6 feet",
             6.0,
         ),
-    ]
+    ])
 }
 
-pub fn default_armor_catalog() -> Vec<ArmorEntry> {
-    vec![ArmorEntry {
+pub fn default_armor_catalog() -> ArmorCatalog {
+    Catalog::new(vec![ArmorEntry {
         label: "None".to_string(),
         armor: None,
-    }]
+    }])
 }
 
-pub fn default_shield_catalog() -> Vec<ShieldEntry> {
-    vec![ShieldEntry {
+pub fn default_shield_catalog() -> ShieldCatalog {
+    Catalog::new(vec![ShieldEntry {
         label: "None".to_string(),
         shield: None,
-    }]
+    }])
 }
 
-pub fn load_catalogs() -> Result<(Vec<WeaponPreset>, Vec<ArmorEntry>, Vec<ShieldEntry>), String> {
-    let weapons = load_weapon_catalog("data/weapons.json")?;
-    let armor = load_armor_catalog("data/armor.json")?;
-    let shields = load_shield_catalog("data/weapons.json")?;
-    let _materials = load_materials("data/materials.json")?;
-    Ok((weapons, armor, shields))
-}
-
-pub fn load_npc_presets(path: &str) -> Result<Vec<NpcPreset>, String> {
-    let data = fs::read_to_string(path).unwrap_or_else(|_| EMBEDDED_NPC_PRESETS_JSON.to_string());
-    let parsed: NpcPresetsFile = serde_json::from_str(&data).map_err(|err| err.to_string())?;
-    Ok(parsed.presets)
-}
-
-pub fn load_fighter_presets(path: &str) -> Result<Vec<FighterPreset>, String> {
-    let data = fs::read_to_string(path).unwrap_or_else(|_| EMBEDDED_FIGHTER_PRESETS_JSON.to_string());
-    let parsed: FighterPresetsFile = serde_json::from_str(&data).map_err(|err| err.to_string())?;
-    Ok(parsed.presets)
-}
-
-pub fn save_fighter_presets(path: &str, presets: &[FighterPreset]) -> Result<(), String> {
-    let data = serde_json::to_string_pretty(&FighterPresetsFile {
-        presets: presets.to_vec(),
-    })
-    .map_err(|err| err.to_string())?;
-    fs::write(path, data).map_err(|err| err.to_string())
-}
-
-#[derive(Deserialize)]
-struct WeaponsFile {
-    weapons: Vec<WeaponJson>,
-    shields: Vec<ShieldJson>,
-}
-
-#[derive(Deserialize)]
-struct WeaponJson {
-    name: String,
-    group: String,
-    speed: String,
-    jab_speed: Option<String>,
-    jab_special: Option<String>,
-    damage: Option<String>,
-    shield_damage: Option<String>,
-    ammunition: Option<String>,
-    range_bands_feet: Option<Vec<f32>>,
-    armor_penetration: Option<i32>,
-    defense_bonus_always: Option<bool>,
-    #[serde(rename = "reach_or_range")]
-    reach_or_range: Option<String>,
-    size: String,
-    handedness: String,
-}
-
-#[derive(Deserialize)]
-struct ShieldJson {
-    name: String,
-    defense: String,
-    damage_reduction: String,
-    #[allow(dead_code)]
-    arc_of_defense: String,
-    cover_value: String,
-    breakage_thresholds: Vec<i32>,
-    weight_lbs: f32,
-}
-
-#[derive(Deserialize)]
-struct ArmorFile {
-    armor: Vec<ArmorJson>,
-}
-
-#[derive(Deserialize)]
-struct ArmorJson {
-    name: String,
-    region: String,
-    damage_reduction: i32,
-    defense_adjustment: i32,
-    initiative_modifier: i32,
-    speed_modifier: i32,
-    #[serde(rename = "type")]
-    armor_type: String,
-    weight_lbs: Option<f32>,
-}
-
-#[derive(Deserialize)]
-#[allow(dead_code)]
-struct MaterialsFile {
-    metals: Vec<MaterialJson>,
-    fabrics: Vec<MaterialJson>,
-    woods: Vec<MaterialJson>,
-}
-
-#[derive(Deserialize)]
-struct MaterialJson {
-    #[allow(dead_code)]
-    tier: i32,
-    #[allow(dead_code)]
-    name: String,
-    #[allow(dead_code)]
-    weight_multiplier: f32,
-}
-
-fn load_weapon_catalog(path: &str) -> Result<Vec<WeaponPreset>, String> {
-    let data = fs::read_to_string(path).unwrap_or_else(|_| EMBEDDED_WEAPONS_JSON.to_string());
-    let parsed: WeaponsFile = serde_json::from_str(&data).map_err(|err| err.to_string())?;
-    let mut catalog = Vec::new();
-    for entry in parsed.weapons {
-        let group = match weapon_group_from_str(&entry.group) {
-            Some(group) => group,
-            None => continue,
-        };
-        let size = match weapon_size_from_str(&entry.size) {
-            Some(size) => size,
-            None => continue,
-        };
-        let handedness = match weapon_handedness_from_str(&entry.handedness) {
-            Some(handedness) => handedness,
-            None => continue,
-        };
-        let (speed_label, jab_label) = split_speed_label(&entry.speed, entry.jab_speed.as_deref());
-        let speed_value = parse_leading_number(&speed_label);
-        let jab_speed_value = jab_label
-            .as_deref()
-            .map(parse_leading_number)
-            .filter(|value| *value > 0.0);
-        let reach_label = entry
-            .reach_or_range
-            .clone()
-            .unwrap_or_else(|| "-".to_string());
-        let reach_ft = parse_reach_ft(&reach_label);
-        let damage_expr = entry.damage.unwrap_or_else(|| "-".to_string());
-        let range_bands_feet = entry
-            .range_bands_feet
-            .as_deref()
-            .and_then(parse_range_bands_feet);
-        catalog.push(WeaponPreset {
-            name: entry.name,
-            group,
-            speed: speed_value,
-            speed_label,
-            jab_speed: jab_speed_value,
-            jab_speed_label: jab_label,
-            jab_special_expr: entry.jab_special.clone(),
-            damage_expr,
-            shield_damage_expr: entry.shield_damage.clone(),
-            reach_label,
-            reach_ft,
-            range_bands_feet,
-            armor_pen: entry.armor_penetration.unwrap_or(0),
-            defense_bonus_always: entry.defense_bonus_always.unwrap_or(false),
-            size,
-            handedness,
-            ammunition: entry.ammunition.clone(),
-        });
-    }
-    if catalog.is_empty() {
-        Err("No weapons loaded from JSON".to_string())
-    } else {
-        Ok(catalog)
-    }
-}
-
-fn load_armor_catalog(path: &str) -> Result<Vec<ArmorEntry>, String> {
-    let data = fs::read_to_string(path).unwrap_or_else(|_| EMBEDDED_ARMOR_JSON.to_string());
-    let parsed: ArmorFile = serde_json::from_str(&data).map_err(|err| err.to_string())?;
-    let mut catalog = Vec::new();
-    catalog.push(ArmorEntry {
-        label: "None".to_string(),
-        armor: None,
-    });
-    for entry in parsed.armor {
-        if entry.name == "None" {
-            continue;
-        }
-        let region = match armor_region_from_str(&entry.region) {
-            Some(region) => region,
-            None => continue,
-        };
-        let armor_type = match armor_type_from_str(&entry.armor_type) {
-            Some(kind) => kind,
-            None => continue,
-        };
-        let label = format!("{} ({})", entry.name, entry.region);
-        let armor = Armor {
-            name: leak_str(entry.name),
-            region,
-            damage_reduction: entry.damage_reduction,
-            defense_adj: entry.defense_adjustment,
-            initiative_mod: entry.initiative_modifier,
-            speed_mod: entry.speed_modifier,
-            armor_type,
-            weight_lbs: entry.weight_lbs.unwrap_or(0.0),
-        };
-        catalog.push(ArmorEntry {
-            label,
-            armor: Some(armor),
-        });
-    }
-    Ok(catalog)
-}
-
-fn load_shield_catalog(path: &str) -> Result<Vec<ShieldEntry>, String> {
-    let data = fs::read_to_string(path).unwrap_or_else(|_| EMBEDDED_WEAPONS_JSON.to_string());
-    let parsed: WeaponsFile = serde_json::from_str(&data).map_err(|err| err.to_string())?;
-    let mut catalog = Vec::new();
-    catalog.push(ShieldEntry {
-        label: "None".to_string(),
-        shield: None,
-    });
-    for entry in parsed.shields {
-        let defense_bonus = parse_shield_defense_bonus(&entry.defense);
-        let dr = parse_leading_number(&entry.damage_reduction) as i32;
-        let cover_value = parse_cover_value(&entry.cover_value);
-        let breakage_thresholds = parse_breakage_thresholds(&entry.breakage_thresholds)
-            .map_err(|err| format!("shield {}: {err}", entry.name))?;
-        let shield = ShieldPreset {
-            name: entry.name.clone(),
-            defense_bonus,
-            dr,
-            cover_value,
-            breakage_thresholds,
-            weight_lbs: entry.weight_lbs,
-        };
-        catalog.push(ShieldEntry {
-            label: entry.name,
-            shield: Some(shield),
-        });
-    }
-    Ok(catalog)
-}
-
-fn load_materials(path: &str) -> Result<MaterialsFile, String> {
-    let data = fs::read_to_string(path).unwrap_or_else(|_| EMBEDDED_MATERIALS_JSON.to_string());
-    serde_json::from_str(&data).map_err(|err| err.to_string())
-}
-
-fn split_speed_label(speed: &str, jab_speed: Option<&str>) -> (String, Option<String>) {
-    if let Some(jab) = jab_speed {
-        return (speed.trim().to_string(), Some(jab.trim().to_string()));
-    }
-    let open = speed.find('(');
-    let close = speed.find(')');
-    if let (Some(open), Some(close)) = (open, close) {
-        if open < close {
-            let base = speed[..open].trim();
-            let jab = speed[open + 1..close].trim();
-            if !jab.is_empty() {
-                return (base.to_string(), Some(jab.to_string()));
-            }
-        }
-    }
-    (speed.trim().to_string(), None)
-}
-
-fn weapon_group_from_str(group: &str) -> Option<WeaponGroup> {
-    match group {
-        "Unarmed" => Some(WeaponGroup::Unarmed),
-        "Axes" => Some(WeaponGroup::Axes),
-        "Basic" => Some(WeaponGroup::Basic),
-        "Blunt" => Some(WeaponGroup::Blunt),
-        "Bows" => Some(WeaponGroup::Bows),
-        "Crossbows" => Some(WeaponGroup::Crossbows),
-        "Double" => Some(WeaponGroup::Double),
-        "Ensnaring" => Some(WeaponGroup::Ensnaring),
-        "Lashes" => Some(WeaponGroup::Lashes),
-        "Large Swords" => Some(WeaponGroup::LargeSwords),
-        "Small Swords" => Some(WeaponGroup::SmallSwords),
-        "Polearms" => Some(WeaponGroup::Polearms),
-        "Spears" => Some(WeaponGroup::Spears),
-        "Shields" => Some(WeaponGroup::Shields),
-        _ => None,
-    }
-}
-
-fn armor_region_from_str(region: &str) -> Option<crate::character::ArmorRegion> {
-    match region {
-        "Northern" => Some(crate::character::ArmorRegion::Northern),
-        "Southern" => Some(crate::character::ArmorRegion::Southern),
-        _ => None,
-    }
-}
-
-fn armor_type_from_str(kind: &str) -> Option<crate::character::ArmorType> {
-    match kind {
-        "None" => Some(crate::character::ArmorType::None),
-        "Light" => Some(crate::character::ArmorType::Light),
-        "Medium" => Some(crate::character::ArmorType::Medium),
-        "Heavy" => Some(crate::character::ArmorType::Heavy),
-        _ => None,
-    }
-}
-
-fn weapon_size_from_str(size: &str) -> Option<WeaponSize> {
-    match size {
-        "S" => Some(WeaponSize::Small),
-        "M" => Some(WeaponSize::Medium),
-        "L" => Some(WeaponSize::Large),
-        _ => None,
-    }
-}
-
-fn weapon_handedness_from_str(handedness: &str) -> Option<WeaponHandedness> {
-    match handedness {
-        "1h" => Some(WeaponHandedness::OneHanded),
-        "2h" => Some(WeaponHandedness::TwoHanded),
-        _ => None,
-    }
-}
-
-fn parse_leading_number(value: &str) -> f32 {
-    let mut started = false;
-    let mut buf = String::new();
-    for ch in value.chars() {
-        if ch.is_ascii_digit() || (ch == '.' && started) {
-            started = true;
-            buf.push(ch);
-        } else if started {
-            break;
-        }
-    }
-    buf.parse::<f32>().unwrap_or(0.0)
-}
-
-fn parse_shield_defense_bonus(value: &str) -> i32 {
-    if let Some(idx) = value.rfind('+') {
-        return value[idx + 1..].trim().parse::<i32>().unwrap_or(0);
-    }
-    if let Some(idx) = value.rfind('-') {
-        return value[idx..].trim().parse::<i32>().unwrap_or(0);
-    }
-    0
-}
-
-fn parse_cover_value(value: &str) -> i32 {
-    parse_leading_number(value) as i32
-}
-
-fn parse_breakage_thresholds(values: &[i32]) -> Result<[i32; 4], String> {
-    if values.len() != 4 {
-        return Err(format!(
-            "expected 4 breakage thresholds, got {}",
-            values.len()
-        ));
-    }
-    Ok([values[0], values[1], values[2], values[3]])
-}
-
-fn parse_reach_ft(value: &str) -> f32 {
-    if value.contains('/') {
-        return 0.0;
-    }
-    parse_leading_number(value)
-}
-
-fn parse_range_bands_feet(values: &[f32]) -> Option<[f32; 4]> {
-    if values.len() != 4 {
-        return None;
-    }
-    Some([values[0], values[1], values[2], values[3]])
-}
 
 fn leak_str(value: String) -> &'static str {
     Box::leak(value.into_boxed_str())
@@ -1658,10 +1347,9 @@ pub fn threshold_of_pain(max_hp: i32, level: u8) -> i32 {
 mod tests {
     use super::*;
     use crate::character;
-    use eframe::egui::Color32;
 
-    fn sample_catalogs() -> (Vec<WeaponPreset>, Vec<ArmorEntry>, Vec<ShieldEntry>) {
-        load_catalogs().unwrap_or_else(|_| {
+    fn sample_catalogs() -> (WeaponCatalog, ArmorCatalog, ShieldCatalog) {
+        crate::data::load_catalogs().unwrap_or_else(|_| {
             (
                 default_weapon_catalog(),
                 default_armor_catalog(),
@@ -1670,11 +1358,13 @@ mod tests {
         })
     }
 
-    fn one_handed_weapon_index(weapons: &[WeaponPreset]) -> usize {
+    fn one_handed_weapon_id(weapons: &WeaponCatalog) -> WeaponId {
         weapons
+            .entries()
             .iter()
             .position(|weapon| weapon.handedness == WeaponHandedness::OneHanded)
-            .unwrap_or(0)
+            .and_then(|idx| weapons.id_from_index(idx))
+            .unwrap_or(WeaponId::new(0))
     }
 
     #[test]
@@ -1723,8 +1413,8 @@ mod tests {
     #[test]
     fn mastery_attack_bonus_applies_to_roll() {
         let (weapons, armor, shields) = sample_catalogs();
-        let mut player = PlayerConfig::new("Test", Color32::from_rgb(0, 0, 0), 0);
-        player.weapon_index = one_handed_weapon_index(&weapons);
+        let mut player = PlayerConfig::new("Test", WeaponId::new(0));
+        player.weapon_id = one_handed_weapon_id(&weapons);
         player.mastery_attack = 3;
         let summary = player_summary(&player, &weapons, &armor, &shields);
         let mut baseline = player.clone();
@@ -1739,8 +1429,8 @@ mod tests {
     #[test]
     fn mastery_damage_applies_to_roll() {
         let (weapons, armor, shields) = sample_catalogs();
-        let mut player = PlayerConfig::new("Test", Color32::from_rgb(0, 0, 0), 0);
-        player.weapon_index = one_handed_weapon_index(&weapons);
+        let mut player = PlayerConfig::new("Test", WeaponId::new(0));
+        player.weapon_id = one_handed_weapon_id(&weapons);
         player.mastery_damage = 4;
         let summary = player_summary(&player, &weapons, &armor, &shields);
         let mut baseline = player.clone();
@@ -1755,15 +1445,16 @@ mod tests {
     #[test]
     fn mastery_defense_applies_without_shield() {
         let (weapons, armor, shields) = sample_catalogs();
-        let mut player = PlayerConfig::new("Test", Color32::from_rgb(0, 0, 0), 0);
-        player.weapon_index = one_handed_weapon_index(&weapons);
+        let mut player = PlayerConfig::new("Test", WeaponId::new(0));
+        player.weapon_id = one_handed_weapon_id(&weapons);
         player.mastery_defense = 2;
+        let npc_presets = Catalog::new(Vec::new());
         let combatant =
-            build_combatant(&player, &weapons, &armor, &shields, &[]);
+            build_combatant(&player, &weapons, &armor, &shields, &npc_presets);
         let mut baseline = player.clone();
         baseline.mastery_defense = 0;
         let baseline_combatant =
-            build_combatant(&baseline, &weapons, &armor, &shields, &[]);
+            build_combatant(&baseline, &weapons, &armor, &shields, &npc_presets);
         assert_eq!(
             combatant.sheet.defense.defense_mod - baseline_combatant.sheet.defense.defense_mod,
             2
@@ -1773,15 +1464,16 @@ mod tests {
     #[test]
     fn mastery_speed_reduces_weapon_speed() {
         let (weapons, armor, shields) = sample_catalogs();
-        let mut player = PlayerConfig::new("Test", Color32::from_rgb(0, 0, 0), 0);
-        player.weapon_index = one_handed_weapon_index(&weapons);
+        let mut player = PlayerConfig::new("Test", WeaponId::new(0));
+        player.weapon_id = one_handed_weapon_id(&weapons);
         player.mastery_speed = 3;
+        let npc_presets = Catalog::new(Vec::new());
         let combatant =
-            build_combatant(&player, &weapons, &armor, &shields, &[]);
+            build_combatant(&player, &weapons, &armor, &shields, &npc_presets);
         let mut baseline = player.clone();
         baseline.mastery_speed = 0;
         let baseline_combatant =
-            build_combatant(&baseline, &weapons, &armor, &shields, &[]);
+            build_combatant(&baseline, &weapons, &armor, &shields, &npc_presets);
         assert_eq!(
             baseline_combatant.sheet.offense.weapon.speed - combatant.sheet.offense.weapon.speed,
             3.0
@@ -1791,36 +1483,45 @@ mod tests {
     #[test]
     fn shield_mastery_defense_overrides_weapon_mastery() {
         let (weapons, _armor, _shields) = sample_catalogs();
-        let mut player = PlayerConfig::new("Test", Color32::from_rgb(0, 0, 0), 0);
-        player.weapon_index = one_handed_weapon_index(&weapons);
+        let mut player = PlayerConfig::new("Test", WeaponId::new(0));
+        player.weapon_id = one_handed_weapon_id(&weapons);
         player.mastery_defense = 5;
         player.shield_mastery_defense = 1;
-        player.shield_index = 1;
-        let mastery = effective_defense_mastery(&player, &weapons[player.weapon_index]);
+        player.shield_id = ShieldId::new(1);
+        let weapon = weapons
+            .get(player.weapon_id)
+            .unwrap_or_else(|| weapons.entries().first().expect("weapon catalog empty"));
+        let mastery = effective_defense_mastery(&player, weapon);
         assert_eq!(mastery, 1);
     }
 
     #[test]
     fn shield_mastery_speed_uses_lower_when_shielded() {
         let (weapons, _armor, _shields) = sample_catalogs();
-        let mut player = PlayerConfig::new("Test", Color32::from_rgb(0, 0, 0), 0);
-        player.weapon_index = one_handed_weapon_index(&weapons);
+        let mut player = PlayerConfig::new("Test", WeaponId::new(0));
+        player.weapon_id = one_handed_weapon_id(&weapons);
         player.mastery_speed = 5;
         player.shield_mastery_speed = 2;
-        player.shield_index = 1;
-        let mastery = effective_speed_mastery(&player, &weapons[player.weapon_index]);
+        player.shield_id = ShieldId::new(1);
+        let weapon = weapons
+            .get(player.weapon_id)
+            .unwrap_or_else(|| weapons.entries().first().expect("weapon catalog empty"));
+        let mastery = effective_speed_mastery(&player, weapon);
         assert_eq!(mastery, 2);
     }
 
     #[test]
     fn shield_mastery_speed_ignored_without_shield() {
         let (weapons, _armor, _shields) = sample_catalogs();
-        let mut player = PlayerConfig::new("Test", Color32::from_rgb(0, 0, 0), 0);
-        player.weapon_index = one_handed_weapon_index(&weapons);
+        let mut player = PlayerConfig::new("Test", WeaponId::new(0));
+        player.weapon_id = one_handed_weapon_id(&weapons);
         player.mastery_speed = 4;
         player.shield_mastery_speed = 1;
-        player.shield_index = 0;
-        let mastery = effective_speed_mastery(&player, &weapons[player.weapon_index]);
+        player.shield_id = ShieldId::new(0);
+        let weapon = weapons
+            .get(player.weapon_id)
+            .unwrap_or_else(|| weapons.entries().first().expect("weapon catalog empty"));
+        let mastery = effective_speed_mastery(&player, weapon);
         assert_eq!(mastery, 4);
     }
 }

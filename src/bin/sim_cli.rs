@@ -1,11 +1,4 @@
-#[path = "../character.rs"]
-mod character;
-#[path = "../sim.rs"]
-mod sim;
-#[path = "../game_logic.rs"]
-#[allow(dead_code)]
-mod game_logic;
-
+use hackmaster_sim::{character, data, game_logic, sim};
 use character::{
     AbilityScore, AbilitySet, ArmorRegion, Character, Equipment, MaterialKind, Progression,
     ProgressionTier, Weapon, WeaponGroup, WeaponMastery,
@@ -96,11 +89,14 @@ fn main() {
     );
     println!("Load category: {}", derived.load_category);
 
-    let weapon_catalog = game_logic::load_catalogs()
+    let weapon_catalog = data::load_catalogs()
         .ok()
         .map(|(weapons, _, _)| weapons)
         .unwrap_or_else(game_logic::default_weapon_catalog);
-    let weapon_preset = weapon_catalog.iter().find(|preset| preset.name == weapon.name);
+    let weapon_preset = weapon_catalog
+        .entries()
+        .iter()
+        .find(|preset| preset.name == weapon.name);
     let strength_damage = weapon_preset
         .map(|preset| {
             game_logic::strength_damage_for_weapon(preset, character.ability_mods.strength.damage)
@@ -199,6 +195,7 @@ fn main() {
     let combatant = Combatant::new(sheet);
     sim.reset_with_combatants([combatant.clone(), combatant]);
     println!("--- Simulation (1s ticks) ---");
+    let mut printed_events = 0usize;
     while !sim.done {
         sim.update(1.0);
         println!(
@@ -206,8 +203,14 @@ fn main() {
             sim.elapsed_seconds,
             sim.distance()
         );
-        if let Some(event) = &sim.last_event {
-            println!("{event}");
+        if printed_events < sim.combat_events.len() {
+            for event in &sim.combat_events[printed_events..] {
+                println!(
+                    "{}",
+                    sim::format_combat_event_line(event, &sim.combatants)
+                );
+            }
+            printed_events = sim.combat_events.len();
         }
         if sim.elapsed_seconds > 120 {
             println!("Stopping after 120s (safety cutoff).");

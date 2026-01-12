@@ -1,16 +1,13 @@
-#[path = "../character.rs"]
-mod character;
-#[path = "../sim.rs"]
-mod sim;
-#[path = "../game_logic.rs"]
-mod game_logic;
-
+use hackmaster_sim::{character, data, game_logic, sim};
 use character::{Progression, ProgressionTier, WeaponGroup};
 use eframe::egui::{self, Color32, Pos2, Rect};
-use sim::{SimConfig, SimState};
+use hackmaster_sim::core::catalog::Catalog;
+use sim::{bulk_simulate, BulkSimResult, SimConfig, SimState};
+use std::time::Instant;
 use game_logic::{
-    ArmorEntry, FighterMasteries, FighterPreset, FighterProgression, NpcPreset, PlayerConfig,
-    ShieldEntry, WeaponHandedness, WeaponPreset, WeaponSize,
+    ArmorCatalog, ArmorEntry, ArmorId, FighterMasteries, FighterPreset, FighterPresetCatalog,
+    FighterProgression, NpcPresetCatalog, PlayerConfig, ShieldCatalog, ShieldEntry, ShieldId,
+    WeaponCatalog, WeaponHandedness, WeaponId, WeaponSize,
 };
 
 #[derive(Clone, Copy)]
@@ -33,25 +30,30 @@ enum WeaponIcon {
 }
 
 const FIGHTER_PRESETS_PATH: &str = "data/fighter_presets.json";
+const BULK_SIM_MAX_SECONDS: u32 = u32::MAX;
 
 struct SimGuiApp {
     running: bool,
     sim: SimState,
     players: [PlayerConfig; 2],
-    weapon_catalog: Vec<WeaponPreset>,
-    armor_catalog: Vec<ArmorEntry>,
-    shield_catalog: Vec<ShieldEntry>,
-    npc_presets: Vec<NpcPreset>,
-    fighter_presets: Vec<FighterPreset>,
+    player_colors: [Color32; 2],
+    weapon_catalog: WeaponCatalog,
+    armor_catalog: ArmorCatalog,
+    shield_catalog: ShieldCatalog,
+    npc_presets: NpcPresetCatalog,
+    fighter_presets: FighterPresetCatalog,
     fighter_preset_names: [String; 2],
     time_scale: f32,
     show_player_editor: [bool; 2],
     last_screen_size: egui::Vec2,
+    bulk_runs: u32,
+    bulk_result: Option<BulkSimResult>,
+    bulk_sim_duration: Option<std::time::Duration>,
 }
 
 impl SimGuiApp {
     fn new() -> Self {
-        let (weapon_catalog, armor_catalog, shield_catalog) = match game_logic::load_catalogs() {
+        let (weapon_catalog, armor_catalog, shield_catalog) = match data::load_catalogs() {
             Ok((weapons, armors, shields)) => (weapons, armors, shields),
             Err(err) => {
                 eprintln!("Failed to load JSON catalogs: {err}");
@@ -62,27 +64,39 @@ impl SimGuiApp {
                 )
             }
         };
-        let npc_presets = match game_logic::load_npc_presets("data/npc_presets.json") {
+        let npc_presets = match data::load_npc_presets("data/npc_presets.json") {
             Ok(presets) => presets,
             Err(err) => {
                 eprintln!("Failed to load NPC presets: {err}");
-                Vec::new()
+                Catalog::new(Vec::new())
             }
         };
-        let fighter_presets = match game_logic::load_fighter_presets(FIGHTER_PRESETS_PATH) {
+        let fighter_presets = match data::load_fighter_presets(FIGHTER_PRESETS_PATH) {
             Ok(presets) => presets,
             Err(err) => {
                 eprintln!("Failed to load fighter presets: {err}");
-                Vec::new()
+                Catalog::new(Vec::new())
             }
         };
         let sim = SimState::new(SimConfig::new(200.0, 1.0));
+        let weapon_a = weapon_catalog
+            .id_from_index(1)
+            .or_else(|| weapon_catalog.first_id())
+            .unwrap_or(WeaponId::new(0));
+        let weapon_b = weapon_catalog
+            .id_from_index(2)
+            .or_else(|| weapon_catalog.first_id())
+            .unwrap_or(WeaponId::new(0));
         let mut app = Self {
             running: false,
             sim,
             players: [
-                PlayerConfig::new("Fighter A", Color32::from_rgb(214, 93, 69), 1),
-                PlayerConfig::new("Fighter B", Color32::from_rgb(70, 140, 210), 2),
+                PlayerConfig::new("Fighter A", weapon_a),
+                PlayerConfig::new("Fighter B", weapon_b),
+            ],
+            player_colors: [
+                Color32::from_rgb(214, 93, 69),
+                Color32::from_rgb(70, 140, 210),
             ],
             weapon_catalog,
             armor_catalog,
@@ -93,6 +107,9 @@ impl SimGuiApp {
             time_scale: 1.0,
             show_player_editor: [false, false],
             last_screen_size: egui::vec2(0.0, 0.0),
+            bulk_runs: 1000,
+            bulk_result: None,
+            bulk_sim_duration: None,
         };
         app.reset_positions();
         app
@@ -107,6 +124,26 @@ impl SimGuiApp {
             &self.npc_presets,
         );
         self.sim.reset_with_combatants(combatants);
+    }
+
+    fn run_bulk_sim(&mut self) {
+        let combatants = game_logic::build_combatants(
+            &self.players,
+            &self.weapon_catalog,
+            &self.armor_catalog,
+            &self.shield_catalog,
+            &self.npc_presets,
+        );
+        let config = SimConfig::new(self.sim.config.start_distance, self.sim.config.stop_distance);
+        let start = Instant::now();
+        let result = bulk_simulate(
+            config,
+            combatants,
+            self.bulk_runs,
+            BULK_SIM_MAX_SECONDS,
+        );
+        self.bulk_result = Some(result);
+        self.bulk_sim_duration = Some(start.elapsed());
     }
 
     fn update_sim(&mut self, dt: f32) {
@@ -164,19 +201,20 @@ impl SimGuiApp {
         for (idx, x, facing) in fighter_positions {
             let combatant = &self.sim.combatants[idx];
             let player = &self.players[idx];
+            let player_color = self.player_colors[idx];
             let knocked_back = combatant.state.knockback_immobile_seconds > 0;
             let downed =
                 combatant.state.hp <= 0 || combatant.state.trauma_remaining_seconds > 0;
             let weapon_icon = self
                 .weapon_catalog
-                .get(player.weapon_index)
+                .get(player.weapon_id)
                 .map(|weapon| weapon_icon_kind(weapon.group))
                 .unwrap_or(WeaponIcon::Other);
             self.draw_person(
                 painter,
                 Pos2::new(x, ground_y),
                 facing,
-                player.color,
+                player_color,
                 downed,
                 knocked_back,
                 weapon_icon,
@@ -204,6 +242,7 @@ impl SimGuiApp {
         let bar_width = (total_width - gap).max(1.0) * 0.5;
 
         for (idx, player) in self.players.iter().enumerate() {
+            let player_color = self.player_colors[idx];
             let hp = self.sim.combatants[idx].state.hp.max(0) as f32;
             let max_hp = self.sim.combatants[idx].sheet.vitals.max_hp.max(1) as f32;
             let hp_ratio = (hp / max_hp).clamp(0.0, 1.0);
@@ -220,7 +259,7 @@ impl SimGuiApp {
                 Pos2::new(fill_x, y),
                 egui::vec2(fill_width, bar_height),
             );
-            painter.rect_filled(fill_rect, 3.0, player.color);
+            painter.rect_filled(fill_rect, 3.0, player_color);
             let name_x = if idx == 0 { bar_x } else { bar_x + bar_width };
             let align = if idx == 0 {
                 egui::Align2::LEFT_CENTER
@@ -261,12 +300,13 @@ impl SimGuiApp {
             );
         }
 
-        for (idx, player) in self.players.iter().enumerate() {
+        for (idx, _) in self.players.iter().enumerate() {
+            let player_color = self.player_colors[idx];
             if let Some(next) = self.sim.combatants[idx].state.next_attack_time {
                 let t = (next - now).max(0.0).min(horizon);
                 let x = left + t * scale;
                 let pos = Pos2::new(x, y - 14.0);
-                painter.circle_filled(pos, 6.0, player.color);
+                painter.circle_filled(pos, 6.0, player_color);
             }
         }
     }
@@ -596,7 +636,7 @@ impl eframe::App for SimGuiApp {
                 for idx in 0..self.players.len() {
                     let weapon_name = self
                         .weapon_catalog
-                        .get(self.players[idx].weapon_index)
+                        .get(self.players[idx].weapon_id)
                         .map(|weapon| weapon.name.as_str())
                         .unwrap_or("Unarmed");
                     ui.horizontal(|ui| {
@@ -614,6 +654,37 @@ impl eframe::App for SimGuiApp {
                     ));
                     if idx == 0 {
                         ui.separator();
+                    }
+                }
+                ui.separator();
+                ui.heading("Bulk sim");
+                ui.horizontal(|ui| {
+                    ui.label("Runs");
+                    ui.add(
+                        egui::DragValue::new(&mut self.bulk_runs)
+                            .range(1..=u32::MAX)
+                            .speed(100.0),
+                    );
+                });
+                if ui.button("Run bulk").clicked() {
+                    self.running = false;
+                    self.run_bulk_sim();
+                }
+                if let Some(result) = &self.bulk_result {
+                    ui.label(format!(
+                        "{} wins: {}",
+                        self.players[0].name, result.wins[0]
+                    ));
+                    ui.label(format!(
+                        "{} wins: {}",
+                        self.players[1].name, result.wins[1]
+                    ));
+                    if result.ties > 0 {
+                        ui.label(format!("Ties/timeouts: {}", result.ties));
+                    }
+                    ui.label(format!("Avg duration: {:.1}s", result.avg_duration));
+                    if let Some(duration) = self.bulk_sim_duration {
+                        ui.label(format!("Sim time: {:.2}s", duration.as_secs_f64()));
                     }
                 }
             });
@@ -645,7 +716,7 @@ impl eframe::App for SimGuiApp {
                 ));
                 if let Some(event) = &self.sim.last_event {
                     ui.separator();
-                    ui.label(event);
+                    ui.label(sim::format_combat_event_line(event, &self.sim.combatants));
                 }
                 ui.label(if self.sim.done {
                     "State: Done"
@@ -658,20 +729,26 @@ impl eframe::App for SimGuiApp {
                 ui.label(format!(
                     "{}: {}",
                     self.players[0].name,
-                    self.weapon_catalog[self.players[0].weapon_index].name
+                    self.weapon_catalog
+                        .get(self.players[0].weapon_id)
+                        .map(|weapon| weapon.name.as_str())
+                        .unwrap_or("Unarmed")
                 ));
                 ui.label(format!(
                     "{}: {}",
                     self.players[1].name,
-                    self.weapon_catalog[self.players[1].weapon_index].name
+                    self.weapon_catalog
+                        .get(self.players[1].weapon_id)
+                        .map(|weapon| weapon.name.as_str())
+                        .unwrap_or("Unarmed")
                 ));
                 ui.separator();
                 ui.label("Combat log");
                 egui::ScrollArea::vertical()
                     .max_height(180.0)
                     .show(ui, |ui| {
-                        for line in &self.sim.combat_log {
-                            ui.label(line);
+                        for event in &self.sim.combat_events {
+                            ui.label(sim::format_combat_event_line(event, &self.sim.combatants));
                         }
                     });
             });
@@ -704,6 +781,7 @@ impl eframe::App for SimGuiApp {
                         ui,
                         id_prefix,
                         player,
+                        &mut self.player_colors[idx],
                         opponent,
                         &self.weapon_catalog,
                         &self.armor_catalog,
@@ -726,49 +804,51 @@ fn render_player_editor(
     ui: &mut egui::Ui,
     id_prefix: &str,
     player: &mut PlayerConfig,
+    player_color: &mut Color32,
     opponent: &PlayerConfig,
-    weapon_catalog: &[WeaponPreset],
-    armor_catalog: &[ArmorEntry],
-    shield_catalog: &[ShieldEntry],
-    npc_presets: &[NpcPreset],
-    fighter_presets: &mut Vec<FighterPreset>,
+    weapon_catalog: &WeaponCatalog,
+    armor_catalog: &ArmorCatalog,
+    shield_catalog: &ShieldCatalog,
+    npc_presets: &NpcPresetCatalog,
+    fighter_presets: &mut FighterPresetCatalog,
     fighter_preset_name: &mut String,
 ) {
     if weapon_catalog.is_empty() {
         ui.label("Weapon catalog is empty.");
         return;
     }
-    player.weapon_index = player.weapon_index.min(weapon_catalog.len() - 1);
-    player.armor_index = player.armor_index.min(armor_catalog.len().saturating_sub(1));
-    player.shield_index = player.shield_index.min(shield_catalog.len().saturating_sub(1));
+    game_logic::sanitize_player_ids(player, weapon_catalog, armor_catalog, shield_catalog);
 
     if !fighter_presets.is_empty() {
         ui.horizontal(|ui| {
             ui.label("Fighter preset");
-            let mut selection = player.fighter_preset.map_or(usize::MAX, |idx| idx);
+            let mut selection = player
+                .fighter_preset
+                .map(|id| fighter_presets.index_of(id))
+                .unwrap_or(usize::MAX);
             egui::ComboBox::from_id_source(format!("{id_prefix}_fighter_preset"))
                 .selected_text(
                     player
                         .fighter_preset
-                        .and_then(|idx| fighter_presets.get(idx))
+                        .and_then(|id| fighter_presets.get(id))
                         .map(|preset| preset.name.as_str())
                         .unwrap_or("None"),
                 )
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut selection, usize::MAX, "None");
-                    for (idx, preset) in fighter_presets.iter().enumerate() {
+                    for (idx, preset) in fighter_presets.entries().iter().enumerate() {
                         ui.selectable_value(&mut selection, idx, preset.name.as_str());
                     }
                 });
             let selection = if selection == usize::MAX {
                 None
             } else {
-                Some(selection)
+                fighter_presets.id_from_index(selection)
             };
             if selection != player.fighter_preset {
                 player.fighter_preset = selection;
-                if let Some(idx) = selection {
-                    if let Some(preset) = fighter_presets.get(idx) {
+                if let Some(id) = selection {
+                    if let Some(preset) = fighter_presets.get(id) {
                         apply_fighter_preset(
                             player,
                             preset,
@@ -802,17 +882,20 @@ fn render_player_editor(
                         name,
                     );
                     if let Some(existing) = fighter_presets
+                        .entries()
                         .iter()
                         .position(|entry| entry.name.eq_ignore_ascii_case(name))
                     {
-                        fighter_presets[existing] = preset;
-                        player.fighter_preset = Some(existing);
+                        if let Some(id) = fighter_presets.id_from_index(existing) {
+                            fighter_presets.replace(id, preset);
+                            player.fighter_preset = Some(id);
+                        }
                     } else {
-                        player.fighter_preset = Some(fighter_presets.len());
-                        fighter_presets.push(preset);
+                        let id = fighter_presets.push(preset);
+                        player.fighter_preset = Some(id);
                     }
                     if let Err(err) =
-                        game_logic::save_fighter_presets(FIGHTER_PRESETS_PATH, fighter_presets)
+                        data::save_fighter_presets(FIGHTER_PRESETS_PATH, fighter_presets)
                     {
                         eprintln!("Failed to save fighter presets: {err}");
                     }
@@ -827,25 +910,28 @@ fn render_player_editor(
     if !npc_presets.is_empty() {
         ui.horizontal(|ui| {
             ui.label("NPC preset");
-            let mut selection = player.npc_preset.map_or(usize::MAX, |idx| idx);
+            let mut selection = player
+                .npc_preset
+                .map(|id| npc_presets.index_of(id))
+                .unwrap_or(usize::MAX);
             egui::ComboBox::from_id_source(format!("{id_prefix}_npc_preset"))
-                .selected_text(match player.npc_preset.and_then(|idx| npc_presets.get(idx)) {
+                .selected_text(match player.npc_preset.and_then(|id| npc_presets.get(id)) {
                     Some(preset) => preset.name.as_str(),
                     None => "None",
                 })
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut selection, usize::MAX, "None");
-                    for (idx, preset) in npc_presets.iter().enumerate() {
+                    for (idx, preset) in npc_presets.entries().iter().enumerate() {
                         ui.selectable_value(&mut selection, idx, preset.name.as_str());
                     }
                 });
             player.npc_preset = if selection == usize::MAX {
                 None
             } else {
-                Some(selection)
+                npc_presets.id_from_index(selection)
             };
         });
-        if let Some(preset) = player.npc_preset.and_then(|idx| npc_presets.get(idx)) {
+        if let Some(preset) = player.npc_preset.and_then(|id| npc_presets.get(id)) {
             player.name = preset.name.clone();
             ui.label(format!(
                 "Preset: HP {} | ATT {} | DEF {} | DR {} | DMG +{} | TOP {}",
@@ -875,7 +961,7 @@ fn render_player_editor(
     });
     ui.horizontal(|ui| {
         ui.label("Color");
-        ui.color_edit_button_srgba(&mut player.color);
+        ui.color_edit_button_srgba(player_color);
     });
     ui.horizontal(|ui| {
         ui.label("Move speed (ft/s)");
@@ -949,14 +1035,25 @@ fn render_player_editor(
     let mut uses_projectiles = false;
     ui.horizontal(|ui| {
         ui.label("Weapon");
+        let mut selection = weapon_catalog.index_of(player.weapon_id);
         egui::ComboBox::from_id_source(format!("{id_prefix}_weapon"))
-            .selected_text(weapon_catalog[player.weapon_index].name.as_str())
+            .selected_text(
+                weapon_catalog
+                    .get(player.weapon_id)
+                    .map(|weapon| weapon.name.as_str())
+                    .unwrap_or("Unknown"),
+            )
             .show_ui(ui, |ui| {
-                for (idx, weapon) in weapon_catalog.iter().enumerate() {
-                    ui.selectable_value(&mut player.weapon_index, idx, weapon.name.as_str());
+                for (idx, weapon) in weapon_catalog.entries().iter().enumerate() {
+                    ui.selectable_value(&mut selection, idx, weapon.name.as_str());
                 }
             });
-        let weapon = &weapon_catalog[player.weapon_index];
+        if let Some(id) = weapon_catalog.id_from_index(selection) {
+            player.weapon_id = id;
+        }
+        let weapon = weapon_catalog
+            .get(player.weapon_id)
+            .unwrap_or_else(|| weapon_catalog.entries().first().expect("weapon catalog empty"));
         game_logic::sanitize_projectile_tier(player, weapon);
         uses_projectiles = game_logic::weapon_uses_projectiles(weapon);
         material_tier_combo(
@@ -975,13 +1072,15 @@ fn render_player_editor(
         }
     });
 
-    let weapon = &weapon_catalog[player.weapon_index];
-    let shield_bonus = if player.shield_index > 0
+    let weapon = weapon_catalog
+        .get(player.weapon_id)
+        .unwrap_or_else(|| weapon_catalog.entries().first().expect("weapon catalog empty"));
+    let shield_bonus = if player.shield_id.index() > 0
         && weapon.handedness == WeaponHandedness::OneHanded
         && !player.two_hand_grip
     {
         shield_catalog
-            .get(player.shield_index)
+            .get(player.shield_id)
             .and_then(|entry| entry.shield.as_ref())
             .map(|shield| shield.defense_bonus + player.shield_material_tier.clamp(0, 5))
     } else {
@@ -1042,13 +1141,17 @@ fn render_player_editor(
     ui.add_enabled_ui(!npc_active, |ui| {
         ui.horizontal(|ui| {
             ui.label("Armor");
+            let mut selection = armor_catalog.index_of(player.armor_id);
             egui::ComboBox::from_id_source(format!("{id_prefix}_armor"))
-                .selected_text(armor_display_name(armor_catalog.get(player.armor_index)))
+                .selected_text(armor_display_name(armor_catalog.get(player.armor_id)))
                 .show_ui(ui, |ui| {
-                    for (idx, armor) in armor_catalog.iter().enumerate() {
-                        ui.selectable_value(&mut player.armor_index, idx, armor.label.clone());
+                    for (idx, armor) in armor_catalog.entries().iter().enumerate() {
+                        ui.selectable_value(&mut selection, idx, armor.label.clone());
                     }
                 });
+            if let Some(id) = armor_catalog.id_from_index(selection) {
+                player.armor_id = id;
+            }
             material_tier_combo(
                 ui,
                 format!("{id_prefix}_armor_material"),
@@ -1061,22 +1164,26 @@ fn render_player_editor(
             let can_use_shield =
                 weapon.handedness == WeaponHandedness::OneHanded && !player.two_hand_grip;
             if !can_use_shield {
-                player.shield_index = 0;
+                player.shield_id = ShieldId::new(0);
                 player.shield_material_tier = 0;
             }
             ui.add_enabled_ui(can_use_shield, |ui| {
+                let mut selection = shield_catalog.index_of(player.shield_id);
                 egui::ComboBox::from_id_source(format!("{id_prefix}_shield"))
-                    .selected_text(shield_display_name(shield_catalog.get(player.shield_index)))
+                    .selected_text(shield_display_name(shield_catalog.get(player.shield_id)))
                     .show_ui(ui, |ui| {
-                        for (idx, shield) in shield_catalog.iter().enumerate() {
-                            ui.selectable_value(&mut player.shield_index, idx, shield.label.clone());
+                        for (idx, shield) in shield_catalog.entries().iter().enumerate() {
+                            ui.selectable_value(&mut selection, idx, shield.label.clone());
                         }
                     });
+                if let Some(id) = shield_catalog.id_from_index(selection) {
+                    player.shield_id = id;
+                }
             });
             if !can_use_shield {
                 ui.label("Unavailable");
             }
-            let shield_enabled = can_use_shield && player.shield_index > 0;
+            let shield_enabled = can_use_shield && player.shield_id.index() > 0;
             ui.add_enabled_ui(shield_enabled, |ui| {
                 material_tier_combo(
                     ui,
@@ -1110,7 +1217,7 @@ fn render_player_editor(
         ability_slider(ui, "CHA", &mut player.charisma);
 
         ui.separator();
-        let shield_active = player.shield_index > 0
+        let shield_active = player.shield_id.index() > 0
             && weapon.handedness == WeaponHandedness::OneHanded
             && !player.two_hand_grip;
         ui.horizontal(|ui| {
@@ -1195,7 +1302,7 @@ fn render_player_editor(
         }
         let target_dr = opponent
             .npc_preset
-            .and_then(|idx| npc_presets.get(idx))
+            .and_then(|id| npc_presets.get(id))
             .map(|preset| preset.armor_dr)
             .unwrap_or_else(|| {
                 game_logic::player_summary(
@@ -1218,9 +1325,9 @@ fn render_player_editor(
 fn apply_fighter_preset(
     player: &mut PlayerConfig,
     preset: &FighterPreset,
-    weapon_catalog: &[WeaponPreset],
-    armor_catalog: &[ArmorEntry],
-    shield_catalog: &[ShieldEntry],
+    weapon_catalog: &WeaponCatalog,
+    armor_catalog: &ArmorCatalog,
+    shield_catalog: &ShieldCatalog,
 ) {
     let attack = tier_from_label(&preset.progression.attack).unwrap_or(ProgressionTier::I);
     let speed = tier_from_label(&preset.progression.speed).unwrap_or(ProgressionTier::I);
@@ -1253,32 +1360,37 @@ fn apply_fighter_preset(
     player.two_hand_grip = preset.two_hand_grip;
     player.use_jab = preset.use_jab;
     player.hold_at_bay = preset.hold_at_bay;
-    player.weapon_index =
-        find_weapon_index_by_name(weapon_catalog, &preset.weapon).unwrap_or(0);
-    player.armor_index = find_armor_index_by_name(armor_catalog, &preset.armor).unwrap_or(0);
-    player.shield_index = find_shield_index_by_name(shield_catalog, &preset.shield).unwrap_or(0);
-    if let Some(weapon) = weapon_catalog.get(player.weapon_index) {
+    player.weapon_id = find_weapon_id_by_name(weapon_catalog, &preset.weapon)
+        .or_else(|| weapon_catalog.first_id())
+        .unwrap_or(WeaponId::new(0));
+    player.armor_id = find_armor_id_by_name(armor_catalog, &preset.armor)
+        .or_else(|| armor_catalog.first_id())
+        .unwrap_or(ArmorId::new(0));
+    player.shield_id = find_shield_id_by_name(shield_catalog, &preset.shield)
+        .or_else(|| shield_catalog.first_id())
+        .unwrap_or(ShieldId::new(0));
+    if let Some(weapon) = weapon_catalog.get(player.weapon_id) {
         game_logic::sanitize_projectile_tier(player, weapon);
     }
 }
 
 fn fighter_preset_from_player(
     player: &PlayerConfig,
-    weapon_catalog: &[WeaponPreset],
-    armor_catalog: &[ArmorEntry],
-    shield_catalog: &[ShieldEntry],
+    weapon_catalog: &WeaponCatalog,
+    armor_catalog: &ArmorCatalog,
+    shield_catalog: &ShieldCatalog,
     name: &str,
 ) -> FighterPreset {
     let weapon = weapon_catalog
-        .get(player.weapon_index)
+        .get(player.weapon_id)
         .map(|weapon| weapon.name.clone())
         .unwrap_or_else(|| "Fist".to_string());
     let armor = armor_catalog
-        .get(player.armor_index)
+        .get(player.armor_id)
         .and_then(|entry| entry.armor.as_ref().map(|armor| armor.name.to_string()))
         .unwrap_or_else(|| "None".to_string());
     let shield = shield_catalog
-        .get(player.shield_index)
+        .get(player.shield_id)
         .and_then(|entry| entry.shield.as_ref().map(|shield| shield.name.to_string()))
         .unwrap_or_else(|| "None".to_string());
     FighterPreset {
@@ -1334,36 +1446,46 @@ fn tier_from_label(label: &str) -> Option<ProgressionTier> {
     }
 }
 
-fn find_weapon_index_by_name(catalog: &[WeaponPreset], name: &str) -> Option<usize> {
+fn find_weapon_id_by_name(catalog: &WeaponCatalog, name: &str) -> Option<WeaponId> {
     catalog
+        .entries()
         .iter()
         .position(|weapon| weapon.name.eq_ignore_ascii_case(name))
+        .and_then(|idx| catalog.id_from_index(idx))
 }
 
-fn find_armor_index_by_name(catalog: &[ArmorEntry], name: &str) -> Option<usize> {
+fn find_armor_id_by_name(catalog: &ArmorCatalog, name: &str) -> Option<ArmorId> {
     if name.eq_ignore_ascii_case("None") {
-        return Some(0);
+        return catalog.first_id();
     }
-    catalog.iter().position(|entry| {
-        entry
-            .armor
-            .as_ref()
-            .map(|armor| armor.name.eq_ignore_ascii_case(name))
-            .unwrap_or(false)
-    })
+    catalog
+        .entries()
+        .iter()
+        .position(|entry| {
+            entry
+                .armor
+                .as_ref()
+                .map(|armor| armor.name.eq_ignore_ascii_case(name))
+                .unwrap_or(false)
+        })
+        .and_then(|idx| catalog.id_from_index(idx))
 }
 
-fn find_shield_index_by_name(catalog: &[ShieldEntry], name: &str) -> Option<usize> {
+fn find_shield_id_by_name(catalog: &ShieldCatalog, name: &str) -> Option<ShieldId> {
     if name.eq_ignore_ascii_case("None") {
-        return Some(0);
+        return catalog.first_id();
     }
-    catalog.iter().position(|entry| {
-        entry
-            .shield
-            .as_ref()
-            .map(|shield| shield.name.eq_ignore_ascii_case(name))
-            .unwrap_or(false)
-    })
+    catalog
+        .entries()
+        .iter()
+        .position(|entry| {
+            entry
+                .shield
+                .as_ref()
+                .map(|shield| shield.name.eq_ignore_ascii_case(name))
+                .unwrap_or(false)
+        })
+        .and_then(|idx| catalog.id_from_index(idx))
 }
 
 fn ability_percentile_editor(
