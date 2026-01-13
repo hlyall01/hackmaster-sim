@@ -991,45 +991,6 @@ const HEALTH_TABLE: [[f32; 5]; 20] = [
     [3.5, 4.0, 4.5, 5.0, 5.5],
 ];
 
-// --- Armor and materials ---
-
-pub const ARMOR: &[Armor] = &[
-    Armor { name: "Robe", region: ArmorRegion::Northern, damage_reduction: 1, defense_adj: -1, initiative_mod: 0, speed_mod: 0, armor_type: ArmorType::None, weight_lbs: 5.0 },
-    Armor { name: "Doublet", region: ArmorRegion::Northern, damage_reduction: 2, defense_adj: -3, initiative_mod: 1, speed_mod: 0, armor_type: ArmorType::Light, weight_lbs: 15.0 },
-    Armor { name: "Gambeson", region: ArmorRegion::Northern, damage_reduction: 2, defense_adj: -2, initiative_mod: 0, speed_mod: 0, armor_type: ArmorType::Light, weight_lbs: 15.0 },
-    Armor { name: "Chainshirt", region: ArmorRegion::Northern, damage_reduction: 3, defense_adj: -3, initiative_mod: 1, speed_mod: 0, armor_type: ArmorType::Medium, weight_lbs: 20.0 },
-    Armor { name: "Ringmail", region: ArmorRegion::Northern, damage_reduction: 4, defense_adj: -4, initiative_mod: 1, speed_mod: 1, armor_type: ArmorType::Medium, weight_lbs: 30.0 },
-    Armor { name: "Breastplate", region: ArmorRegion::Northern, damage_reduction: 5, defense_adj: -5, initiative_mod: 1, speed_mod: 2, armor_type: ArmorType::Medium, weight_lbs: 35.0 },
-    Armor { name: "Scalemail", region: ArmorRegion::Northern, damage_reduction: 5, defense_adj: -6, initiative_mod: 3, speed_mod: 2, armor_type: ArmorType::Heavy, weight_lbs: 60.0 },
-    Armor { name: "Chainmail", region: ArmorRegion::Northern, damage_reduction: 5, defense_adj: -5, initiative_mod: 2, speed_mod: 2, armor_type: ArmorType::Heavy, weight_lbs: 45.0 },
-    Armor { name: "Splintmail", region: ArmorRegion::Northern, damage_reduction: 6, defense_adj: -5, initiative_mod: 2, speed_mod: 2, armor_type: ArmorType::Heavy, weight_lbs: 55.0 },
-    Armor { name: "Brigandine", region: ArmorRegion::Northern, damage_reduction: 6, defense_adj: -4, initiative_mod: 2, speed_mod: 1, armor_type: ArmorType::Heavy, weight_lbs: 50.0 },
-    Armor { name: "Halfplate", region: ArmorRegion::Northern, damage_reduction: 7, defense_adj: -5, initiative_mod: 2, speed_mod: 2, armor_type: ArmorType::Heavy, weight_lbs: 40.0 },
-    Armor { name: "Platemail", region: ArmorRegion::Northern, damage_reduction: 8, defense_adj: -5, initiative_mod: 3, speed_mod: 2, armor_type: ArmorType::Heavy, weight_lbs: 55.0 },
-    Armor { name: "Kaftan", region: ArmorRegion::Southern, damage_reduction: 1, defense_adj: 0, initiative_mod: 2, speed_mod: 0, armor_type: ArmorType::None, weight_lbs: 8.0 },
-    Armor { name: "Quilted", region: ArmorRegion::Southern, damage_reduction: 1, defense_adj: 0, initiative_mod: 0, speed_mod: 0, armor_type: ArmorType::Light, weight_lbs: 10.0 },
-    Armor { name: "Boiled", region: ArmorRegion::Southern, damage_reduction: 2, defense_adj: -2, initiative_mod: 1, speed_mod: 0, armor_type: ArmorType::Light, weight_lbs: 20.0 },
-    Armor { name: "Rawhide", region: ArmorRegion::Southern, damage_reduction: 2, defense_adj: -1, initiative_mod: 1, speed_mod: 1, armor_type: ArmorType::Light, weight_lbs: 20.0 },
-    Armor { name: "Studded", region: ArmorRegion::Southern, damage_reduction: 2, defense_adj: -1, initiative_mod: 0, speed_mod: 1, armor_type: ArmorType::Medium, weight_lbs: 25.0 },
-    Armor { name: "Jazerant", region: ArmorRegion::Southern, damage_reduction: 3, defense_adj: -2, initiative_mod: 0, speed_mod: 2, armor_type: ArmorType::Medium, weight_lbs: 25.0 },
-    Armor { name: "Kazhagand", region: ArmorRegion::Southern, damage_reduction: 4, defense_adj: -3, initiative_mod: 2, speed_mod: 2, armor_type: ArmorType::Medium, weight_lbs: 30.0 },
-    Armor { name: "Hoopmail", region: ArmorRegion::Southern, damage_reduction: 5, defense_adj: -5, initiative_mod: 2, speed_mod: 2, armor_type: ArmorType::Medium, weight_lbs: 35.0 },
-    Armor { name: "Lamellar", region: ArmorRegion::Southern, damage_reduction: 6, defense_adj: -4, initiative_mod: 1, speed_mod: 2, armor_type: ArmorType::Heavy, weight_lbs: 40.0 },
-    Armor { name: "Mirror", region: ArmorRegion::Southern, damage_reduction: 7, defense_adj: -5, initiative_mod: 3, speed_mod: 1, armor_type: ArmorType::Heavy, weight_lbs: 45.0 },
-];
-
-pub const MATERIALS: &[Material] = &[
-    Material { tier: 0, name: "Bronze", weight_mult: 1.2, kind: MaterialKind::Metal },
-    Material { tier: 1, name: "Iron", weight_mult: 1.0, kind: MaterialKind::Metal },
-    Material { tier: 2, name: "Steel", weight_mult: 1.0, kind: MaterialKind::Metal },
-    Material { tier: 0, name: "Cotton", weight_mult: 1.0, kind: MaterialKind::Fabric },
-    Material { tier: 1, name: "Wool", weight_mult: 1.5, kind: MaterialKind::Fabric },
-    Material { tier: 2, name: "Linen", weight_mult: 1.5, kind: MaterialKind::Fabric },
-    Material { tier: 0, name: "Oak", weight_mult: 1.0, kind: MaterialKind::Wood },
-    Material { tier: 1, name: "Yew", weight_mult: 0.8, kind: MaterialKind::Wood },
-    Material { tier: 2, name: "Ash", weight_mult: 0.8, kind: MaterialKind::Wood },
-];
-
 // --- Utility helpers ---
 
 pub fn mastery_threshold(base_threshold: f32, intelligence: u8, completed_tiers: i32) -> f32 {
@@ -1153,12 +1114,18 @@ mod tests {
             looks: 10,
             charisma: 10,
         };
-        let armor = ARMOR
-            .iter()
-            .find(|armor| armor.name == "Chainmail" && armor.region == ArmorRegion::Northern)
-            .cloned();
+        let armor = Armor {
+            name: "Test Armor",
+            region: ArmorRegion::Northern,
+            damage_reduction: 5,
+            defense_adj: -5,
+            initiative_mod: 0,
+            speed_mod: 0,
+            armor_type: ArmorType::Heavy,
+            weight_lbs: 40.0,
+        };
         let equipment = Equipment {
-            armor,
+            armor: Some(armor),
             ..Default::default()
         };
         let character = Character::builder("Test")

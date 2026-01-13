@@ -1,3 +1,4 @@
+use crate::character::{Material, MaterialKind};
 use serde::Deserialize;
 use std::fs;
 
@@ -5,7 +6,6 @@ const EMBEDDED_MATERIALS_JSON: &str =
     include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/materials.json"));
 
 #[derive(Deserialize)]
-#[allow(dead_code)]
 struct MaterialsFile {
     metals: Vec<MaterialJson>,
     fabrics: Vec<MaterialJson>,
@@ -14,16 +14,36 @@ struct MaterialsFile {
 
 #[derive(Deserialize)]
 struct MaterialJson {
-    #[allow(dead_code)]
     tier: i32,
-    #[allow(dead_code)]
     name: String,
-    #[allow(dead_code)]
     weight_multiplier: f32,
 }
 
-pub(super) fn load_materials(path: &str) -> Result<(), String> {
+pub fn load_materials(path: &str) -> Result<Vec<Material>, String> {
     let data = fs::read_to_string(path).unwrap_or_else(|_| EMBEDDED_MATERIALS_JSON.to_string());
-    let _parsed: MaterialsFile = serde_json::from_str(&data).map_err(|err| err.to_string())?;
-    Ok(())
+    let parsed: MaterialsFile = serde_json::from_str(&data).map_err(|err| err.to_string())?;
+    let mut materials = Vec::new();
+    materials.extend(parsed.metals.into_iter().map(|entry| Material {
+        tier: entry.tier,
+        name: leak_str(entry.name),
+        weight_mult: entry.weight_multiplier,
+        kind: MaterialKind::Metal,
+    }));
+    materials.extend(parsed.fabrics.into_iter().map(|entry| Material {
+        tier: entry.tier,
+        name: leak_str(entry.name),
+        weight_mult: entry.weight_multiplier,
+        kind: MaterialKind::Fabric,
+    }));
+    materials.extend(parsed.woods.into_iter().map(|entry| Material {
+        tier: entry.tier,
+        name: leak_str(entry.name),
+        weight_mult: entry.weight_multiplier,
+        kind: MaterialKind::Wood,
+    }));
+    Ok(materials)
+}
+
+fn leak_str(value: String) -> &'static str {
+    Box::leak(value.into_boxed_str())
 }

@@ -541,9 +541,8 @@ fn write_dataset_csv(path: &Path, lines: &[WeaponLine]) -> std::io::Result<()> {
 }
 
 fn load_weapon_catalog() -> WeaponCatalog {
-    data::load_catalogs()
-        .map(|(weapons, _, _)| weapons)
-        .unwrap_or_else(|_| game_logic::default_weapon_catalog())
+    data::load_weapon_catalog("data/weapons.json")
+        .expect("Failed to load weapon catalog")
 }
 
 #[cfg(test)]

@@ -37,18 +37,25 @@ fn main() {
         base_threshold: 100.0,
     };
 
-    let armor = character::ARMOR
-        .iter()
-        .find(|a| a.name == "Chainmail" && a.region == ArmorRegion::Northern)
-        .cloned();
+    let armor_catalog = data::load_armor_catalog("data/armor.json")
+        .expect("Failed to load armor catalog");
+    let armor = armor_catalog.entries().iter().find_map(|entry| {
+        entry
+            .armor
+            .as_ref()
+            .filter(|armor| armor.name == "Chainmail" && armor.region == ArmorRegion::Northern)
+            .cloned()
+    });
+    let materials = data::load_materials("data/materials.json")
+        .expect("Failed to load materials");
 
     let equipment = Equipment {
         weapon: Some(weapon.clone()),
         shield: None,
         armor,
-        weapon_material: character::MATERIALS
+        weapon_material: materials
             .iter()
-            .find(|m| m.kind == MaterialKind::Metal && m.name == "Steel")
+            .find(|material| material.kind == MaterialKind::Metal && material.name == "Steel")
             .cloned(),
         armor_material: None,
         shield_material: None,
@@ -90,10 +97,8 @@ fn main() {
     );
     println!("Load category: {}", derived.load_category);
 
-    let weapon_catalog = data::load_catalogs()
-        .ok()
-        .map(|(weapons, _, _)| weapons)
-        .unwrap_or_else(game_logic::default_weapon_catalog);
+    let weapon_catalog = data::load_weapon_catalog("data/weapons.json")
+        .expect("Failed to load weapon catalog");
     let weapon_preset = weapon_catalog
         .entries()
         .iter()

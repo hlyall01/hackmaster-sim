@@ -54,17 +54,8 @@ struct SimGuiApp {
 
 impl SimGuiApp {
     fn new() -> Self {
-        let (weapon_catalog, armor_catalog, shield_catalog) = match data::load_catalogs() {
-            Ok((weapons, armors, shields)) => (weapons, armors, shields),
-            Err(err) => {
-                eprintln!("Failed to load JSON catalogs: {err}");
-                (
-                    game_logic::default_weapon_catalog(),
-                    game_logic::default_armor_catalog(),
-                    game_logic::default_shield_catalog(),
-                )
-            }
-        };
+        let (weapon_catalog, armor_catalog, shield_catalog) = data::load_catalogs()
+            .unwrap_or_else(|err| panic!("Failed to load JSON catalogs: {err}"));
         let npc_presets = match data::load_npc_presets("data/npc_presets.json") {
             Ok(presets) => presets,
             Err(err) => {
