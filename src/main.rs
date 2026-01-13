@@ -549,6 +549,7 @@ fn load_weapon_catalog() -> WeaponCatalog {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game_logic::{WeaponHandedness, WeaponSize};
 
     const EPS: f64 = 1e-6;
 

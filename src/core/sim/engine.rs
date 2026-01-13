@@ -227,6 +227,12 @@ impl SimState {
                 (self.actors[idx].position - old_positions[idx]).abs() > f32::EPSILON;
         }
         self.elapsed_seconds += 1;
+        let now = self.elapsed_seconds as f32;
+        for combatant in &mut self.combatants {
+            combatant
+                .state
+                .refresh_defense_plus_four_ready(&combatant.sheet, now);
+        }
     }
 
     pub fn distance(&self) -> f32 {
@@ -336,6 +342,7 @@ impl SimState {
                         &mut self.combatants,
                         attacker_idx,
                         defender_idx,
+                        now,
                         state_snapshot.as_ref(),
                         &mut self.rng,
                     );

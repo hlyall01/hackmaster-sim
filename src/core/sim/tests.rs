@@ -266,6 +266,74 @@
     }
 
     #[test]
+    fn mirror_match_winrate_within_two_percent() {
+        if cfg!(debug_assertions) {
+            return;
+        }
+        let combatant = combatant_basic(
+            "Mirror".to_string(),
+            "Test Blade".to_string(),
+            4,
+            4,
+            2,
+            false,
+            0,
+            "2d6p".to_string(),
+            2,
+            6.0,
+            4.0,
+            10.0,
+            true,
+            false,
+            None,
+            true,
+            false,
+            30,
+        );
+        let config = SimConfig::new(4.0, 1.0);
+        let runs = 100_000u32;
+        let mut sim = SimState::with_logging(config, false);
+        sim.reset_with_combatants([combatant.clone(), combatant]);
+        sim.set_rng(SimRng::from_seed(42));
+        let mut wins = [0u32; 2];
+        let mut ties = 0u32;
+        for _ in 0..runs {
+            sim.reset_preserve_rng();
+            while !sim.done && sim.elapsed_seconds < 60 {
+                sim.update(1.0);
+            }
+            let hp_a = sim.combatants[0].state.hp;
+            let hp_b = sim.combatants[1].state.hp;
+            if sim.done {
+                if hp_a <= 0 && hp_b <= 0 {
+                    ties += 1;
+                } else if hp_a <= 0 {
+                    wins[1] += 1;
+                } else if hp_b <= 0 {
+                    wins[0] += 1;
+                } else {
+                    ties += 1;
+                }
+            } else {
+                ties += 1;
+            }
+        }
+        let diff = if wins[0] > wins[1] {
+            wins[0] - wins[1]
+        } else {
+            wins[1] - wins[0]
+        };
+        let max_diff = runs / 50;
+        assert!(
+            diff <= max_diff,
+            "mirror winrate diff {} exceeds 2% (wins={:?}, ties={})",
+            diff,
+            wins,
+            ties
+        );
+    }
+
+    #[test]
     fn hold_at_bay_hit_without_jab_deals_no_damage() {
         let attacker = combatant_basic(
             "Attacker".to_string(),
@@ -797,8 +865,8 @@
     }
 
     #[test]
-    fn two_hand_grip_bonus_applies_once_between_attacks() {
-        let attacker = combatant_basic(
+    fn two_hand_grip_bonus_ready_on_attack_timer() {
+        let mut combatant = combatant_basic(
             "Attacker".to_string(),
             "Test Blade".to_string(),
             0,
@@ -818,59 +886,23 @@
             false,
             20,
         );
-        let defender = combatant_basic(
-            "Defender".to_string(),
-            "Test Blade".to_string(),
-            0,
-            0,
-            0,
-            false,
-            0,
-            "1d1".to_string(),
-            0,
-            10.0,
-            1.0,
-            5.0,
-            false,
-            false,
-            None,
-            true,
-            false,
-            20,
-        );
-        let mut state = make_state(attacker, defender);
-        let mut rng = FixedRng(0);
-        let _ = resolve_attack(
-            &mut state.combatants,
-            0,
-            1,
-            0,
-            false,
-            AttackMode::Normal,
-            0.0,
-            None,
-            &mut rng,
-        );
-        assert!(state.combatants[0].state.defense_plus_four_ready);
+        assert!(combatant.state.defense_plus_four_ready);
 
-        let mut rng = FixedRng(0);
-        let _ = resolve_attack(
-            &mut state.combatants,
-            1,
-            0,
-            0,
-            false,
-            AttackMode::Normal,
-            0.0,
-            None,
-            &mut rng,
-        );
-        assert!(!state.combatants[0].state.defense_plus_four_ready);
+        combatant.state.next_attack_time = Some(2.0);
+        combatant
+            .state
+            .refresh_defense_plus_four_ready(&combatant.sheet, 1.0);
+        assert!(!combatant.state.defense_plus_four_ready);
+
+        combatant
+            .state
+            .refresh_defense_plus_four_ready(&combatant.sheet, 2.0);
+        assert!(combatant.state.defense_plus_four_ready);
     }
 
     #[test]
-    fn defensive_dualwielding_bonus_applies_once_between_attacks() {
-        let mut attacker = combatant_basic(
+    fn defensive_dualwielding_bonus_ready_on_attack_timer() {
+        let mut combatant = combatant_basic(
             "Attacker".to_string(),
             "Test Blade".to_string(),
             0,
@@ -890,55 +922,22 @@
             false,
             20,
         );
-        attacker.sheet.maneuvers.defensive_dualwielding = true;
-        let defender = combatant_basic(
-            "Defender".to_string(),
-            "Test Blade".to_string(),
-            0,
-            0,
-            0,
-            false,
-            0,
-            "1d1".to_string(),
-            0,
-            10.0,
-            1.0,
-            5.0,
-            false,
-            false,
-            None,
-            true,
-            false,
-            20,
-        );
-        let mut state = make_state(attacker, defender);
-        let mut rng = FixedRng(0);
-        let _ = resolve_attack(
-            &mut state.combatants,
-            0,
-            1,
-            0,
-            false,
-            AttackMode::Normal,
-            0.0,
-            None,
-            &mut rng,
-        );
-        assert!(state.combatants[0].state.defense_plus_four_ready);
+        combatant.sheet.maneuvers.defensive_dualwielding = true;
+        combatant
+            .state
+            .refresh_defense_plus_four_ready(&combatant.sheet, 0.0);
+        assert!(combatant.state.defense_plus_four_ready);
 
-        let mut rng = FixedRng(0);
-        let _ = resolve_attack(
-            &mut state.combatants,
-            1,
-            0,
-            0,
-            false,
-            AttackMode::Normal,
-            0.0,
-            None,
-            &mut rng,
-        );
-        assert!(!state.combatants[0].state.defense_plus_four_ready);
+        combatant.state.next_attack_time = Some(2.0);
+        combatant
+            .state
+            .refresh_defense_plus_four_ready(&combatant.sheet, 1.0);
+        assert!(!combatant.state.defense_plus_four_ready);
+
+        combatant
+            .state
+            .refresh_defense_plus_four_ready(&combatant.sheet, 2.0);
+        assert!(combatant.state.defense_plus_four_ready);
     }
 
     #[test]
@@ -1221,27 +1220,7 @@
 
     #[test]
     fn one_handed_weapon_does_not_grant_defense_bonus() {
-        let attacker = combatant_basic(
-            "Attacker".to_string(),
-            "Test Blade".to_string(),
-            0,
-            0,
-            0,
-            false,
-            0,
-            "1d1".to_string(),
-            0,
-            10.0,
-            1.0,
-            5.0,
-            false,
-            false,
-            None,
-            true,
-            false,
-            20,
-        );
-        let defender = combatant_basic(
+        let mut defender = combatant_basic(
             "Defender".to_string(),
             "Short Sword".to_string(),
             0,
@@ -1261,20 +1240,10 @@
             false,
             20,
         );
-        let mut state = make_state(attacker, defender);
-        let mut rng = FixedRng(0);
-        let _ = resolve_attack(
-            &mut state.combatants,
-            0,
-            1,
-            0,
-            false,
-            AttackMode::Normal,
-            0.0,
-            None,
-            &mut rng,
-        );
-        assert!(!state.combatants[1].state.defense_plus_four_ready);
+        defender
+            .state
+            .refresh_defense_plus_four_ready(&defender.sheet, 0.0);
+        assert!(!defender.state.defense_plus_four_ready);
     }
 
     #[test]

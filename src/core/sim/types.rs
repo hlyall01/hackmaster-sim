@@ -282,7 +282,7 @@ impl Default for CombatantSheet {
 
 impl CombatantState {
     pub(crate) fn new(sheet: &CombatantSheet) -> Self {
-        Self {
+        let mut state = Self {
             hp: sheet.vitals.max_hp,
             next_attack_time: None,
             defense_plus_four_ready: false,
@@ -291,7 +291,38 @@ impl CombatantState {
             knockback_immobile_seconds: 0,
             knockback_applied_this_tick: false,
             shield_intact: sheet.defense.shield_name.is_some(),
-        }
+        };
+        state.refresh_defense_plus_four_ready(sheet, 0.0);
+        state
+    }
+
+    pub(crate) fn refresh_defense_plus_four_ready(&mut self, sheet: &CombatantSheet, now: f32) {
+        let ready = defense_plus_four_ready_at(sheet, self, now);
+        self.defense_plus_four_ready = ready;
+    }
+}
+
+fn defense_plus_four_eligible(sheet: &CombatantSheet) -> bool {
+    let weapon = &sheet.offense.weapon;
+    (weapon.two_hand_grip || sheet.maneuvers.defensive_dualwielding)
+        && weapon.has_weapon
+        && !weapon.defense_bonus_always
+}
+
+pub(crate) fn defense_plus_four_ready_at(
+    sheet: &CombatantSheet,
+    state: &CombatantState,
+    now: f32,
+) -> bool {
+    if !defense_plus_four_eligible(sheet) {
+        return false;
+    }
+    if state.trauma_remaining_seconds > 0 {
+        return false;
+    }
+    match state.next_attack_time {
+        Some(next_attack) => now + 0.0001 >= next_attack,
+        None => true,
     }
 }
 

@@ -3,8 +3,8 @@ use rand::Rng;
 use crate::core::rules::{penetrating_roll, roll_damage_expr};
 
 use super::types::{
-    AttackRollBreakdown, Combatant, CombatantState, DamageBreakdown, KnockAsideRollBreakdown,
-    ShieldBreakageStep, ShieldDamageBreakdown,
+    defense_plus_four_ready_at, AttackRollBreakdown, Combatant, CombatantState, DamageBreakdown,
+    KnockAsideRollBreakdown, ShieldBreakageStep, ShieldDamageBreakdown,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -124,9 +124,6 @@ pub(crate) fn resolve_attack(
         strength_damage,
         armor_penetration,
         use_jab,
-        attacker_two_hand_grip,
-        attacker_has_weapon,
-        attacker_weapon_defense_always,
         attacker_uses_projectiles,
     ) = {
         let attacker = &combatants[attacker_idx];
@@ -136,9 +133,6 @@ pub(crate) fn resolve_attack(
             attacker.sheet.offense.strength_damage,
             weapon.armor_penetration,
             weapon.use_jab,
-            weapon.two_hand_grip,
-            weapon.has_weapon,
-            weapon.defense_bonus_always,
             weapon.uses_projectiles,
         )
     };
@@ -158,9 +152,6 @@ pub(crate) fn resolve_attack(
         shield_dr,
         shield_breakage,
         trauma_incapacitated,
-        defender_two_hand_grip,
-        defender_defensive_dualwielding,
-        defender_has_weapon,
         defender_weapon_defense_always,
         defender_weapon_speed,
     ) = {
@@ -176,19 +167,18 @@ pub(crate) fn resolve_attack(
             defender.sheet.defense.shield_dr,
             defender.sheet.defense.shield_breakage,
             defender_state.trauma_remaining_seconds > 0,
-            defender.sheet.offense.weapon.two_hand_grip,
-            defender.sheet.maneuvers.defensive_dualwielding,
-            defender.sheet.offense.weapon.has_weapon,
             defender.sheet.offense.weapon.defense_bonus_always,
             defender.sheet.offense.weapon.speed,
         )
     };
+    let defense_ready = if is_ranged {
+        false
+    } else {
+        defense_plus_four_ready_at(&combatants[defender_idx].sheet, defender_state, now)
+    };
     let weapon_defense_bonus = if is_ranged {
         0
-    } else if defender_weapon_defense_always
-        || ((defender_two_hand_grip || defender_defensive_dualwielding)
-            && defender_state.defense_plus_four_ready)
-    {
+    } else if defender_weapon_defense_always || defense_ready {
         4
     } else {
         0
@@ -363,21 +353,6 @@ pub(crate) fn resolve_attack(
         combatants[defender_idx].state.next_attack_time = Some(reset_time);
     }
 
-    if !is_ranged {
-        if (defender_two_hand_grip || defender_defensive_dualwielding)
-            && combatants[defender_idx].state.defense_plus_four_ready
-            && defender_has_weapon
-            && !defender_weapon_defense_always
-        {
-            combatants[defender_idx].state.defense_plus_four_ready = false;
-        }
-        if (attacker_two_hand_grip || combatants[attacker_idx].sheet.maneuvers.defensive_dualwielding)
-            && attacker_has_weapon
-            && !attacker_weapon_defense_always
-        {
-            combatants[attacker_idx].state.defense_plus_four_ready = true;
-        }
-    }
     let defender_hp_after = combatants[defender_idx].state.hp;
     let trauma_applied = trauma_seconds.is_some();
     AttackOutcome {
@@ -404,6 +379,7 @@ pub(crate) fn resolve_knock_aside(
     combatants: &mut [Combatant; 2],
     attacker_idx: usize,
     defender_idx: usize,
+    now: f32,
     state_snapshot: Option<&[CombatantState; 2]>,
     rng: &mut impl Rng,
 ) -> KnockAsideOutcome {
@@ -423,15 +399,13 @@ pub(crate) fn resolve_knock_aside(
         ),
         rng,
     );
-    let weapon_defense_bonus = if defender.sheet.offense.weapon.defense_bonus_always
-        || ((defender.sheet.offense.weapon.two_hand_grip
-            || defender.sheet.maneuvers.defensive_dualwielding)
-            && defender_state.defense_plus_four_ready)
-    {
-        4
-    } else {
-        0
-    };
+    let defense_ready = defense_plus_four_ready_at(&defender.sheet, defender_state, now);
+    let weapon_defense_bonus =
+        if defender.sheet.offense.weapon.defense_bonus_always || defense_ready {
+            4
+        } else {
+            0
+        };
     let defense_roll = defense_die + defender.sheet.defense.defense_mod + weapon_defense_bonus;
     let success = attack_roll >= defense_roll;
     let roll = KnockAsideRollBreakdown {
