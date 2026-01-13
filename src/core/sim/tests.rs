@@ -3,9 +3,10 @@
     use crate::core::rng::SimRng;
     use crate::core::rules::{
         clean_damage_expr, evaluate_expression_with_detail, penetrating_roll_with,
-        roll_damage_expr_with_detail,
+        roll_damage_expr_with_detail, DamageExprCache,
     };
     use rand::SeedableRng;
+    use std::time::{Duration, Instant};
 
     fn combatant_basic(
         name: String,
@@ -39,6 +40,10 @@
                 | "Arbalest"
                 | "Sling"
         );
+        let damage_expr_cache = DamageExprCache::new(&damage_expr);
+        let jab_special_expr_cache = jab_special_expr
+            .as_deref()
+            .map(DamageExprCache::new);
         let sheet = CombatantSheet {
             name,
             offense: OffenseProfile {
@@ -47,7 +52,9 @@
                 weapon: WeaponProfile {
                     name: weapon_name,
                     damage_expr,
+                    damage_expr_cache,
                     shield_damage_expr: None,
+                    shield_damage_expr_cache: None,
                     armor_penetration,
                     speed: weapon_speed,
                     reach_ft,
@@ -55,6 +62,7 @@
                     two_hand_grip,
                     use_jab,
                     jab_special_expr,
+                    jab_special_expr_cache,
                     has_weapon,
                     defense_bonus_always: weapon_defense_always,
                     uses_projectiles,
@@ -62,6 +70,7 @@
             },
             defense: DefenseProfile {
                 defense_mod,
+                ranged_defense_mod: 0,
                 armor_dr,
                 armor_is_heavy,
                 shield_name: None,
@@ -72,6 +81,8 @@
             },
             mobility: MobilityProfile { move_speed },
             vitals: Vitals {
+                trauma_die_sides: 20,
+                trauma_die_penetrating: false,
                 max_hp,
                 constitution: 10,
                 threshold_of_pain: 3,
@@ -196,6 +207,62 @@
             &mut rng,
         );
         assert_eq!(state.combatants[1].state.hp, 20);
+    }
+
+    #[test]
+    fn bulk_sim_100k_under_one_second() {
+        if cfg!(debug_assertions) {
+            return;
+        }
+        let attacker = combatant_basic(
+            "Attacker".to_string(),
+            "Antler".to_string(),
+            6,
+            5,
+            1,
+            false,
+            0,
+            "2d6p".to_string(),
+            2,
+            10.0,
+            3.0,
+            20.0,
+            false,
+            false,
+            None,
+            true,
+            false,
+            18,
+        );
+        let defender = combatant_basic(
+            "Defender".to_string(),
+            "Claw".to_string(),
+            5,
+            6,
+            1,
+            false,
+            0,
+            "1d8p".to_string(),
+            2,
+            9.0,
+            1.0,
+            20.0,
+            false,
+            false,
+            None,
+            true,
+            false,
+            18,
+        );
+        let config = SimConfig::new(200.0, 3.0);
+        let start = Instant::now();
+        let _ = bulk_simulate(config, [attacker, defender], 100_000, 60);
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed <= Duration::from_secs(1),
+            "bulk sim 100k took {:?}",
+            elapsed
+        );
     }
 
     #[test]
@@ -375,7 +442,9 @@
                 weapon: WeaponProfile {
                     name: "Test Blade".to_string(),
                     damage_expr: "1d1".to_string(),
+                    damage_expr_cache: DamageExprCache::new("1d1"),
                     shield_damage_expr: None,
+                    shield_damage_expr_cache: None,
                     armor_penetration: 0,
                     speed: 10.0,
                     reach_ft: 1.0,
@@ -383,12 +452,14 @@
                     two_hand_grip: false,
                     use_jab: false,
                     jab_special_expr: None,
+                    jab_special_expr_cache: None,
                     has_weapon: true,
                     defense_bonus_always: false,
                     uses_projectiles: false,
                 },
             },
             defense: DefenseProfile {
+                ranged_defense_mod: 0,
                 defense_mod: 0,
                 armor_dr: 0,
                 armor_is_heavy: false,
@@ -400,6 +471,8 @@
             },
             mobility: MobilityProfile { move_speed: 0.0 },
             vitals: Vitals {
+                trauma_die_sides: 20,
+                trauma_die_penetrating: false,
                 max_hp: 10,
                 constitution: 1,
                 threshold_of_pain: 0,
@@ -423,7 +496,9 @@
                 weapon: WeaponProfile {
                     name: "Test Blade".to_string(),
                     damage_expr: "30".to_string(),
+                    damage_expr_cache: DamageExprCache::new("30"),
                     shield_damage_expr: None,
+                    shield_damage_expr_cache: None,
                     armor_penetration: 0,
                     speed: 10.0,
                     reach_ft: 1.0,
@@ -431,12 +506,14 @@
                     two_hand_grip: false,
                     use_jab: false,
                     jab_special_expr: None,
+                    jab_special_expr_cache: None,
                     has_weapon: true,
                     defense_bonus_always: false,
                     uses_projectiles: false,
                 },
             },
             defense: DefenseProfile {
+                ranged_defense_mod: 0,
                 defense_mod: 0,
                 armor_dr: 0,
                 armor_is_heavy: false,
@@ -448,6 +525,8 @@
             },
             mobility: MobilityProfile { move_speed: 0.0 },
             vitals: Vitals {
+                trauma_die_sides: 20,
+                trauma_die_penetrating: false,
                 max_hp: 100,
                 constitution: 10,
                 threshold_of_pain: 0,
@@ -925,7 +1004,9 @@
         let throwing_axe = WeaponProfile {
             name: "Throwing axe".to_string(),
             damage_expr: "1d1".to_string(),
+            damage_expr_cache: DamageExprCache::new("1d1"),
             shield_damage_expr: None,
+            shield_damage_expr_cache: None,
             armor_penetration: 0,
             speed: 1.0,
             reach_ft: 1.0,
@@ -933,6 +1014,7 @@
             two_hand_grip: false,
             use_jab: false,
             jab_special_expr: None,
+            jab_special_expr_cache: None,
             has_weapon: true,
             defense_bonus_always: false,
             uses_projectiles: false,
@@ -940,7 +1022,9 @@
         let melee_weapon = WeaponProfile {
             name: "Sword".to_string(),
             damage_expr: "1d1".to_string(),
+            damage_expr_cache: DamageExprCache::new("1d1"),
             shield_damage_expr: None,
+            shield_damage_expr_cache: None,
             armor_penetration: 0,
             speed: 1.0,
             reach_ft: 1.0,
@@ -948,6 +1032,7 @@
             two_hand_grip: false,
             use_jab: false,
             jab_special_expr: None,
+            jab_special_expr_cache: None,
             has_weapon: true,
             defense_bonus_always: false,
             uses_projectiles: false,
@@ -960,6 +1045,7 @@
                 weapon: throwing_axe,
             },
             defense: DefenseProfile {
+                ranged_defense_mod: 0,
                 defense_mod: 0,
                 armor_dr: 0,
                 armor_is_heavy: false,
@@ -971,6 +1057,8 @@
             },
             mobility: MobilityProfile { move_speed: 10.0 },
             vitals: Vitals {
+                trauma_die_sides: 20,
+                trauma_die_penetrating: false,
                 max_hp: 1000,
                 constitution: 10,
                 threshold_of_pain: 0,
@@ -985,6 +1073,7 @@
                 weapon: melee_weapon,
             },
             defense: DefenseProfile {
+                ranged_defense_mod: 0,
                 defense_mod: 0,
                 armor_dr: 0,
                 armor_is_heavy: false,
@@ -996,6 +1085,8 @@
             },
             mobility: MobilityProfile { move_speed: 10.0 },
             vitals: Vitals {
+                trauma_die_sides: 20,
+                trauma_die_penetrating: false,
                 max_hp: 1000,
                 constitution: 10,
                 threshold_of_pain: 0,

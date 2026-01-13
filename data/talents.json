@@ -1,0 +1,58 @@
+{
+  "talents": [
+    {
+      "id": "hit_point_bonus",
+      "name": "Hit Point Bonus",
+      "description": "Gain +2 hit points per rank.",
+      "max_rank": 10,
+      "effects": [
+        { "type": "hit_point_bonus", "amount": 2 }
+      ]
+    },
+    {
+      "id": "tough_as_nails",
+      "name": "Tough as Nails",
+      "description": "Use a d12p for Threshold of Pain checks.",
+      "max_rank": 1,
+      "effects": [
+        { "type": "trauma_die_override", "sides": 12, "penetrating": true }
+      ]
+    },
+    {
+      "id": "tough_hide",
+      "name": "Tough Hide",
+      "description": "Gain +1 damage reduction to any wound.",
+      "max_rank": 1,
+      "effects": [
+        { "type": "armor_dr_bonus", "amount": 1 }
+      ]
+    },
+    {
+      "id": "attack_bonus_weapon",
+      "name": "Attack Bonus (weapon)",
+      "description": "Gain +1 attack bonus with a chosen melee weapon.",
+      "max_rank": 1,
+      "effects": [
+        { "type": "attack_bonus_weapon", "amount": 1 }
+      ]
+    },
+    {
+      "id": "damage_bonus_weapon",
+      "name": "Damage Bonus (weapon)",
+      "description": "Gain +1 damage bonus with a chosen melee weapon.",
+      "max_rank": 1,
+      "effects": [
+        { "type": "damage_bonus_weapon", "amount": 1 }
+      ]
+    },
+    {
+      "id": "dodge",
+      "name": "Dodge",
+      "description": "Gain +1 defense and add Dex defense vs ranged when dodging.",
+      "max_rank": 1,
+      "effects": [
+        { "type": "dodge", "defense_bonus": 1, "allow_dex_ranged": true }
+      ]
+    }
+  ]
+}

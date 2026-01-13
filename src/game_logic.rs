@@ -3,21 +3,25 @@ use crate::character::{
     Weapon, WeaponGroup, WeaponMastery,
 };
 use crate::core::catalog::Catalog;
+use crate::core::rules::DamageExprCache;
+use crate::core::types::{TalentEffect, TalentSelection, TalentSpec};
 pub use crate::core::ids::{
     ArmorId, ArmorTag, FighterPresetId, FighterPresetTag, NpcPresetId, NpcPresetTag, ShieldId,
-    ShieldTag, WeaponId, WeaponTag,
+    ShieldTag, TalentId, TalentTag, WeaponId, WeaponTag,
 };
 use crate::sim::{
     self, Combatant, CombatantSheet, DefenseProfile, MobilityProfile, OffenseProfile, Vitals,
     WeaponProfile,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 pub type WeaponCatalog = Catalog<WeaponTag, WeaponPreset>;
 pub type ArmorCatalog = Catalog<ArmorTag, ArmorEntry>;
 pub type ShieldCatalog = Catalog<ShieldTag, ShieldEntry>;
 pub type NpcPresetCatalog = Catalog<NpcPresetTag, NpcPreset>;
 pub type FighterPresetCatalog = Catalog<FighterPresetTag, FighterPreset>;
+pub type TalentCatalog = Catalog<TalentTag, TalentSpec>;
 
 #[derive(Clone)]
 pub struct WeaponPreset {
@@ -178,6 +182,8 @@ pub struct FighterPreset {
     pub use_jab: bool,
     #[serde(default)]
     pub hold_at_bay: bool,
+    #[serde(default)]
+    pub talents: Vec<TalentSelection>,
 }
 
 #[derive(Clone)]
@@ -214,6 +220,7 @@ pub struct PlayerConfig {
     pub two_hand_grip: bool,
     pub use_jab: bool,
     pub hold_at_bay: bool,
+    pub talents: Vec<TalentSelection>,
 }
 
 impl PlayerConfig {
@@ -251,8 +258,112 @@ impl PlayerConfig {
             two_hand_grip: false,
             use_jab: false,
             hold_at_bay: false,
+            talents: Vec::new(),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TraumaDieOverride {
+    sides: i32,
+    penetrating: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+struct TalentModifiers {
+    hp_bonus: i32,
+    armor_dr_bonus: i32,
+    defense_bonus: i32,
+    allow_dex_ranged: bool,
+    trauma_die_override: Option<TraumaDieOverride>,
+    attack_bonus_by_weapon: HashMap<WeaponId, i32>,
+    damage_bonus_by_weapon: HashMap<WeaponId, i32>,
+}
+
+impl TalentModifiers {
+    fn attack_bonus_for_weapon(&self, weapon_id: WeaponId) -> i32 {
+        *self.attack_bonus_by_weapon.get(&weapon_id).unwrap_or(&0)
+    }
+
+    fn damage_bonus_for_weapon(&self, weapon_id: WeaponId) -> i32 {
+        *self.damage_bonus_by_weapon.get(&weapon_id).unwrap_or(&0)
+    }
+}
+
+fn talent_rank(selection: &TalentSelection) -> i32 {
+    if selection.rank == 0 {
+        1
+    } else {
+        selection.rank as i32
+    }
+}
+
+fn find_talent<'a>(catalog: &'a TalentCatalog, id: &str) -> Option<&'a TalentSpec> {
+    catalog.entries().iter().find(|talent| talent.id == id)
+}
+
+fn weapon_id_by_name(catalog: &WeaponCatalog, name: &str) -> Option<WeaponId> {
+    catalog
+        .entries()
+        .iter()
+        .position(|weapon| weapon.name.eq_ignore_ascii_case(name))
+        .and_then(|idx| catalog.id_from_index(idx))
+}
+
+fn resolve_talent_modifiers(
+    player: &PlayerConfig,
+    talent_catalog: &TalentCatalog,
+    weapon_catalog: &WeaponCatalog,
+) -> TalentModifiers {
+    let mut modifiers = TalentModifiers::default();
+    for selection in &player.talents {
+        let Some(spec) = find_talent(talent_catalog, &selection.id) else {
+            continue;
+        };
+        let rank = talent_rank(selection);
+        for effect in &spec.effects {
+            match effect {
+                TalentEffect::HitPointBonus { amount } => {
+                    modifiers.hp_bonus += amount * rank;
+                }
+                TalentEffect::ArmorDrBonus { amount } => {
+                    modifiers.armor_dr_bonus += amount * rank;
+                }
+                TalentEffect::AttackBonusWeapon { amount } => {
+                    if let Some(weapon_name) = selection.weapon.as_deref() {
+                        if let Some(weapon_id) = weapon_id_by_name(weapon_catalog, weapon_name) {
+                            let entry =
+                                modifiers.attack_bonus_by_weapon.entry(weapon_id).or_insert(0);
+                            *entry += amount * rank;
+                        }
+                    }
+                }
+                TalentEffect::DamageBonusWeapon { amount } => {
+                    if let Some(weapon_name) = selection.weapon.as_deref() {
+                        if let Some(weapon_id) = weapon_id_by_name(weapon_catalog, weapon_name) {
+                            let entry =
+                                modifiers.damage_bonus_by_weapon.entry(weapon_id).or_insert(0);
+                            *entry += amount * rank;
+                        }
+                    }
+                }
+                TalentEffect::Dodge {
+                    defense_bonus,
+                    allow_dex_ranged,
+                } => {
+                    modifiers.defense_bonus += defense_bonus * rank;
+                    modifiers.allow_dex_ranged |= *allow_dex_ranged;
+                }
+                TalentEffect::TraumaDieOverride { sides, penetrating } => {
+                    modifiers.trauma_die_override = Some(TraumaDieOverride {
+                        sides: *sides,
+                        penetrating: *penetrating,
+                    });
+                }
+            }
+        }
+    }
+    modifiers
 }
 
 pub fn sanitize_player_ids(
@@ -352,11 +463,16 @@ pub fn player_summary(
     weapon_catalog: &WeaponCatalog,
     armor_catalog: &ArmorCatalog,
     shield_catalog: &ShieldCatalog,
+    talent_catalog: &TalentCatalog,
 ) -> PlayerSummary {
     let weapon = weapon_for_player(player, weapon_catalog);
     let character = build_character(player, weapon_catalog, armor_catalog, shield_catalog);
-    let derived = character.derived();
-    let roll = roll_summary(player, weapon, &character, &derived);
+    let modifiers = resolve_talent_modifiers(player, talent_catalog, weapon_catalog);
+    let mut derived = character.derived();
+    derived.hit_points = (derived.hit_points as i32 + modifiers.hp_bonus).max(1) as u32;
+    derived.armor_dr = (derived.armor_dr + modifiers.armor_dr_bonus).max(0);
+    derived.base_dv += modifiers.defense_bonus;
+    let roll = roll_summary(player, weapon, &character, &derived, &modifiers);
     PlayerSummary { derived, roll }
 }
 
@@ -365,6 +481,7 @@ fn roll_summary(
     weapon: &WeaponPreset,
     character: &Character,
     derived: &DerivedStats,
+    modifiers: &TalentModifiers,
 ) -> RollSummary {
     let is_ranged_weapon = is_ranged_weapon(weapon);
     let uses_projectiles = uses_projectiles(&weapon.name, weapon.ammunition.is_some());
@@ -376,12 +493,16 @@ fn roll_summary(
     );
     let attack_mastery = effective_attack_mastery(player);
     let damage_mastery = effective_damage_mastery(player);
-    let attack_bonus = derived.attack_bonus + material_attack_bonus + attack_mastery;
+    let attack_bonus = derived.attack_bonus
+        + material_attack_bonus
+        + attack_mastery
+        + modifiers.attack_bonus_for_weapon(player.weapon_id);
     let two_hand_bonus = two_hand_damage_bonus(weapon, player.two_hand_grip);
     let strength_damage = strength_damage_for_weapon(weapon, character.ability_mods.strength.damage)
         + two_hand_bonus
         + material_damage_bonus
-        + damage_mastery;
+        + damage_mastery
+        + modifiers.damage_bonus_for_weapon(player.weapon_id);
 
     RollSummary {
         attack_bonus,
@@ -463,6 +584,7 @@ pub fn build_combatants(
     armor_catalog: &ArmorCatalog,
     shield_catalog: &ShieldCatalog,
     npc_presets: &NpcPresetCatalog,
+    talent_catalog: &TalentCatalog,
 ) -> [Combatant; 2] {
     [
         build_combatant(
@@ -471,6 +593,7 @@ pub fn build_combatants(
             armor_catalog,
             shield_catalog,
             npc_presets,
+            talent_catalog,
         ),
         build_combatant(
             &players[1],
@@ -478,6 +601,7 @@ pub fn build_combatants(
             armor_catalog,
             shield_catalog,
             npc_presets,
+            talent_catalog,
         ),
     ]
 }
@@ -488,10 +612,12 @@ pub fn build_combatant(
     armor_catalog: &ArmorCatalog,
     shield_catalog: &ShieldCatalog,
     npc_presets: &NpcPresetCatalog,
+    talent_catalog: &TalentCatalog,
 ) -> Combatant {
     let weapon_preset = weapon_for_player(player, weapon_catalog);
     let character = build_character(player, weapon_catalog, armor_catalog, shield_catalog);
     let derived = character.derived();
+    let modifiers = resolve_talent_modifiers(player, talent_catalog, weapon_catalog);
     let weapon_name = character
         .equipment
         .weapon
@@ -541,6 +667,9 @@ pub fn build_combatant(
         .shield_damage_expr
         .clone()
         .filter(|expr| expr != "-" && !expr.is_empty());
+    let range_bands_feet = weapon_preset
+        .range_bands_feet
+        .or_else(|| sim::range_bands_for_weapon_name(&weapon_preset.name));
 
     let effective_two_hand = effective_two_hand_grip(weapon_preset, player.two_hand_grip);
     let two_hand_damage_bonus = two_hand_damage_bonus(weapon_preset, player.two_hand_grip);
@@ -570,15 +699,19 @@ pub fn build_combatant(
     let attack_mastery = effective_attack_mastery(player);
     let defense_mastery = effective_defense_mastery(player, weapon_preset);
     let damage_mastery = effective_damage_mastery(player);
-    let mut attack_bonus = derived.attack_bonus + material_attack_bonus + attack_mastery;
-    let mut defense_mod = derived.base_dv + defense_mastery;
-    let mut armor_dr = derived.armor_dr;
+    let mut attack_bonus = derived.attack_bonus
+        + material_attack_bonus
+        + attack_mastery
+        + modifiers.attack_bonus_for_weapon(player.weapon_id);
+    let mut defense_mod = derived.base_dv + defense_mastery + modifiers.defense_bonus;
+    let mut armor_dr = (derived.armor_dr + modifiers.armor_dr_bonus).max(0);
     let mut strength_damage =
         strength_damage_for_weapon(weapon_preset, character.ability_mods.strength.damage)
             + two_hand_damage_bonus
-        + material_damage_bonus
-        + damage_mastery;
-    let mut max_hp = derived.hit_points as i32;
+            + material_damage_bonus
+        + damage_mastery
+        + modifiers.damage_bonus_for_weapon(player.weapon_id);
+    let mut max_hp = (derived.hit_points as i32 + modifiers.hp_bonus).max(1);
     let mut threshold_of_pain = threshold_of_pain(max_hp, player.level);
     let mut shield_name = shield_data.map(|shield| shield.name.to_string());
     let mut shield_defense_bonus = shield_data.map(|shield| shield.defense_bonus).unwrap_or(0);
@@ -586,6 +719,15 @@ pub fn build_combatant(
     let mut shield_cover_value = shield_data.map(|shield| shield.cover_value);
     let mut shield_breakage =
         shield_data.map(|shield| breakage_steps_from_thresholds(shield.breakage_thresholds));
+    let mut ranged_defense_mod = if modifiers.allow_dex_ranged {
+        character.ability_mods.dexterity.defense + modifiers.defense_bonus
+    } else {
+        0
+    };
+    let (mut trauma_die_sides, mut trauma_die_penetrating) = modifiers
+        .trauma_die_override
+        .map(|override_die| (override_die.sides, override_die.penetrating))
+        .unwrap_or((20, false));
     if let Some(preset) = player.npc_preset.and_then(|id| npc_presets.get(id)) {
         name = preset.name.clone();
         attack_bonus = preset.attack_bonus;
@@ -599,6 +741,9 @@ pub fn build_combatant(
         shield_dr = 0;
         shield_cover_value = None;
         shield_breakage = None;
+        ranged_defense_mod = 0;
+        trauma_die_sides = 20;
+        trauma_die_penetrating = false;
     }
 
     let weapon_speed = if use_jab {
@@ -606,6 +751,13 @@ pub fn build_combatant(
     } else {
         (weapon_speed + two_hand_speed_penalty + speed_mod - speed_mastery).max(min_speed)
     };
+    let damage_expr_cache = DamageExprCache::new(&weapon_damage);
+    let shield_damage_expr_cache = shield_damage_expr
+        .as_deref()
+        .map(DamageExprCache::new);
+    let jab_special_expr_cache = jab_special_expr
+        .as_deref()
+        .map(DamageExprCache::new);
     let sheet = CombatantSheet {
         name,
         offense: OffenseProfile {
@@ -614,14 +766,17 @@ pub fn build_combatant(
             weapon: WeaponProfile {
                 name: weapon_name,
                 damage_expr: weapon_damage,
+                damage_expr_cache,
                 shield_damage_expr,
+                shield_damage_expr_cache,
                 armor_penetration,
                 speed: weapon_speed,
                 reach_ft: weapon_reach,
-                range_bands_feet: weapon_preset.range_bands_feet,
+                range_bands_feet,
                 two_hand_grip: effective_two_hand,
                 use_jab,
                 jab_special_expr,
+                jab_special_expr_cache,
                 has_weapon,
                 defense_bonus_always: weapon_defense_always,
                 uses_projectiles,
@@ -629,6 +784,7 @@ pub fn build_combatant(
         },
         defense: DefenseProfile {
             defense_mod,
+            ranged_defense_mod,
             armor_dr,
             armor_is_heavy,
             shield_name,
@@ -644,6 +800,8 @@ pub fn build_combatant(
             max_hp,
             constitution: player.constitution,
             threshold_of_pain,
+            trauma_die_sides,
+            trauma_die_penetrating,
         },
         maneuvers: sim::ManeuverProfile {
             hold_at_bay: player.hold_at_bay,
@@ -1413,13 +1571,15 @@ mod tests {
     #[test]
     fn mastery_attack_bonus_applies_to_roll() {
         let (weapons, armor, shields) = sample_catalogs();
+        let talents = Catalog::new(Vec::new());
         let mut player = PlayerConfig::new("Test", WeaponId::new(0));
         player.weapon_id = one_handed_weapon_id(&weapons);
         player.mastery_attack = 3;
-        let summary = player_summary(&player, &weapons, &armor, &shields);
+        let summary = player_summary(&player, &weapons, &armor, &shields, &talents);
         let mut baseline = player.clone();
         baseline.mastery_attack = 0;
-        let baseline_summary = player_summary(&baseline, &weapons, &armor, &shields);
+        let baseline_summary =
+            player_summary(&baseline, &weapons, &armor, &shields, &talents);
         assert_eq!(
             summary.roll.attack_bonus - baseline_summary.roll.attack_bonus,
             3
@@ -1429,13 +1589,15 @@ mod tests {
     #[test]
     fn mastery_damage_applies_to_roll() {
         let (weapons, armor, shields) = sample_catalogs();
+        let talents = Catalog::new(Vec::new());
         let mut player = PlayerConfig::new("Test", WeaponId::new(0));
         player.weapon_id = one_handed_weapon_id(&weapons);
         player.mastery_damage = 4;
-        let summary = player_summary(&player, &weapons, &armor, &shields);
+        let summary = player_summary(&player, &weapons, &armor, &shields, &talents);
         let mut baseline = player.clone();
         baseline.mastery_damage = 0;
-        let baseline_summary = player_summary(&baseline, &weapons, &armor, &shields);
+        let baseline_summary =
+            player_summary(&baseline, &weapons, &armor, &shields, &talents);
         assert_eq!(
             summary.roll.strength_damage - baseline_summary.roll.strength_damage,
             4
@@ -1445,16 +1607,24 @@ mod tests {
     #[test]
     fn mastery_defense_applies_without_shield() {
         let (weapons, armor, shields) = sample_catalogs();
+        let talents = Catalog::new(Vec::new());
         let mut player = PlayerConfig::new("Test", WeaponId::new(0));
         player.weapon_id = one_handed_weapon_id(&weapons);
         player.mastery_defense = 2;
         let npc_presets = Catalog::new(Vec::new());
         let combatant =
-            build_combatant(&player, &weapons, &armor, &shields, &npc_presets);
+            build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
         let mut baseline = player.clone();
         baseline.mastery_defense = 0;
         let baseline_combatant =
-            build_combatant(&baseline, &weapons, &armor, &shields, &npc_presets);
+            build_combatant(
+                &baseline,
+                &weapons,
+                &armor,
+                &shields,
+                &npc_presets,
+                &talents,
+            );
         assert_eq!(
             combatant.sheet.defense.defense_mod - baseline_combatant.sheet.defense.defense_mod,
             2
@@ -1464,16 +1634,24 @@ mod tests {
     #[test]
     fn mastery_speed_reduces_weapon_speed() {
         let (weapons, armor, shields) = sample_catalogs();
+        let talents = Catalog::new(Vec::new());
         let mut player = PlayerConfig::new("Test", WeaponId::new(0));
         player.weapon_id = one_handed_weapon_id(&weapons);
         player.mastery_speed = 3;
         let npc_presets = Catalog::new(Vec::new());
         let combatant =
-            build_combatant(&player, &weapons, &armor, &shields, &npc_presets);
+            build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
         let mut baseline = player.clone();
         baseline.mastery_speed = 0;
         let baseline_combatant =
-            build_combatant(&baseline, &weapons, &armor, &shields, &npc_presets);
+            build_combatant(
+                &baseline,
+                &weapons,
+                &armor,
+                &shields,
+                &npc_presets,
+                &talents,
+            );
         assert_eq!(
             baseline_combatant.sheet.offense.weapon.speed - combatant.sheet.offense.weapon.speed,
             3.0

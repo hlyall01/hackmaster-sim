@@ -18,6 +18,7 @@ pub struct SimState {
     pub done: bool,
     pub last_event: Option<CombatEvent>,
     pub combat_events: Vec<CombatEvent>,
+    pub log_events: bool,
     rng: SimRng,
     tick_accum: f32,
     hold_at_bay: HoldAtBayState,
@@ -33,10 +34,18 @@ struct HoldAtBayState {
 
 impl SimState {
     pub fn new(config: SimConfig) -> Self {
-        Self::with_rng(config, SimRng::default())
+        Self::with_rng_and_log(config, SimRng::default(), true)
+    }
+
+    pub fn with_logging(config: SimConfig, log_events: bool) -> Self {
+        Self::with_rng_and_log(config, SimRng::default(), log_events)
     }
 
     pub fn with_rng(config: SimConfig, rng: SimRng) -> Self {
+        Self::with_rng_and_log(config, rng, true)
+    }
+
+    fn with_rng_and_log(config: SimConfig, rng: SimRng, log_events: bool) -> Self {
         Self {
             config,
             actors: [
@@ -50,6 +59,7 @@ impl SimState {
             done: false,
             last_event: None,
             combat_events: Vec::new(),
+            log_events,
             rng,
             tick_accum: 0.0,
             hold_at_bay: HoldAtBayState::default(),
@@ -131,16 +141,14 @@ impl SimState {
         let weapon_b = &self.combatants[1].sheet.offense.weapon;
         let range_bands_a = weapon_a.range_bands_feet;
         let range_bands_b = weapon_b.range_bands_feet;
-        let weapon_name_a = weapon_a.name.clone();
-        let weapon_name_b = weapon_b.name.clone();
         let ranged_projectile_a = weapon_a.uses_projectiles;
         let ranged_projectile_b = weapon_b.uses_projectiles;
         let max_range_a = range_bands_a
             .map(max_range_for_bands)
-            .or_else(|| max_range_for_weapon_name(&weapon_name_a));
+            .or_else(|| max_range_for_weapon_name(&weapon_a.name));
         let max_range_b = range_bands_b
             .map(max_range_for_bands)
-            .or_else(|| max_range_for_weapon_name(&weapon_name_b));
+            .or_else(|| max_range_for_weapon_name(&weapon_b.name));
         let ranged_a = max_range_a.is_some();
         let ranged_b = max_range_b.is_some();
         let ranged_projectile_a = ranged_a && ranged_projectile_a;
@@ -338,16 +346,19 @@ impl SimState {
                         self.combatants[attacker_idx].state.next_attack_time =
                             Some(next_attack + weapon_speed);
                     }
-                    let event_struct = CombatEvent {
-                        time: self.elapsed_seconds,
-                        attacker_idx,
-                        defender_idx,
-                        kind: CombatEventKind::KnockAside(KnockAsideEvent {
-                            success: event.success,
-                        }),
-                    };
-                    self.last_event = Some(event_struct.clone());
-                    self.combat_events.push(event_struct);
+                    if self.log_events {
+                        let event_struct = CombatEvent {
+                            time: self.elapsed_seconds,
+                            attacker_idx,
+                            defender_idx,
+                            kind: CombatEventKind::KnockAside(KnockAsideEvent {
+                                success: event.success,
+                                roll: event.roll,
+                            }),
+                        };
+                        self.last_event = Some(event_struct.clone());
+                        self.combat_events.push(event_struct);
+                    }
                 }
                 continue;
             }
@@ -426,24 +437,31 @@ impl SimState {
                     event.defender_idx,
                     event.knockback_ft,
                 );
-                let event_struct = CombatEvent {
-                    time: self.elapsed_seconds,
-                    attacker_idx: event.attacker_idx,
-                    defender_idx: event.defender_idx,
-                    kind: CombatEventKind::Attack(AttackEvent {
-                        hit: event.hit,
-                        shield_block: event.shield_block,
-                        damage: event.damage,
-                        shield_damage: event.shield_damage,
-                        knockback_ft: event.knockback_ft,
-                        hold_at_bay: event.hold_at_bay,
-                        use_jab: event.use_jab,
-                        is_ranged: event.is_ranged,
-                        trauma_applied: event.trauma_applied,
-                    }),
-                };
-                self.last_event = Some(event_struct.clone());
-                self.combat_events.push(event_struct);
+                if self.log_events {
+                    let event_struct = CombatEvent {
+                        time: self.elapsed_seconds,
+                        attacker_idx: event.attacker_idx,
+                        defender_idx: event.defender_idx,
+                        kind: CombatEventKind::Attack(AttackEvent {
+                            hit: event.hit,
+                            shield_block: event.shield_block,
+                            damage: event.damage,
+                            shield_damage: event.shield_damage,
+                            knockback_ft: event.knockback_ft,
+                            hold_at_bay: event.hold_at_bay,
+                            use_jab: event.use_jab,
+                            is_ranged: event.is_ranged,
+                            trauma_applied: event.trauma_applied,
+                            trauma_seconds: event.trauma_seconds,
+                            roll: event.roll,
+                            damage_breakdown: event.damage_breakdown,
+                            shield_damage_breakdown: event.shield_damage_breakdown,
+                            defender_hp_after: event.defender_hp_after,
+                        }),
+                    };
+                    self.last_event = Some(event_struct.clone());
+                    self.combat_events.push(event_struct);
+                }
                 let mut speed = self.combatants[attacker_idx]
                     .sheet
                     .offense
@@ -484,12 +502,13 @@ pub fn bulk_simulate(
     if runs == 0 {
         return BulkSimResult::default();
     }
-    let mut sim = SimState::new(config);
+    let mut sim = SimState::with_logging(config, false);
+    sim.reset_with_combatants(combatants);
     let mut wins = [0u32; 2];
     let mut ties = 0u32;
     let mut total_seconds = 0u64;
     for _ in 0..runs {
-        sim.reset_with_combatants_preserve_rng(combatants.clone());
+        sim.reset_preserve_rng();
         while !sim.done && sim.elapsed_seconds < max_seconds {
             sim.update(1.0);
         }

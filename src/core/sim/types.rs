@@ -22,7 +22,9 @@ pub struct SimActor {
 pub struct WeaponProfile {
     pub name: String,
     pub damage_expr: String,
+    pub damage_expr_cache: DamageExprCache,
     pub shield_damage_expr: Option<String>,
+    pub shield_damage_expr_cache: Option<DamageExprCache>,
     pub armor_penetration: i32,
     pub speed: f32,
     pub reach_ft: f32,
@@ -30,6 +32,7 @@ pub struct WeaponProfile {
     pub two_hand_grip: bool,
     pub use_jab: bool,
     pub jab_special_expr: Option<String>,
+    pub jab_special_expr_cache: Option<DamageExprCache>,
     pub has_weapon: bool,
     pub defense_bonus_always: bool,
     pub uses_projectiles: bool,
@@ -50,6 +53,7 @@ pub struct OffenseProfile {
 #[derive(Clone, Debug)]
 pub struct DefenseProfile {
     pub defense_mod: i32,
+    pub ranged_defense_mod: i32,
     pub armor_dr: i32,
     pub armor_is_heavy: bool,
     pub shield_name: Option<String>,
@@ -69,6 +73,8 @@ pub struct Vitals {
     pub max_hp: i32,
     pub constitution: u8,
     pub threshold_of_pain: i32,
+    pub trauma_die_sides: i32,
+    pub trauma_die_penetrating: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -120,6 +126,43 @@ pub enum CombatEventKind {
 }
 
 #[derive(Clone, Debug)]
+pub struct AttackRollBreakdown {
+    pub attack_die: i32,
+    pub defense_die: i32,
+    pub attack_bonus: i32,
+    pub range_mod: i32,
+    pub defense_base: i32,
+    pub weapon_defense_bonus: i32,
+    pub shield_defense_bonus: i32,
+    pub attack_total: i32,
+    pub defense_total: i32,
+}
+
+#[derive(Clone, Debug)]
+pub struct DamageBreakdown {
+    pub rolled_damage: i32,
+    pub strength_damage: i32,
+    pub raw_damage: i32,
+    pub armor_dr: i32,
+    pub armor_penetration: i32,
+    pub effective_armor_dr: i32,
+    pub final_damage: i32,
+}
+
+#[derive(Clone, Debug)]
+pub struct ShieldDamageBreakdown {
+    pub rolled_damage: i32,
+    pub strength_damage: i32,
+    pub raw_damage: i32,
+    pub shield_dr: i32,
+    pub armor_dr: i32,
+    pub armor_penetration: i32,
+    pub effective_armor_dr: i32,
+    pub hp_damage: i32,
+    pub shield_broken: bool,
+}
+
+#[derive(Clone, Debug)]
 pub struct AttackEvent {
     pub hit: bool,
     pub shield_block: bool,
@@ -130,19 +173,40 @@ pub struct AttackEvent {
     pub use_jab: bool,
     pub is_ranged: bool,
     pub trauma_applied: bool,
+    pub trauma_seconds: Option<i32>,
+    pub roll: AttackRollBreakdown,
+    pub damage_breakdown: Option<DamageBreakdown>,
+    pub shield_damage_breakdown: Option<ShieldDamageBreakdown>,
+    pub defender_hp_after: i32,
+}
+
+#[derive(Clone, Debug)]
+pub struct KnockAsideRollBreakdown {
+    pub attack_die: i32,
+    pub defense_die: i32,
+    pub attack_bonus: i32,
+    pub defense_base: i32,
+    pub weapon_defense_bonus: i32,
+    pub attack_total: i32,
+    pub defense_total: i32,
 }
 
 #[derive(Clone, Debug)]
 pub struct KnockAsideEvent {
     pub success: bool,
+    pub roll: KnockAsideRollBreakdown,
 }
 
 impl Default for WeaponProfile {
     fn default() -> Self {
+        let damage_expr = "d4p".to_string();
+        let damage_expr_cache = DamageExprCache::new(&damage_expr);
         Self {
             name: "Weapon".to_string(),
-            damage_expr: "d4p".to_string(),
+            damage_expr,
+            damage_expr_cache,
             shield_damage_expr: None,
+            shield_damage_expr_cache: None,
             armor_penetration: 0,
             speed: 10.0,
             reach_ft: 1.0,
@@ -150,6 +214,7 @@ impl Default for WeaponProfile {
             two_hand_grip: false,
             use_jab: false,
             jab_special_expr: None,
+            jab_special_expr_cache: None,
             has_weapon: false,
             defense_bonus_always: false,
             uses_projectiles: false,
@@ -171,6 +236,7 @@ impl Default for DefenseProfile {
     fn default() -> Self {
         Self {
             defense_mod: 0,
+            ranged_defense_mod: 0,
             armor_dr: 0,
             armor_is_heavy: false,
             shield_name: None,
@@ -194,6 +260,8 @@ impl Default for Vitals {
             max_hp: 10,
             constitution: 10,
             threshold_of_pain: 3,
+            trauma_die_sides: 20,
+            trauma_die_penetrating: false,
         }
     }
 }
@@ -242,3 +310,4 @@ impl Default for Combatant {
         Self::new(CombatantSheet::default())
     }
 }
+use crate::core::rules::DamageExprCache;

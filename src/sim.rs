@@ -47,32 +47,42 @@ pub fn format_combat_event(event: &CombatEvent, combatants: &[Combatant; 2]) -> 
                 format!("{attacker_name} misses {defender_name} with {weapon_name}")
             };
 
-            let mut extras = Vec::new();
+            let mut details = Vec::new();
+            details.push(format_attack_roll(&attack.roll));
+            if let Some(breakdown) = attack.damage_breakdown.as_ref() {
+                details.push(format_damage_breakdown(breakdown));
+            }
+            if let Some(breakdown) = attack.shield_damage_breakdown.as_ref() {
+                details.push(format_shield_damage_breakdown(breakdown));
+            }
+            details.push(format!("hp {}", attack.defender_hp_after.max(0)));
             if attack.is_ranged {
-                extras.push("ranged".to_string());
+                details.push("ranged".to_string());
             }
             if attack.use_jab {
-                extras.push("jab".to_string());
+                details.push("jab".to_string());
             }
             if attack.knockback_ft > 0.0 {
-                extras.push(format!("knockback {:.0}ft", attack.knockback_ft));
+                details.push(format!("knockback {:.0}ft", attack.knockback_ft));
             }
-            if attack.trauma_applied {
-                extras.push("trauma".to_string());
+            if let Some(seconds) = attack.trauma_seconds {
+                details.push(format!("trauma {}s", seconds));
             }
 
-            if extras.is_empty() {
+            if details.is_empty() {
                 base
             } else {
-                format!("{base} ({})", extras.join(", "))
+                format!("{base} [{}]", details.join(" | "))
             }
         }
         CombatEventKind::KnockAside(knock) => {
-            if knock.success {
+            let base = if knock.success {
                 format!("{attacker_name} knocks aside {defender_name}'s weapon")
             } else {
                 format!("{attacker_name} fails to knock aside {defender_name}'s weapon")
-            }
+            };
+            let details = format_knock_aside_roll(&knock.roll);
+            format!("{base} [{details}]")
         }
     }
 }
@@ -83,4 +93,75 @@ pub fn format_combat_event_line(event: &CombatEvent, combatants: &[Combatant; 2]
         event.time,
         format_combat_event(event, combatants)
     )
+}
+
+fn format_attack_roll(roll: &AttackRollBreakdown) -> String {
+    let mut atk_parts = vec![
+        format!("d20 {}", roll.attack_die),
+        format!("bonus {}", roll.attack_bonus),
+    ];
+    if roll.range_mod != 0 {
+        atk_parts.push(format!("range {}", roll.range_mod));
+    }
+    let atk = format!("atk {} ({})", roll.attack_total, atk_parts.join(" + "));
+
+    let mut def_parts = vec![
+        format!("d20 {}", roll.defense_die),
+        format!("base {}", roll.defense_base),
+    ];
+    if roll.weapon_defense_bonus != 0 {
+        def_parts.push(format!("weapon {}", roll.weapon_defense_bonus));
+    }
+    if roll.shield_defense_bonus != 0 {
+        def_parts.push(format!("shield {}", roll.shield_defense_bonus));
+    }
+    let def = format!("def {} ({})", roll.defense_total, def_parts.join(" + "));
+
+    format!("{atk} vs {def}")
+}
+
+fn format_knock_aside_roll(roll: &KnockAsideRollBreakdown) -> String {
+    let atk_parts = vec![
+        format!("d20 {}", roll.attack_die),
+        format!("bonus {}", roll.attack_bonus),
+    ];
+    let atk = format!("atk {} ({})", roll.attack_total, atk_parts.join(" + "));
+
+    let mut def_parts = vec![
+        format!("d20 {}", roll.defense_die),
+        format!("base {}", roll.defense_base),
+    ];
+    if roll.weapon_defense_bonus != 0 {
+        def_parts.push(format!("weapon {}", roll.weapon_defense_bonus));
+    }
+    let def = format!("def {} ({})", roll.defense_total, def_parts.join(" + "));
+
+    format!("{atk} vs {def}")
+}
+
+fn format_damage_breakdown(breakdown: &DamageBreakdown) -> String {
+    format!(
+        "raw {} (roll {} + str {}) - dr {} = {}",
+        breakdown.raw_damage,
+        breakdown.rolled_damage,
+        breakdown.strength_damage,
+        breakdown.effective_armor_dr,
+        breakdown.final_damage
+    )
+}
+
+fn format_shield_damage_breakdown(breakdown: &ShieldDamageBreakdown) -> String {
+    let mut text = format!(
+        "shield raw {} (roll {} + str {}) - sdr {} - dr {} = hp {}",
+        breakdown.raw_damage,
+        breakdown.rolled_damage,
+        breakdown.strength_damage,
+        breakdown.shield_dr,
+        breakdown.effective_armor_dr,
+        breakdown.hp_damage
+    );
+    if breakdown.shield_broken {
+        text.push_str(" (shield broken)");
+    }
+    text
 }

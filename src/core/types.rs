@@ -2,6 +2,7 @@
 
 use crate::character::AbilitySet;
 use crate::core::ids::NpcPresetId;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug)]
 pub struct PlayerProfile {
@@ -44,30 +45,43 @@ impl Inventory {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Talent {
-    Placeholder,
-}
-
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TalentSpec {
-    pub talent: Talent,
-    pub name: &'static str,
-    pub description: &'static str,
+    pub id: String,
+    pub name: String,
+    pub description: String,
     pub max_rank: u8,
+    pub effects: Vec<TalentEffect>,
 }
 
-impl Talent {
-    pub fn spec(self) -> TalentSpec {
-        match self {
-            Talent::Placeholder => TalentSpec {
-                talent: self,
-                name: "Placeholder",
-                description: "No effect yet.",
-                max_rank: 1,
-            },
-        }
-    }
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct TalentSelection {
+    pub id: String,
+    #[serde(default = "default_talent_rank")]
+    pub rank: u8,
+    #[serde(default)]
+    pub weapon: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TalentEffect {
+    HitPointBonus { amount: i32 },
+    ArmorDrBonus { amount: i32 },
+    AttackBonusWeapon { amount: i32 },
+    DamageBonusWeapon { amount: i32 },
+    Dodge {
+        defense_bonus: i32,
+        allow_dex_ranged: bool,
+    },
+    TraumaDieOverride {
+        sides: i32,
+        penetrating: bool,
+    },
+}
+
+fn default_talent_rank() -> u8 {
+    1
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

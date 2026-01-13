@@ -1,4 +1,5 @@
 use hackmaster_sim::{character, data, game_logic, sim};
+use hackmaster_sim::core::rules::DamageExprCache;
 use character::{
     AbilityScore, AbilitySet, ArmorRegion, Character, Equipment, MaterialKind, Progression,
     ProgressionTier, Weapon, WeaponGroup, WeaponMastery,
@@ -114,6 +115,7 @@ fn main() {
         .as_ref()
         .map(|weapon| weapon.damage_expr.clone())
         .unwrap_or_else(|| "d4p".to_string());
+    let weapon_damage_cache = DamageExprCache::new(&weapon_damage_expr);
     let weapon_speed = character
         .equipment
         .weapon
@@ -158,7 +160,9 @@ fn main() {
             weapon: WeaponProfile {
                 name: weapon_name,
                 damage_expr: weapon_damage_expr,
+                damage_expr_cache: weapon_damage_cache,
                 shield_damage_expr: None,
+                shield_damage_expr_cache: None,
                 armor_penetration,
                 speed: weapon_speed,
                 reach_ft: weapon_reach,
@@ -166,6 +170,7 @@ fn main() {
                 two_hand_grip: false,
                 use_jab: false,
                 jab_special_expr: None,
+                jab_special_expr_cache: None,
                 has_weapon,
                 defense_bonus_always: weapon_defense_always,
                 uses_projectiles,
@@ -173,6 +178,7 @@ fn main() {
         },
         defense: DefenseProfile {
             defense_mod: derived.base_dv,
+            ranged_defense_mod: 0,
             armor_dr: derived.armor_dr,
             armor_is_heavy,
             shield_name: None,
@@ -189,6 +195,8 @@ fn main() {
                 derived.hit_points as i32,
                 character.level,
             ),
+            trauma_die_sides: 20,
+            trauma_die_penetrating: false,
         },
         maneuvers: sim::ManeuverProfile { hold_at_bay: false },
     };

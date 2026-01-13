@@ -2,7 +2,10 @@ use rand::Rng;
 
 use crate::core::rules::{penetrating_roll, roll_damage_expr};
 
-use super::types::{Combatant, CombatantState, ShieldBreakageStep};
+use super::types::{
+    AttackRollBreakdown, Combatant, CombatantState, DamageBreakdown, KnockAsideRollBreakdown,
+    ShieldBreakageStep, ShieldDamageBreakdown,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AttackMode {
@@ -22,10 +25,16 @@ pub(crate) struct AttackOutcome {
     pub(super) use_jab: bool,
     pub(super) is_ranged: bool,
     pub(super) trauma_applied: bool,
+    pub(super) trauma_seconds: Option<i32>,
+    pub(super) roll: AttackRollBreakdown,
+    pub(super) damage_breakdown: Option<DamageBreakdown>,
+    pub(super) shield_damage_breakdown: Option<ShieldDamageBreakdown>,
+    pub(super) defender_hp_after: i32,
 }
 
 pub(crate) struct KnockAsideOutcome {
     pub(super) success: bool,
+    pub(super) roll: KnockAsideRollBreakdown,
 }
 
 pub(crate) fn defense_die_sides(
@@ -68,15 +77,21 @@ fn maybe_apply_trauma(
     defender_idx: usize,
     damage: i32,
     rng: &mut impl Rng,
-) -> bool {
+) -> Option<i32> {
     let pain_threshold = combatants[defender_idx].sheet.vitals.threshold_of_pain;
     if damage <= pain_threshold {
-        return false;
+        return None;
     }
     let con_half = (combatants[defender_idx].sheet.vitals.constitution as i32) / 2;
-    let trauma_roll = roll_die(20, rng);
+    let trauma_die_sides = combatants[defender_idx].sheet.vitals.trauma_die_sides.max(1);
+    let trauma_penetrating = combatants[defender_idx].sheet.vitals.trauma_die_penetrating;
+    let trauma_roll = if trauma_penetrating {
+        penetrating_roll(trauma_die_sides, rng)
+    } else {
+        roll_die(trauma_die_sides, rng)
+    };
     if trauma_roll <= con_half {
-        return false;
+        return None;
     }
     let duration = if trauma_roll == 20 {
         roll_damage_expr("5d6p", rng, false) * 60
@@ -87,7 +102,7 @@ fn maybe_apply_trauma(
     let remaining = combatants[defender_idx].state.trauma_remaining_seconds;
     combatants[defender_idx].state.trauma_remaining_seconds = remaining.max(duration as i32);
     combatants[defender_idx].state.next_attack_time = None;
-    true
+    Some(duration as i32)
 }
 
 pub(crate) fn resolve_attack(
@@ -107,11 +122,8 @@ pub(crate) fn resolve_attack(
     let (
         attack_bonus,
         strength_damage,
-        damage_expr,
-        shield_damage_expr,
         armor_penetration,
         use_jab,
-        jab_special_expr,
         attacker_two_hand_grip,
         attacker_has_weapon,
         attacker_weapon_defense_always,
@@ -122,11 +134,8 @@ pub(crate) fn resolve_attack(
         (
             attacker.sheet.offense.attack_bonus,
             attacker.sheet.offense.strength_damage,
-            weapon.damage_expr.clone(),
-            weapon.shield_damage_expr.clone(),
             weapon.armor_penetration,
             weapon.use_jab,
-            weapon.jab_special_expr.clone(),
             weapon.two_hand_grip,
             weapon.has_weapon,
             weapon.defense_bonus_always,
@@ -140,6 +149,7 @@ pub(crate) fn resolve_attack(
     };
     let (
         defense_mod,
+        ranged_defense_mod,
         armor_dr,
         armor_is_heavy,
         shield_active,
@@ -155,11 +165,8 @@ pub(crate) fn resolve_attack(
     ) = {
         let defender = &combatants[defender_idx];
         (
-            if is_ranged {
-                0
-            } else {
-                defender.sheet.defense.defense_mod
-            },
+            defender.sheet.defense.defense_mod,
+            defender.sheet.defense.ranged_defense_mod,
             defender.sheet.defense.armor_dr,
             defender.sheet.defense.armor_is_heavy,
             defender_state.shield_intact,
@@ -201,30 +208,62 @@ pub(crate) fn resolve_attack(
         rng,
     );
     let mut attack_roll = attack_die + attack_bonus + range_mod;
-    if is_ranged && shield_active {
+    let mut use_shield_for_ranged = false;
+    let (defense_mod_used, shield_defense_bonus_used) = if is_ranged {
+        let dodge_total = defense_die + ranged_defense_mod;
+        let shield_total = defense_die + shield_defense_bonus;
+        if ranged_defense_mod != 0 && dodge_total >= shield_total {
+            (ranged_defense_mod, 0)
+        } else {
+            use_shield_for_ranged = shield_active;
+            (0, shield_defense_bonus)
+        }
+    } else {
+        (defense_mod, shield_defense_bonus)
+    };
+    if is_ranged && use_shield_for_ranged {
         if let Some(cap) = shield_cover_value {
             attack_roll = attack_roll.min(cap);
         }
     }
-    let defense_roll = defense_die + defense_mod + weapon_defense_bonus + shield_defense_bonus;
+    let defense_roll = defense_die + defense_mod_used + weapon_defense_bonus + shield_defense_bonus_used;
+    let roll = AttackRollBreakdown {
+        attack_die,
+        defense_die,
+        attack_bonus,
+        range_mod,
+        defense_base: defense_mod_used,
+        weapon_defense_bonus,
+        shield_defense_bonus: shield_defense_bonus_used,
+        attack_total: attack_roll,
+        defense_total: defense_roll,
+    };
     let mut damage = 0;
     let mut hit = false;
     let mut shield_block = false;
     let mut shield_damage = 0;
     let mut shield_broken = false;
     let mut knockback_ft = 0.0;
-    let mut trauma_applied = false;
+    let mut trauma_seconds = None;
+    let mut damage_breakdown = None;
+    let mut shield_damage_breakdown = None;
 
     if attack_roll >= defense_roll {
         hit = true;
-        let jab_expr = jab_special_expr.as_deref().unwrap_or(&damage_expr);
-        let rolled_damage = if use_jab {
-            roll_damage_expr(jab_expr, rng, true)
-        } else {
-            roll_damage_expr(&damage_expr, rng, false)
+        let (rolled_damage, halve_jab_damage) = {
+            let weapon = &combatants[attacker_idx].sheet.offense.weapon;
+            if use_jab {
+                let cache = weapon
+                    .jab_special_expr_cache
+                    .as_ref()
+                    .unwrap_or(&weapon.damage_expr_cache);
+                (cache.roll(rng, true), weapon.jab_special_expr_cache.is_none())
+            } else {
+                (weapon.damage_expr_cache.roll(rng, false), false)
+            }
         };
         let mut raw = rolled_damage + strength_damage;
-        if use_jab && jab_special_expr.is_none() {
+        if halve_jab_damage {
             raw /= 2;
         }
         if raw < 0 {
@@ -242,17 +281,29 @@ pub(crate) fn resolve_attack(
             combatants[defender_idx].state.hp -= damage;
             knockback_ft = knockback_distance_ft(raw);
 
-            trauma_applied = maybe_apply_trauma(combatants, defender_idx, damage, rng);
+            trauma_seconds = maybe_apply_trauma(combatants, defender_idx, damage, rng);
+            damage_breakdown = Some(DamageBreakdown {
+                rolled_damage,
+                strength_damage,
+                raw_damage: raw,
+                armor_dr,
+                armor_penetration,
+                effective_armor_dr: effective_dr,
+                final_damage: damage,
+            });
         }
     } else if shield_active && !is_ranged {
         let miss_margin = defense_roll - attack_roll;
         if miss_margin < 10 {
             shield_block = true;
-            let shield_expr = shield_damage_expr
-                .as_deref()
-                .filter(|expr| !expr.is_empty())
-                .unwrap_or(&damage_expr);
-            let rolled_damage = roll_damage_expr(shield_expr, rng, false);
+            let rolled_damage = {
+                let weapon = &combatants[attacker_idx].sheet.offense.weapon;
+                let cache = weapon
+                    .shield_damage_expr_cache
+                    .as_ref()
+                    .unwrap_or(&weapon.damage_expr_cache);
+                cache.roll(rng, false)
+            };
             let mut raw = rolled_damage + strength_damage;
             if raw < 0 {
                 raw = 0;
@@ -267,7 +318,7 @@ pub(crate) fn resolve_attack(
             let hp_damage = (shield_after_dr - effective_dr).max(0);
             if hp_damage > 0 {
                 combatants[defender_idx].state.hp -= hp_damage;
-                trauma_applied = trauma_applied || maybe_apply_trauma(combatants, defender_idx, hp_damage, rng);
+                trauma_seconds = maybe_apply_trauma(combatants, defender_idx, hp_damage, rng);
             }
 
             if let Some(steps) = shield_breakage {
@@ -284,6 +335,18 @@ pub(crate) fn resolve_attack(
             if shield_broken {
                 combatants[defender_idx].state.shield_intact = false;
             }
+            damage = hp_damage;
+            shield_damage_breakdown = Some(ShieldDamageBreakdown {
+                rolled_damage,
+                strength_damage,
+                raw_damage: raw,
+                shield_dr,
+                armor_dr,
+                armor_penetration,
+                effective_armor_dr: effective_dr,
+                hp_damage,
+                shield_broken,
+            });
         }
     }
 
@@ -309,6 +372,8 @@ pub(crate) fn resolve_attack(
             combatants[attacker_idx].state.defense_plus_four_ready = true;
         }
     }
+    let defender_hp_after = combatants[defender_idx].state.hp;
+    let trauma_applied = trauma_seconds.is_some();
     AttackOutcome {
         attacker_idx,
         defender_idx,
@@ -321,6 +386,11 @@ pub(crate) fn resolve_attack(
         use_jab,
         is_ranged,
         trauma_applied,
+        trauma_seconds,
+        roll,
+        damage_breakdown,
+        shield_damage_breakdown,
+        defender_hp_after,
     }
 }
 
@@ -356,7 +426,16 @@ pub(crate) fn resolve_knock_aside(
     };
     let defense_roll = defense_die + defender.sheet.defense.defense_mod + weapon_defense_bonus;
     let success = attack_roll >= defense_roll;
-    KnockAsideOutcome { success }
+    let roll = KnockAsideRollBreakdown {
+        attack_die,
+        defense_die,
+        attack_bonus: attacker.sheet.offense.attack_bonus,
+        defense_base: defender.sheet.defense.defense_mod,
+        weapon_defense_bonus,
+        attack_total: attack_roll,
+        defense_total: defense_roll,
+    };
+    KnockAsideOutcome { success, roll }
 }
 
 fn breakage_roll(step: ShieldBreakageStep, rng: &mut impl Rng) -> bool {

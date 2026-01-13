@@ -7,7 +7,7 @@ use std::time::Instant;
 use game_logic::{
     ArmorCatalog, ArmorEntry, ArmorId, FighterMasteries, FighterPreset, FighterPresetCatalog,
     FighterProgression, NpcPresetCatalog, PlayerConfig, ShieldCatalog, ShieldEntry, ShieldId,
-    WeaponCatalog, WeaponHandedness, WeaponId, WeaponSize,
+    TalentCatalog, WeaponCatalog, WeaponHandedness, WeaponId, WeaponSize,
 };
 
 #[derive(Clone, Copy)]
@@ -40,6 +40,7 @@ struct SimGuiApp {
     weapon_catalog: WeaponCatalog,
     armor_catalog: ArmorCatalog,
     shield_catalog: ShieldCatalog,
+    talent_catalog: TalentCatalog,
     npc_presets: NpcPresetCatalog,
     fighter_presets: FighterPresetCatalog,
     fighter_preset_names: [String; 2],
@@ -78,6 +79,13 @@ impl SimGuiApp {
                 Catalog::new(Vec::new())
             }
         };
+        let talent_catalog = match data::load_talents("data/talents.json") {
+            Ok(talents) => talents,
+            Err(err) => {
+                eprintln!("Failed to load talents: {err}");
+                Catalog::new(Vec::new())
+            }
+        };
         let sim = SimState::new(SimConfig::new(200.0, 1.0));
         let weapon_a = weapon_catalog
             .id_from_index(1)
@@ -101,6 +109,7 @@ impl SimGuiApp {
             weapon_catalog,
             armor_catalog,
             shield_catalog,
+            talent_catalog,
             npc_presets,
             fighter_presets,
             fighter_preset_names: ["Fighter A".to_string(), "Fighter B".to_string()],
@@ -122,6 +131,7 @@ impl SimGuiApp {
             &self.armor_catalog,
             &self.shield_catalog,
             &self.npc_presets,
+            &self.talent_catalog,
         );
         self.sim.reset_with_combatants(combatants);
     }
@@ -133,6 +143,7 @@ impl SimGuiApp {
             &self.armor_catalog,
             &self.shield_catalog,
             &self.npc_presets,
+            &self.talent_catalog,
         );
         let config = SimConfig::new(self.sim.config.start_distance, self.sim.config.stop_distance);
         let start = Instant::now();
@@ -786,6 +797,7 @@ impl eframe::App for SimGuiApp {
                         &self.weapon_catalog,
                         &self.armor_catalog,
                         &self.shield_catalog,
+                        &self.talent_catalog,
                         &self.npc_presets,
                         &mut self.fighter_presets,
                         fighter_preset_name,
@@ -809,6 +821,7 @@ fn render_player_editor(
     weapon_catalog: &WeaponCatalog,
     armor_catalog: &ArmorCatalog,
     shield_catalog: &ShieldCatalog,
+    talent_catalog: &TalentCatalog,
     npc_presets: &NpcPresetCatalog,
     fighter_presets: &mut FighterPresetCatalog,
     fighter_preset_name: &mut String,
@@ -1240,7 +1253,13 @@ fn render_player_editor(
     });
 
     let game_logic::PlayerSummary { derived, roll } =
-        game_logic::player_summary(player, weapon_catalog, armor_catalog, shield_catalog);
+        game_logic::player_summary(
+            player,
+            weapon_catalog,
+            armor_catalog,
+            shield_catalog,
+            talent_catalog,
+        );
     let defense_mastery = game_logic::effective_defense_mastery(player, weapon);
     ui.separator();
     if npc_active {
@@ -1310,6 +1329,7 @@ fn render_player_editor(
                     weapon_catalog,
                     armor_catalog,
                     shield_catalog,
+                    talent_catalog,
                 )
                 .derived
                 .armor_dr
@@ -1360,6 +1380,7 @@ fn apply_fighter_preset(
     player.two_hand_grip = preset.two_hand_grip;
     player.use_jab = preset.use_jab;
     player.hold_at_bay = preset.hold_at_bay;
+    player.talents = preset.talents.clone();
     player.weapon_id = find_weapon_id_by_name(weapon_catalog, &preset.weapon)
         .or_else(|| weapon_catalog.first_id())
         .unwrap_or(WeaponId::new(0));
@@ -1431,6 +1452,7 @@ fn fighter_preset_from_player(
         two_hand_grip: player.two_hand_grip,
         use_jab: player.use_jab,
         hold_at_bay: player.hold_at_bay,
+        talents: player.talents.clone(),
     }
 }
 

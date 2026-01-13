@@ -33,9 +33,12 @@ pub enum ShieldTag {}
 pub enum NpcPresetTag {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FighterPresetTag {}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TalentTag {}
 
 pub type WeaponId = Id<WeaponTag>;
 pub type ArmorId = Id<ArmorTag>;
 pub type ShieldId = Id<ShieldTag>;
 pub type NpcPresetId = Id<NpcPresetTag>;
 pub type FighterPresetId = Id<FighterPresetTag>;
+pub type TalentId = Id<TalentTag>;

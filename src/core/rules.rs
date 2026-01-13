@@ -2,6 +2,35 @@
 
 use rand::Rng;
 
+#[derive(Clone, Debug)]
+pub struct DamageExprCache {
+    cleaned: String,
+    cleaned_nonpenetrating: String,
+    is_lower_of: bool,
+}
+
+impl DamageExprCache {
+    pub fn new(expr: &str) -> Self {
+        let lower = expr.to_ascii_lowercase();
+        let is_lower_of = lower.contains("lower of");
+        let cleaned = clean_damage_expr(expr);
+        let cleaned_nonpenetrating = cleaned.replace('p', "");
+        Self {
+            cleaned,
+            cleaned_nonpenetrating,
+            is_lower_of,
+        }
+    }
+
+    pub fn roll(&self, rng: &mut impl Rng, nonpenetrating: bool) -> i32 {
+        if nonpenetrating {
+            roll_damage_expr_cached(&self.cleaned_nonpenetrating, self.is_lower_of, rng)
+        } else {
+            roll_damage_expr_cached(&self.cleaned, self.is_lower_of, rng)
+        }
+    }
+}
+
 pub fn roll_damage_expr_with_detail(expr: &str, rng: &mut impl Rng) -> (i32, String) {
     roll_damage_expr_with_detail_inner(expr, rng, false)
 }
@@ -53,6 +82,20 @@ pub fn roll_damage_expr(expr: &str, rng: &mut impl Rng, nonpenetrating: bool) ->
         a_total.min(b_total)
     } else {
         evaluate_expression(&cleaned, rng)
+    }
+}
+
+fn roll_damage_expr_cached(
+    cleaned: &str,
+    is_lower_of: bool,
+    rng: &mut impl Rng,
+) -> i32 {
+    if is_lower_of {
+        let a_total = evaluate_expression(cleaned, rng);
+        let b_total = evaluate_expression(cleaned, rng);
+        a_total.min(b_total)
+    } else {
+        evaluate_expression(cleaned, rng)
     }
 }
 
