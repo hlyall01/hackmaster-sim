@@ -7,5 +7,5 @@ pub mod spawner;
 
 pub use loot::{LootItemEntry, LootRoll, LootTable};
 pub use progression::{apply_xp, apply_xp_with, LevelUpResult, XpCurve};
-pub use run::{FightResult, Reward, RunOutcome, RunState};
+pub use run::{run_next_fight, CombatantBuilder, FightResult, Reward, RunOutcome, RunState, Wound};
 pub use spawner::{EnemySpawnEntry, EnemySpawner};

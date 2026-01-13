@@ -11,76 +11,18 @@
 - Gameplay loop is deterministic with injectable RNG.
 - All cross-layer data flow uses typed IDs + explicit conversion.
 
-## Phase 0: Baseline Cleanup (stabilize boundaries)
-- Inventory current responsibilities (done in `boundary_audit.md`).
-- Ensure sim emits structured events only (already started).
-- Replace remaining UI-only types in core (keep colors in UI).
-- Remove duplicate rules/data in `src/main.rs` or re-home them into core.
-
-Deliverables
-- Core modules compile without `eframe/egui` imports.
-- One path for weapon/material data (no duplicates).
-
-## Phase 1: Split Data Loading from Rules
-Move JSON and embedded fallback logic out of `src/game_logic.rs`.
-
-Work
-- Create `src/data/` (or `src/adapters/`) with:
-  - `weapons.rs`, `armor.rs`, `materials.rs`, `npc_presets.rs`, `fighter_presets.rs`
-  - a thin `load_*` API that returns catalogs and parse errors
-- Keep `game_logic` focused on pure transforms:
-  - `build_combatant`, material bonuses, mastery rules
-- If needed, rename `game_logic` to `builders` or `core_builders`.
-
-Deliverables
-- `game_logic` has no `std::fs` or `include_str!`.
-- UI/CLI call `data::*` loaders and pass catalogs into core.
-
-## Phase 2: Domain Types + Gameplay Layer
-Introduce a gameplay layer to orchestrate fights, loot, and progression.
-
-Work
-- Expand `src/core/types.rs` with new domain types:
-  - `PlayerProfile` (base stats, level, xp)
-  - `Inventory` (gold, items)
-  - `Talent` and `TalentSpec` (enum + metadata)
-  - `EnemyProfile` (level, preset ID)
-- Add `src/core/gameplay/`:
-  - `run.rs`: `RunState`, `RunOutcome`, `FightResult`, `Reward`
-  - `spawner.rs`: `EnemySpawner` (level-appropriate selection)
-  - `loot.rs`: `LootTable` and `LootRoll`
-  - `progression.rs`: XP curve, level-up + stat growth hooks
-- Use `core::rng::SimRng` for deterministic rolls.
-
-Deliverables
-- A pure gameplay API that can be called from CLI/GUI.
-- Minimal unit tests for spawner + loot determinism.
-
-## Phase 3: MVP Autobattler Loop
-Implement a first-pass loop for "fight -> loot -> xp".
-
-Work
-- Provide `gameplay::run_next_fight`:
-  - Pick enemy from spawner (based on player level or run depth)
-  - Convert `PlayerProfile` + gear into `CombatantSheet`
-  - Sim a single fight via `core::sim`
-  - Produce `FightResult` (win/lose, hp left, turns, events)
-  - Apply rewards (gold + xp) if win
-- Keep talents as passive placeholders (no effects yet).
-- Store run state: `RunState { player, inventory, run_depth }`.
-
-Deliverables
-- CLI entry (or small test) that runs N fights in a row.
-- Deterministic output with seeded RNG.
+## Phase 3: Wound System
+You dont full heal after every fight, you gets wounds in battle. Each time you take damage you track it as a wound. Wounds all heal independently, and current HP is reduced by the sum of wound damage (max HP stays the same).
+After a battle each wound heals by 1. Then a wound takes half a day for each point of damage in its current size to heal. Example: a 7 point wound becomes 6 immediately, then takes 3 days to become 5 (half-day x 6), then 2.5 days to become 4, etc. We will be having a random amount of days between encounters in the game, but for now just implement wounds and say there is 8 days between each encounter.
 
 ## Phase 4: Growth Systems
 Expand leveling and talents in small steps.
 
 Work
 - Implement XP curve + level increments.
-- Add talent unlock flow (choose one of three on level-up).
-- Add stat allocation rules (fixed gain per level or choice).
-- Add item upgrades (basic tiers for weapons/armor).
+- Earn weapon mastery after every fight. Roll for it. 8d6 penetrating points.
+- Add talent unlock flow. earn bp (build points) and advancement points (ap) on levelup to spend on talents.
+- Add stat allocation rules (costs build points, roll for stat increase).
 
 Deliverables
 - Level-up decision point in the loop.
@@ -99,15 +41,7 @@ Work
 Deliverables
 - A simple, visible autobattler loop in UI.
 
-## Very First Steps (next 1-2 PRs)
-1) Extract JSON loading into `src/data/*` and simplify `game_logic`.
-2) Create `core/gameplay/run.rs` with:
-   - `RunState`, `RunOutcome`, `FightResult`, `Reward`
-   - a stub `run_next_fight` that calls `core::sim`
-3) Add minimal loot + XP in `core/gameplay/loot.rs` and `progression.rs`.
-
 ## Open Questions (need answers to progress)
-- How should enemy strength scale (player level, run depth, or both)?
-- Should loot be flat gold only for MVP, or include item drops?
+- When do we roll stats and apply them to the player profile?
 - Are talents purely passive modifiers, or can they unlock actions?
 - Do we want full campaign persistence (save/load) in v1?
