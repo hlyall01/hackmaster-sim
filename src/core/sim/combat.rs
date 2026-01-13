@@ -159,6 +159,7 @@ pub(crate) fn resolve_attack(
         shield_breakage,
         trauma_incapacitated,
         defender_two_hand_grip,
+        defender_defensive_dualwielding,
         defender_has_weapon,
         defender_weapon_defense_always,
         defender_weapon_speed,
@@ -176,6 +177,7 @@ pub(crate) fn resolve_attack(
             defender.sheet.defense.shield_breakage,
             defender_state.trauma_remaining_seconds > 0,
             defender.sheet.offense.weapon.two_hand_grip,
+            defender.sheet.maneuvers.defensive_dualwielding,
             defender.sheet.offense.weapon.has_weapon,
             defender.sheet.offense.weapon.defense_bonus_always,
             defender.sheet.offense.weapon.speed,
@@ -184,7 +186,8 @@ pub(crate) fn resolve_attack(
     let weapon_defense_bonus = if is_ranged {
         0
     } else if defender_weapon_defense_always
-        || (defender_two_hand_grip && defender_state.defense_plus_four_ready)
+        || ((defender_two_hand_grip || defender_defensive_dualwielding)
+            && defender_state.defense_plus_four_ready)
     {
         4
     } else {
@@ -361,14 +364,17 @@ pub(crate) fn resolve_attack(
     }
 
     if !is_ranged {
-        if defender_two_hand_grip
+        if (defender_two_hand_grip || defender_defensive_dualwielding)
             && combatants[defender_idx].state.defense_plus_four_ready
             && defender_has_weapon
             && !defender_weapon_defense_always
         {
             combatants[defender_idx].state.defense_plus_four_ready = false;
         }
-        if attacker_two_hand_grip && attacker_has_weapon && !attacker_weapon_defense_always {
+        if (attacker_two_hand_grip || combatants[attacker_idx].sheet.maneuvers.defensive_dualwielding)
+            && attacker_has_weapon
+            && !attacker_weapon_defense_always
+        {
             combatants[attacker_idx].state.defense_plus_four_ready = true;
         }
     }
@@ -418,7 +424,9 @@ pub(crate) fn resolve_knock_aside(
         rng,
     );
     let weapon_defense_bonus = if defender.sheet.offense.weapon.defense_bonus_always
-        || (defender.sheet.offense.weapon.two_hand_grip && defender_state.defense_plus_four_ready)
+        || ((defender.sheet.offense.weapon.two_hand_grip
+            || defender.sheet.maneuvers.defensive_dualwielding)
+            && defender_state.defense_plus_four_ready)
     {
         4
     } else {

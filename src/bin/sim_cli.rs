@@ -198,7 +198,10 @@ fn main() {
             trauma_die_sides: 20,
             trauma_die_penetrating: false,
         },
-        maneuvers: sim::ManeuverProfile { hold_at_bay: false },
+        maneuvers: sim::ManeuverProfile {
+            hold_at_bay: false,
+            defensive_dualwielding: false,
+        },
     };
     let combatant = Combatant::new(sheet);
     sim.reset_with_combatants([combatant.clone(), combatant]);

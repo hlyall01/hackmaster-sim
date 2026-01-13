@@ -183,6 +183,8 @@ pub struct FighterPreset {
     #[serde(default)]
     pub hold_at_bay: bool,
     #[serde(default)]
+    pub defensive_dualwielding: bool,
+    #[serde(default)]
     pub talents: Vec<TalentSelection>,
 }
 
@@ -220,6 +222,7 @@ pub struct PlayerConfig {
     pub two_hand_grip: bool,
     pub use_jab: bool,
     pub hold_at_bay: bool,
+    pub defensive_dualwielding: bool,
     pub talents: Vec<TalentSelection>,
 }
 
@@ -258,6 +261,7 @@ impl PlayerConfig {
             two_hand_grip: false,
             use_jab: false,
             hold_at_bay: false,
+            defensive_dualwielding: false,
             talents: Vec::new(),
         }
     }
@@ -274,6 +278,7 @@ struct TalentModifiers {
     hp_bonus: i32,
     armor_dr_bonus: i32,
     defense_bonus: i32,
+    defense_bonus_by_weapon: HashMap<WeaponId, i32>,
     allow_dex_ranged: bool,
     trauma_die_override: Option<TraumaDieOverride>,
     attack_bonus_by_weapon: HashMap<WeaponId, i32>,
@@ -287,6 +292,10 @@ impl TalentModifiers {
 
     fn damage_bonus_for_weapon(&self, weapon_id: WeaponId) -> i32 {
         *self.damage_bonus_by_weapon.get(&weapon_id).unwrap_or(&0)
+    }
+
+    fn defense_bonus_for_weapon(&self, weapon_id: WeaponId) -> i32 {
+        *self.defense_bonus_by_weapon.get(&weapon_id).unwrap_or(&0)
     }
 }
 
@@ -343,6 +352,17 @@ fn resolve_talent_modifiers(
                         if let Some(weapon_id) = weapon_id_by_name(weapon_catalog, weapon_name) {
                             let entry =
                                 modifiers.damage_bonus_by_weapon.entry(weapon_id).or_insert(0);
+                            *entry += amount * rank;
+                        }
+                    }
+                }
+                TalentEffect::DefenseBonusWeapon { amount } => {
+                    if let Some(weapon_name) = selection.weapon.as_deref() {
+                        if let Some(weapon_id) = weapon_id_by_name(weapon_catalog, weapon_name) {
+                            let entry = modifiers
+                                .defense_bonus_by_weapon
+                                .entry(weapon_id)
+                                .or_insert(0);
                             *entry += amount * rank;
                         }
                     }
@@ -411,6 +431,12 @@ pub fn shield_equipped(player: &PlayerConfig, weapon: &WeaponPreset) -> bool {
     can_equip_shield(player, weapon) && player.shield_id.index() > 0
 }
 
+pub fn defensive_dualwielding_active(player: &PlayerConfig, weapon: &WeaponPreset) -> bool {
+    player.defensive_dualwielding
+        && weapon.handedness == WeaponHandedness::OneHanded
+        && !player.two_hand_grip
+}
+
 pub fn effective_attack_mastery(player: &PlayerConfig) -> i32 {
     clamp_mastery(player.mastery_attack)
 }
@@ -468,10 +494,14 @@ pub fn player_summary(
     let weapon = weapon_for_player(player, weapon_catalog);
     let character = build_character(player, weapon_catalog, armor_catalog, shield_catalog);
     let modifiers = resolve_talent_modifiers(player, talent_catalog, weapon_catalog);
+    let defensive_dualwielding = defensive_dualwielding_active(player, weapon);
+    let defense_bonus_weapon =
+        modifiers.defense_bonus_for_weapon(player.weapon_id)
+            * if defensive_dualwielding { 2 } else { 1 };
     let mut derived = character.derived();
     derived.hit_points = (derived.hit_points as i32 + modifiers.hp_bonus).max(1) as u32;
     derived.armor_dr = (derived.armor_dr + modifiers.armor_dr_bonus).max(0);
-    derived.base_dv += modifiers.defense_bonus;
+    derived.base_dv += modifiers.defense_bonus + defense_bonus_weapon;
     let roll = roll_summary(player, weapon, &character, &derived, &modifiers);
     PlayerSummary { derived, roll }
 }
@@ -697,13 +727,19 @@ pub fn build_combatant(
         uses_projectiles,
     );
     let attack_mastery = effective_attack_mastery(player);
-    let defense_mastery = effective_defense_mastery(player, weapon_preset);
+    let mut defensive_dualwielding = defensive_dualwielding_active(player, weapon_preset);
+    let defense_mastery = effective_defense_mastery(player, weapon_preset)
+        * if defensive_dualwielding { 2 } else { 1 };
+    let defense_bonus_weapon =
+        modifiers.defense_bonus_for_weapon(player.weapon_id)
+            * if defensive_dualwielding { 2 } else { 1 };
+    let defense_bonus = modifiers.defense_bonus;
     let damage_mastery = effective_damage_mastery(player);
     let mut attack_bonus = derived.attack_bonus
         + material_attack_bonus
         + attack_mastery
         + modifiers.attack_bonus_for_weapon(player.weapon_id);
-    let mut defense_mod = derived.base_dv + defense_mastery + modifiers.defense_bonus;
+    let mut defense_mod = derived.base_dv + defense_mastery + defense_bonus + defense_bonus_weapon;
     let mut armor_dr = (derived.armor_dr + modifiers.armor_dr_bonus).max(0);
     let mut strength_damage =
         strength_damage_for_weapon(weapon_preset, character.ability_mods.strength.damage)
@@ -720,7 +756,7 @@ pub fn build_combatant(
     let mut shield_breakage =
         shield_data.map(|shield| breakage_steps_from_thresholds(shield.breakage_thresholds));
     let mut ranged_defense_mod = if modifiers.allow_dex_ranged {
-        character.ability_mods.dexterity.defense + modifiers.defense_bonus
+        character.ability_mods.dexterity.defense + defense_bonus
     } else {
         0
     };
@@ -744,6 +780,7 @@ pub fn build_combatant(
         ranged_defense_mod = 0;
         trauma_die_sides = 20;
         trauma_die_penetrating = false;
+        defensive_dualwielding = false;
     }
 
     let weapon_speed = if use_jab {
@@ -805,6 +842,7 @@ pub fn build_combatant(
         },
         maneuvers: sim::ManeuverProfile {
             hold_at_bay: player.hold_at_bay,
+            defensive_dualwielding,
         },
     };
 
@@ -1353,7 +1391,9 @@ fn leak_str(value: String) -> &'static str {
 }
 
 fn can_equip_shield(player: &PlayerConfig, weapon: &WeaponPreset) -> bool {
-    weapon.handedness == WeaponHandedness::OneHanded && !player.two_hand_grip
+    weapon.handedness == WeaponHandedness::OneHanded
+        && !player.two_hand_grip
+        && !defensive_dualwielding_active(player, weapon)
 }
 
 fn apply_shield_material_tier(shield: ShieldPreset, tier: i32) -> Shield {
@@ -1629,6 +1669,72 @@ mod tests {
             combatant.sheet.defense.defense_mod - baseline_combatant.sheet.defense.defense_mod,
             2
         );
+    }
+
+    #[test]
+    fn defensive_dualwielding_doubles_mastery_and_weapon_defense_bonus_only() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let weapon_id = one_handed_weapon_id(&weapons);
+        let weapon_name = weapons
+            .get(weapon_id)
+            .map(|weapon| weapon.name.clone())
+            .unwrap_or_else(|| "Fist".to_string());
+        let talents = Catalog::new(vec![
+            TalentSpec {
+                id: "defense_bonus_weapon".to_string(),
+                name: "Defense Bonus (weapon)".to_string(),
+                description: "".to_string(),
+                max_rank: 1,
+                effects: vec![TalentEffect::DefenseBonusWeapon { amount: 2 }],
+            },
+            TalentSpec {
+                id: "dodge".to_string(),
+                name: "Dodge".to_string(),
+                description: "".to_string(),
+                max_rank: 1,
+                effects: vec![TalentEffect::Dodge {
+                    defense_bonus: 1,
+                    allow_dex_ranged: false,
+                }],
+            },
+        ]);
+        let mut player = PlayerConfig::new("Test", weapon_id);
+        player.mastery_defense = 3;
+        player.defensive_dualwielding = true;
+        player.talents = vec![
+            TalentSelection {
+                id: "defense_bonus_weapon".to_string(),
+                rank: 1,
+                weapon: Some(weapon_name),
+            },
+            TalentSelection {
+                id: "dodge".to_string(),
+                rank: 1,
+                weapon: None,
+            },
+        ];
+        let npc_presets = Catalog::new(Vec::new());
+        let dual = build_combatant(
+            &player,
+            &weapons,
+            &armor,
+            &shields,
+            &npc_presets,
+            &talents,
+        );
+        let mut baseline = player.clone();
+        baseline.defensive_dualwielding = false;
+        let normal = build_combatant(
+            &baseline,
+            &weapons,
+            &armor,
+            &shields,
+            &npc_presets,
+            &talents,
+        );
+        let diff = dual.sheet.defense.defense_mod - normal.sheet.defense.defense_mod;
+        assert_eq!(diff, player.mastery_defense + 2);
+        assert_ne!(diff, player.mastery_defense + 3);
     }
 
     #[test]

@@ -70,6 +70,7 @@ pub enum TalentEffect {
     ArmorDrBonus { amount: i32 },
     AttackBonusWeapon { amount: i32 },
     DamageBonusWeapon { amount: i32 },
+    DefenseBonusWeapon { amount: i32 },
     Dodge {
         defense_bonus: i32,
         allow_dex_ranged: bool,

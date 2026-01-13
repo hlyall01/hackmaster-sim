@@ -45,6 +45,15 @@
         { "type": "damage_bonus_weapon", "amount": 1 }
       ]
     },
+        {
+      "id": "defense_bonus_weapon",
+      "name": "Defense Bonus (weapon)",
+      "description": "Gain +1 defense bonus with a chosen melee weapon.",
+      "max_rank": 1,
+      "effects": [
+        { "type": "defense_bonus_weapon", "amount": 1 }
+      ]
+    },
     {
       "id": "dodge",
       "name": "Dodge",

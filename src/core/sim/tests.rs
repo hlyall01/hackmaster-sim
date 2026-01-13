@@ -869,6 +869,79 @@
     }
 
     #[test]
+    fn defensive_dualwielding_bonus_applies_once_between_attacks() {
+        let mut attacker = combatant_basic(
+            "Attacker".to_string(),
+            "Test Blade".to_string(),
+            0,
+            0,
+            0,
+            false,
+            0,
+            "1d1".to_string(),
+            0,
+            10.0,
+            1.0,
+            5.0,
+            false,
+            false,
+            None,
+            true,
+            false,
+            20,
+        );
+        attacker.sheet.maneuvers.defensive_dualwielding = true;
+        let defender = combatant_basic(
+            "Defender".to_string(),
+            "Test Blade".to_string(),
+            0,
+            0,
+            0,
+            false,
+            0,
+            "1d1".to_string(),
+            0,
+            10.0,
+            1.0,
+            5.0,
+            false,
+            false,
+            None,
+            true,
+            false,
+            20,
+        );
+        let mut state = make_state(attacker, defender);
+        let mut rng = FixedRng(0);
+        let _ = resolve_attack(
+            &mut state.combatants,
+            0,
+            1,
+            0,
+            false,
+            AttackMode::Normal,
+            0.0,
+            None,
+            &mut rng,
+        );
+        assert!(state.combatants[0].state.defense_plus_four_ready);
+
+        let mut rng = FixedRng(0);
+        let _ = resolve_attack(
+            &mut state.combatants,
+            1,
+            0,
+            0,
+            false,
+            AttackMode::Normal,
+            0.0,
+            None,
+            &mut rng,
+        );
+        assert!(!state.combatants[0].state.defense_plus_four_ready);
+    }
+
+    #[test]
     fn poleaxe_always_gets_defense_bonus() {
         let attacker = combatant_basic(
             "Attacker".to_string(),

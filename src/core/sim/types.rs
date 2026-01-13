@@ -41,6 +41,7 @@ pub struct WeaponProfile {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ManeuverProfile {
     pub hold_at_bay: bool,
+    pub defensive_dualwielding: bool,
 }
 
 #[derive(Clone, Debug)]

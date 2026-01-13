@@ -4,7 +4,7 @@ use egui_plot::{GridInput, GridMark, Legend, Line, Plot, PlotPoints, Points, VLi
 use hackmaster_sim::character::WeaponGroup;
 use hackmaster_sim::core::rules::{effective_armor_value, expected_damage_expr};
 use hackmaster_sim::data;
-use hackmaster_sim::game_logic::{self, WeaponCatalog, WeaponHandedness, WeaponPreset, WeaponSize};
+use hackmaster_sim::game_logic::{self, WeaponCatalog, WeaponPreset};
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};

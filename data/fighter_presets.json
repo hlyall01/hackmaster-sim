@@ -154,7 +154,8 @@
       "shield_material_tier": 0,
       "two_hand_grip": false,
       "use_jab": false,
-      "hold_at_bay": false
+      "hold_at_bay": false,
+      "defensive_dualwielding": true
     }
   ]
 }

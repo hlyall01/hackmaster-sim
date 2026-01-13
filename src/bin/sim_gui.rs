@@ -1091,6 +1091,7 @@ fn render_player_editor(
     let shield_bonus = if player.shield_id.index() > 0
         && weapon.handedness == WeaponHandedness::OneHanded
         && !player.two_hand_grip
+        && !player.defensive_dualwielding
     {
         shield_catalog
             .get(player.shield_id)
@@ -1106,6 +1107,11 @@ fn render_player_editor(
         player.two_hand_grip = true;
     } else if !can_two_hand {
         player.two_hand_grip = false;
+    }
+    let can_defensive_dualwield =
+        weapon.handedness == WeaponHandedness::OneHanded && !player.two_hand_grip;
+    if !can_defensive_dualwield {
+        player.defensive_dualwielding = false;
     }
     let jab_label = weapon
         .jab_speed_label
@@ -1150,6 +1156,17 @@ fn render_player_editor(
             ui.label("Unavailable");
         }
     });
+    ui.horizontal(|ui| {
+        ui.add_enabled_ui(can_defensive_dualwield, |ui| {
+            ui.checkbox(&mut player.defensive_dualwielding, "Defensive dualwielding");
+        });
+        if !can_defensive_dualwield {
+            ui.label("Unavailable");
+        }
+    });
+    if player.defensive_dualwielding {
+        ui.label("Defensive dualwielding: double defense mastery & weapon defense talent bonus");
+    }
 
     ui.add_enabled_ui(!npc_active, |ui| {
         ui.horizontal(|ui| {
@@ -1174,8 +1191,9 @@ fn render_player_editor(
         });
         ui.horizontal(|ui| {
             ui.label("Shield");
-            let can_use_shield =
-                weapon.handedness == WeaponHandedness::OneHanded && !player.two_hand_grip;
+            let can_use_shield = weapon.handedness == WeaponHandedness::OneHanded
+                && !player.two_hand_grip
+                && !player.defensive_dualwielding;
             if !can_use_shield {
                 player.shield_id = ShieldId::new(0);
                 player.shield_material_tier = 0;
@@ -1260,7 +1278,9 @@ fn render_player_editor(
             shield_catalog,
             talent_catalog,
         );
-    let defense_mastery = game_logic::effective_defense_mastery(player, weapon);
+    let defensive_dualwielding = game_logic::defensive_dualwielding_active(player, weapon);
+    let defense_mastery = game_logic::effective_defense_mastery(player, weapon)
+        * if defensive_dualwielding { 2 } else { 1 };
     ui.separator();
     if npc_active {
         ui.label("Derived stats ignored while NPC preset is active.");
@@ -1312,10 +1332,16 @@ fn render_player_editor(
                     weapon_def
                 ));
             } else {
+                let dual_note = if defensive_dualwielding || player.two_hand_grip {
+                    " (+4 after you attack)"
+                } else {
+                    ""
+                };
                 ui.label(format!(
-                    "Defense roll (melee): d20p + {}{}",
+                    "Defense roll (melee): d20p + {}{}{}",
                     derived.base_dv + defense_mastery,
-                    weapon_def
+                    weapon_def,
+                    dual_note
                 ));
             }
         }
@@ -1380,6 +1406,7 @@ fn apply_fighter_preset(
     player.two_hand_grip = preset.two_hand_grip;
     player.use_jab = preset.use_jab;
     player.hold_at_bay = preset.hold_at_bay;
+    player.defensive_dualwielding = preset.defensive_dualwielding;
     player.talents = preset.talents.clone();
     player.weapon_id = find_weapon_id_by_name(weapon_catalog, &preset.weapon)
         .or_else(|| weapon_catalog.first_id())
@@ -1452,6 +1479,7 @@ fn fighter_preset_from_player(
         two_hand_grip: player.two_hand_grip,
         use_jab: player.use_jab,
         hold_at_bay: player.hold_at_bay,
+        defensive_dualwielding: player.defensive_dualwielding,
         talents: player.talents.clone(),
     }
 }
