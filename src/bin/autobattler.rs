@@ -1,10 +1,10 @@
 use hackmaster_sim::character::{AbilityScore, AbilitySet, Progression, ProgressionTier};
 use hackmaster_sim::core::gameplay::{
-    run_next_fight, CombatantBuilder, EnemySpawnEntry, EnemySpawner, LootTable, RunState,
+    run_next_fight, CombatantBuilder, EnemySpawnEntry, EnemySpawner, LootTable, RunState, Wound,
 };
 use hackmaster_sim::core::ids::NpcPresetId;
 use hackmaster_sim::core::rng::SimRng;
-use hackmaster_sim::core::sim::SimConfig;
+use hackmaster_sim::core::sim::{CombatEvent, CombatEventKind, SimConfig};
 use hackmaster_sim::core::types::{EnemyProfile, Inventory, PlayerProfile};
 use hackmaster_sim::data;
 use hackmaster_sim::game_logic::{
@@ -152,6 +152,9 @@ fn main() {
                 .collect::<Vec<_>>()
                 .join(",")
         };
+        let wound_tracker = format_wound_tracker(&outcome.state.wounds);
+        let hits_dealt = format_hit_list(&outcome.fight.events, 0, 1);
+        let hits_taken = format_hit_list(&outcome.fight.events, 1, 0);
         println!(
             "Fight {fight_index}: vs {enemy_name} -> {status} | hp={} | wounds=[{}] total_wounds={} | +{}g | total_g={}",
             outcome.fight.remaining_hp,
@@ -160,6 +163,8 @@ fn main() {
             reward_gold,
             outcome.state.inventory.gold
         );
+        println!("  Wound tracker (hd progress/need): {wound_tracker}");
+        println!("  Hits (hp damage): dealt=[{hits_dealt}] taken=[{hits_taken}]");
 
         run_state = outcome.state;
         if !outcome.fight.won {
@@ -167,6 +172,45 @@ fn main() {
             break;
         }
     }
+}
+
+fn format_wound_tracker(wounds: &[Wound]) -> String {
+    if wounds.is_empty() {
+        return "none".to_string();
+    }
+    wounds
+        .iter()
+        .map(|wound| {
+            let damage = wound.damage;
+            let progress = wound.healing_progress_half_days.min(damage);
+            format!("{damage}({progress}/{damage} hd)")
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn format_hit_list(events: &[CombatEvent], attacker_idx: usize, defender_idx: usize) -> String {
+    let hits = events
+        .iter()
+        .filter_map(|event| {
+            if event.attacker_idx != attacker_idx || event.defender_idx != defender_idx {
+                return None;
+            }
+            let CombatEventKind::Attack(attack) = &event.kind else {
+                return None;
+            };
+            if attack.damage <= 0 {
+                return None;
+            }
+            Some(attack.damage.to_string())
+        })
+        .collect::<Vec<_>>();
+
+    if hits.is_empty() {
+        return "none".to_string();
+    }
+
+    hits.join(",")
 }
 
 fn find_fighter_preset<'a>(

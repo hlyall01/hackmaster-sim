@@ -2,8 +2,9 @@ use hackmaster_sim::{character, data, game_logic, sim};
 use character::{Progression, ProgressionTier, WeaponGroup};
 use eframe::egui::{self, Color32, Pos2, Rect};
 use hackmaster_sim::core::catalog::Catalog;
+use hackmaster_sim::core::types::{TalentSelection, TalentSpec};
 use sim::{bulk_simulate, BulkSimResult, SimConfig, SimState};
-use std::time::Instant;
+use std::{collections::BTreeMap, time::Instant};
 use game_logic::{
     ArmorCatalog, ArmorEntry, ArmorId, FighterMasteries, FighterPreset, FighterPresetCatalog,
     FighterProgression, NpcPresetCatalog, PlayerConfig, ShieldCatalog, ShieldEntry, ShieldId,
@@ -29,8 +30,38 @@ enum WeaponIcon {
     Other,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PlayerEditorTab {
+    Core,
+    Gear,
+    Stats,
+    Talents,
+    Derived,
+}
+
+impl PlayerEditorTab {
+    fn label(self) -> &'static str {
+        match self {
+            PlayerEditorTab::Core => "Core",
+            PlayerEditorTab::Gear => "Gear",
+            PlayerEditorTab::Stats => "Stats",
+            PlayerEditorTab::Talents => "Talents",
+            PlayerEditorTab::Derived => "Derived",
+        }
+    }
+}
+
+const PLAYER_EDITOR_TABS: [PlayerEditorTab; 5] = [
+    PlayerEditorTab::Core,
+    PlayerEditorTab::Gear,
+    PlayerEditorTab::Stats,
+    PlayerEditorTab::Talents,
+    PlayerEditorTab::Derived,
+];
+
 const FIGHTER_PRESETS_PATH: &str = "data/fighter_presets.json";
 const BULK_SIM_MAX_SECONDS: u32 = u32::MAX;
+const TALENT_TAB_ALL: &str = "All";
 
 struct SimGuiApp {
     running: bool,
@@ -46,6 +77,8 @@ struct SimGuiApp {
     fighter_preset_names: [String; 2],
     time_scale: f32,
     show_player_editor: [bool; 2],
+    player_editor_tabs: [PlayerEditorTab; 2],
+    talent_category_tabs: [String; 2],
     last_screen_size: egui::Vec2,
     bulk_runs: u32,
     bulk_result: Option<BulkSimResult>,
@@ -106,6 +139,11 @@ impl SimGuiApp {
             fighter_preset_names: ["Fighter A".to_string(), "Fighter B".to_string()],
             time_scale: 1.0,
             show_player_editor: [false, false],
+            player_editor_tabs: [PlayerEditorTab::Core, PlayerEditorTab::Core],
+            talent_category_tabs: [
+                TALENT_TAB_ALL.to_string(),
+                TALENT_TAB_ALL.to_string(),
+            ],
             last_screen_size: egui::vec2(0.0, 0.0),
             bulk_runs: 1000,
             bulk_result: None,
@@ -587,8 +625,11 @@ impl eframe::App for SimGuiApp {
             self.last_screen_size = screen_rect.size();
             ctx.request_repaint();
         }
-        self.sim.config.stop_distance =
-            game_logic::stop_distance_for_players(&self.players, &self.weapon_catalog);
+        self.sim.config.stop_distance = game_logic::stop_distance_for_players(
+            &self.players,
+            &self.weapon_catalog,
+            &self.talent_catalog,
+        );
         self.update_sim(dt);
 
         egui::TopBottomPanel::top("controls").show(ctx, |ui| {
@@ -768,6 +809,7 @@ impl eframe::App for SimGuiApp {
             egui::Window::new(title)
                 .id(egui::Id::new(format!("player_editor_{idx}")))
                 .open(&mut open)
+                .default_size(egui::vec2(560.0, 740.0))
                 .resizable(true)
                 .show(ctx, |ui| {
                     let id_prefix = if idx == 0 { "p1" } else { "p2" };
@@ -792,6 +834,8 @@ impl eframe::App for SimGuiApp {
                         &self.npc_presets,
                         &mut self.fighter_presets,
                         fighter_preset_name,
+                        &mut self.player_editor_tabs[idx],
+                        &mut self.talent_category_tabs[idx],
                     );
                 });
             self.show_player_editor[idx] = open;
@@ -801,6 +845,21 @@ impl eframe::App for SimGuiApp {
             ctx.request_repaint();
         }
     }
+}
+
+fn render_player_editor_tabs(
+    ui: &mut egui::Ui,
+    id_prefix: &str,
+    active_tab: &mut PlayerEditorTab,
+) {
+    ui.push_id(format!("{id_prefix}_tabs"), |ui| {
+        ui.horizontal(|ui| {
+            for tab in PLAYER_EDITOR_TABS {
+                ui.selectable_value(active_tab, tab, tab.label());
+            }
+        });
+    });
+    ui.separator();
 }
 
 fn render_player_editor(
@@ -816,6 +875,8 @@ fn render_player_editor(
     npc_presets: &NpcPresetCatalog,
     fighter_presets: &mut FighterPresetCatalog,
     fighter_preset_name: &mut String,
+    active_tab: &mut PlayerEditorTab,
+    talent_category_tab: &mut String,
 ) {
     if weapon_catalog.is_empty() {
         ui.label("Weapon catalog is empty.");
@@ -823,539 +884,581 @@ fn render_player_editor(
     }
     game_logic::sanitize_player_ids(player, weapon_catalog, armor_catalog, shield_catalog);
 
-    if !fighter_presets.is_empty() {
-        ui.horizontal(|ui| {
-            ui.label("Fighter preset");
-            let mut selection = player
-                .fighter_preset
-                .map(|id| fighter_presets.index_of(id))
-                .unwrap_or(usize::MAX);
-            egui::ComboBox::from_id_source(format!("{id_prefix}_fighter_preset"))
-                .selected_text(
-                    player
+    render_player_editor_tabs(ui, id_prefix, active_tab);
+
+    match *active_tab {
+        PlayerEditorTab::Core => {
+            if !fighter_presets.is_empty() {
+                ui.horizontal(|ui| {
+                    ui.label("Fighter preset");
+                    let mut selection = player
                         .fighter_preset
-                        .and_then(|id| fighter_presets.get(id))
-                        .map(|preset| preset.name.as_str())
-                        .unwrap_or("None"),
-                )
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut selection, usize::MAX, "None");
-                    for (idx, preset) in fighter_presets.entries().iter().enumerate() {
-                        ui.selectable_value(&mut selection, idx, preset.name.as_str());
-                    }
-                });
-            let selection = if selection == usize::MAX {
-                None
-            } else {
-                fighter_presets.id_from_index(selection)
-            };
-            if selection != player.fighter_preset {
-                player.fighter_preset = selection;
-                if let Some(id) = selection {
-                    if let Some(preset) = fighter_presets.get(id) {
-                        apply_fighter_preset(
-                            player,
-                            preset,
-                            weapon_catalog,
-                            armor_catalog,
-                            shield_catalog,
-                        );
-                        player.npc_preset = None;
-                        fighter_preset_name.clear();
-                        fighter_preset_name.push_str(preset.name.as_str());
-                    }
-                }
-            }
-        });
-        let save_enabled =
-            !fighter_preset_name.trim().is_empty() && player.npc_preset.is_none();
-        ui.horizontal(|ui| {
-            ui.label("Save as");
-            ui.text_edit_singleline(fighter_preset_name);
-            if ui
-                .add_enabled(save_enabled, egui::Button::new("Save preset"))
-                .clicked()
-            {
-                let name = fighter_preset_name.trim();
-                if !name.is_empty() {
-                    let preset = fighter_preset_from_player(
-                        player,
-                        weapon_catalog,
-                        armor_catalog,
-                        shield_catalog,
-                        name,
-                    );
-                    if let Some(existing) = fighter_presets
-                        .entries()
-                        .iter()
-                        .position(|entry| entry.name.eq_ignore_ascii_case(name))
-                    {
-                        if let Some(id) = fighter_presets.id_from_index(existing) {
-                            fighter_presets.replace(id, preset);
-                            player.fighter_preset = Some(id);
-                        }
+                        .map(|id| fighter_presets.index_of(id))
+                        .unwrap_or(usize::MAX);
+                    egui::ComboBox::from_id_source(format!("{id_prefix}_fighter_preset"))
+                        .selected_text(
+                            player
+                                .fighter_preset
+                                .and_then(|id| fighter_presets.get(id))
+                                .map(|preset| preset.name.as_str())
+                                .unwrap_or("None"),
+                        )
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut selection, usize::MAX, "None");
+                            for (idx, preset) in fighter_presets.entries().iter().enumerate() {
+                                ui.selectable_value(&mut selection, idx, preset.name.as_str());
+                            }
+                        });
+                    let selection = if selection == usize::MAX {
+                        None
                     } else {
-                        let id = fighter_presets.push(preset);
-                        player.fighter_preset = Some(id);
+                        fighter_presets.id_from_index(selection)
+                    };
+                    if selection != player.fighter_preset {
+                        player.fighter_preset = selection;
+                        if let Some(id) = selection {
+                            if let Some(preset) = fighter_presets.get(id) {
+                                apply_fighter_preset(
+                                    player,
+                                    preset,
+                                    weapon_catalog,
+                                    armor_catalog,
+                                    shield_catalog,
+                                );
+                                player.npc_preset = None;
+                                fighter_preset_name.clear();
+                                fighter_preset_name.push_str(preset.name.as_str());
+                            }
+                        }
                     }
-                    if let Err(err) =
-                        data::save_fighter_presets(FIGHTER_PRESETS_PATH, fighter_presets)
+                });
+                let save_enabled =
+                    !fighter_preset_name.trim().is_empty() && player.npc_preset.is_none();
+                ui.horizontal(|ui| {
+                    ui.label("Save as");
+                    ui.text_edit_singleline(fighter_preset_name);
+                    if ui
+                        .add_enabled(save_enabled, egui::Button::new("Save preset"))
+                        .clicked()
                     {
-                        eprintln!("Failed to save fighter presets: {err}");
+                        let name = fighter_preset_name.trim();
+                        if !name.is_empty() {
+                            let preset = fighter_preset_from_player(
+                                player,
+                                weapon_catalog,
+                                armor_catalog,
+                                shield_catalog,
+                                name,
+                            );
+                            if let Some(existing) = fighter_presets
+                                .entries()
+                                .iter()
+                                .position(|entry| entry.name.eq_ignore_ascii_case(name))
+                            {
+                                if let Some(id) = fighter_presets.id_from_index(existing) {
+                                    fighter_presets.replace(id, preset);
+                                    player.fighter_preset = Some(id);
+                                }
+                            } else {
+                                let id = fighter_presets.push(preset);
+                                player.fighter_preset = Some(id);
+                            }
+                            if let Err(err) =
+                                data::save_fighter_presets(FIGHTER_PRESETS_PATH, fighter_presets)
+                            {
+                                eprintln!("Failed to save fighter presets: {err}");
+                            }
+                        }
                     }
-                }
-            }
-            if player.npc_preset.is_some() {
-                ui.label("Disabled while NPC preset is active.");
-            }
-        });
-    }
-
-    if !npc_presets.is_empty() {
-        ui.horizontal(|ui| {
-            ui.label("NPC preset");
-            let mut selection = player
-                .npc_preset
-                .map(|id| npc_presets.index_of(id))
-                .unwrap_or(usize::MAX);
-            egui::ComboBox::from_id_source(format!("{id_prefix}_npc_preset"))
-                .selected_text(match player.npc_preset.and_then(|id| npc_presets.get(id)) {
-                    Some(preset) => preset.name.as_str(),
-                    None => "None",
-                })
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut selection, usize::MAX, "None");
-                    for (idx, preset) in npc_presets.entries().iter().enumerate() {
-                        ui.selectable_value(&mut selection, idx, preset.name.as_str());
+                    if player.npc_preset.is_some() {
+                        ui.label("Disabled while NPC preset is active.");
                     }
                 });
-            player.npc_preset = if selection == usize::MAX {
-                None
-            } else {
-                npc_presets.id_from_index(selection)
-            };
-        });
-        if let Some(preset) = player.npc_preset.and_then(|id| npc_presets.get(id)) {
-            player.name = preset.name.clone();
-            ui.label(format!(
-                "Preset: HP {} | ATT {} | DEF {} | DR {} | DMG +{} | TOP {}",
-                preset.hp,
-                preset.attack_bonus,
-                preset.defense_mod,
-                preset.armor_dr,
-                preset.damage_bonus,
-                preset.top
-            ));
-        }
-    }
-    let npc_active = player.npc_preset.is_some();
-    ui.add_enabled_ui(!npc_active, |ui| {
-        ui.horizontal(|ui| {
-            ui.label("Name");
-            ui.text_edit_singleline(&mut player.name);
-        });
-        ui.horizontal(|ui| {
-            ui.label("Level");
-            ui.add(egui::Slider::new(&mut player.level, 1..=20).step_by(1.0));
-        });
-        ui.horizontal(|ui| {
-            ui.label("Base HP");
-            ui.add(egui::Slider::new(&mut player.base_hp, 1..=200).step_by(1.0));
-        });
-    });
-    ui.horizontal(|ui| {
-        ui.label("Color");
-        ui.color_edit_button_srgba(player_color);
-    });
-    ui.horizontal(|ui| {
-        ui.label("Move speed (ft/s)");
-        ui.add(egui::Slider::new(&mut player.move_speed, 0.0..=40.0).step_by(5.0));
-    });
-    ui.add_enabled_ui(!npc_active, |ui| {
-        ui.horizontal(|ui| {
-            tier_combo(
-                ui,
-                format!("{id_prefix}_attack_tier"),
-                "Attack Tier",
-                &mut player.progression.attack,
-                &[
-                    ProgressionTier::I,
-                    ProgressionTier::II,
-                    ProgressionTier::III,
-                    ProgressionTier::IV,
-                    ProgressionTier::V,
-                    ProgressionTier::VI,
-                ],
-            );
-        });
-        ui.horizontal(|ui| {
-            tier_combo(
-                ui,
-                format!("{id_prefix}_speed_tier"),
-                "Speed Tier",
-                &mut player.progression.speed,
-                &[
-                    ProgressionTier::I,
-                    ProgressionTier::II,
-                    ProgressionTier::III,
-                    ProgressionTier::IV,
-                    ProgressionTier::V,
-                    ProgressionTier::VI,
-                ],
-            );
-        });
-        ui.horizontal(|ui| {
-            tier_combo(
-                ui,
-                format!("{id_prefix}_initiative_tier"),
-                "Initiative Tier",
-                &mut player.progression.initiative,
-                &[
-                    ProgressionTier::I,
-                    ProgressionTier::II,
-                    ProgressionTier::III,
-                    ProgressionTier::IV,
-                    ProgressionTier::V,
-                ],
-            );
-        });
-        ui.horizontal(|ui| {
-            tier_combo(
-                ui,
-                format!("{id_prefix}_health_tier"),
-                "Health Tier",
-                &mut player.progression.health,
-                &[
-                    ProgressionTier::I,
-                    ProgressionTier::II,
-                    ProgressionTier::III,
-                    ProgressionTier::IV,
-                    ProgressionTier::V,
-                ],
-            );
-        });
-    });
+            }
 
-    let mut uses_projectiles = false;
-    ui.horizontal(|ui| {
-        ui.label("Weapon");
-        let mut selection = weapon_catalog.index_of(player.weapon_id);
-        egui::ComboBox::from_id_source(format!("{id_prefix}_weapon"))
-            .selected_text(
-                weapon_catalog
-                    .get(player.weapon_id)
-                    .map(|weapon| weapon.name.as_str())
-                    .unwrap_or("Unknown"),
-            )
-            .show_ui(ui, |ui| {
-                for (idx, weapon) in weapon_catalog.entries().iter().enumerate() {
-                    ui.selectable_value(&mut selection, idx, weapon.name.as_str());
+            if !npc_presets.is_empty() {
+                ui.horizontal(|ui| {
+                    ui.label("NPC preset");
+                    let mut selection = player
+                        .npc_preset
+                        .map(|id| npc_presets.index_of(id))
+                        .unwrap_or(usize::MAX);
+                    egui::ComboBox::from_id_source(format!("{id_prefix}_npc_preset"))
+                        .selected_text(match player.npc_preset.and_then(|id| npc_presets.get(id)) {
+                            Some(preset) => preset.name.as_str(),
+                            None => "None",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut selection, usize::MAX, "None");
+                            for (idx, preset) in npc_presets.entries().iter().enumerate() {
+                                ui.selectable_value(&mut selection, idx, preset.name.as_str());
+                            }
+                        });
+                    player.npc_preset = if selection == usize::MAX {
+                        None
+                    } else {
+                        npc_presets.id_from_index(selection)
+                    };
+                });
+                if let Some(preset) = player.npc_preset.and_then(|id| npc_presets.get(id)) {
+                    player.name = preset.name.clone();
+                    ui.label(format!(
+                        "Preset: HP {} | ATT {} | DEF {} | DR {} | DMG +{} | TOP {}",
+                        preset.hp,
+                        preset.attack_bonus,
+                        preset.defense_mod,
+                        preset.armor_dr,
+                        preset.damage_bonus,
+                        preset.top
+                    ));
                 }
+            }
+
+            let npc_active = player.npc_preset.is_some();
+            ui.add_enabled_ui(!npc_active, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Name");
+                    ui.text_edit_singleline(&mut player.name);
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Level");
+                    ui.add(egui::Slider::new(&mut player.level, 1..=20).step_by(1.0));
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Base HP");
+                    ui.add(egui::Slider::new(&mut player.base_hp, 1..=200).step_by(1.0));
+                });
             });
-        if let Some(id) = weapon_catalog.id_from_index(selection) {
-            player.weapon_id = id;
-        }
-        let weapon = weapon_catalog
-            .get(player.weapon_id)
-            .unwrap_or_else(|| weapon_catalog.entries().first().expect("weapon catalog empty"));
-        game_logic::sanitize_projectile_tier(player, weapon);
-        uses_projectiles = game_logic::weapon_uses_projectiles(weapon);
-        material_tier_combo(
-            ui,
-            format!("{id_prefix}_weapon_material"),
-            "Weapon material",
-            &mut player.weapon_material_tier,
-        );
-        if uses_projectiles {
-            material_tier_combo(
-                ui,
-                format!("{id_prefix}_ammo_material"),
-                "Ammo material",
-                &mut player.projectile_material_tier,
-            );
-        }
-    });
-
-    let weapon = weapon_catalog
-        .get(player.weapon_id)
-        .unwrap_or_else(|| weapon_catalog.entries().first().expect("weapon catalog empty"));
-    let shield_bonus = if player.shield_id.index() > 0
-        && weapon.handedness == WeaponHandedness::OneHanded
-        && !player.two_hand_grip
-        && !player.defensive_dualwielding
-    {
-        shield_catalog
-            .get(player.shield_id)
-            .and_then(|entry| entry.shield.as_ref())
-            .map(|shield| shield.defense_bonus + player.shield_material_tier.clamp(0, 5))
-    } else {
-        None
-    };
-    let is_two_handed = weapon.handedness == WeaponHandedness::TwoHanded;
-    let can_two_hand = weapon.handedness == WeaponHandedness::OneHanded
-        && (weapon.size == WeaponSize::Medium || weapon.size == WeaponSize::Large);
-    if is_two_handed {
-        player.two_hand_grip = true;
-    } else if !can_two_hand {
-        player.two_hand_grip = false;
-    }
-    let can_defensive_dualwield =
-        weapon.handedness == WeaponHandedness::OneHanded && !player.two_hand_grip;
-    if !can_defensive_dualwield {
-        player.defensive_dualwielding = false;
-    }
-    let jab_label = weapon
-        .jab_speed_label
-        .as_ref()
-        .map(|jab| format!(" (jab {jab})"))
-        .unwrap_or_default();
-    ui.label(format!(
-        "Speed {}{} | Damage {} | Reach/Range {}",
-        weapon.speed_label, jab_label, weapon.damage_expr, weapon.reach_label
-    ));
-    let has_jab = weapon.jab_speed.is_some();
-    if !has_jab {
-        player.use_jab = false;
-    }
-    ui.horizontal(|ui| {
-        ui.add_enabled_ui(has_jab, |ui| {
-            ui.checkbox(&mut player.use_jab, "Jab attack");
-        });
-        if !has_jab {
-            ui.label("Unavailable");
-        }
-        ui.checkbox(&mut player.hold_at_bay, "Hold at bay");
-    });
-    if player.use_jab {
-        if let Some(jab_special) = weapon.jab_special_expr.as_ref() {
-            ui.label(format!("Jab special damage: {jab_special} (non-penetrating)"));
-        } else {
-            ui.label("Jab damage: half, non-penetrating");
-        }
-    }
-    if player.two_hand_grip && can_two_hand {
-        ui.label("Two-hand grip: +3 damage, +2 speed");
-    }
-    ui.horizontal(|ui| {
-        let enabled = can_two_hand && !is_two_handed;
-        ui.add_enabled_ui(enabled, |ui| {
-            ui.checkbox(&mut player.two_hand_grip, "Two-hand grip");
-        });
-        if is_two_handed {
-            ui.label("Required");
-        } else if !can_two_hand {
-            ui.label("Unavailable");
-        }
-    });
-    ui.horizontal(|ui| {
-        ui.add_enabled_ui(can_defensive_dualwield, |ui| {
-            ui.checkbox(&mut player.defensive_dualwielding, "Defensive dualwielding");
-        });
-        if !can_defensive_dualwield {
-            ui.label("Unavailable");
-        }
-    });
-    if player.defensive_dualwielding {
-        ui.label("Defensive dualwielding: double defense mastery & weapon defense talent bonus");
-    }
-
-    ui.add_enabled_ui(!npc_active, |ui| {
-        ui.horizontal(|ui| {
-            ui.label("Armor");
-            let mut selection = armor_catalog.index_of(player.armor_id);
-            egui::ComboBox::from_id_source(format!("{id_prefix}_armor"))
-                .selected_text(armor_display_name(armor_catalog.get(player.armor_id)))
-                .show_ui(ui, |ui| {
-                    for (idx, armor) in armor_catalog.entries().iter().enumerate() {
-                        ui.selectable_value(&mut selection, idx, armor.label.clone());
-                    }
+            ui.horizontal(|ui| {
+                ui.label("Color");
+                ui.color_edit_button_srgba(player_color);
+            });
+            ui.horizontal(|ui| {
+                ui.label("Move speed (ft/s)");
+                ui.add(egui::Slider::new(&mut player.move_speed, 0.0..=40.0).step_by(5.0));
+            });
+            ui.add_enabled_ui(!npc_active, |ui| {
+                ui.horizontal(|ui| {
+                    tier_combo(
+                        ui,
+                        format!("{id_prefix}_attack_tier"),
+                        "Attack Tier",
+                        &mut player.progression.attack,
+                        &[
+                            ProgressionTier::I,
+                            ProgressionTier::II,
+                            ProgressionTier::III,
+                            ProgressionTier::IV,
+                            ProgressionTier::V,
+                            ProgressionTier::VI,
+                        ],
+                    );
                 });
-            if let Some(id) = armor_catalog.id_from_index(selection) {
-                player.armor_id = id;
-            }
-            material_tier_combo(
-                ui,
-                format!("{id_prefix}_armor_material"),
-                "Material",
-                &mut player.armor_material_tier,
-            );
-        });
-        ui.horizontal(|ui| {
-            ui.label("Shield");
-            let can_use_shield = weapon.handedness == WeaponHandedness::OneHanded
-                && !player.two_hand_grip
-                && !player.defensive_dualwielding;
-            if !can_use_shield {
-                player.shield_id = ShieldId::new(0);
-                player.shield_material_tier = 0;
-            }
-            ui.add_enabled_ui(can_use_shield, |ui| {
-                let mut selection = shield_catalog.index_of(player.shield_id);
-                egui::ComboBox::from_id_source(format!("{id_prefix}_shield"))
-                    .selected_text(shield_display_name(shield_catalog.get(player.shield_id)))
+                ui.horizontal(|ui| {
+                    tier_combo(
+                        ui,
+                        format!("{id_prefix}_speed_tier"),
+                        "Speed Tier",
+                        &mut player.progression.speed,
+                        &[
+                            ProgressionTier::I,
+                            ProgressionTier::II,
+                            ProgressionTier::III,
+                            ProgressionTier::IV,
+                            ProgressionTier::V,
+                            ProgressionTier::VI,
+                        ],
+                    );
+                });
+                ui.horizontal(|ui| {
+                    tier_combo(
+                        ui,
+                        format!("{id_prefix}_initiative_tier"),
+                        "Initiative Tier",
+                        &mut player.progression.initiative,
+                        &[
+                            ProgressionTier::I,
+                            ProgressionTier::II,
+                            ProgressionTier::III,
+                            ProgressionTier::IV,
+                            ProgressionTier::V,
+                        ],
+                    );
+                });
+                ui.horizontal(|ui| {
+                    tier_combo(
+                        ui,
+                        format!("{id_prefix}_health_tier"),
+                        "Health Tier",
+                        &mut player.progression.health,
+                        &[
+                            ProgressionTier::I,
+                            ProgressionTier::II,
+                            ProgressionTier::III,
+                            ProgressionTier::IV,
+                            ProgressionTier::V,
+                        ],
+                    );
+                });
+            });
+        }
+        PlayerEditorTab::Gear => {
+            let mut uses_projectiles = false;
+            ui.horizontal(|ui| {
+                ui.label("Weapon");
+                let mut selection = weapon_catalog.index_of(player.weapon_id);
+                egui::ComboBox::from_id_source(format!("{id_prefix}_weapon"))
+                    .selected_text(
+                        weapon_catalog
+                            .get(player.weapon_id)
+                            .map(|weapon| weapon.name.as_str())
+                            .unwrap_or("Unknown"),
+                    )
                     .show_ui(ui, |ui| {
-                        for (idx, shield) in shield_catalog.entries().iter().enumerate() {
-                            ui.selectable_value(&mut selection, idx, shield.label.clone());
+                        for (idx, weapon) in weapon_catalog.entries().iter().enumerate() {
+                            ui.selectable_value(&mut selection, idx, weapon.name.as_str());
                         }
                     });
-                if let Some(id) = shield_catalog.id_from_index(selection) {
-                    player.shield_id = id;
+                if let Some(id) = weapon_catalog.id_from_index(selection) {
+                    player.weapon_id = id;
                 }
-            });
-            if !can_use_shield {
-                ui.label("Unavailable");
-            }
-            let shield_enabled = can_use_shield && player.shield_id.index() > 0;
-            ui.add_enabled_ui(shield_enabled, |ui| {
+                let weapon = weapon_catalog
+                    .get(player.weapon_id)
+                    .unwrap_or_else(|| weapon_catalog.entries().first().expect("weapon catalog empty"));
+                game_logic::sanitize_projectile_tier(player, weapon);
+                uses_projectiles = game_logic::weapon_uses_projectiles(weapon);
                 material_tier_combo(
                     ui,
-                    format!("{id_prefix}_shield_material"),
-                    "Material",
-                    &mut player.shield_material_tier,
+                    format!("{id_prefix}_weapon_material"),
+                    "Weapon material",
+                    &mut player.weapon_material_tier,
                 );
+                if uses_projectiles {
+                    material_tier_combo(
+                        ui,
+                        format!("{id_prefix}_ammo_material"),
+                        "Ammo material",
+                        &mut player.projectile_material_tier,
+                    );
+                }
             });
-        });
 
-        ui.separator();
-        ui.label("Abilities");
-        ability_percentile_editor(
-            ui,
-            &format!("{id_prefix}_str"),
-            "STR",
-            &mut player.strength_base,
-            &mut player.strength_pct,
-        );
-        ability_percentile_editor(
-            ui,
-            &format!("{id_prefix}_dex"),
-            "DEX",
-            &mut player.dex_base,
-            &mut player.dex_pct,
-        );
-        ability_slider(ui, "INT", &mut player.intelligence);
-        ability_slider(ui, "WIS", &mut player.wisdom);
-        ability_slider(ui, "CON", &mut player.constitution);
-        ability_slider(ui, "LKS", &mut player.looks);
-        ability_slider(ui, "CHA", &mut player.charisma);
-
-        ui.separator();
-        let shield_active = player.shield_id.index() > 0
-            && weapon.handedness == WeaponHandedness::OneHanded
-            && !player.two_hand_grip;
-        ui.horizontal(|ui| {
-            ui.vertical(|ui| {
-                ui.label("Weapon masteries");
-                mastery_slider(ui, "Attack", &mut player.mastery_attack);
-                mastery_slider(ui, "Defense", &mut player.mastery_defense);
-                mastery_slider(ui, "Damage", &mut player.mastery_damage);
-                mastery_slider(ui, "Speed", &mut player.mastery_speed);
+            let weapon = weapon_catalog
+                .get(player.weapon_id)
+                .unwrap_or_else(|| weapon_catalog.entries().first().expect("weapon catalog empty"));
+            let is_two_handed = weapon.handedness == WeaponHandedness::TwoHanded;
+            let can_two_hand = weapon.handedness == WeaponHandedness::OneHanded
+                && (weapon.size == WeaponSize::Medium || weapon.size == WeaponSize::Large);
+            if is_two_handed {
+                player.two_hand_grip = true;
+            } else if !can_two_hand {
+                player.two_hand_grip = false;
+            }
+            let can_defensive_dualwield =
+                weapon.handedness == WeaponHandedness::OneHanded && !player.two_hand_grip;
+            if !can_defensive_dualwield {
+                player.defensive_dualwielding = false;
+            }
+            let jab_label = weapon
+                .jab_speed_label
+                .as_ref()
+                .map(|jab| format!(" (jab {jab})"))
+                .unwrap_or_default();
+            ui.label(format!(
+                "Speed {}{} | Damage {} | Reach/Range {}",
+                weapon.speed_label, jab_label, weapon.damage_expr, weapon.reach_label
+            ));
+            let has_jab = weapon.jab_speed.is_some();
+            if !has_jab {
+                player.use_jab = false;
+            }
+            ui.horizontal(|ui| {
+                ui.add_enabled_ui(has_jab, |ui| {
+                    ui.checkbox(&mut player.use_jab, "Jab attack");
+                });
+                if !has_jab {
+                    ui.label("Unavailable");
+                }
+                ui.checkbox(&mut player.hold_at_bay, "Hold at bay");
             });
-            ui.separator();
-            ui.add_enabled_ui(shield_active, |ui| {
-                ui.vertical(|ui| {
-                    ui.label("Shield masteries");
-                    mastery_slider(ui, "Defense", &mut player.shield_mastery_defense);
-                    mastery_slider(ui, "Speed", &mut player.shield_mastery_speed);
+            if player.use_jab {
+                if let Some(jab_special) = weapon.jab_special_expr.as_ref() {
+                    ui.label(format!("Jab special damage: {jab_special} (non-penetrating)"));
+                } else {
+                    ui.label("Jab damage: half, non-penetrating");
+                }
+            }
+            if player.two_hand_grip && can_two_hand {
+                ui.label("Two-hand grip: +3 damage, +2 speed");
+            }
+            ui.horizontal(|ui| {
+                let enabled = can_two_hand && !is_two_handed;
+                ui.add_enabled_ui(enabled, |ui| {
+                    ui.checkbox(&mut player.two_hand_grip, "Two-hand grip");
+                });
+                if is_two_handed {
+                    ui.label("Required");
+                } else if !can_two_hand {
+                    ui.label("Unavailable");
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.add_enabled_ui(can_defensive_dualwield, |ui| {
+                    ui.checkbox(&mut player.defensive_dualwielding, "Defensive dualwielding");
+                });
+                if !can_defensive_dualwield {
+                    ui.label("Unavailable");
+                }
+            });
+            if player.defensive_dualwielding {
+                ui.label("Defensive dualwielding: double defense mastery & weapon defense talent bonus");
+            }
+
+            let npc_active = player.npc_preset.is_some();
+            ui.add_enabled_ui(!npc_active, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Armor");
+                    let mut selection = armor_catalog.index_of(player.armor_id);
+                    egui::ComboBox::from_id_source(format!("{id_prefix}_armor"))
+                        .selected_text(armor_display_name(armor_catalog.get(player.armor_id)))
+                        .show_ui(ui, |ui| {
+                            for (idx, armor) in armor_catalog.entries().iter().enumerate() {
+                                ui.selectable_value(&mut selection, idx, armor.label.clone());
+                            }
+                        });
+                    if let Some(id) = armor_catalog.id_from_index(selection) {
+                        player.armor_id = id;
+                    }
+                    material_tier_combo(
+                        ui,
+                        format!("{id_prefix}_armor_material"),
+                        "Material",
+                        &mut player.armor_material_tier,
+                    );
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Shield");
+                    let can_use_shield = weapon.handedness == WeaponHandedness::OneHanded
+                        && !player.two_hand_grip
+                        && !player.defensive_dualwielding;
+                    if !can_use_shield {
+                        player.shield_id = ShieldId::new(0);
+                        player.shield_material_tier = 0;
+                    }
+                    ui.add_enabled_ui(can_use_shield, |ui| {
+                        let mut selection = shield_catalog.index_of(player.shield_id);
+                        egui::ComboBox::from_id_source(format!("{id_prefix}_shield"))
+                            .selected_text(shield_display_name(shield_catalog.get(player.shield_id)))
+                            .show_ui(ui, |ui| {
+                                for (idx, shield) in shield_catalog.entries().iter().enumerate() {
+                                    ui.selectable_value(&mut selection, idx, shield.label.clone());
+                                }
+                            });
+                        if let Some(id) = shield_catalog.id_from_index(selection) {
+                            player.shield_id = id;
+                        }
+                    });
+                    if !can_use_shield {
+                        ui.label("Unavailable");
+                    }
+                    let shield_enabled = can_use_shield && player.shield_id.index() > 0;
+                    ui.add_enabled_ui(shield_enabled, |ui| {
+                        material_tier_combo(
+                            ui,
+                            format!("{id_prefix}_shield_material"),
+                            "Material",
+                            &mut player.shield_material_tier,
+                        );
+                    });
                 });
             });
-        });
-    });
-
-    let game_logic::PlayerSummary { derived, roll } =
-        game_logic::player_summary(
-            player,
-            weapon_catalog,
-            armor_catalog,
-            shield_catalog,
-            talent_catalog,
-        );
-    let defensive_dualwielding = game_logic::defensive_dualwielding_active(player, weapon);
-    let defense_mastery = game_logic::effective_defense_mastery(player, weapon)
-        * if defensive_dualwielding { 2 } else { 1 };
-    ui.separator();
-    if npc_active {
-        ui.label("Derived stats ignored while NPC preset is active.");
-    } else {
-        ui.label("Derived");
-        ui.label(format!(
-            "Hit points: {} (x{:.1})",
-            derived.hit_points, derived.health_mult
-        ));
-        ui.label(format!("Attack bonus: {}", derived.attack_bonus));
-        ui.label(format!("Speed mod: {}", derived.speed_mod));
-        ui.label(format!("Initiative mod: {}", derived.initiative_mod));
-        ui.label(format!("Base DV: {}", derived.base_dv));
-        if let Some(shield_bonus) = shield_bonus {
-            let weapon_defense = if weapon.defense_bonus_always { 4 } else { 0 };
-            let dv_with_shield =
-                derived.base_dv + defense_mastery + weapon_defense + 4 + shield_bonus;
-            ui.label(format!("DV (melee + shield): {}", dv_with_shield));
         }
-        ui.label(format!("Armor DR: {}", derived.armor_dr));
-        ui.label(format!(
-            "Carry (none/light/med/heavy): {:?}",
-            derived.carry_capacity
-        ));
-        ui.label(format!("Load: {}", derived.load_category));
-
-        let attack_bonus = roll.attack_bonus;
-        let strength_damage = roll.strength_damage;
-
-        ui.separator();
-        ui.label("Rolls");
-        ui.label(format!("Attack roll: d20p + {}", attack_bonus));
-        if roll.is_ranged_weapon {
-            if let Some(shield_bonus) = shield_bonus {
-                ui.label(format!(
-                    "Defense roll (ranged): d20p + {} (cover cap applies)",
-                    shield_bonus
-                ));
-            } else {
-                ui.label("Defense roll (ranged): d12p if stationary, else d20p");
+        PlayerEditorTab::Stats => {
+            let npc_active = player.npc_preset.is_some();
+            if npc_active {
+                ui.label("Disabled while NPC preset is active.");
             }
-        } else {
-            let weapon_def = if weapon.defense_bonus_always { " (+4 weapon)" } else { "" };
-            if let Some(shield_bonus) = shield_bonus {
-                ui.label(format!(
-                    "Defense roll (melee): d20p + {} + {}{}",
-                    derived.base_dv + defense_mastery + 4,
-                    shield_bonus,
-                    weapon_def
-                ));
-            } else {
-                let dual_note = if defensive_dualwielding || player.two_hand_grip {
-                    " (+4 after you attack)"
-                } else {
-                    ""
-                };
-                ui.label(format!(
-                    "Defense roll (melee): d20p + {}{}{}",
-                    derived.base_dv + defense_mastery,
-                    weapon_def,
-                    dual_note
-                ));
-            }
+            ui.add_enabled_ui(!npc_active, |ui| {
+                ui.label("Abilities");
+                ability_percentile_editor(
+                    ui,
+                    &format!("{id_prefix}_str"),
+                    "STR",
+                    &mut player.strength_base,
+                    &mut player.strength_pct,
+                );
+                ability_percentile_editor(
+                    ui,
+                    &format!("{id_prefix}_dex"),
+                    "DEX",
+                    &mut player.dex_base,
+                    &mut player.dex_pct,
+                );
+                ability_slider(ui, "INT", &mut player.intelligence);
+                ability_slider(ui, "WIS", &mut player.wisdom);
+                ability_slider(ui, "CON", &mut player.constitution);
+                ability_slider(ui, "LKS", &mut player.looks);
+                ability_slider(ui, "CHA", &mut player.charisma);
+
+                ui.separator();
+                let weapon = weapon_catalog
+                    .get(player.weapon_id)
+                    .unwrap_or_else(|| {
+                        weapon_catalog.entries().first().expect("weapon catalog empty")
+                    });
+                let shield_active = player.shield_id.index() > 0
+                    && weapon.handedness == WeaponHandedness::OneHanded
+                    && !player.two_hand_grip;
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label("Weapon masteries");
+                        mastery_slider(ui, "Attack", &mut player.mastery_attack);
+                        mastery_slider(ui, "Defense", &mut player.mastery_defense);
+                        mastery_slider(ui, "Damage", &mut player.mastery_damage);
+                        mastery_slider(ui, "Speed", &mut player.mastery_speed);
+                    });
+                    ui.separator();
+                    ui.add_enabled_ui(shield_active, |ui| {
+                        ui.vertical(|ui| {
+                            ui.label("Shield masteries");
+                            mastery_slider(ui, "Defense", &mut player.shield_mastery_defense);
+                            mastery_slider(ui, "Speed", &mut player.shield_mastery_speed);
+                        });
+                    });
+                });
+            });
         }
-        let target_dr = opponent
-            .npc_preset
-            .and_then(|id| npc_presets.get(id))
-            .map(|preset| preset.armor_dr)
-            .unwrap_or_else(|| {
+        PlayerEditorTab::Talents => {
+            let npc_active = player.npc_preset.is_some();
+            if npc_active {
+                ui.label("Disabled while NPC preset is active.");
+            }
+            ui.add_enabled_ui(!npc_active, |ui| {
+                ui.label("Talents");
+                render_talent_selector(
+                    ui,
+                    id_prefix,
+                    player,
+                    weapon_catalog,
+                    talent_catalog,
+                    talent_category_tab,
+                );
+            });
+        }
+        PlayerEditorTab::Derived => {
+            let npc_active = player.npc_preset.is_some();
+            if npc_active {
+                ui.label("Derived stats ignored while NPC preset is active.");
+                return;
+            }
+            let weapon = weapon_catalog
+                .get(player.weapon_id)
+                .unwrap_or_else(|| weapon_catalog.entries().first().expect("weapon catalog empty"));
+            let shield_bonus = if player.shield_id.index() > 0
+                && weapon.handedness == WeaponHandedness::OneHanded
+                && !player.two_hand_grip
+                && !player.defensive_dualwielding
+            {
+                shield_catalog
+                    .get(player.shield_id)
+                    .and_then(|entry| entry.shield.as_ref())
+                    .map(|shield| shield.defense_bonus + player.shield_material_tier.clamp(0, 5))
+            } else {
+                None
+            };
+
+            let game_logic::PlayerSummary { derived, roll } =
                 game_logic::player_summary(
-                    opponent,
+                    player,
                     weapon_catalog,
                     armor_catalog,
                     shield_catalog,
                     talent_catalog,
-                )
-                .derived
-                .armor_dr
-            });
-        ui.label(format!("Your armor DR: {}", derived.armor_dr));
-        ui.label(format!(
-            "Damage roll: {} + {} vs target DR {} (AP {})",
-            weapon.damage_expr, strength_damage, target_dr, weapon.armor_pen
-        ));
+                );
+            let defensive_dualwielding = game_logic::defensive_dualwielding_active(player, weapon);
+            let defense_mastery = game_logic::effective_defense_mastery(player, weapon)
+                * if defensive_dualwielding { 2 } else { 1 };
+            ui.label("Derived");
+            ui.label(format!(
+                "Hit points: {} (x{:.1})",
+                derived.hit_points, derived.health_mult
+            ));
+            ui.label(format!("Attack bonus: {}", derived.attack_bonus));
+            ui.label(format!("Speed mod: {}", derived.speed_mod));
+            ui.label(format!("Initiative mod: {}", derived.initiative_mod));
+            ui.label(format!("Base DV: {}", derived.base_dv));
+            if let Some(shield_bonus) = shield_bonus {
+                let weapon_defense = if weapon.defense_bonus_always { 4 } else { 0 };
+                let dv_with_shield =
+                    derived.base_dv + defense_mastery + weapon_defense + 4 + shield_bonus;
+                ui.label(format!("DV (melee + shield): {}", dv_with_shield));
+            }
+            ui.label(format!("Armor DR: {}", derived.armor_dr));
+            ui.label(format!(
+                "Carry (none/light/med/heavy): {:?}",
+                derived.carry_capacity
+            ));
+            ui.label(format!("Load: {}", derived.load_category));
+
+            let attack_bonus = roll.attack_bonus;
+            let strength_damage = roll.strength_damage;
+
+            ui.separator();
+            ui.label("Rolls");
+            ui.label(format!("Attack roll: d20p + {}", attack_bonus));
+            if roll.is_ranged_weapon {
+                if let Some(shield_bonus) = shield_bonus {
+                    ui.label(format!(
+                        "Defense roll (ranged): d20p + {} (cover cap applies)",
+                        shield_bonus
+                    ));
+                } else {
+                    ui.label("Defense roll (ranged): d12p if stationary, else d20p");
+                }
+            } else {
+                let weapon_def = if weapon.defense_bonus_always { " (+4 weapon)" } else { "" };
+                if let Some(shield_bonus) = shield_bonus {
+                    ui.label(format!(
+                        "Defense roll (melee): d20p + {} + {}{}",
+                        derived.base_dv + defense_mastery + 4,
+                        shield_bonus,
+                        weapon_def
+                    ));
+                } else {
+                    let dual_note = if defensive_dualwielding || player.two_hand_grip {
+                        " (+4 after you attack)"
+                    } else {
+                        ""
+                    };
+                    ui.label(format!(
+                        "Defense roll (melee): d20p + {}{}{}",
+                        derived.base_dv + defense_mastery,
+                        weapon_def,
+                        dual_note
+                    ));
+                }
+            }
+            let target_dr = opponent
+                .npc_preset
+                .and_then(|id| npc_presets.get(id))
+                .map(|preset| preset.armor_dr)
+                .unwrap_or_else(|| {
+                    game_logic::player_summary(
+                        opponent,
+                        weapon_catalog,
+                        armor_catalog,
+                        shield_catalog,
+                        talent_catalog,
+                    )
+                    .derived
+                    .armor_dr
+                });
+            ui.label(format!("Your armor DR: {}", derived.armor_dr));
+            ui.label(format!(
+                "Damage roll: {} + {} vs target DR {} (AP {})",
+                weapon.damage_expr, strength_damage, target_dr, weapon.armor_pen
+            ));
+        }
     }
 }
 
@@ -1559,6 +1662,289 @@ fn mastery_slider(ui: &mut egui::Ui, label: &str, value: &mut i32) {
     ui.horizontal(|ui| {
         ui.label(label);
         ui.add(egui::Slider::new(value, 0..=6).step_by(1.0));
+    });
+}
+
+fn format_talent_requirement_failure(
+    failure: &game_logic::TalentRequirementFailure,
+    talent_catalog: &TalentCatalog,
+) -> String {
+    match failure {
+        game_logic::TalentRequirementFailure::MinLevel { required, current } => {
+            format!("Requires level {required} (current {current}).")
+        }
+        game_logic::TalentRequirementFailure::MinStatBase {
+            stat,
+            required,
+            current,
+        } => format!(
+            "Requires {} {required}+ (current {current}).",
+            stat.label()
+        ),
+        game_logic::TalentRequirementFailure::MinStatPercentile {
+            stat,
+            required,
+            current,
+        } => {
+            let current_label = current
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "N/A".to_string());
+            format!(
+                "Requires {} percentile {required}+ (current {current_label}).",
+                stat.label()
+            )
+        }
+        game_logic::TalentRequirementFailure::RequiresTalent {
+            id,
+            required_rank,
+            current_rank,
+        } => {
+            let talent_name = talent_catalog
+                .entries()
+                .iter()
+                .find(|talent| talent.id == *id)
+                .map(|talent| talent.name.as_str())
+                .unwrap_or(id.as_str());
+            format!(
+                "Requires {talent_name} rank {required_rank} (current {current_rank})."
+            )
+        }
+    }
+}
+
+fn render_talent_selector(
+    ui: &mut egui::Ui,
+    id_prefix: &str,
+    player: &mut PlayerConfig,
+    weapon_catalog: &WeaponCatalog,
+    talent_catalog: &TalentCatalog,
+    active_category: &mut String,
+) {
+    if talent_catalog.is_empty() {
+        ui.label("No talents loaded.");
+        return;
+    }
+
+    let mut categories: BTreeMap<String, Vec<&TalentSpec>> = BTreeMap::new();
+    for spec in talent_catalog.entries() {
+        let category = if spec.category.trim().is_empty() {
+            "Uncategorized"
+        } else {
+            spec.category.as_str()
+        };
+        categories
+            .entry(category.to_string())
+            .or_default()
+            .push(spec);
+    }
+    let mut categories: Vec<(String, Vec<&TalentSpec>)> = categories.into_iter().collect();
+    let total_count: usize = categories.iter().map(|(_, specs)| specs.len()).sum();
+    categories.sort_by(|a, b| a.0.cmp(&b.0));
+
+    if active_category != TALENT_TAB_ALL
+        && !categories.iter().any(|(name, _)| name == active_category)
+    {
+        active_category.clear();
+        active_category.push_str(TALENT_TAB_ALL);
+    }
+
+    ui.horizontal_wrapped(|ui| {
+        let all_label = format!("{TALENT_TAB_ALL} ({total_count})");
+        if ui
+            .selectable_label(active_category.as_str() == TALENT_TAB_ALL, all_label)
+            .clicked()
+        {
+            active_category.clear();
+            active_category.push_str(TALENT_TAB_ALL);
+        }
+        for (category, specs) in &categories {
+            let label = format!("{category} ({})", specs.len());
+            if ui
+                .selectable_label(active_category.as_str() == category.as_str(), label)
+                .clicked()
+            {
+                active_category.clear();
+                active_category.push_str(category);
+            }
+        }
+    });
+    ui.separator();
+
+    let abilities = game_logic::ability_set_from_player(player);
+    let talent_snapshot = player.talents.clone();
+    let context = game_logic::TalentContext {
+        level: player.level,
+        stats: &abilities,
+        talents: &talent_snapshot,
+    };
+    let mut add_queue: Vec<TalentSelection> = Vec::new();
+    let mut remove_queue: Vec<usize> = Vec::new();
+
+    egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+        if active_category.as_str() == TALENT_TAB_ALL {
+            for (category, specs) in &categories {
+                ui.separator();
+                ui.label(category.as_str());
+                for spec in specs {
+                    render_talent_entry(
+                        ui,
+                        id_prefix,
+                        player,
+                        weapon_catalog,
+                        talent_catalog,
+                        spec,
+                        &context,
+                        &mut add_queue,
+                        &mut remove_queue,
+                    );
+                }
+            }
+        } else if let Some((_, specs)) =
+            categories.iter().find(|(name, _)| name == active_category)
+        {
+            for spec in specs {
+                render_talent_entry(
+                    ui,
+                    id_prefix,
+                    player,
+                    weapon_catalog,
+                    talent_catalog,
+                    spec,
+                    &context,
+                    &mut add_queue,
+                    &mut remove_queue,
+                );
+            }
+        }
+    });
+
+    if !add_queue.is_empty() {
+        player.talents.extend(add_queue);
+    }
+
+    if !remove_queue.is_empty() {
+        remove_queue.sort_unstable();
+        remove_queue.dedup();
+        for index in remove_queue.into_iter().rev() {
+            if index < player.talents.len() {
+                player.talents.remove(index);
+            }
+        }
+    }
+}
+
+fn render_talent_entry(
+    ui: &mut egui::Ui,
+    id_prefix: &str,
+    player: &mut PlayerConfig,
+    weapon_catalog: &WeaponCatalog,
+    talent_catalog: &TalentCatalog,
+    spec: &TalentSpec,
+    context: &game_logic::TalentContext<'_>,
+    add_queue: &mut Vec<TalentSelection>,
+    remove_queue: &mut Vec<usize>,
+) {
+    let selected_index = player.talents.iter().position(|sel| sel.id == spec.id);
+    let requirement_failures = game_logic::evaluate_talent_requirements(spec, context);
+    let locked = !requirement_failures.is_empty();
+    ui.group(|ui| {
+        ui.horizontal(|ui| {
+            ui.label(spec.name.as_str());
+            if let Some(index) = selected_index {
+                if ui.button("Remove").clicked() {
+                    remove_queue.push(index);
+                }
+            } else if ui.add_enabled(!locked, egui::Button::new("Add")).clicked() {
+                let weapon = if game_logic::talent_requires_weapon(spec) {
+                    weapon_catalog
+                        .get(player.weapon_id)
+                        .map(|weapon| weapon.name.clone())
+                        .or_else(|| {
+                            weapon_catalog
+                                .entries()
+                                .first()
+                                .map(|weapon| weapon.name.clone())
+                        })
+                } else {
+                    None
+                };
+                add_queue.push(TalentSelection {
+                    id: spec.id.clone(),
+                    rank: 1,
+                    weapon,
+                });
+            }
+        });
+        if let Some(cost) = spec.cost_bp {
+            ui.label(format!("Cost: {cost} BP"));
+        }
+        ui.label(spec.description.as_str());
+        if locked {
+            ui.colored_label(
+                Color32::from_rgb(180, 70, 70),
+                "Requirements not met:",
+            );
+            for failure in &requirement_failures {
+                ui.label(format!(
+                    "- {}",
+                    format_talent_requirement_failure(failure, talent_catalog)
+                ));
+            }
+        }
+
+        if let Some(index) = selected_index {
+            let selection = &mut player.talents[index];
+            let max_rank = spec.max_rank.max(1);
+            if selection.rank == 0 || selection.rank > max_rank {
+                selection.rank = selection.rank.clamp(1, max_rank);
+            }
+            if max_rank > 1 {
+                ui.add_enabled(
+                    !locked,
+                    egui::Slider::new(&mut selection.rank, 1..=max_rank)
+                        .step_by(1.0)
+                        .text("Rank"),
+                );
+            } else {
+                selection.rank = 1;
+                ui.label("Rank: 1");
+            }
+
+            if game_logic::talent_requires_weapon(spec) {
+                if selection.weapon.is_none() {
+                    selection.weapon = weapon_catalog
+                        .get(player.weapon_id)
+                        .map(|weapon| weapon.name.clone())
+                        .or_else(|| {
+                            weapon_catalog
+                                .entries()
+                                .first()
+                                .map(|weapon| weapon.name.clone())
+                        });
+                }
+                let selected_text = selection
+                    .weapon
+                    .clone()
+                    .unwrap_or_else(|| "Select weapon".to_string());
+                ui.horizontal(|ui| {
+                    ui.label("Weapon");
+                    egui::ComboBox::from_id_source(format!(
+                        "{id_prefix}_talent_weapon_{}",
+                        spec.id
+                    ))
+                    .selected_text(selected_text)
+                    .show_ui(ui, |ui| {
+                        for weapon in weapon_catalog.entries() {
+                            ui.selectable_value(
+                                &mut selection.weapon,
+                                Some(weapon.name.clone()),
+                                weapon.name.as_str(),
+                            );
+                        }
+                    });
+                });
+            }
+        }
     });
 }
 

@@ -4,64 +4,705 @@
       "id": "hit_point_bonus",
       "name": "Hit Point Bonus",
       "description": "Gain +2 hit points per rank.",
+      "category": "Fortitude",
       "max_rank": 10,
       "effects": [
-        { "type": "hit_point_bonus", "amount": 2 }
+        {
+          "type": "hit_point_bonus",
+          "amount": 2
+        }
       ]
     },
     {
       "id": "tough_as_nails",
       "name": "Tough as Nails",
       "description": "Use a d12p for Threshold of Pain checks.",
+      "category": "Fortitude",
       "max_rank": 1,
       "effects": [
-        { "type": "trauma_die_override", "sides": 12, "penetrating": true }
+        {
+          "type": "trauma_die_override",
+          "sides": 12,
+          "penetrating": true
+        }
       ]
     },
     {
       "id": "tough_hide",
       "name": "Tough Hide",
       "description": "Gain +1 damage reduction to any wound.",
+      "category": "Defense",
       "max_rank": 1,
       "effects": [
-        { "type": "armor_dr_bonus", "amount": 1 }
+        {
+          "type": "armor_dr_bonus",
+          "amount": 1
+        }
       ]
     },
     {
       "id": "attack_bonus_weapon",
       "name": "Attack Bonus (weapon)",
-      "description": "Gain +1 attack bonus with a chosen melee weapon.",
+      "description": "Gain +1 attack bonus with a chosen melee weapon. May be taken multiple times but only once per weapon.",
+      "cost_bp": 10,
+      "category": "Martial",
       "max_rank": 1,
       "effects": [
-        { "type": "attack_bonus_weapon", "amount": 1 }
+        {
+          "type": "attack_bonus_weapon",
+          "amount": 1
+        }
       ]
     },
     {
       "id": "damage_bonus_weapon",
       "name": "Damage Bonus (weapon)",
-      "description": "Gain +1 damage bonus with a chosen melee weapon.",
+      "description": "Gain +1 damage bonus with a chosen melee weapon. May be taken multiple times but only once per weapon.",
+      "cost_bp": 10,
+      "category": "Martial",
       "max_rank": 1,
       "effects": [
-        { "type": "damage_bonus_weapon", "amount": 1 }
+        {
+          "type": "damage_bonus_weapon",
+          "amount": 1
+        }
       ]
     },
-        {
+    {
       "id": "defense_bonus_weapon",
-      "name": "Defense Bonus (weapon)",
-      "description": "Gain +1 defense bonus with a chosen melee weapon.",
+      "name": "Parry Bonus (weapon)",
+      "description": "Gain +1 defense bonus with a chosen melee weapon. May be taken multiple times but only once per weapon.",
+      "cost_bp": 10,
+      "category": "Martial",
       "max_rank": 1,
       "effects": [
-        { "type": "defense_bonus_weapon", "amount": 1 }
+        {
+          "type": "defense_bonus_weapon",
+          "amount": 1
+        }
       ]
     },
     {
       "id": "dodge",
       "name": "Dodge",
-      "description": "Gain +1 defense and add Dex defense vs ranged when dodging.",
+      "description": "Gain +1 to your Defense roll. Additionally, possessing this talent permits the defender to add the Defense modifier provided by Dexterity (assuming the defender can see the approaching missile). Note that if a defender with the Dodge talent and a shield opts to use the shield to deflect missiles, the Dodge benefits do not apply.",
+      "cost_bp": 25,
+      "category": "Martial",
       "max_rank": 1,
       "effects": [
-        { "type": "dodge", "defense_bonus": 1, "allow_dex_ranged": true }
+        {
+          "type": "dodge",
+          "defense_bonus": 1,
+          "allow_dex_ranged": true
+        }
       ]
+    },
+    {
+      "id": "advanced_sighting",
+      "name": "Advanced Sighting",
+      "description": "Mitigate distance penalties on Accuracy with ranged weapons. Treat targets as if only two-thirds their effective (size-modified) distance. Example: a man 60 feet away is treated as 40 feet.",
+      "cost_bp": 30,
+      "category": "Martial",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "range_distance_multiplier",
+          "multiplier": 0.6667
+        }
+      ]
+    },
+    {
+      "id": "armor_focus",
+      "name": "Armor Focus",
+      "description": "Negates the penalty to initiative from wearing armor.",
+      "cost_bp": 15,
+      "category": "Martial",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "armor_initiative_penalty_negation"
+        }
+      ]
+    },
+    {
+      "id": "armor_specialization",
+      "name": "Armor Specialization",
+      "description": "Negates the penalty to speed from wearing armor.",
+      "cost_bp": 20,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "requires_talent",
+          "id": "armor_focus"
+        }
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "armor_speed_penalty_negation"
+        }
+      ]
+    },
+    {
+      "id": "armor_master",
+      "name": "Armor Master",
+      "description": "Increases the damage reduction worn armor grants you by 1.",
+      "cost_bp": 25,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "requires_talent",
+          "id": "armor_specialization"
+        }
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "armor_dr_bonus_armored",
+          "amount": 1
+        }
+      ]
+    },
+    {
+      "id": "blind_fighting",
+      "name": "Blind-Fighting",
+      "description": "Fight in poor or no light. In total darkness, suffer only a -4 penalty to attack (instead of -8). In extremely dim illumination, incur only a -2 penalty. No Defense penalties due to darkness or inability to see within melee distance. Effective only against threats within melee distance. No protection from missile fire or threats outside melee range. You may walk safely in darkness. Reduces attack penalty versus invisible creatures to -4, but does not allow precise targeting.",
+      "cost_bp": 30,
+      "category": "Martial",
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "blind_shooting",
+      "name": "Blind-Shooting",
+      "description": "Fire at opponents you cannot see. Dimly lit targets suffer -2 accuracy; completely blind shots are -6. The target may employ a shield for cover if held at the ready. The GM compares the attack roll versus true distance and applies cover if applicable.",
+      "cost_bp": 40,
+      "category": "Martial",
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "cleave",
+      "name": "Cleave",
+      "description": "If you drop a creature, you get an immediate extra melee attack against another creature within reach. The extra attack is with the same weapon and bonus. Usable once per second.",
+      "cost_bp": 30,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "strength",
+          "min_base": 12
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "combat_expertise",
+      "name": "Combat Expertise",
+      "description": "Improves the Fight Defensively special combat move, halving the attack penalty from -2/4/6/8 to -1/2/3/4.",
+      "cost_bp": 25,
+      "category": "Martial",
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "combat_reflexes",
+      "name": "Combat Reflexes",
+      "description": "Attack an opponent who performs the Flee special combat move, even if you are not due to act and are engaged by other foes.",
+      "cost_bp": 15,
+      "category": "Martial",
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "crack_shot",
+      "name": "Crack Shot (weapon)",
+      "description": "Gain +1 attack with a chosen ranged weapon. May be taken multiple times but only once per weapon.",
+      "cost_bp": 10,
+      "category": "Martial",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "attack_bonus_weapon",
+          "amount": 1
+        }
+      ]
+    },
+    {
+      "id": "deceptive_defender",
+      "name": "Deceptive Defender",
+      "description": "Gain +1 Defense bonus versus an opponent's initial attack; subsequent attacks by the same opponent do not gain this bonus. If an opponent declares a Called Shot, increase their delay to 4d4p seconds and gain an additional +4 Defense versus that called shot.",
+      "cost_bp": 17,
+      "category": "Martial",
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "double_weapon_focus",
+      "name": "Double Weapon Focus",
+      "description": "Reduce the unmodified base speed of double weapons by 1.",
+      "cost_bp": 10,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 14
+        }
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "weapon_speed_bonus",
+          "amount": -1,
+          "weapon_group": "double"
+        }
+      ]
+    },
+    {
+      "id": "double_weapon_specialization",
+      "name": "Double Weapon Specialization",
+      "description": "Treat double weapons as normal weapons for style matching: battle axes for double axes, scimitars for double scimitars, scythes for dual scythes, military picks for hooked hammers, staves for monk's spades, spears and battle axes for spear-axes, and longswords for two-bladed swords.",
+      "cost_bp": 10,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "min_level",
+          "level": 3
+        },
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 16
+        },
+        {
+          "type": "requires_talent",
+          "id": "double_weapon_focus"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "double_weapon_master",
+      "name": "Double Weapon Master",
+      "description": "Treat double weapons as size M instead of size L for handedness and minimum speed. Allows aggressive two-weapon fighting while using a shield.",
+      "cost_bp": 35,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "min_level",
+          "level": 6
+        },
+        {
+          "type": "min_stat",
+          "stat": "strength",
+          "min_base": 16
+        },
+        {
+          "type": "requires_talent",
+          "id": "double_weapon_specialization"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "greased_lightning",
+      "name": "Greased Lightning (weapon)",
+      "description": "Gain -1 Speed bonus for a chosen ranged weapon (subject to the weapon's minimum speed). May be taken multiple times but only once per weapon.",
+      "cost_bp": 10,
+      "category": "Martial",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "weapon_speed_bonus",
+          "amount": -1,
+          "ranged_only": true
+        }
+      ]
+    },
+    {
+      "id": "great_cleave",
+      "name": "Great Cleave",
+      "description": "Removes the once per second restriction from Cleave, allowing multiple cleaves if you continue to drop enemies within one second.",
+      "cost_bp": 10,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "requires_talent",
+          "id": "cleave"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "heavy_armor_optimization",
+      "name": "Heavy Armor Optimization",
+      "description": "While wearing heavy armor, add one quarter of your armor's damage reduction (rounded down) to melee damage. If critically hit by a hacking or piercing weapon, ignore all ancillary critical hit effects.",
+      "cost_bp": 25,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "strength",
+          "min_base": 15
+        }
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "heavy_armor_damage_bonus_from_dr",
+          "divisor": 4
+        }
+      ]
+    },
+    {
+      "id": "improved_critical",
+      "name": "Improved Critical (weapon group)",
+      "description": "You can inflict critical hits on a natural 19 in addition to a natural 20, but do not automatically hit on a 19. Your modified total attack must still exceed the modified total defense.",
+      "cost_bp": 25,
+      "category": "Martial",
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "improved_reach",
+      "name": "Improved Reach (weapon group)",
+      "description": "Increase effective reach by 1 foot for a chosen weapon group (select a weapon from that group). If this makes your reach longer than your opponent's, you strike first; ties still go to the inherently longer weapon. May be taken again for a different weapon group.",
+      "cost_bp": 15,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 12
+        }
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "weapon_reach_bonus",
+          "amount": 1
+        }
+      ]
+    },
+    {
+      "id": "light_armor_optimization",
+      "name": "Light Armor Optimization",
+      "description": "While wearing light armor, add half of your armor's damage reduction (rounded down) to your defense. Halve extra damage taken from critical hits.",
+      "cost_bp": 25,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 15
+        }
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "light_armor_defense_bonus_from_dr",
+          "divisor": 2
+        }
+      ]
+    },
+    {
+      "id": "medium_armor_optimization",
+      "name": "Medium Armor Optimization",
+      "description": "While wearing medium armor, increase armor damage reduction by 1 and reduce its defense penalty by 1. Reduce severity of received critical hits by 10.",
+      "cost_bp": 25,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "strength",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 13
+        }
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "medium_armor_dr_bonus",
+          "amount": 1
+        },
+        {
+          "type": "medium_armor_defense_penalty_reduction",
+          "amount": 1
+        }
+      ]
+    },
+    {
+      "id": "mobility",
+      "name": "Mobility",
+      "description": "Give Ground and Scamper Back may still be used against opponents whose superior speed would normally prevent these maneuvers.",
+      "cost_bp": 20,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "requires_talent",
+          "id": "dodge"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "one_upsmanship",
+      "name": "One-Upsmanship",
+      "description": "In melee, when attacker and defender tie, you may gain +1 Attack to land a blow if you have at least Average Honor and your foe is in a lower honor category. Must deliver a catchy, snarky, or distinctive catch phrase.",
+      "cost_bp": 10,
+      "category": "Martial",
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "power_attack",
+      "name": "Power Attack",
+      "description": "When attacking with a melee weapon, you may ignore beneficial attack modifiers from Intelligence and Dexterity to double your Strength damage modifier. Cannot be used with weapons smaller than your size.",
+      "cost_bp": 30,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "strength",
+          "min_base": 13
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "precision_aiming",
+      "name": "Precision Aiming",
+      "description": "For called shots, reduce delay time to 1-2 seconds and halve the passive defense bonus normally given to targets. No benefit when aiming center of mass.",
+      "cost_bp": 18,
+      "category": "Martial",
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "precision_combatant",
+      "name": "Precision Combatant",
+      "description": "Called shots incur a d4p second delay during which you take only a -2 defense penalty. Opponents receive only half the normal defense bonus for a called shot.",
+      "cost_bp": 12,
+      "category": "Martial",
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "shield_focus",
+      "name": "Shield Focus",
+      "description": "Gain a +1 defense bonus while using shields.",
+      "cost_bp": 15,
+      "category": "Martial",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "shield_defense_bonus",
+          "amount": 1
+        }
+      ]
+    },
+    {
+      "id": "shield_specialization",
+      "name": "Shield Specialization",
+      "description": "Reduce the cover value of your shield by 5, removing the need to actively crouch behind it for full projectile protection.",
+      "cost_bp": 15,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "min_level",
+          "level": 3
+        },
+        {
+          "type": "requires_talent",
+          "id": "shield_focus"
+        }
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "shield_cover_value_adjustment",
+          "amount": -5
+        }
+      ]
+    },
+    {
+      "id": "shield_master",
+      "name": "Shield Master",
+      "description": "Improve the Arc of Defense of shields: bucklers to two frontal attackers, small shields to all frontal and flank attackers, and medium/large/tower shields to all frontal, flank, and rear attackers.",
+      "cost_bp": 15,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "min_level",
+          "level": 6
+        },
+        {
+          "type": "requires_talent",
+          "id": "shield_specialization"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "spring_attack",
+      "name": "Spring Attack",
+      "description": "Tactical Move no longer penalizes attack, only defense.",
+      "cost_bp": 20,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "requires_talent",
+          "id": "mobility"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "swift",
+      "name": "Swift (weapon or shield)",
+      "description": "Gain -1 Speed with a chosen melee weapon or shield. May be taken multiple times but only once per implement.",
+      "cost_bp": 10,
+      "category": "Martial",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "weapon_speed_bonus",
+          "amount": -1
+        }
+      ]
+    },
+    {
+      "id": "two_weapon_fighting",
+      "name": "Two-Weapon Fighting",
+      "description": "When using two one-handed weapons offensively, you no longer suffer a -2 penalty to damage with the secondary weapon.",
+      "cost_bp": 20,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 12
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "improved_two_weapon_fighting",
+      "name": "Improved Two-Weapon Fighting",
+      "description": "Subsequent attacks with the primary weapon are made on its weapon speed plus one.",
+      "cost_bp": 15,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "min_level",
+          "level": 3
+        },
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 13
+        },
+        {
+          "type": "requires_talent",
+          "id": "two_weapon_fighting"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "greater_two_weapon_fighting",
+      "name": "Greater Two-Weapon Fighting",
+      "description": "Subsequent attacks with the secondary weapon are made after a delay of its weapon speed plus one.",
+      "cost_bp": 15,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "min_level",
+          "level": 6
+        },
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 14
+        },
+        {
+          "type": "requires_talent",
+          "id": "improved_two_weapon_fighting"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "perfect_two_weapon_fighting",
+      "name": "Perfect Two-Weapon Fighting",
+      "description": "Combine the best of both two one-handed weapon fighting styles: attack frequency of attacking with both weapons and the superior defense of defending with both weapons.",
+      "cost_bp": 35,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "min_level",
+          "level": 9
+        },
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 15
+        },
+        {
+          "type": "requires_talent",
+          "id": "greater_two_weapon_fighting"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "weapon_focus",
+      "name": "Weapon Focus (weapon group)",
+      "description": "Reduce your base weapon experience threshold by 20% for the chosen weapon group.",
+      "cost_bp": 10,
+      "category": "Martial",
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "whirlwind_attack",
+      "name": "Whirlwind Attack",
+      "description": "Gain access to the Whirlwind Attack special combat move: strike all nearby creatures within reach with a single attack roll, increasing weapon speed by 5 seconds after all other modifiers. If defenders use Give Ground or Scamper Back, they take half damage. Cannot be combined with other special combat moves until your next attack opportunity.",
+      "cost_bp": 25,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "min_level",
+          "level": 6
+        },
+        {
+          "type": "requires_talent",
+          "id": "combat_expertise"
+        },
+        {
+          "type": "requires_talent",
+          "id": "spring_attack"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
     }
   ]
 }

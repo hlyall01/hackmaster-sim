@@ -1,10 +1,12 @@
 use crate::character::{
-    AbilityScore, AbilitySet, Armor, Character, DerivedStats, Equipment, Progression, Shield,
-    Weapon, WeaponGroup, WeaponMastery,
+    AbilityScore, AbilitySet, Armor, ArmorType, Character, DerivedStats, Equipment, Progression,
+    Shield, Weapon, WeaponGroup, WeaponMastery,
 };
 use crate::core::catalog::Catalog;
 use crate::core::rules::DamageExprCache;
-use crate::core::types::{TalentEffect, TalentSelection, TalentSpec};
+use crate::core::types::{
+    AbilityKind, TalentEffect, TalentRequirement, TalentSelection, TalentSpec,
+};
 pub use crate::core::ids::{
     ArmorId, ArmorTag, FighterPresetId, FighterPresetTag, NpcPresetId, NpcPresetTag, ShieldId,
     ShieldTag, TalentId, TalentTag, WeaponId, WeaponTag,
@@ -273,7 +275,7 @@ struct TraumaDieOverride {
     penetrating: bool,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 struct TalentModifiers {
     hp_bonus: i32,
     armor_dr_bonus: i32,
@@ -283,6 +285,45 @@ struct TalentModifiers {
     trauma_die_override: Option<TraumaDieOverride>,
     attack_bonus_by_weapon: HashMap<WeaponId, i32>,
     damage_bonus_by_weapon: HashMap<WeaponId, i32>,
+    weapon_speed_bonus_by_weapon: HashMap<WeaponId, i32>,
+    shield_defense_bonus: i32,
+    shield_cover_value_adjustment: i32,
+    ignore_armor_initiative_penalty: bool,
+    ignore_armor_speed_penalty: bool,
+    armor_dr_bonus_armored: i32,
+    light_armor_defense_divisor: Option<i32>,
+    medium_armor_dr_bonus: i32,
+    medium_armor_defense_penalty_reduction: i32,
+    heavy_armor_damage_bonus_divisor: Option<i32>,
+    reach_bonus_by_group: HashMap<WeaponGroup, i32>,
+    range_distance_multiplier: f32,
+}
+
+impl Default for TalentModifiers {
+    fn default() -> Self {
+        Self {
+            hp_bonus: 0,
+            armor_dr_bonus: 0,
+            defense_bonus: 0,
+            defense_bonus_by_weapon: HashMap::new(),
+            allow_dex_ranged: false,
+            trauma_die_override: None,
+            attack_bonus_by_weapon: HashMap::new(),
+            damage_bonus_by_weapon: HashMap::new(),
+            weapon_speed_bonus_by_weapon: HashMap::new(),
+            shield_defense_bonus: 0,
+            shield_cover_value_adjustment: 0,
+            ignore_armor_initiative_penalty: false,
+            ignore_armor_speed_penalty: false,
+            armor_dr_bonus_armored: 0,
+            light_armor_defense_divisor: None,
+            medium_armor_dr_bonus: 0,
+            medium_armor_defense_penalty_reduction: 0,
+            heavy_armor_damage_bonus_divisor: None,
+            reach_bonus_by_group: HashMap::new(),
+            range_distance_multiplier: 1.0,
+        }
+    }
 }
 
 impl TalentModifiers {
@@ -297,6 +338,76 @@ impl TalentModifiers {
     fn defense_bonus_for_weapon(&self, weapon_id: WeaponId) -> i32 {
         *self.defense_bonus_by_weapon.get(&weapon_id).unwrap_or(&0)
     }
+
+    fn weapon_speed_bonus_for_weapon(&self, weapon_id: WeaponId) -> i32 {
+        *self.weapon_speed_bonus_by_weapon.get(&weapon_id).unwrap_or(&0)
+    }
+
+    fn reach_bonus_for_group(&self, group: WeaponGroup) -> i32 {
+        *self.reach_bonus_by_group.get(&group).unwrap_or(&0)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct ArmorTalentAdjustments {
+    speed_mod_bonus: i32,
+    initiative_mod_bonus: i32,
+    base_dv_bonus: i32,
+    armor_dr_bonus: i32,
+    heavy_armor_damage_bonus: i32,
+}
+
+fn armor_talent_adjustments(
+    armor: Option<&Armor>,
+    modifiers: &TalentModifiers,
+) -> ArmorTalentAdjustments {
+    let mut adjustments = ArmorTalentAdjustments::default();
+    let Some(armor) = armor else {
+        return adjustments;
+    };
+    let mut armor_dr = armor.damage_reduction + modifiers.armor_dr_bonus_armored;
+    if matches!(armor.armor_type, ArmorType::Medium) {
+        armor_dr += modifiers.medium_armor_dr_bonus;
+    }
+    let armor_dr = armor_dr.max(0);
+    if modifiers.ignore_armor_speed_penalty && armor.speed_mod < 0 {
+        adjustments.speed_mod_bonus -= armor.speed_mod;
+    }
+    if modifiers.ignore_armor_initiative_penalty && armor.initiative_mod < 0 {
+        adjustments.initiative_mod_bonus -= armor.initiative_mod;
+    }
+    if modifiers.armor_dr_bonus_armored != 0 {
+        adjustments.armor_dr_bonus += modifiers.armor_dr_bonus_armored;
+    }
+    match armor.armor_type {
+        ArmorType::Light => {
+            if let Some(divisor) = modifiers.light_armor_defense_divisor {
+                if divisor > 0 {
+                    adjustments.base_dv_bonus += armor_dr / divisor;
+                }
+            }
+        }
+        ArmorType::Medium => {
+            if modifiers.medium_armor_dr_bonus != 0 {
+                adjustments.armor_dr_bonus += modifiers.medium_armor_dr_bonus;
+            }
+            if modifiers.medium_armor_defense_penalty_reduction > 0 && armor.defense_adj < 0 {
+                let reduction = modifiers
+                    .medium_armor_defense_penalty_reduction
+                    .min(-armor.defense_adj);
+                adjustments.base_dv_bonus += reduction;
+            }
+        }
+        ArmorType::Heavy => {
+            if let Some(divisor) = modifiers.heavy_armor_damage_bonus_divisor {
+                if divisor > 0 {
+                    adjustments.heavy_armor_damage_bonus += armor_dr / divisor;
+                }
+            }
+        }
+        ArmorType::None => {}
+    }
+    adjustments
 }
 
 fn talent_rank(selection: &TalentSelection) -> i32 {
@@ -311,6 +422,121 @@ fn find_talent<'a>(catalog: &'a TalentCatalog, id: &str) -> Option<&'a TalentSpe
     catalog.entries().iter().find(|talent| talent.id == id)
 }
 
+pub fn talent_requires_weapon(spec: &TalentSpec) -> bool {
+    spec.effects.iter().any(|effect| match effect {
+        TalentEffect::AttackBonusWeapon { .. }
+        | TalentEffect::DamageBonusWeapon { .. }
+        | TalentEffect::DefenseBonusWeapon { .. }
+        | TalentEffect::WeaponReachBonus { .. } => true,
+        TalentEffect::WeaponSpeedBonus { weapon_group, .. } => weapon_group.is_none(),
+        _ => false,
+    })
+}
+
+#[derive(Clone, Debug)]
+pub struct TalentContext<'a> {
+    pub level: u8,
+    pub stats: &'a AbilitySet,
+    pub talents: &'a [TalentSelection],
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TalentRequirementFailure {
+    MinLevel { required: u8, current: u8 },
+    MinStatBase {
+        stat: AbilityKind,
+        required: u8,
+        current: u8,
+    },
+    MinStatPercentile {
+        stat: AbilityKind,
+        required: u8,
+        current: Option<u8>,
+    },
+    RequiresTalent {
+        id: String,
+        required_rank: u8,
+        current_rank: u8,
+    },
+}
+
+fn ability_values(stats: &AbilitySet, stat: AbilityKind) -> (u8, Option<u8>) {
+    match stat {
+        AbilityKind::Strength => (stats.strength.base, Some(stats.strength.percentile)),
+        AbilityKind::Dexterity => (stats.dexterity.base, Some(stats.dexterity.percentile)),
+        AbilityKind::Intelligence => (stats.intelligence, None),
+        AbilityKind::Wisdom => (stats.wisdom, None),
+        AbilityKind::Constitution => (stats.constitution, None),
+        AbilityKind::Looks => (stats.looks, None),
+        AbilityKind::Charisma => (stats.charisma, None),
+    }
+}
+
+pub fn evaluate_talent_requirements(
+    spec: &TalentSpec,
+    context: &TalentContext<'_>,
+) -> Vec<TalentRequirementFailure> {
+    let mut failures = Vec::new();
+    for requirement in &spec.requirements {
+        match requirement {
+            TalentRequirement::MinLevel { level } => {
+                if context.level < *level {
+                    failures.push(TalentRequirementFailure::MinLevel {
+                        required: *level,
+                        current: context.level,
+                    });
+                }
+            }
+            TalentRequirement::MinStat {
+                stat,
+                min_base,
+                min_percentile,
+            } => {
+                let (current_base, current_percentile) = ability_values(context.stats, *stat);
+                if let Some(required) = min_base {
+                    if current_base < *required {
+                        failures.push(TalentRequirementFailure::MinStatBase {
+                            stat: *stat,
+                            required: *required,
+                            current: current_base,
+                        });
+                    }
+                }
+                if let Some(required) = min_percentile {
+                    let meets_percentile = current_percentile
+                        .map(|current| current >= *required)
+                        .unwrap_or(false);
+                    if !meets_percentile {
+                        failures.push(TalentRequirementFailure::MinStatPercentile {
+                            stat: *stat,
+                            required: *required,
+                            current: current_percentile,
+                        });
+                    }
+                }
+            }
+            TalentRequirement::RequiresTalent { id, min_rank } => {
+                let required_rank = min_rank.unwrap_or(1).max(1);
+                let current_rank = context
+                    .talents
+                    .iter()
+                    .filter(|selection| selection.id == *id)
+                    .map(|selection| selection.rank.max(1))
+                    .max()
+                    .unwrap_or(0);
+                if current_rank < required_rank {
+                    failures.push(TalentRequirementFailure::RequiresTalent {
+                        id: id.clone(),
+                        required_rank,
+                        current_rank,
+                    });
+                }
+            }
+        }
+    }
+    failures
+}
+
 fn weapon_id_by_name(catalog: &WeaponCatalog, name: &str) -> Option<WeaponId> {
     catalog
         .entries()
@@ -319,16 +545,45 @@ fn weapon_id_by_name(catalog: &WeaponCatalog, name: &str) -> Option<WeaponId> {
         .and_then(|idx| catalog.id_from_index(idx))
 }
 
+fn weapon_group_from_str(value: &str) -> Option<WeaponGroup> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "unarmed" => Some(WeaponGroup::Unarmed),
+        "axes" => Some(WeaponGroup::Axes),
+        "basic" => Some(WeaponGroup::Basic),
+        "blunt" => Some(WeaponGroup::Blunt),
+        "bows" => Some(WeaponGroup::Bows),
+        "crossbows" => Some(WeaponGroup::Crossbows),
+        "double" => Some(WeaponGroup::Double),
+        "ensnaring" => Some(WeaponGroup::Ensnaring),
+        "lashes" => Some(WeaponGroup::Lashes),
+        "large_swords" | "large swords" => Some(WeaponGroup::LargeSwords),
+        "small_swords" | "small swords" => Some(WeaponGroup::SmallSwords),
+        "polearms" => Some(WeaponGroup::Polearms),
+        "spears" => Some(WeaponGroup::Spears),
+        "shields" => Some(WeaponGroup::Shields),
+        _ => None,
+    }
+}
+
 fn resolve_talent_modifiers(
     player: &PlayerConfig,
     talent_catalog: &TalentCatalog,
     weapon_catalog: &WeaponCatalog,
 ) -> TalentModifiers {
     let mut modifiers = TalentModifiers::default();
+    let stats = ability_set_from_player(player);
+    let context = TalentContext {
+        level: player.level,
+        stats: &stats,
+        talents: &player.talents,
+    };
     for selection in &player.talents {
         let Some(spec) = find_talent(talent_catalog, &selection.id) else {
             continue;
         };
+        if !evaluate_talent_requirements(spec, &context).is_empty() {
+            continue;
+        }
         let rank = talent_rank(selection);
         for effect in &spec.effects {
             match effect {
@@ -379,6 +634,87 @@ fn resolve_talent_modifiers(
                         sides: *sides,
                         penetrating: *penetrating,
                     });
+                }
+                TalentEffect::WeaponSpeedBonus {
+                    amount,
+                    ranged_only,
+                    weapon_group,
+                } => {
+                    let weapon_id = if let Some(group_name) = weapon_group.as_deref() {
+                        let Some(group) = weapon_group_from_str(group_name) else {
+                            continue;
+                        };
+                        let Some(weapon) = weapon_catalog.get(player.weapon_id) else {
+                            continue;
+                        };
+                        if weapon.group != group {
+                            continue;
+                        }
+                        player.weapon_id
+                    } else if let Some(weapon_name) = selection.weapon.as_deref() {
+                        let Some(weapon_id) = weapon_id_by_name(weapon_catalog, weapon_name) else {
+                            continue;
+                        };
+                        weapon_id
+                    } else {
+                        continue;
+                    };
+                    let Some(weapon) = weapon_catalog.get(weapon_id) else {
+                        continue;
+                    };
+                    if *ranged_only && !is_ranged_weapon(weapon) {
+                        continue;
+                    }
+                    let entry = modifiers
+                        .weapon_speed_bonus_by_weapon
+                        .entry(weapon_id)
+                        .or_insert(0);
+                    *entry += amount * rank;
+                }
+                TalentEffect::WeaponReachBonus { amount } => {
+                    if let Some(weapon_name) = selection.weapon.as_deref() {
+                        if let Some(weapon_id) = weapon_id_by_name(weapon_catalog, weapon_name) {
+                            if let Some(weapon) = weapon_catalog.get(weapon_id) {
+                                let entry = modifiers
+                                    .reach_bonus_by_group
+                                    .entry(weapon.group)
+                                    .or_insert(0);
+                                *entry += amount * rank;
+                            }
+                        }
+                    }
+                }
+                TalentEffect::RangeDistanceMultiplier { multiplier } => {
+                    if *multiplier > 0.0 {
+                        modifiers.range_distance_multiplier *= *multiplier;
+                    }
+                }
+                TalentEffect::ArmorInitiativePenaltyNegation => {
+                    modifiers.ignore_armor_initiative_penalty = true;
+                }
+                TalentEffect::ArmorSpeedPenaltyNegation => {
+                    modifiers.ignore_armor_speed_penalty = true;
+                }
+                TalentEffect::ArmorDrBonusArmored { amount } => {
+                    modifiers.armor_dr_bonus_armored += amount * rank;
+                }
+                TalentEffect::LightArmorDefenseBonusFromDr { divisor } => {
+                    modifiers.light_armor_defense_divisor = Some(*divisor);
+                }
+                TalentEffect::MediumArmorDrBonus { amount } => {
+                    modifiers.medium_armor_dr_bonus += amount * rank;
+                }
+                TalentEffect::MediumArmorDefensePenaltyReduction { amount } => {
+                    modifiers.medium_armor_defense_penalty_reduction += amount * rank;
+                }
+                TalentEffect::HeavyArmorDamageBonusFromDr { divisor } => {
+                    modifiers.heavy_armor_damage_bonus_divisor = Some(*divisor);
+                }
+                TalentEffect::ShieldDefenseBonus { amount } => {
+                    modifiers.shield_defense_bonus += amount * rank;
+                }
+                TalentEffect::ShieldCoverValueAdjustment { amount } => {
+                    modifiers.shield_cover_value_adjustment += amount * rank;
                 }
             }
         }
@@ -484,6 +820,21 @@ fn weapon_for_player<'a>(
         .expect("weapon catalog is empty")
 }
 
+pub fn ability_set_from_player(player: &PlayerConfig) -> AbilitySet {
+    AbilitySet {
+        strength: AbilityScore::new(
+            player.strength_base,
+            normalize_percentile(player.strength_pct),
+        ),
+        intelligence: player.intelligence,
+        wisdom: player.wisdom,
+        dexterity: AbilityScore::new(player.dex_base, normalize_percentile(player.dex_pct)),
+        constitution: player.constitution,
+        looks: player.looks,
+        charisma: player.charisma,
+    }
+}
+
 pub fn player_summary(
     player: &PlayerConfig,
     weapon_catalog: &WeaponCatalog,
@@ -494,15 +845,27 @@ pub fn player_summary(
     let weapon = weapon_for_player(player, weapon_catalog);
     let character = build_character(player, weapon_catalog, armor_catalog, shield_catalog);
     let modifiers = resolve_talent_modifiers(player, talent_catalog, weapon_catalog);
+    let armor_adjustments = armor_talent_adjustments(character.equipment.armor.as_ref(), &modifiers);
     let defensive_dualwielding = defensive_dualwielding_active(player, weapon);
     let defense_bonus_weapon =
         modifiers.defense_bonus_for_weapon(player.weapon_id)
             * if defensive_dualwielding { 2 } else { 1 };
     let mut derived = character.derived();
+    derived.speed_mod += armor_adjustments.speed_mod_bonus;
+    derived.initiative_mod += armor_adjustments.initiative_mod_bonus;
+    derived.base_dv += armor_adjustments.base_dv_bonus;
     derived.hit_points = (derived.hit_points as i32 + modifiers.hp_bonus).max(1) as u32;
-    derived.armor_dr = (derived.armor_dr + modifiers.armor_dr_bonus).max(0);
+    derived.armor_dr =
+        (derived.armor_dr + armor_adjustments.armor_dr_bonus + modifiers.armor_dr_bonus).max(0);
     derived.base_dv += modifiers.defense_bonus + defense_bonus_weapon;
-    let roll = roll_summary(player, weapon, &character, &derived, &modifiers);
+    let roll = roll_summary(
+        player,
+        weapon,
+        &character,
+        &derived,
+        &modifiers,
+        armor_adjustments.heavy_armor_damage_bonus,
+    );
     PlayerSummary { derived, roll }
 }
 
@@ -512,6 +875,7 @@ fn roll_summary(
     character: &Character,
     derived: &DerivedStats,
     modifiers: &TalentModifiers,
+    armor_damage_bonus: i32,
 ) -> RollSummary {
     let is_ranged_weapon = is_ranged_weapon(weapon);
     let uses_projectiles = uses_projectiles(&weapon.name, weapon.ammunition.is_some());
@@ -528,11 +892,15 @@ fn roll_summary(
         + attack_mastery
         + modifiers.attack_bonus_for_weapon(player.weapon_id);
     let two_hand_bonus = two_hand_damage_bonus(weapon, player.two_hand_grip);
-    let strength_damage = strength_damage_for_weapon(weapon, character.ability_mods.strength.damage)
+    let mut strength_damage =
+        strength_damage_for_weapon(weapon, character.ability_mods.strength.damage)
         + two_hand_bonus
         + material_damage_bonus
         + damage_mastery
         + modifiers.damage_bonus_for_weapon(player.weapon_id);
+    if !is_ranged_weapon {
+        strength_damage += armor_damage_bonus;
+    }
 
     RollSummary {
         attack_bonus,
@@ -565,18 +933,7 @@ pub fn build_character(
         .get(player.shield_id)
         .and_then(|entry| entry.shield.clone());
 
-    let abilities = AbilitySet {
-        strength: AbilityScore::new(
-            player.strength_base,
-            normalize_percentile(player.strength_pct),
-        ),
-        intelligence: player.intelligence,
-        wisdom: player.wisdom,
-        dexterity: AbilityScore::new(player.dex_base, normalize_percentile(player.dex_pct)),
-        constitution: player.constitution,
-        looks: player.looks,
-        charisma: player.charisma,
-    };
+    let abilities = ability_set_from_player(player);
 
     let mastery = WeaponMastery {
         group: weapon_preset.group,
@@ -646,8 +1003,13 @@ pub fn build_combatant(
 ) -> Combatant {
     let weapon_preset = weapon_for_player(player, weapon_catalog);
     let character = build_character(player, weapon_catalog, armor_catalog, shield_catalog);
-    let derived = character.derived();
     let modifiers = resolve_talent_modifiers(player, talent_catalog, weapon_catalog);
+    let armor_adjustments = armor_talent_adjustments(character.equipment.armor.as_ref(), &modifiers);
+    let mut derived = character.derived();
+    derived.speed_mod += armor_adjustments.speed_mod_bonus;
+    derived.initiative_mod += armor_adjustments.initiative_mod_bonus;
+    derived.base_dv += armor_adjustments.base_dv_bonus;
+    derived.armor_dr = (derived.armor_dr + armor_adjustments.armor_dr_bonus).max(0);
     let weapon_name = character
         .equipment
         .weapon
@@ -661,17 +1023,21 @@ pub fn build_combatant(
         .map(|weapon| weapon.speed)
         .unwrap_or(10.0);
     let speed_mod = derived.speed_mod as f32;
-    let weapon_reach = character
+    let reach_bonus = modifiers.reach_bonus_for_group(weapon_preset.group) as f32;
+    let weapon_reach = (character
         .equipment
         .weapon
         .as_ref()
         .map(|weapon| weapon.reach_ft)
-        .unwrap_or(1.0);
+        .unwrap_or(1.0)
+        .max(1.0)
+        + reach_bonus)
+        .max(1.0);
     let armor_is_heavy = character
         .equipment
         .armor
         .as_ref()
-        .map(|armor| matches!(armor.armor_type, crate::character::ArmorType::Heavy))
+        .map(|armor| matches!(armor.armor_type, ArmorType::Heavy))
         .unwrap_or(false);
     let armor_penetration = character
         .equipment
@@ -708,7 +1074,10 @@ pub fn build_combatant(
     let min_speed = weapon_preset.size.min_speed();
     let speed_mastery = effective_speed_mastery(player, weapon_preset) as f32;
     let jab_speed =
-        (weapon_preset.jab_speed.unwrap_or(weapon_speed) + speed_mod - speed_mastery)
+        (weapon_preset.jab_speed.unwrap_or(weapon_speed)
+            + speed_mod
+            - speed_mastery
+            + modifiers.weapon_speed_bonus_for_weapon(player.weapon_id) as f32)
             .max(min_speed);
     let jab_special_expr = if use_jab {
         weapon_preset.jab_special_expr.clone()
@@ -747,12 +1116,19 @@ pub fn build_combatant(
             + material_damage_bonus
         + damage_mastery
         + modifiers.damage_bonus_for_weapon(player.weapon_id);
+    if !is_ranged_weapon {
+        strength_damage += armor_adjustments.heavy_armor_damage_bonus;
+    }
     let mut max_hp = (derived.hit_points as i32 + modifiers.hp_bonus).max(1);
     let mut threshold_of_pain = threshold_of_pain(max_hp, player.level);
     let mut shield_name = shield_data.map(|shield| shield.name.to_string());
-    let mut shield_defense_bonus = shield_data.map(|shield| shield.defense_bonus).unwrap_or(0);
+    let mut shield_defense_bonus = shield_data.map(|shield| shield.defense_bonus).unwrap_or(0)
+        + modifiers.shield_defense_bonus;
     let mut shield_dr = shield_data.map(|shield| shield.dr).unwrap_or(0);
     let mut shield_cover_value = shield_data.map(|shield| shield.cover_value);
+    if let Some(cover_value) = shield_cover_value.as_mut() {
+        *cover_value = (*cover_value + modifiers.shield_cover_value_adjustment).max(0);
+    }
     let mut shield_breakage =
         shield_data.map(|shield| breakage_steps_from_thresholds(shield.breakage_thresholds));
     let mut ranged_defense_mod = if modifiers.allow_dex_ranged {
@@ -786,7 +1162,12 @@ pub fn build_combatant(
     let weapon_speed = if use_jab {
         jab_speed
     } else {
-        (weapon_speed + two_hand_speed_penalty + speed_mod - speed_mastery).max(min_speed)
+        (weapon_speed
+            + two_hand_speed_penalty
+            + speed_mod
+            - speed_mastery
+            + modifiers.weapon_speed_bonus_for_weapon(player.weapon_id) as f32)
+            .max(min_speed)
     };
     let damage_expr_cache = DamageExprCache::new(&weapon_damage);
     let shield_damage_expr_cache = shield_damage_expr
@@ -810,6 +1191,7 @@ pub fn build_combatant(
                 speed: weapon_speed,
                 reach_ft: weapon_reach,
                 range_bands_feet,
+                range_distance_multiplier: modifiers.range_distance_multiplier,
                 two_hand_grip: effective_two_hand,
                 use_jab,
                 jab_special_expr,
@@ -852,27 +1234,27 @@ pub fn build_combatant(
 pub fn stop_distance_for_players(
     players: &[PlayerConfig; 2],
     weapon_catalog: &WeaponCatalog,
+    talent_catalog: &TalentCatalog,
 ) -> f32 {
-    let reach_a = weapon_catalog
-        .get(players[0].weapon_id)
-        .map(|weapon| {
-            weapon
-                .range_bands_feet
-                .map(sim::max_range_for_bands)
-                .or_else(|| sim::max_range_for_weapon_name(&weapon.name))
-                .unwrap_or_else(|| weapon.reach_ft.max(1.0))
-        })
-        .unwrap_or(1.0);
-    let reach_b = weapon_catalog
-        .get(players[1].weapon_id)
-        .map(|weapon| {
-            weapon
-                .range_bands_feet
-                .map(sim::max_range_for_bands)
-                .or_else(|| sim::max_range_for_weapon_name(&weapon.name))
-                .unwrap_or_else(|| weapon.reach_ft.max(1.0))
-        })
-        .unwrap_or(1.0);
+    let reach_for_player = |player: &PlayerConfig| {
+        weapon_catalog
+            .get(player.weapon_id)
+            .map(|weapon| {
+                weapon
+                    .range_bands_feet
+                    .map(sim::max_range_for_bands)
+                    .or_else(|| sim::max_range_for_weapon_name(&weapon.name))
+                    .unwrap_or_else(|| {
+                        let modifiers =
+                            resolve_talent_modifiers(player, talent_catalog, weapon_catalog);
+                        let reach_bonus = modifiers.reach_bonus_for_group(weapon.group) as f32;
+                        (weapon.reach_ft + reach_bonus).max(1.0)
+                    })
+            })
+            .unwrap_or(1.0)
+    };
+    let reach_a = reach_for_player(&players[0]);
+    let reach_b = reach_for_player(&players[1]);
     reach_a.max(reach_b)
 }
 
@@ -1008,6 +1390,130 @@ mod tests {
     }
 
     #[test]
+    fn talent_requirements_block_min_level() {
+        let spec = TalentSpec {
+            id: "requires_level".to_string(),
+            name: "Requires Level".to_string(),
+            description: "".to_string(),
+            cost_bp: None,
+            category: "Test".to_string(),
+            requirements: vec![TalentRequirement::MinLevel { level: 3 }],
+            max_rank: 1,
+            effects: Vec::new(),
+        };
+        let stats = AbilitySet {
+            strength: AbilityScore::new(10, 1),
+            intelligence: 10,
+            wisdom: 10,
+            dexterity: AbilityScore::new(10, 1),
+            constitution: 10,
+            looks: 10,
+            charisma: 10,
+        };
+        let context = TalentContext {
+            level: 2,
+            stats: &stats,
+            talents: &[],
+        };
+        let failures = evaluate_talent_requirements(&spec, &context);
+        assert_eq!(
+            failures,
+            vec![TalentRequirementFailure::MinLevel {
+                required: 3,
+                current: 2
+            }]
+        );
+    }
+
+    #[test]
+    fn talent_requirements_block_missing_stats() {
+        let spec = TalentSpec {
+            id: "requires_stats".to_string(),
+            name: "Requires Stats".to_string(),
+            description: "".to_string(),
+            cost_bp: None,
+            category: "Test".to_string(),
+            requirements: vec![TalentRequirement::MinStat {
+                stat: AbilityKind::Strength,
+                min_base: Some(12),
+                min_percentile: Some(51),
+            }],
+            max_rank: 1,
+            effects: Vec::new(),
+        };
+        let stats = AbilitySet {
+            strength: AbilityScore::new(10, 1),
+            intelligence: 10,
+            wisdom: 10,
+            dexterity: AbilityScore::new(10, 1),
+            constitution: 10,
+            looks: 10,
+            charisma: 10,
+        };
+        let context = TalentContext {
+            level: 1,
+            stats: &stats,
+            talents: &[],
+        };
+        let failures = evaluate_talent_requirements(&spec, &context);
+        assert!(failures.contains(&TalentRequirementFailure::MinStatBase {
+            stat: AbilityKind::Strength,
+            required: 12,
+            current: 10,
+        }));
+        assert!(failures.contains(&TalentRequirementFailure::MinStatPercentile {
+            stat: AbilityKind::Strength,
+            required: 51,
+            current: Some(1),
+        }));
+    }
+
+    #[test]
+    fn talent_requirements_block_missing_prereq_talent() {
+        let spec = TalentSpec {
+            id: "requires_talent".to_string(),
+            name: "Requires Talent".to_string(),
+            description: "".to_string(),
+            cost_bp: None,
+            category: "Test".to_string(),
+            requirements: vec![TalentRequirement::RequiresTalent {
+                id: "prereq".to_string(),
+                min_rank: Some(2),
+            }],
+            max_rank: 1,
+            effects: Vec::new(),
+        };
+        let stats = AbilitySet {
+            strength: AbilityScore::new(10, 1),
+            intelligence: 10,
+            wisdom: 10,
+            dexterity: AbilityScore::new(10, 1),
+            constitution: 10,
+            looks: 10,
+            charisma: 10,
+        };
+        let selections = vec![TalentSelection {
+            id: "prereq".to_string(),
+            rank: 1,
+            weapon: None,
+        }];
+        let context = TalentContext {
+            level: 1,
+            stats: &stats,
+            talents: &selections,
+        };
+        let failures = evaluate_talent_requirements(&spec, &context);
+        assert_eq!(
+            failures,
+            vec![TalentRequirementFailure::RequiresTalent {
+                id: "prereq".to_string(),
+                required_rank: 2,
+                current_rank: 1
+            }]
+        );
+    }
+
+    #[test]
     fn material_bonuses_melee_use_weapon_tier() {
         let (attack, damage) = material_bonuses(2, 4, false, false);
         assert_eq!((attack, damage), (2, 2));
@@ -1126,6 +1632,9 @@ mod tests {
                 id: "defense_bonus_weapon".to_string(),
                 name: "Defense Bonus (weapon)".to_string(),
                 description: "".to_string(),
+                cost_bp: None,
+                category: "Test".to_string(),
+                requirements: Vec::new(),
                 max_rank: 1,
                 effects: vec![TalentEffect::DefenseBonusWeapon { amount: 2 }],
             },
@@ -1133,6 +1642,9 @@ mod tests {
                 id: "dodge".to_string(),
                 name: "Dodge".to_string(),
                 description: "".to_string(),
+                cost_bp: None,
+                category: "Test".to_string(),
+                requirements: Vec::new(),
                 max_rank: 1,
                 effects: vec![TalentEffect::Dodge {
                     defense_bonus: 1,

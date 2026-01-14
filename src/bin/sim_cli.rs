@@ -172,6 +172,7 @@ fn main() {
                 speed: weapon_speed,
                 reach_ft: weapon_reach,
                 range_bands_feet,
+                range_distance_multiplier: 1.0,
                 two_hand_grip: false,
                 use_jab: false,
                 jab_special_expr: None,
