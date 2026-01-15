@@ -1,0 +1,316 @@
+{
+  "races": [
+    {
+      "id": "armeroci",
+      "name": "Armeroci",
+      "category": "Human",
+      "base_hp": 8,
+      "size": "medium",
+      "knockback_size": "small",
+      "ability_adjustments": {
+        "strength": 0,
+        "dexterity": 1,
+        "intelligence": 0,
+        "wisdom": 2,
+        "constitution": -2,
+        "looks": 0,
+        "charisma": 0
+      },
+      "pros": [
+        "+1 defense bonus",
+        "Age Gracefully talent",
+        "Charm Resistance talent",
+        "Initiative die starts at d10 instead of d12",
+        "1 free Artistry or Musician skill purchase",
+        "1 free Listening skill purchase",
+        "1 free Observation skill purchase",
+        "5 additional Advancement Points",
+        "5 additional Learning Points"
+      ],
+      "cons": [
+        "Size small for knock backs"
+      ]
+    },
+    {
+      "id": "fymblwngen",
+      "name": "Fymblwngen",
+      "category": "Human",
+      "base_hp": 10,
+      "size": "medium",
+      "ability_adjustments": {
+        "strength": 1,
+        "dexterity": 0,
+        "intelligence": 0,
+        "wisdom": 1,
+        "constitution": 0,
+        "looks": 0,
+        "charisma": 0
+      },
+      "pros": [
+        "Bilingual proficiency",
+        "Skinning/Tanning proficiency",
+        "2 free Hunting skill purchases",
+        "1 free Survival skill purchase",
+        "1 free Tracking skill purchase",
+        "5 additional Learning Points",
+        "5 additional Advancement Points"
+      ],
+      "cons": []
+    },
+    {
+      "id": "ithican",
+      "name": "Ithican",
+      "category": "Human",
+      "base_hp": 10,
+      "size": "medium",
+      "ability_adjustments": {
+        "strength": 0,
+        "dexterity": 1,
+        "intelligence": 1,
+        "wisdom": 0,
+        "constitution": 0,
+        "looks": 0,
+        "charisma": 0
+      },
+      "pros": [
+        "Bilingual proficiency",
+        "Seaman's Cant proficiency",
+        "1 free Literacy (Ithican) skill purchase",
+        "1 free Appraisal skill purchase",
+        "1 free Salesmanship skill purchase",
+        "1 free Skilled Liar skill purchase",
+        "1 free Swimming skill purchase",
+        "5 additional Learning Points",
+        "5 additional Advancement Points"
+      ],
+      "cons": []
+    },
+    {
+      "id": "kanian",
+      "name": "Kanian",
+      "category": "Human",
+      "base_hp": 10,
+      "size": "medium",
+      "ability_adjustments": {
+        "strength": 1,
+        "dexterity": 0,
+        "intelligence": 1,
+        "wisdom": 0,
+        "constitution": 0,
+        "looks": 0,
+        "charisma": 0
+      },
+      "pros": [
+        "4 free Riding skill purchases",
+        "2 free Monster Lore skill purchases",
+        "1 free Religion skill purchase",
+        "1 free Scrutiny skill purchase",
+        "5 additional Learning Points",
+        "5 additional Advancement Points"
+      ],
+      "cons": []
+    },
+    {
+      "id": "katlakehan",
+      "name": "Katlakehan",
+      "category": "Human",
+      "base_hp": 10,
+      "size": "medium",
+      "ability_adjustments": {
+        "strength": 0,
+        "dexterity": 1,
+        "intelligence": 0,
+        "wisdom": 0,
+        "constitution": 0,
+        "looks": 0,
+        "charisma": 1
+      },
+      "pros": [
+        "Bilingual proficiency",
+        "1 free Glean Information skill purchase",
+        "1 free Persuasion skill purchase",
+        "1 free Reading Lips skill purchase",
+        "1 free Recruiting skill purchase",
+        "1 free Riding skill purchase",
+        "1 free Salesmanship skill purchase",
+        "5 additional Learning Points",
+        "5 additional Advancement Points"
+      ],
+      "cons": []
+    },
+    {
+      "id": "midlander",
+      "name": "Midlander",
+      "category": "Human",
+      "base_hp": 10,
+      "size": "medium",
+      "ability_adjustments": {
+        "strength": 0,
+        "dexterity": 0,
+        "intelligence": 0,
+        "wisdom": 1,
+        "constitution": 0,
+        "looks": 0,
+        "charisma": 1
+      },
+      "pros": [
+        "Bilingual proficiency",
+        "Laborer proficiency",
+        "2 free Agriculture skill purchases",
+        "1 free Animal Empathy skill purchase",
+        "1 free Animal Herding skill purchase",
+        "1 free Animal Husbandry skill purchase",
+        "5 additional Learning Points",
+        "5 additional Advancement Points"
+      ],
+      "cons": []
+    },
+    {
+      "id": "pather",
+      "name": "Pather",
+      "category": "Human",
+      "base_hp": 10,
+      "size": "medium",
+      "ability_adjustments": {
+        "strength": 0,
+        "dexterity": 0,
+        "intelligence": 0,
+        "wisdom": 0,
+        "constitution": 1,
+        "looks": 0,
+        "charisma": 1
+      },
+      "pros": [
+        "Hiking/Roadmarching proficiency",
+        "3 free Literacy (Pathian) skill purchases",
+        "2 free Language (Old Pathian) skill purchases",
+        "1 free Administration skill purchase",
+        "1 free Cartography skill purchase",
+        "1 free Law skill purchase",
+        "1 free Religion skill purchase",
+        "5 additional Learning Points",
+        "5 additional Advancement Points"
+      ],
+      "cons": []
+    },
+    {
+      "id": "vetlander",
+      "name": "Vetlander",
+      "category": "Human",
+      "base_hp": 10,
+      "size": "medium",
+      "ability_adjustments": {
+        "strength": 0,
+        "dexterity": 0,
+        "intelligence": 1,
+        "wisdom": 0,
+        "constitution": 1,
+        "looks": 0,
+        "charisma": 0
+      },
+      "pros": [
+        "Bilingual proficiency",
+        "Seaman's Cant proficiency",
+        "2 free Swimming skill purchases",
+        "1 free Boating skill purchase",
+        "1 free Pottery skill purchase",
+        "1 free Survival skill purchase",
+        "5 additional Learning Points",
+        "5 additional Advancement Points"
+      ],
+      "cons": []
+    },
+    {
+      "id": "limmtrig",
+      "name": "Limmtrig",
+      "category": "Demi-human",
+      "base_hp": 10,
+      "size": "medium",
+      "knockback_size": "large",
+      "ability_adjustments": {
+        "strength": 1,
+        "dexterity": -2,
+        "intelligence": -1,
+        "wisdom": 0,
+        "constitution": 3,
+        "looks": -1,
+        "charisma": 1
+      },
+      "pros": [
+        "Hiking/Roadmarching proficiency",
+        "Fast Healer talent",
+        "1 free Botany skill purchase",
+        "1 free Forestry skill purchase",
+        "1 free Listening skill purchase",
+        "+1 on saving throws versus poison for every 3 full points of Constitution"
+      ],
+      "cons": [
+        "Cannot eat meat",
+        "Gullible quirk (no BP gained)",
+        "-2 on mastery die for Scrutiny"
+      ]
+    },
+    {
+      "id": "vorova_female",
+      "name": "Vorova (Female)",
+      "category": "Demi-human",
+      "base_hp": 10,
+      "size": "medium",
+      "ability_adjustments": {
+        "strength": 0,
+        "dexterity": 1,
+        "intelligence": 0,
+        "wisdom": 1,
+        "constitution": 0,
+        "looks": -2,
+        "charisma": 1
+      },
+      "pros": [
+        "Hiking/Roadmarching proficiency",
+        "Pain Tolerant talent",
+        "1 free Survival skill purchase",
+        "Below 32F: +1/5% to all rolls/checks",
+        "Save +4 vs frost and cold spells",
+        "10% less damage from frost and cold spells"
+      ],
+      "cons": [
+        "Superstitious quirk (no BP gained)",
+        "Above 86F: -1/5% to all rolls/checks",
+        "Above 104F: -2/10% to all rolls/checks",
+        "Save -4 vs fire and heat spells",
+        "10% more damage from fire and heat spells"
+      ]
+    },
+    {
+      "id": "vorova_male",
+      "name": "Vorova (Male)",
+      "category": "Demi-human",
+      "base_hp": 10,
+      "size": "medium",
+      "ability_adjustments": {
+        "strength": 2,
+        "dexterity": 1,
+        "intelligence": 0,
+        "wisdom": -1,
+        "constitution": 1,
+        "looks": -4,
+        "charisma": -1
+      },
+      "pros": [
+        "Hiking/Roadmarching proficiency",
+        "Pain Tolerant talent",
+        "1 free Survival skill purchase",
+        "Below 32F: +1/5% to all rolls/checks",
+        "Save +4 vs frost and cold spells",
+        "10% less damage from frost and cold spells"
+      ],
+      "cons": [
+        "Superstitious quirk (no BP gained)",
+        "Above 86F: -1/5% to all rolls/checks",
+        "Above 104F: -2/10% to all rolls/checks",
+        "Save -4 vs fire and heat spells",
+        "10% more damage from fire and heat spells"
+      ]
+    }
+  ]
+}

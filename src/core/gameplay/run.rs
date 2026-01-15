@@ -39,7 +39,7 @@ impl RunState {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Wound {
     pub damage: u32,
-    pub healing_progress_half_days: u32,
+    pub healing_progress_quarter_days: u32,
 }
 
 pub trait CombatantBuilder {
@@ -133,7 +133,8 @@ pub fn run_next_fight<B: CombatantBuilder>(
     if !new_wounds.is_empty() {
         state.wounds.append(&mut new_wounds);
     }
-    heal_wounds(&mut state.wounds, rest_days);
+    let fast_healer = player_has_talent(&state.player, "fast_healer");
+    heal_wounds(&mut state.wounds, rest_days, fast_healer);
 
     let reward = if won {
         let loot = loot_table.roll(enemy_profile.level, rng);
@@ -180,7 +181,7 @@ fn collect_wounds(events: &[CombatEvent]) -> Vec<Wound> {
             if attack.damage > 0 {
                 wounds.push(Wound {
                     damage: attack.damage as u32,
-                    healing_progress_half_days: 0,
+                    healing_progress_quarter_days: 0,
                 });
             }
         }
@@ -188,32 +189,48 @@ fn collect_wounds(events: &[CombatEvent]) -> Vec<Wound> {
     wounds
 }
 
-fn heal_wounds(wounds: &mut Vec<Wound>, rest_days: u32) {
-    let rest_half_days = rest_days.saturating_mul(2);
+fn player_has_talent(player: &PlayerProfile, id: &str) -> bool {
+    player.talents.iter().any(|talent| talent.id == id)
+}
+
+fn heal_wounds(wounds: &mut Vec<Wound>, rest_days: u32, fast_healer: bool) {
+    let rest_quarter_days = rest_days.saturating_mul(4);
     for wound in wounds.iter_mut() {
         if wound.damage == 0 {
             continue;
         }
 
-        wound.damage = wound.damage.saturating_sub(1);
-        if wound.damage == 0 {
-            wound.healing_progress_half_days = 0;
-            continue;
+        let mut healing_progress =
+            wound.healing_progress_quarter_days.saturating_add(rest_quarter_days);
+        if !(fast_healer && wound.damage == 1) {
+            wound.damage = wound.damage.saturating_sub(1);
+            if wound.damage == 0 {
+                wound.healing_progress_quarter_days = 0;
+                continue;
+            }
         }
 
-        wound.healing_progress_half_days =
-            wound.healing_progress_half_days.saturating_add(rest_half_days);
         while wound.damage > 0 {
-            let required_half_days = wound.damage;
-            if wound.healing_progress_half_days < required_half_days {
+            let required_quarter_days = if fast_healer {
+                if wound.damage == 1 {
+                    1
+                } else {
+                    wound.damage.saturating_sub(1).saturating_mul(2)
+                }
+            } else {
+                wound.damage.saturating_mul(2)
+            };
+            if healing_progress < required_quarter_days {
                 break;
             }
-            wound.healing_progress_half_days -= required_half_days;
+            healing_progress = healing_progress.saturating_sub(required_quarter_days);
             wound.damage -= 1;
         }
 
         if wound.damage == 0 {
-            wound.healing_progress_half_days = 0;
+            wound.healing_progress_quarter_days = 0;
+        } else {
+            wound.healing_progress_quarter_days = healing_progress;
         }
     }
     wounds.retain(|wound| wound.damage > 0);
@@ -291,7 +308,7 @@ mod tests {
             wounds,
             vec![Wound {
                 damage: 7,
-                healing_progress_half_days: 0
+                healing_progress_quarter_days: 0
             }]
         );
     }
@@ -300,16 +317,37 @@ mod tests {
     fn heals_wounds_with_rest_days() {
         let mut wounds = vec![Wound {
             damage: 7,
-            healing_progress_half_days: 0,
+            healing_progress_quarter_days: 0,
         }];
 
-        heal_wounds(&mut wounds, 1);
+        heal_wounds(&mut wounds, 1, false);
         assert_eq!(
             wounds,
             vec![Wound {
                 damage: 6,
-                healing_progress_half_days: 2
+                healing_progress_quarter_days: 4
             }]
         );
+    }
+
+    #[test]
+    fn fast_healer_recovers_wounds_faster() {
+        let mut normal = vec![Wound {
+            damage: 3,
+            healing_progress_quarter_days: 0,
+        }];
+        let mut fast = normal.clone();
+
+        heal_wounds(&mut normal, 1, false);
+        heal_wounds(&mut fast, 1, true);
+
+        assert_eq!(
+            normal,
+            vec![Wound {
+                damage: 1,
+                healing_progress_quarter_days: 0
+            }]
+        );
+        assert!(fast.is_empty());
     }
 }

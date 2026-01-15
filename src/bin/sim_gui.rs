@@ -2,7 +2,7 @@ use hackmaster_sim::{character, data, game_logic, sim};
 use character::{Progression, ProgressionTier, WeaponGroup};
 use eframe::egui::{self, Color32, Pos2, Rect};
 use hackmaster_sim::core::catalog::Catalog;
-use hackmaster_sim::core::types::{TalentSelection, TalentSpec};
+use hackmaster_sim::core::types::{RaceSpec, TalentSelection, TalentSpec};
 use sim::{bulk_simulate, BulkSimResult, SimConfig, SimState};
 use std::{collections::BTreeMap, time::Instant};
 use game_logic::{
@@ -62,6 +62,7 @@ const PLAYER_EDITOR_TABS: [PlayerEditorTab; 5] = [
 const FIGHTER_PRESETS_PATH: &str = "data/fighter_presets.json";
 const BULK_SIM_MAX_SECONDS: u32 = u32::MAX;
 const TALENT_TAB_ALL: &str = "All";
+const TALENT_TAB_RACIALS: &str = "Racials";
 
 struct SimGuiApp {
     running: bool,
@@ -71,6 +72,7 @@ struct SimGuiApp {
     weapon_catalog: WeaponCatalog,
     armor_catalog: ArmorCatalog,
     shield_catalog: ShieldCatalog,
+    race_catalog: Vec<RaceSpec>,
     talent_catalog: TalentCatalog,
     npc_presets: NpcPresetCatalog,
     fighter_presets: FighterPresetCatalog,
@@ -110,6 +112,13 @@ impl SimGuiApp {
                 Catalog::new(Vec::new())
             }
         };
+        let race_catalog = match data::load_races("data/races.json") {
+            Ok(races) => races,
+            Err(err) => {
+                eprintln!("Failed to load races: {err}");
+                Vec::new()
+            }
+        };
         let sim = SimState::new(SimConfig::new(200.0, 1.0));
         let weapon_a = weapon_catalog
             .id_from_index(1)
@@ -133,6 +142,7 @@ impl SimGuiApp {
             weapon_catalog,
             armor_catalog,
             shield_catalog,
+            race_catalog,
             talent_catalog,
             npc_presets,
             fighter_presets,
@@ -830,6 +840,7 @@ impl eframe::App for SimGuiApp {
                         &self.weapon_catalog,
                         &self.armor_catalog,
                         &self.shield_catalog,
+                        &self.race_catalog,
                         &self.talent_catalog,
                         &self.npc_presets,
                         &mut self.fighter_presets,
@@ -871,6 +882,7 @@ fn render_player_editor(
     weapon_catalog: &WeaponCatalog,
     armor_catalog: &ArmorCatalog,
     shield_catalog: &ShieldCatalog,
+    race_catalog: &[RaceSpec],
     talent_catalog: &TalentCatalog,
     npc_presets: &NpcPresetCatalog,
     fighter_presets: &mut FighterPresetCatalog,
@@ -1279,6 +1291,102 @@ fn render_player_editor(
                 ui.label("Disabled while NPC preset is active.");
             }
             ui.add_enabled_ui(!npc_active, |ui| {
+                if !race_catalog.is_empty() {
+                    let mut selection = player
+                        .race_id
+                        .as_ref()
+                        .and_then(|id| race_catalog.iter().position(|race| race.id == *id))
+                        .unwrap_or(usize::MAX);
+                    let race_locked =
+                        player.race_applied || player.fighter_preset.is_some() || npc_active;
+                    ui.horizontal(|ui| {
+                        ui.label("Race");
+                        ui.add_enabled_ui(!race_locked, |ui| {
+                            egui::ComboBox::from_id_source(format!("{id_prefix}_race"))
+                                .selected_text(
+                                    race_catalog
+                                        .get(selection)
+                                        .map(|race| race.name.as_str())
+                                        .unwrap_or("None"),
+                                )
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(&mut selection, usize::MAX, "None");
+                                    for (idx, race) in race_catalog.iter().enumerate() {
+                                        ui.selectable_value(
+                                            &mut selection,
+                                            idx,
+                                            race.name.as_str(),
+                                        );
+                                    }
+                                });
+                        });
+                        let selected_race = race_catalog.get(selection);
+                        let can_apply = selected_race.is_some() && !race_locked;
+                        if ui
+                            .add_enabled(
+                                can_apply,
+                                egui::Button::new("Apply race adjustments"),
+                            )
+                            .clicked()
+                        {
+                            if let Some(race) = selected_race {
+                                game_logic::apply_race_adjustments(player, race);
+                            }
+                        }
+                    });
+                    player.race_id = if selection == usize::MAX {
+                        None
+                    } else {
+                        race_catalog
+                            .get(selection)
+                            .map(|race| race.id.clone())
+                    };
+                    if let Some(race) = player
+                        .race_id
+                        .as_ref()
+                        .and_then(|id| race_catalog.iter().find(|race| race.id == *id))
+                    {
+                        ui.label(format!(
+                            "Base HP {} | {}",
+                            race.base_hp,
+                            race_adjustment_summary(race)
+                        ));
+                    }
+                    if race_locked {
+                        ui.label("Race adjustments apply only when creating a new character.");
+                    }
+                    ui.separator();
+                }
+                ui.label("Conditions");
+                ui.horizontal(|ui| {
+                    ui.checkbox(
+                        &mut player.environment.natural_surroundings,
+                        "Natural surroundings",
+                    );
+                    ui.label("Temp F");
+                    ui.add(egui::DragValue::new(&mut player.environment.temperature_f).speed(1));
+                });
+                ui.separator();
+                ui.label("Misc roll modifiers");
+                let mut misc_row = |label: &str, value: &mut i32| {
+                    ui.horizontal(|ui| {
+                        ui.label(label);
+                        ui.add(egui::DragValue::new(value).speed(1));
+                    });
+                };
+                misc_row("All rolls", &mut player.misc_modifiers.all_roll_bonus);
+                misc_row("Attack", &mut player.misc_modifiers.attack_bonus);
+                misc_row("Defense", &mut player.misc_modifiers.defense_bonus);
+                misc_row("Damage", &mut player.misc_modifiers.damage_bonus);
+                misc_row("Initiative", &mut player.misc_modifiers.initiative_bonus);
+                misc_row("Speed", &mut player.misc_modifiers.speed_mod_bonus);
+                misc_row("Armor DR", &mut player.misc_modifiers.armor_dr_bonus);
+                misc_row("HP", &mut player.misc_modifiers.hp_bonus);
+                misc_row(
+                    "Initiative die steps",
+                    &mut player.misc_modifiers.initiative_die_bonus,
+                );
+                ui.separator();
                 ui.label("Abilities");
                 ability_percentile_editor(
                     ui,
@@ -1340,6 +1448,7 @@ fn render_player_editor(
                     id_prefix,
                     player,
                     weapon_catalog,
+                    race_catalog,
                     talent_catalog,
                     talent_category_tab,
                 );
@@ -1501,6 +1610,8 @@ fn apply_fighter_preset(
     player.use_jab = preset.use_jab;
     player.hold_at_bay = preset.hold_at_bay;
     player.defensive_dualwielding = preset.defensive_dualwielding;
+    player.environment = game_logic::EnvironmentConfig::default();
+    player.misc_modifiers = game_logic::MiscRollModifiers::default();
     player.talents = preset.talents.clone();
     player.weapon_id = find_weapon_id_by_name(weapon_catalog, &preset.weapon)
         .or_else(|| weapon_catalog.first_id())
@@ -1511,6 +1622,8 @@ fn apply_fighter_preset(
     player.shield_id = find_shield_id_by_name(shield_catalog, &preset.shield)
         .or_else(|| shield_catalog.first_id())
         .unwrap_or(ShieldId::new(0));
+    player.race_id = preset.race_id.clone();
+    player.race_applied = false;
     if let Some(weapon) = weapon_catalog.get(player.weapon_id) {
         game_logic::sanitize_projectile_tier(player, weapon);
     }
@@ -1574,6 +1687,7 @@ fn fighter_preset_from_player(
         use_jab: player.use_jab,
         hold_at_bay: player.hold_at_bay,
         defensive_dualwielding: player.defensive_dualwielding,
+        race_id: player.race_id.clone(),
         talents: player.talents.clone(),
     }
 }
@@ -1630,6 +1744,37 @@ fn find_shield_id_by_name(catalog: &ShieldCatalog, name: &str) -> Option<ShieldI
                 .unwrap_or(false)
         })
         .and_then(|idx| catalog.id_from_index(idx))
+}
+
+fn race_adjustment_summary(race: &RaceSpec) -> String {
+    let mut parts = Vec::new();
+    let adj = &race.ability_adjustments;
+    if adj.strength != 0 {
+        parts.push(format!("STR {:+}", adj.strength));
+    }
+    if adj.dexterity != 0 {
+        parts.push(format!("DEX {:+}", adj.dexterity));
+    }
+    if adj.intelligence != 0 {
+        parts.push(format!("INT {:+}", adj.intelligence));
+    }
+    if adj.wisdom != 0 {
+        parts.push(format!("WIS {:+}", adj.wisdom));
+    }
+    if adj.constitution != 0 {
+        parts.push(format!("CON {:+}", adj.constitution));
+    }
+    if adj.looks != 0 {
+        parts.push(format!("LKS {:+}", adj.looks));
+    }
+    if adj.charisma != 0 {
+        parts.push(format!("CHA {:+}", adj.charisma));
+    }
+    if parts.is_empty() {
+        "No stat adjustments".to_string()
+    } else {
+        parts.join(", ")
+    }
 }
 
 fn ability_percentile_editor(
@@ -1712,11 +1857,43 @@ fn format_talent_requirement_failure(
     }
 }
 
+fn race_for_player<'a>(player: &PlayerConfig, race_catalog: &'a [RaceSpec]) -> Option<&'a RaceSpec> {
+    player
+        .race_id
+        .as_ref()
+        .and_then(|id| race_catalog.iter().find(|race| race.id == *id))
+}
+
+fn racial_talent_matches(spec: &TalentSpec, race: Option<&RaceSpec>) -> bool {
+    if spec.category != TALENT_TAB_RACIALS {
+        return true;
+    }
+    let Some(race) = race else {
+        return false;
+    };
+    if spec
+        .race_ids
+        .iter()
+        .any(|race_id| race_id == &race.id)
+    {
+        return true;
+    }
+    if spec
+        .race_categories
+        .iter()
+        .any(|category| category.eq_ignore_ascii_case(&race.category))
+    {
+        return true;
+    }
+    false
+}
+
 fn render_talent_selector(
     ui: &mut egui::Ui,
     id_prefix: &str,
     player: &mut PlayerConfig,
     weapon_catalog: &WeaponCatalog,
+    race_catalog: &[RaceSpec],
     talent_catalog: &TalentCatalog,
     active_category: &mut String,
 ) {
@@ -1725,8 +1902,12 @@ fn render_talent_selector(
         return;
     }
 
+    let active_race = race_for_player(player, race_catalog);
     let mut categories: BTreeMap<String, Vec<&TalentSpec>> = BTreeMap::new();
     for spec in talent_catalog.entries() {
+        if !racial_talent_matches(spec, active_race) {
+            continue;
+        }
         let category = if spec.category.trim().is_empty() {
             "Uncategorized"
         } else {
@@ -1737,6 +1918,7 @@ fn render_talent_selector(
             .or_default()
             .push(spec);
     }
+    categories.entry(TALENT_TAB_RACIALS.to_string()).or_default();
     let mut categories: Vec<(String, Vec<&TalentSpec>)> = categories.into_iter().collect();
     let total_count: usize = categories.iter().map(|(_, specs)| specs.len()).sum();
     categories.sort_by(|a, b| a.0.cmp(&b.0));
@@ -1783,6 +1965,9 @@ fn render_talent_selector(
     egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
         if active_category.as_str() == TALENT_TAB_ALL {
             for (category, specs) in &categories {
+                if specs.is_empty() {
+                    continue;
+                }
                 ui.separator();
                 ui.label(category.as_str());
                 for spec in specs {
@@ -1799,9 +1984,16 @@ fn render_talent_selector(
                     );
                 }
             }
-        } else if let Some((_, specs)) =
+        } else if let Some((name, specs)) =
             categories.iter().find(|(name, _)| name == active_category)
         {
+            if name == TALENT_TAB_RACIALS && specs.is_empty() {
+                if active_race.is_some() {
+                    ui.label("No racial talents available for the selected race.");
+                } else {
+                    ui.label("Select a race to view racial talents.");
+                }
+            }
             for spec in specs {
                 render_talent_entry(
                     ui,
@@ -1847,14 +2039,24 @@ fn render_talent_entry(
     let selected_index = player.talents.iter().position(|sel| sel.id == spec.id);
     let requirement_failures = game_logic::evaluate_talent_requirements(spec, context);
     let locked = !requirement_failures.is_empty();
+    let is_nyi = spec.effects.is_empty();
+    let muted_color = ui.visuals().weak_text_color();
+    let can_adjust = !locked && !is_nyi;
     ui.group(|ui| {
         ui.horizontal(|ui| {
-            ui.label(spec.name.as_str());
+            if is_nyi {
+                ui.colored_label(muted_color, spec.name.as_str());
+            } else {
+                ui.label(spec.name.as_str());
+            }
             if let Some(index) = selected_index {
                 if ui.button("Remove").clicked() {
                     remove_queue.push(index);
                 }
-            } else if ui.add_enabled(!locked, egui::Button::new("Add")).clicked() {
+            } else if ui
+                .add_enabled(!locked && !is_nyi, egui::Button::new("Add"))
+                .clicked()
+            {
                 let weapon = if game_logic::talent_requires_weapon(spec) {
                     weapon_catalog
                         .get(player.weapon_id)
@@ -1876,10 +2078,35 @@ fn render_talent_entry(
             }
         });
         if let Some(cost) = spec.cost_bp {
-            ui.label(format!("Cost: {cost} BP"));
+            let text = format!("Cost: {cost} BP");
+            if is_nyi {
+                ui.colored_label(muted_color, text);
+            } else {
+                ui.label(text);
+            }
         }
-        ui.label(spec.description.as_str());
-        if locked {
+        if let Some(cost) = spec.cost_lp {
+            let text = format!("Cost: {cost} LP");
+            if is_nyi {
+                ui.colored_label(muted_color, text);
+            } else {
+                ui.label(text);
+            }
+        }
+        if let Some(cost) = spec.cost_rp {
+            let text = format!("Cost: {cost} RP");
+            if is_nyi {
+                ui.colored_label(muted_color, text);
+            } else {
+                ui.label(text);
+            }
+        }
+        if is_nyi {
+            ui.colored_label(muted_color, "NYI");
+        } else {
+            ui.label(spec.description.as_str());
+        }
+        if locked && !is_nyi {
             ui.colored_label(
                 Color32::from_rgb(180, 70, 70),
                 "Requirements not met:",
@@ -1900,14 +2127,18 @@ fn render_talent_entry(
             }
             if max_rank > 1 {
                 ui.add_enabled(
-                    !locked,
+                    can_adjust,
                     egui::Slider::new(&mut selection.rank, 1..=max_rank)
                         .step_by(1.0)
                         .text("Rank"),
                 );
             } else {
                 selection.rank = 1;
-                ui.label("Rank: 1");
+                if is_nyi {
+                    ui.colored_label(muted_color, "Rank: 1");
+                } else {
+                    ui.label("Rank: 1");
+                }
             }
 
             if game_logic::talent_requires_weapon(spec) {
@@ -1927,20 +2158,26 @@ fn render_talent_entry(
                     .clone()
                     .unwrap_or_else(|| "Select weapon".to_string());
                 ui.horizontal(|ui| {
-                    ui.label("Weapon");
-                    egui::ComboBox::from_id_source(format!(
-                        "{id_prefix}_talent_weapon_{}",
-                        spec.id
-                    ))
-                    .selected_text(selected_text)
-                    .show_ui(ui, |ui| {
-                        for weapon in weapon_catalog.entries() {
-                            ui.selectable_value(
-                                &mut selection.weapon,
-                                Some(weapon.name.clone()),
-                                weapon.name.as_str(),
-                            );
-                        }
+                    if is_nyi {
+                        ui.colored_label(muted_color, "Weapon");
+                    } else {
+                        ui.label("Weapon");
+                    }
+                    ui.add_enabled_ui(can_adjust, |ui| {
+                        egui::ComboBox::from_id_source(format!(
+                            "{id_prefix}_talent_weapon_{}",
+                            spec.id
+                        ))
+                        .selected_text(selected_text)
+                        .show_ui(ui, |ui| {
+                            for weapon in weapon_catalog.entries() {
+                                ui.selectable_value(
+                                    &mut selection.weapon,
+                                    Some(weapon.name.clone()),
+                                    weapon.name.as_str(),
+                                );
+                            }
+                        });
                     });
                 });
             }

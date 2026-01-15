@@ -72,7 +72,7 @@ impl Default for Progression {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InitiativeDieQuality {
     Standard,
     OneBetter,
@@ -84,6 +84,26 @@ pub enum InitiativeDieQuality {
 impl Default for InitiativeDieQuality {
     fn default() -> Self {
         InitiativeDieQuality::Standard
+    }
+}
+
+impl InitiativeDieQuality {
+    pub fn improved(self, steps: i32) -> Self {
+        let steps = steps.max(0);
+        let idx = match self {
+            InitiativeDieQuality::Standard => 0,
+            InitiativeDieQuality::OneBetter => 1,
+            InitiativeDieQuality::TwoBetter => 2,
+            InitiativeDieQuality::ThreeBetter => 3,
+            InitiativeDieQuality::FourBetter => 4,
+        };
+        match (idx + steps).min(4) {
+            0 => InitiativeDieQuality::Standard,
+            1 => InitiativeDieQuality::OneBetter,
+            2 => InitiativeDieQuality::TwoBetter,
+            3 => InitiativeDieQuality::ThreeBetter,
+            _ => InitiativeDieQuality::FourBetter,
+        }
     }
 }
 

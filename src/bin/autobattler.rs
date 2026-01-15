@@ -163,7 +163,7 @@ fn main() {
             reward_gold,
             outcome.state.inventory.gold
         );
-        println!("  Wound tracker (hd progress/need): {wound_tracker}");
+        println!("  Wound tracker (6h progress/need): {wound_tracker}");
         println!("  Hits (hp damage): dealt=[{hits_dealt}] taken=[{hits_taken}]");
 
         run_state = outcome.state;
@@ -182,8 +182,9 @@ fn format_wound_tracker(wounds: &[Wound]) -> String {
         .iter()
         .map(|wound| {
             let damage = wound.damage;
-            let progress = wound.healing_progress_half_days.min(damage);
-            format!("{damage}({progress}/{damage} hd)")
+            let required = damage.saturating_mul(2);
+            let progress = wound.healing_progress_quarter_days.min(required);
+            format!("{damage}({progress}/{required} 6h)")
         })
         .collect::<Vec<_>>()
         .join(", ")
@@ -268,6 +269,8 @@ fn player_config_from_preset(
     player.hold_at_bay = preset.hold_at_bay;
     player.defensive_dualwielding = preset.defensive_dualwielding;
     player.talents = preset.talents.clone();
+    player.race_id = preset.race_id.clone();
+    player.race_applied = false;
     player.weapon_id = find_weapon_id_by_name(weapon_catalog, &preset.weapon)
         .or_else(|| weapon_catalog.first_id())
         .unwrap_or_else(|| WeaponId::new(0));
@@ -297,6 +300,7 @@ fn player_profile_from_config(config: &PlayerConfig) -> PlayerProfile {
             looks: config.looks,
             charisma: config.charisma,
         },
+        talents: config.talents.clone(),
     }
 }
 

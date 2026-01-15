@@ -4,6 +4,7 @@ mod armor;
 mod fighter_presets;
 mod materials;
 mod npc_presets;
+mod races;
 mod talents;
 mod weapons;
 
@@ -13,6 +14,7 @@ pub use armor::load_armor_catalog;
 pub use fighter_presets::{load_fighter_presets, save_fighter_presets};
 pub use materials::load_materials;
 pub use npc_presets::load_npc_presets;
+pub use races::load_races;
 pub use talents::load_talents;
 pub use weapons::{load_shield_catalog, load_weapon_catalog};
 

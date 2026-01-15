@@ -10,6 +10,7 @@ pub struct PlayerProfile {
     pub level: u8,
     pub xp: u32,
     pub base_stats: AbilitySet,
+    pub talents: Vec<TalentSelection>,
 }
 
 impl PlayerProfile {
@@ -19,6 +20,7 @@ impl PlayerProfile {
             level: 1,
             xp: 0,
             base_stats,
+            talents: Vec::new(),
         }
     }
 }
@@ -43,6 +45,42 @@ impl Inventory {
     pub fn add_item(&mut self, item: impl Into<String>) {
         self.items.push(item.into());
     }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct AbilityAdjustments {
+    #[serde(default)]
+    pub strength: i32,
+    #[serde(default)]
+    pub dexterity: i32,
+    #[serde(default)]
+    pub intelligence: i32,
+    #[serde(default)]
+    pub wisdom: i32,
+    #[serde(default)]
+    pub constitution: i32,
+    #[serde(default)]
+    pub looks: i32,
+    #[serde(default)]
+    pub charisma: i32,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RaceSpec {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub category: String,
+    pub base_hp: u32,
+    pub size: String,
+    #[serde(default)]
+    pub knockback_size: Option<String>,
+    #[serde(default)]
+    pub ability_adjustments: AbilityAdjustments,
+    #[serde(default)]
+    pub pros: Vec<String>,
+    #[serde(default)]
+    pub cons: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -93,8 +131,16 @@ pub struct TalentSpec {
     pub description: String,
     #[serde(default)]
     pub cost_bp: Option<u32>,
+    #[serde(default)]
+    pub cost_lp: Option<u32>,
+    #[serde(default)]
+    pub cost_rp: Option<u32>,
     #[serde(default = "default_talent_category")]
     pub category: String,
+    #[serde(default)]
+    pub race_categories: Vec<String>,
+    #[serde(default)]
+    pub race_ids: Vec<String>,
     #[serde(default)]
     pub requirements: Vec<TalentRequirement>,
     pub max_rank: u8,
@@ -115,9 +161,13 @@ pub struct TalentSelection {
 pub enum TalentEffect {
     HitPointBonus { amount: i32 },
     ArmorDrBonus { amount: i32 },
+    SpeedModBonus { amount: i32 },
+    InitiativeModBonus { amount: i32 },
     AttackBonusWeapon { amount: i32 },
     DamageBonusWeapon { amount: i32 },
+    DamageBonusWeaponGroup { amount: i32, weapon_group: String },
     DefenseBonusWeapon { amount: i32 },
+    InitiativeDieBonus { steps: i32 },
     Dodge {
         defense_bonus: i32,
         allow_dex_ranged: bool,
@@ -126,6 +176,9 @@ pub enum TalentEffect {
         sides: i32,
         penetrating: bool,
     },
+    ThresholdOfPainMultiplier { multiplier: f32 },
+    ThresholdOfPainLevelBonus { per_level_pct: f32 },
+    FastHealer,
     WeaponSpeedBonus {
         amount: i32,
         #[serde(default)]
