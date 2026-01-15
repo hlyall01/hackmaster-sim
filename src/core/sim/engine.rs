@@ -420,12 +420,13 @@ impl SimState {
                     .unwrap_or(now)
             };
             if now + 0.0001 >= next_attack {
-                let event = resolve_attack(
+                let mut event = resolve_attack(
                     &mut self.combatants,
                     attacker_idx,
                     defender_idx,
                     ranged_mod.unwrap_or(0),
                     use_ranged,
+                    distance,
                     attack_mode,
                     now,
                     state_snapshot.as_ref(),
@@ -464,10 +465,44 @@ impl SimState {
                             damage_breakdown: event.damage_breakdown,
                             shield_damage_breakdown: event.shield_damage_breakdown,
                             defender_hp_after: event.defender_hp_after,
+                            critical: event.critical,
                         }),
                     };
                     self.last_event = Some(event_struct.clone());
                     self.combat_events.push(event_struct);
+                }
+                if let Some(counter) = event.counter_attack.take() {
+                    self.apply_knockback(
+                        counter.attacker_idx,
+                        counter.defender_idx,
+                        counter.knockback_ft,
+                    );
+                    if self.log_events {
+                        let counter_event = CombatEvent {
+                            time: self.elapsed_seconds,
+                            attacker_idx: counter.attacker_idx,
+                            defender_idx: counter.defender_idx,
+                            kind: CombatEventKind::Attack(AttackEvent {
+                                hit: counter.hit,
+                                shield_block: counter.shield_block,
+                                damage: counter.damage,
+                                shield_damage: counter.shield_damage,
+                                knockback_ft: counter.knockback_ft,
+                                hold_at_bay: false,
+                                use_jab: counter.use_jab,
+                                is_ranged: counter.is_ranged,
+                                trauma_applied: counter.trauma_applied,
+                                trauma_seconds: counter.trauma_seconds,
+                                roll: counter.roll,
+                                damage_breakdown: counter.damage_breakdown,
+                                shield_damage_breakdown: counter.shield_damage_breakdown,
+                                defender_hp_after: counter.defender_hp_after,
+                                critical: counter.critical,
+                            }),
+                        };
+                        self.last_event = Some(counter_event.clone());
+                        self.combat_events.push(counter_event);
+                    }
                 }
                 let mut speed = self.combatants[attacker_idx]
                     .sheet

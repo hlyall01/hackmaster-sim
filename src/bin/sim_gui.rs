@@ -1554,6 +1554,14 @@ fn render_player_editor(
                     shield_catalog,
                     talent_catalog,
                 );
+            let combatant = game_logic::build_combatant(
+                player,
+                weapon_catalog,
+                armor_catalog,
+                shield_catalog,
+                npc_presets,
+                talent_catalog,
+            );
             let defensive_dualwielding = game_logic::defensive_dualwielding_active(player, weapon);
             let defense_mastery = game_logic::effective_defense_mastery(player, weapon)
                 * if defensive_dualwielding { 2 } else { 1 };
@@ -1561,6 +1569,10 @@ fn render_player_editor(
             ui.label(format!(
                 "Hit points: {} (x{:.1})",
                 derived.hit_points, derived.health_mult
+            ));
+            ui.label(format!(
+                "Threshold of Pain: {}",
+                combatant.sheet.vitals.threshold_of_pain
             ));
             ui.label(format!("Attack bonus: {}", derived.attack_bonus));
             ui.label(format!("Speed mod: {}", derived.speed_mod));

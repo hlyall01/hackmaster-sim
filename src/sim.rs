@@ -68,6 +68,26 @@ pub fn format_combat_event(event: &CombatEvent, combatants: &[Combatant; 2]) -> 
             if let Some(seconds) = attack.trauma_seconds {
                 details.push(format!("trauma {}s", seconds));
             }
+            if let Some(crit) = attack.critical.as_ref() {
+                let mut crit_parts = vec![format!("sev {}", crit.severity)];
+                if crit.instant_kill {
+                    crit_parts.push("kill".to_string());
+                } else {
+                    if crit.extra_dice > 0 {
+                        crit_parts.push(format!("+{} dice", crit.extra_dice));
+                    }
+                    if crit.extra_damage > 0 {
+                        crit_parts.push(format!("+{} dmg", crit.extra_damage));
+                    }
+                    if crit.speed_reset {
+                        crit_parts.push("speed reset".to_string());
+                    }
+                    if let Some(seconds) = crit.trauma_seconds {
+                        crit_parts.push(format!("ToP {}s", seconds));
+                    }
+                }
+                details.push(format!("crit {}", crit_parts.join(", ")));
+            }
 
             if details.is_empty() {
                 base

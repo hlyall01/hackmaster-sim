@@ -1,5 +1,8 @@
     use super::*;
-    use super::combat::{defense_die_sides, resolve_attack, AttackMode};
+    use super::combat::{
+        critical_effect_for, extra_damage_dice_sequence, defense_die_sides, resolve_attack,
+        AttackMode, DamageDie,
+    };
     use crate::core::rng::SimRng;
     use crate::core::rules::{
         clean_damage_expr, evaluate_expression_with_detail, penetrating_roll_with,
@@ -48,7 +51,10 @@
             name,
             offense: OffenseProfile {
                 attack_bonus,
+                attack_bonus_base: attack_bonus,
                 strength_damage,
+                strength_damage_base: strength_damage,
+                unarmed_damage_bonus: 0,
                 weapon: WeaponProfile {
                     name: weapon_name,
                     damage_expr,
@@ -67,12 +73,15 @@
                     has_weapon,
                     defense_bonus_always: weapon_defense_always,
                     uses_projectiles,
+                    is_small_weapon: false,
+                    is_unarmed: false,
                 },
             },
             defense: DefenseProfile {
                 defense_mod,
                 ranged_defense_mod: 0,
                 armor_dr,
+                natural_dr: 0,
                 armor_is_heavy,
                 shield_name: None,
                 shield_defense_bonus: 0,
@@ -102,6 +111,93 @@
     #[test]
     fn lower_of_damage_expr_is_parsed_for_shield_damage() {
         assert_eq!(clean_damage_expr("lower of 2d6p"), "2d6p");
+    }
+
+    #[test]
+    fn critical_effects_follow_severity_table() {
+        let low = critical_effect_for(1);
+        assert_eq!(low.extra_dice, 1);
+        assert!(!low.speed_reset);
+        assert!(!low.auto_trauma);
+        assert!(!low.instant_kill);
+
+        let mid = critical_effect_for(15);
+        assert_eq!(mid.extra_dice, 2);
+        assert!(!mid.speed_reset);
+
+        let high = critical_effect_for(25);
+        assert_eq!(high.extra_dice, 3);
+        assert!(high.speed_reset);
+
+        let severe = critical_effect_for(35);
+        assert_eq!(severe.extra_dice, 4);
+        assert!(severe.auto_trauma);
+
+        let deadly = critical_effect_for(41);
+        assert!(deadly.instant_kill);
+        assert_eq!(deadly.extra_dice, 0);
+    }
+
+    #[test]
+    fn extra_damage_dice_cycles_low_to_high() {
+        let sequence = extra_damage_dice_sequence("2d3+d6", 4, false);
+        assert_eq!(
+            sequence,
+            vec![
+                DamageDie {
+                    sides: 3,
+                    penetrating: false
+                },
+                DamageDie {
+                    sides: 3,
+                    penetrating: false
+                },
+                DamageDie {
+                    sides: 6,
+                    penetrating: false
+                },
+                DamageDie {
+                    sides: 3,
+                    penetrating: false
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn extra_damage_dice_respects_penetration_flags() {
+        let sequence = extra_damage_dice_sequence("d4p+d6", 3, false);
+        assert_eq!(
+            sequence,
+            vec![
+                DamageDie {
+                    sides: 4,
+                    penetrating: true
+                },
+                DamageDie {
+                    sides: 6,
+                    penetrating: false
+                },
+                DamageDie {
+                    sides: 4,
+                    penetrating: true
+                },
+            ]
+        );
+        let nonpen = extra_damage_dice_sequence("d4p+d6", 2, true);
+        assert_eq!(
+            nonpen,
+            vec![
+                DamageDie {
+                    sides: 4,
+                    penetrating: false
+                },
+                DamageDie {
+                    sides: 6,
+                    penetrating: false
+                },
+            ]
+        );
     }
 
     struct SeqRng {
@@ -202,6 +298,7 @@
             1,
             0,
             false,
+            1.0,
             AttackMode::Normal,
             0.0,
             None,
@@ -384,6 +481,7 @@
             1,
             0,
             false,
+            1.0,
             AttackMode::HoldAtBay,
             0.0,
             None,
@@ -442,6 +540,7 @@
             1,
             0,
             false,
+            1.0,
             AttackMode::HoldAtBay,
             0.0,
             None,
@@ -507,7 +606,10 @@
             name: "Test".to_string(),
             offense: OffenseProfile {
                 attack_bonus: 100,
+                attack_bonus_base: 100,
                 strength_damage: 0,
+                strength_damage_base: 0,
+                unarmed_damage_bonus: 0,
                 weapon: WeaponProfile {
                     name: "Test Blade".to_string(),
                     damage_expr: "1d1".to_string(),
@@ -526,12 +628,15 @@
                     has_weapon: true,
                     defense_bonus_always: false,
                     uses_projectiles: false,
+                    is_small_weapon: false,
+                    is_unarmed: false,
                 },
             },
             defense: DefenseProfile {
                 ranged_defense_mod: 0,
                 defense_mod: 0,
                 armor_dr: 0,
+                natural_dr: 0,
                 armor_is_heavy: false,
                 shield_name: None,
                 shield_defense_bonus: 0,
@@ -562,7 +667,10 @@
             name: "Test".to_string(),
             offense: OffenseProfile {
                 attack_bonus: 100,
+                attack_bonus_base: 100,
                 strength_damage: 0,
+                strength_damage_base: 0,
+                unarmed_damage_bonus: 0,
                 weapon: WeaponProfile {
                     name: "Test Blade".to_string(),
                     damage_expr: "30".to_string(),
@@ -581,12 +689,15 @@
                     has_weapon: true,
                     defense_bonus_always: false,
                     uses_projectiles: false,
+                    is_small_weapon: false,
+                    is_unarmed: false,
                 },
             },
             defense: DefenseProfile {
                 ranged_defense_mod: 0,
                 defense_mod: 0,
                 armor_dr: 0,
+                natural_dr: 0,
                 armor_is_heavy: false,
                 shield_name: None,
                 shield_defense_bonus: 0,
@@ -662,6 +773,7 @@
             1,
             0,
             false,
+            1.0,
             AttackMode::Normal,
             0.0,
             None,
@@ -713,13 +825,14 @@
             20,
         );
         let mut state = make_state(attacker, defender);
-        let mut rng = rand::rngs::StdRng::seed_from_u64(3);
+        let mut rng = SeqRng::new(vec![0]);
         let _ = resolve_attack(
             &mut state.combatants,
             0,
             1,
             0,
             false,
+            1.0,
             AttackMode::Normal,
             0.0,
             None,
@@ -778,6 +891,7 @@
             1,
             0,
             false,
+            1.0,
             AttackMode::Normal,
             0.0,
             None,
@@ -836,6 +950,7 @@
             1,
             0,
             false,
+            1.0,
             AttackMode::Normal,
             0.0,
             None,
@@ -993,6 +1108,7 @@
             1,
             0,
             false,
+            1.0,
             AttackMode::Normal,
             0.0,
             None,
@@ -1094,6 +1210,8 @@
             has_weapon: true,
             defense_bonus_always: false,
             uses_projectiles: false,
+            is_small_weapon: false,
+            is_unarmed: false,
         };
         let melee_weapon = WeaponProfile {
             name: "Sword".to_string(),
@@ -1113,18 +1231,24 @@
             has_weapon: true,
             defense_bonus_always: false,
             uses_projectiles: false,
+            is_small_weapon: false,
+            is_unarmed: false,
         };
         let attacker = Combatant::new(CombatantSheet {
             name: "Thrower".to_string(),
             offense: OffenseProfile {
                 attack_bonus: 0,
+                attack_bonus_base: 0,
                 strength_damage: 0,
+                strength_damage_base: 0,
+                unarmed_damage_bonus: 0,
                 weapon: throwing_axe,
             },
             defense: DefenseProfile {
                 ranged_defense_mod: 0,
                 defense_mod: 0,
                 armor_dr: 0,
+                natural_dr: 0,
                 armor_is_heavy: false,
                 shield_name: None,
                 shield_defense_bonus: 0,
@@ -1146,13 +1270,17 @@
             name: "Defender".to_string(),
             offense: OffenseProfile {
                 attack_bonus: 0,
+                attack_bonus_base: 0,
                 strength_damage: 0,
+                strength_damage_base: 0,
+                unarmed_damage_bonus: 0,
                 weapon: melee_weapon,
             },
             defense: DefenseProfile {
                 ranged_defense_mod: 0,
                 defense_mod: 0,
                 armor_dr: 0,
+                natural_dr: 0,
                 armor_is_heavy: false,
                 shield_name: None,
                 shield_defense_bonus: 0,
@@ -1301,6 +1429,7 @@
             1,
             0,
             false,
+            1.0,
             AttackMode::Normal,
             0.0,
             None,
@@ -1315,6 +1444,7 @@
             1,
             0,
             false,
+            1.0,
             AttackMode::Normal,
             0.0,
             None,

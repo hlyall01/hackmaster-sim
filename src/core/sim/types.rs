@@ -37,6 +37,8 @@ pub struct WeaponProfile {
     pub has_weapon: bool,
     pub defense_bonus_always: bool,
     pub uses_projectiles: bool,
+    pub is_small_weapon: bool,
+    pub is_unarmed: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -48,7 +50,10 @@ pub struct ManeuverProfile {
 #[derive(Clone, Debug)]
 pub struct OffenseProfile {
     pub attack_bonus: i32,
+    pub attack_bonus_base: i32,
     pub strength_damage: i32,
+    pub strength_damage_base: i32,
+    pub unarmed_damage_bonus: i32,
     pub weapon: WeaponProfile,
 }
 
@@ -57,6 +62,7 @@ pub struct DefenseProfile {
     pub defense_mod: i32,
     pub ranged_defense_mod: i32,
     pub armor_dr: i32,
+    pub natural_dr: i32,
     pub armor_is_heavy: bool,
     pub shield_name: Option<String>,
     pub shield_defense_bonus: i32,
@@ -165,6 +171,16 @@ pub struct ShieldDamageBreakdown {
 }
 
 #[derive(Clone, Debug)]
+pub struct CriticalHit {
+    pub severity: i32,
+    pub extra_dice: i32,
+    pub extra_damage: i32,
+    pub speed_reset: bool,
+    pub trauma_seconds: Option<i32>,
+    pub instant_kill: bool,
+}
+
+#[derive(Clone, Debug)]
 pub struct AttackEvent {
     pub hit: bool,
     pub shield_block: bool,
@@ -180,6 +196,7 @@ pub struct AttackEvent {
     pub damage_breakdown: Option<DamageBreakdown>,
     pub shield_damage_breakdown: Option<ShieldDamageBreakdown>,
     pub defender_hp_after: i32,
+    pub critical: Option<CriticalHit>,
 }
 
 #[derive(Clone, Debug)]
@@ -221,6 +238,8 @@ impl Default for WeaponProfile {
             has_weapon: false,
             defense_bonus_always: false,
             uses_projectiles: false,
+            is_small_weapon: false,
+            is_unarmed: false,
         }
     }
 }
@@ -229,7 +248,10 @@ impl Default for OffenseProfile {
     fn default() -> Self {
         Self {
             attack_bonus: 0,
+            attack_bonus_base: 0,
             strength_damage: 0,
+            strength_damage_base: 0,
+            unarmed_damage_bonus: 0,
             weapon: WeaponProfile::default(),
         }
     }
@@ -241,6 +263,7 @@ impl Default for DefenseProfile {
             defense_mod: 0,
             ranged_defense_mod: 0,
             armor_dr: 0,
+            natural_dr: 0,
             armor_is_heavy: false,
             shield_name: None,
             shield_defense_bonus: 0,

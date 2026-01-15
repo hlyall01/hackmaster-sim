@@ -1242,9 +1242,7 @@ pub fn build_combatant(
         + misc_modifiers.initiative_bonus
         + misc_modifiers.all_roll_bonus;
     derived.base_dv += armor_adjustments.base_dv_bonus;
-    derived.armor_dr =
-        (derived.armor_dr + armor_adjustments.armor_dr_bonus + misc_modifiers.armor_dr_bonus)
-            .max(0);
+    derived.armor_dr = (derived.armor_dr + armor_adjustments.armor_dr_bonus).max(0);
     let weapon_name = character
         .equipment
         .weapon
@@ -1331,6 +1329,7 @@ pub fn build_combatant(
         uses_projectiles,
     );
     let attack_mastery = effective_attack_mastery(player);
+    let mut attack_bonus_base = derived.attack_bonus + attack_mastery;
     let mut defensive_dualwielding = defensive_dualwielding_active(player, weapon_preset);
     let defense_mastery = effective_defense_mastery(player, weapon_preset)
         * if defensive_dualwielding { 2 } else { 1 };
@@ -1340,14 +1339,15 @@ pub fn build_combatant(
     let defense_bonus =
         modifiers.defense_bonus + misc_modifiers.defense_bonus + misc_modifiers.all_roll_bonus;
     let damage_mastery = effective_damage_mastery(player);
-    let mut attack_bonus = derived.attack_bonus
-        + material_attack_bonus
-        + attack_mastery
-        + modifiers.attack_bonus_for_weapon(player.weapon_id);
+    let mut attack_bonus =
+        attack_bonus_base + material_attack_bonus + modifiers.attack_bonus_for_weapon(player.weapon_id);
     let mut defense_mod = derived.base_dv + defense_mastery + defense_bonus + defense_bonus_weapon;
-    let mut armor_dr = (derived.armor_dr + modifiers.armor_dr_bonus).max(0);
+    let mut natural_dr = (modifiers.armor_dr_bonus + misc_modifiers.armor_dr_bonus).max(0);
+    let mut armor_dr = (derived.armor_dr + natural_dr).max(0);
+    let mut strength_damage_base = character.ability_mods.strength.damage;
+    let mut unarmed_damage_bonus = modifiers.damage_bonus_for_group(WeaponGroup::Unarmed);
     let mut strength_damage =
-        strength_damage_for_weapon(weapon_preset, character.ability_mods.strength.damage)
+        strength_damage_for_weapon(weapon_preset, strength_damage_base)
             + two_hand_damage_bonus
             + material_damage_bonus
         + damage_mastery
@@ -1394,9 +1394,13 @@ pub fn build_combatant(
     if let Some(preset) = player.npc_preset.and_then(|id| npc_presets.get(id)) {
         name = preset.name.clone();
         attack_bonus = preset.attack_bonus;
+        attack_bonus_base = preset.attack_bonus;
         defense_mod = preset.defense_mod;
         armor_dr = preset.armor_dr;
+        natural_dr = 0;
         strength_damage = preset.damage_bonus;
+        strength_damage_base = 0;
+        unarmed_damage_bonus = 0;
         max_hp = preset.hp.max(1);
         threshold_of_pain = preset.top.max(1);
         shield_name = None;
@@ -1427,11 +1431,16 @@ pub fn build_combatant(
     let jab_special_expr_cache = jab_special_expr
         .as_deref()
         .map(DamageExprCache::new);
+    let is_unarmed_weapon = weapon_preset.group == WeaponGroup::Unarmed;
+    let is_small_weapon = matches!(weapon_preset.size, WeaponSize::Small);
     let sheet = CombatantSheet {
         name,
         offense: OffenseProfile {
             attack_bonus,
+            attack_bonus_base,
             strength_damage,
+            strength_damage_base,
+            unarmed_damage_bonus,
             weapon: WeaponProfile {
                 name: weapon_name,
                 damage_expr: weapon_damage,
@@ -1450,12 +1459,15 @@ pub fn build_combatant(
                 has_weapon,
                 defense_bonus_always: weapon_defense_always,
                 uses_projectiles,
+                is_small_weapon,
+                is_unarmed: is_unarmed_weapon,
             },
         },
         defense: DefenseProfile {
             defense_mod,
             ranged_defense_mod,
             armor_dr,
+            natural_dr,
             armor_is_heavy,
             shield_name,
             shield_defense_bonus,

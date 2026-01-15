@@ -161,7 +161,10 @@ fn main() {
         name: character.name.clone(),
         offense: OffenseProfile {
             attack_bonus: derived.attack_bonus,
+            attack_bonus_base: derived.attack_bonus,
             strength_damage,
+            strength_damage_base: character.ability_mods.strength.damage,
+            unarmed_damage_bonus: 0,
             weapon: WeaponProfile {
                 name: weapon_name,
                 damage_expr: weapon_damage_expr,
@@ -180,12 +183,15 @@ fn main() {
                 has_weapon,
                 defense_bonus_always: weapon_defense_always,
                 uses_projectiles,
+                is_small_weapon: false,
+                is_unarmed: weapon.group == WeaponGroup::Unarmed,
             },
         },
         defense: DefenseProfile {
             defense_mod: derived.base_dv,
             ranged_defense_mod: 0,
             armor_dr: derived.armor_dr,
+            natural_dr: 0,
             armor_is_heavy,
             shield_name: None,
             shield_defense_bonus: 0,

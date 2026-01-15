@@ -291,6 +291,7 @@ mod tests {
                     shield_broken: false,
                 }),
                 defender_hp_after: 0,
+                critical: None,
             }),
         }
     }
