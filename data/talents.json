@@ -3027,7 +3027,7 @@
     {
       "id": "heat_adaptation",
       "name": "Heat Adaptation",
-      "description": "Mutually exclusive with Frostheart. Reduce heat penalties by 1/5% (no penalty at 86F, only -1/5% at 104F+). Save vs fire and heat at -2 instead of -4, and no longer suffer additional fire/heat damage. Vorova only.",
+      "description": "Mutually exclusive with Frostheart. Reduce heat penalties by 1/5% (no penalty at 30C, only -1/5% at 40C+). Save vs fire and heat at -2 instead of -4, and no longer suffer additional fire/heat damage. Vorova only.",
       "cost_rp": 5,
       "category": "Racials",
       "race_ids": [

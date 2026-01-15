@@ -269,14 +269,14 @@
         "Hiking/Roadmarching proficiency",
         "Pain Tolerant talent",
         "1 free Survival skill purchase",
-        "Below 32F: +1/5% to all rolls/checks",
+        "Below 0C: +1/5% to all rolls/checks",
         "Save +4 vs frost and cold spells",
         "10% less damage from frost and cold spells"
       ],
       "cons": [
         "Superstitious quirk (no BP gained)",
-        "Above 86F: -1/5% to all rolls/checks",
-        "Above 104F: -2/10% to all rolls/checks",
+        "Above 30C: -1/5% to all rolls/checks",
+        "Above 40C: -2/10% to all rolls/checks",
         "Save -4 vs fire and heat spells",
         "10% more damage from fire and heat spells"
       ]
@@ -300,14 +300,14 @@
         "Hiking/Roadmarching proficiency",
         "Pain Tolerant talent",
         "1 free Survival skill purchase",
-        "Below 32F: +1/5% to all rolls/checks",
+        "Below 0C: +1/5% to all rolls/checks",
         "Save +4 vs frost and cold spells",
         "10% less damage from frost and cold spells"
       ],
       "cons": [
         "Superstitious quirk (no BP gained)",
-        "Above 86F: -1/5% to all rolls/checks",
-        "Above 104F: -2/10% to all rolls/checks",
+        "Above 30C: -1/5% to all rolls/checks",
+        "Above 40C: -2/10% to all rolls/checks",
         "Save -4 vs fire and heat spells",
         "10% more damage from fire and heat spells"
       ]

@@ -63,6 +63,21 @@ const FIGHTER_PRESETS_PATH: &str = "data/fighter_presets.json";
 const BULK_SIM_MAX_SECONDS: u32 = u32::MAX;
 const TALENT_TAB_ALL: &str = "All";
 const TALENT_TAB_RACIALS: &str = "Racials";
+const WEAPON_GROUP_LABELS: [&str; 13] = [
+    "Unarmed",
+    "Axes",
+    "Basic",
+    "Blunt",
+    "Bows",
+    "Crossbows",
+    "Double",
+    "Ensnaring",
+    "Lashes",
+    "Large swords",
+    "Small swords",
+    "Polearms",
+    "Spears",
+];
 
 struct SimGuiApp {
     running: bool,
@@ -1290,81 +1305,77 @@ fn render_player_editor(
             if npc_active {
                 ui.label("Disabled while NPC preset is active.");
             }
-            ui.add_enabled_ui(!npc_active, |ui| {
-                if !race_catalog.is_empty() {
-                    let mut selection = player
-                        .race_id
-                        .as_ref()
-                        .and_then(|id| race_catalog.iter().position(|race| race.id == *id))
-                        .unwrap_or(usize::MAX);
-                    let race_locked =
-                        player.race_applied || player.fighter_preset.is_some() || npc_active;
-                    ui.horizontal(|ui| {
-                        ui.label("Race");
-                        ui.add_enabled_ui(!race_locked, |ui| {
-                            egui::ComboBox::from_id_source(format!("{id_prefix}_race"))
-                                .selected_text(
-                                    race_catalog
-                                        .get(selection)
-                                        .map(|race| race.name.as_str())
-                                        .unwrap_or("None"),
-                                )
-                                .show_ui(ui, |ui| {
-                                    ui.selectable_value(&mut selection, usize::MAX, "None");
-                                    for (idx, race) in race_catalog.iter().enumerate() {
-                                        ui.selectable_value(
-                                            &mut selection,
-                                            idx,
-                                            race.name.as_str(),
-                                        );
-                                    }
-                                });
-                        });
-                        let selected_race = race_catalog.get(selection);
-                        let can_apply = selected_race.is_some() && !race_locked;
-                        if ui
-                            .add_enabled(
-                                can_apply,
-                                egui::Button::new("Apply race adjustments"),
+            if !race_catalog.is_empty() {
+                let mut selection = player
+                    .race_id
+                    .as_ref()
+                    .and_then(|id| race_catalog.iter().position(|race| race.id == *id))
+                    .unwrap_or(usize::MAX);
+                let race_locked =
+                    player.race_applied || player.fighter_preset.is_some() || npc_active;
+                ui.horizontal(|ui| {
+                    ui.label("Race");
+                    ui.add_enabled_ui(!race_locked, |ui| {
+                        egui::ComboBox::from_id_source(format!("{id_prefix}_race"))
+                            .selected_text(
+                                race_catalog
+                                    .get(selection)
+                                    .map(|race| race.name.as_str())
+                                    .unwrap_or("None"),
                             )
-                            .clicked()
-                        {
-                            if let Some(race) = selected_race {
-                                game_logic::apply_race_adjustments(player, race);
-                            }
-                        }
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut selection, usize::MAX, "None");
+                                for (idx, race) in race_catalog.iter().enumerate() {
+                                    ui.selectable_value(&mut selection, idx, race.name.as_str());
+                                }
+                            });
                     });
-                    player.race_id = if selection == usize::MAX {
-                        None
-                    } else {
-                        race_catalog
-                            .get(selection)
-                            .map(|race| race.id.clone())
-                    };
-                    if let Some(race) = player
-                        .race_id
-                        .as_ref()
-                        .and_then(|id| race_catalog.iter().find(|race| race.id == *id))
+                    let selected_race = race_catalog.get(selection);
+                    let can_apply = selected_race.is_some() && !race_locked;
+                    if ui
+                        .add_enabled(
+                            can_apply,
+                            egui::Button::new("Apply race adjustments"),
+                        )
+                        .clicked()
                     {
-                        ui.label(format!(
-                            "Base HP {} | {}",
-                            race.base_hp,
-                            race_adjustment_summary(race)
-                        ));
+                        if let Some(race) = selected_race {
+                            game_logic::apply_race_adjustments(player, race);
+                        }
                     }
-                    if race_locked {
-                        ui.label("Race adjustments apply only when creating a new character.");
-                    }
+                });
+                player.race_id = if selection == usize::MAX {
+                    None
+                } else {
+                    race_catalog.get(selection).map(|race| race.id.clone())
+                };
+                if let Some(race) = player
+                    .race_id
+                    .as_ref()
+                    .and_then(|id| race_catalog.iter().find(|race| race.id == *id))
+                {
+                    ui.label(format!(
+                        "Base HP {} | {}",
+                        race.base_hp,
+                        race_adjustment_summary(race)
+                    ));
+                }
+                if race_locked {
+                    ui.label("Race adjustments apply only when creating a new character.");
+                }
+                if !npc_active {
                     ui.separator();
                 }
+            }
+            ui.add_enabled_ui(!npc_active, |ui| {
                 ui.label("Conditions");
                 ui.horizontal(|ui| {
                     ui.checkbox(
                         &mut player.environment.natural_surroundings,
                         "Natural surroundings",
                     );
-                    ui.label("Temp F");
-                    ui.add(egui::DragValue::new(&mut player.environment.temperature_f).speed(1));
+                    ui.label("Temp C");
+                    ui.add(egui::DragValue::new(&mut player.environment.temperature_c).speed(1));
                 });
                 ui.separator();
                 ui.label("Misc roll modifiers");
@@ -1440,6 +1451,65 @@ fn render_player_editor(
             let npc_active = player.npc_preset.is_some();
             if npc_active {
                 ui.label("Disabled while NPC preset is active.");
+            }
+            if !race_catalog.is_empty() {
+                let mut selection = player
+                    .race_id
+                    .as_ref()
+                    .and_then(|id| race_catalog.iter().position(|race| race.id == *id))
+                    .unwrap_or(usize::MAX);
+                let race_locked =
+                    player.race_applied || player.fighter_preset.is_some() || npc_active;
+                ui.horizontal(|ui| {
+                    ui.label("Race");
+                    ui.add_enabled_ui(!race_locked, |ui| {
+                        egui::ComboBox::from_id_source(format!("{id_prefix}_race_talents"))
+                            .selected_text(
+                                race_catalog
+                                    .get(selection)
+                                    .map(|race| race.name.as_str())
+                                    .unwrap_or("None"),
+                            )
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut selection, usize::MAX, "None");
+                                for (idx, race) in race_catalog.iter().enumerate() {
+                                    ui.selectable_value(&mut selection, idx, race.name.as_str());
+                                }
+                            });
+                    });
+                });
+                player.race_id = if selection == usize::MAX {
+                    None
+                } else {
+                    race_catalog.get(selection).map(|race| race.id.clone())
+                };
+                if race_locked {
+                    ui.label("Race selection is locked by the preset.");
+                }
+                if !npc_active {
+                    ui.separator();
+                }
+            }
+            ui.label("Current talents");
+            let mut current_talents: Vec<String> = player
+                .talents
+                .iter()
+                .map(|selection| talent_display_label(selection, talent_catalog))
+                .collect();
+            if current_talents.is_empty() {
+                ui.label("None");
+            } else {
+                current_talents.sort();
+                egui::ScrollArea::vertical()
+                    .max_height(120.0)
+                    .show(ui, |ui| {
+                        for label in current_talents {
+                            ui.label(label);
+                        }
+                    });
+            }
+            if !npc_active {
+                ui.separator();
             }
             ui.add_enabled_ui(!npc_active, |ui| {
                 ui.label("Talents");
@@ -1857,11 +1927,51 @@ fn format_talent_requirement_failure(
     }
 }
 
+fn talent_display_label(selection: &TalentSelection, talent_catalog: &TalentCatalog) -> String {
+    let talent_name = talent_catalog
+        .entries()
+        .iter()
+        .find(|talent| talent.id == selection.id)
+        .map(|talent| talent.name.as_str())
+        .unwrap_or(selection.id.as_str());
+    let mut details: Vec<String> = Vec::new();
+    if let Some(weapon) = selection.weapon.as_ref() {
+        details.push(weapon.clone());
+    }
+    if selection.rank > 1 {
+        details.push(format!("rank {}", selection.rank));
+    }
+    if details.is_empty() {
+        talent_name.to_string()
+    } else {
+        format!("{talent_name} ({})", details.join(", "))
+    }
+}
+
 fn race_for_player<'a>(player: &PlayerConfig, race_catalog: &'a [RaceSpec]) -> Option<&'a RaceSpec> {
     player
         .race_id
         .as_ref()
         .and_then(|id| race_catalog.iter().find(|race| race.id == *id))
+}
+
+fn weapon_group_label(group: WeaponGroup) -> &'static str {
+    match group {
+        WeaponGroup::Unarmed => "Unarmed",
+        WeaponGroup::Axes => "Axes",
+        WeaponGroup::Basic => "Basic",
+        WeaponGroup::Blunt => "Blunt",
+        WeaponGroup::Bows => "Bows",
+        WeaponGroup::Crossbows => "Crossbows",
+        WeaponGroup::Double => "Double",
+        WeaponGroup::Ensnaring => "Ensnaring",
+        WeaponGroup::Lashes => "Lashes",
+        WeaponGroup::LargeSwords => "Large swords",
+        WeaponGroup::SmallSwords => "Small swords",
+        WeaponGroup::Polearms => "Polearms",
+        WeaponGroup::Spears => "Spears",
+        WeaponGroup::Shields => "Shields",
+    }
 }
 
 fn racial_talent_matches(spec: &TalentSpec, race: Option<&RaceSpec>) -> bool {
@@ -1961,6 +2071,10 @@ fn render_talent_selector(
     };
     let mut add_queue: Vec<TalentSelection> = Vec::new();
     let mut remove_queue: Vec<usize> = Vec::new();
+    let default_group = weapon_catalog
+        .get(player.weapon_id)
+        .map(|weapon| weapon_group_label(weapon.group))
+        .unwrap_or(WEAPON_GROUP_LABELS[0]);
 
     egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
         if active_category.as_str() == TALENT_TAB_ALL {
@@ -1975,6 +2089,7 @@ fn render_talent_selector(
                         ui,
                         id_prefix,
                         player,
+                        default_group,
                         weapon_catalog,
                         talent_catalog,
                         spec,
@@ -1999,6 +2114,7 @@ fn render_talent_selector(
                     ui,
                     id_prefix,
                     player,
+                    default_group,
                     weapon_catalog,
                     talent_catalog,
                     spec,
@@ -2029,6 +2145,7 @@ fn render_talent_entry(
     ui: &mut egui::Ui,
     id_prefix: &str,
     player: &mut PlayerConfig,
+    default_group: &str,
     weapon_catalog: &WeaponCatalog,
     talent_catalog: &TalentCatalog,
     spec: &TalentSpec,
@@ -2040,8 +2157,10 @@ fn render_talent_entry(
     let requirement_failures = game_logic::evaluate_talent_requirements(spec, context);
     let locked = !requirement_failures.is_empty();
     let is_nyi = spec.effects.is_empty();
+    let requires_group = game_logic::talent_requires_weapon_group(spec);
     let muted_color = ui.visuals().weak_text_color();
-    let can_adjust = !locked && !is_nyi;
+    let can_adjust = !locked && (!is_nyi || requires_group);
+    let allow_add = !locked && (!is_nyi || requires_group);
     ui.group(|ui| {
         ui.horizontal(|ui| {
             if is_nyi {
@@ -2054,10 +2173,12 @@ fn render_talent_entry(
                     remove_queue.push(index);
                 }
             } else if ui
-                .add_enabled(!locked && !is_nyi, egui::Button::new("Add"))
+                .add_enabled(allow_add, egui::Button::new("Add"))
                 .clicked()
             {
-                let weapon = if game_logic::talent_requires_weapon(spec) {
+                let weapon = if requires_group {
+                    Some(default_group.to_string())
+                } else if game_logic::talent_requires_weapon(spec) {
                     weapon_catalog
                         .get(player.weapon_id)
                         .map(|weapon| weapon.name.clone())
@@ -2141,7 +2262,42 @@ fn render_talent_entry(
                 }
             }
 
-            if game_logic::talent_requires_weapon(spec) {
+            if requires_group {
+                if selection.weapon.is_none()
+                    || !WEAPON_GROUP_LABELS
+                        .iter()
+                        .any(|label| Some(*label) == selection.weapon.as_deref())
+                {
+                    selection.weapon = Some(default_group.to_string());
+                }
+                let selected_text = selection
+                    .weapon
+                    .clone()
+                    .unwrap_or_else(|| "Select group".to_string());
+                ui.horizontal(|ui| {
+                    if is_nyi {
+                        ui.colored_label(muted_color, "Group");
+                    } else {
+                        ui.label("Group");
+                    }
+                    ui.add_enabled_ui(can_adjust, |ui| {
+                        egui::ComboBox::from_id_source(format!(
+                            "{id_prefix}_talent_group_{}",
+                            spec.id
+                        ))
+                        .selected_text(selected_text)
+                        .show_ui(ui, |ui| {
+                            for label in WEAPON_GROUP_LABELS {
+                                ui.selectable_value(
+                                    &mut selection.weapon,
+                                    Some(label.to_string()),
+                                    label,
+                                );
+                            }
+                        });
+                    });
+                });
+            } else if game_logic::talent_requires_weapon(spec) {
                 if selection.weapon.is_none() {
                     selection.weapon = weapon_catalog
                         .get(player.weapon_id)

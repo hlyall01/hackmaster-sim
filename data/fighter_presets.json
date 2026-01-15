@@ -40,7 +40,38 @@
       "hold_at_bay": false,
       "defensive_dualwielding": false,
       "race_id": "midlander",
-      "talents": []
+      "talents": [
+        {
+          "id": "armor_focus",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "armor_specialization",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "armor_master",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "weapon_focus",
+          "rank": 1,
+          "weapon": "Polearms"
+        },
+        {
+          "id": "weapon_specialization",
+          "rank": 1,
+          "weapon": "Polearms"
+        },
+        {
+          "id": "solid",
+          "rank": 1,
+          "weapon": null
+        }
+      ]
     },
     {
       "name": "Zorya",
@@ -82,7 +113,43 @@
       "hold_at_bay": false,
       "defensive_dualwielding": false,
       "race_id": "vorova_female",
-      "talents": []
+      "talents": [
+        {
+          "id": "pain_tolerant",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "weapon_focus",
+          "rank": 1,
+          "weapon": "Axes"
+        },
+        {
+          "id": "swift",
+          "rank": 1,
+          "weapon": "Throwing axe"
+        },
+        {
+          "id": "shield_focus",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "advanced_sighting",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "bloodline",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "heat_adaptation",
+          "rank": 1,
+          "weapon": null
+        }
+      ]
     },
     {
       "name": "Luana Rexhep",
@@ -124,7 +191,28 @@
       "hold_at_bay": true,
       "defensive_dualwielding": false,
       "race_id": "katlakehan",
-      "talents": []
+      "talents": [
+        {
+          "id": "dodge",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "improved_awareness",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "fast_healer",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "groin_stomp",
+          "rank": 1,
+          "weapon": null
+        }
+      ]
     },
     {
       "name": "Volfango Drakos",
@@ -168,12 +256,42 @@
       "race_id": "ithican",
       "talents": [
         {
+          "id": "dodge",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "deceptive_defender",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "precision_combatant",
+          "rank": 1,
+          "weapon": null
+        },
+        {
           "id": "defense_bonus_weapon",
           "rank": 1,
           "weapon": "Short sword"
         },
         {
-          "id": "dodge",
+          "id": "swift",
+          "rank": 1,
+          "weapon": "Short sword"
+        },
+        {
+          "id": "backstab",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "devious",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "contender",
           "rank": 1,
           "weapon": null
         }

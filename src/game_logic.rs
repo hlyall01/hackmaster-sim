@@ -194,14 +194,14 @@ pub struct FighterPreset {
 
 #[derive(Clone, Copy, Debug)]
 pub struct EnvironmentConfig {
-    pub temperature_f: i32,
+    pub temperature_c: i32,
     pub natural_surroundings: bool,
 }
 
 impl Default for EnvironmentConfig {
     fn default() -> Self {
         Self {
-            temperature_f: 70,
+            temperature_c: 21,
             natural_surroundings: false,
         }
     }
@@ -487,6 +487,21 @@ pub fn talent_requires_weapon(spec: &TalentSpec) -> bool {
     })
 }
 
+pub fn talent_requires_weapon_group(spec: &TalentSpec) -> bool {
+    matches!(
+        spec.id.as_str(),
+        "weapon_focus"
+            | "weapon_specialization"
+            | "weapon_supremacy"
+            | "ranged_weapon_specialization"
+            | "ranged_weapon_supremacy"
+            | "improved_critical"
+            | "critical_mastery"
+            | "wounding_criticals"
+            | "ranged_critical_mastery"
+    )
+}
+
 #[derive(Clone, Debug)]
 pub struct TalentContext<'a> {
     pub level: u8,
@@ -526,11 +541,32 @@ fn ability_values(stats: &AbilitySet, stat: AbilityKind) -> (u8, Option<u8>) {
     }
 }
 
+fn selection_weapon_group(selection: &TalentSelection) -> Option<WeaponGroup> {
+    selection
+        .weapon
+        .as_deref()
+        .and_then(weapon_group_from_str)
+}
+
+fn requires_matching_weapon_group(spec: &TalentSpec, required_id: &str) -> bool {
+    match spec.id.as_str() {
+        "weapon_specialization" => required_id == "weapon_focus",
+        "weapon_supremacy" => required_id == "weapon_specialization",
+        "ranged_weapon_specialization" => required_id == "weapon_focus",
+        "ranged_weapon_supremacy" => required_id == "ranged_weapon_specialization",
+        "critical_mastery" => required_id == "improved_critical",
+        "wounding_criticals" => required_id == "improved_critical",
+        "ranged_critical_mastery" => required_id == "improved_critical",
+        _ => false,
+    }
+}
+
 pub fn evaluate_talent_requirements(
     spec: &TalentSpec,
     context: &TalentContext<'_>,
 ) -> Vec<TalentRequirementFailure> {
     let mut failures = Vec::new();
+    let spec_selection = context.talents.iter().find(|selection| selection.id == spec.id);
     for requirement in &spec.requirements {
         match requirement {
             TalentRequirement::MinLevel { level } => {
@@ -571,13 +607,34 @@ pub fn evaluate_talent_requirements(
             }
             TalentRequirement::RequiresTalent { id, min_rank } => {
                 let required_rank = min_rank.unwrap_or(1).max(1);
-                let current_rank = context
-                    .talents
-                    .iter()
-                    .filter(|selection| selection.id == *id)
-                    .map(|selection| selection.rank.max(1))
-                    .max()
-                    .unwrap_or(0);
+                let requires_group = requires_matching_weapon_group(spec, id);
+                let desired_group = if requires_group {
+                    spec_selection.and_then(selection_weapon_group)
+                } else {
+                    None
+                };
+                let current_rank = if requires_group && spec_selection.is_none() {
+                    context
+                        .talents
+                        .iter()
+                        .filter(|selection| selection.id == *id)
+                        .map(|selection| selection.rank.max(1))
+                        .max()
+                        .unwrap_or(0)
+                } else {
+                    context
+                        .talents
+                        .iter()
+                        .filter(|selection| selection.id == *id)
+                        .filter(|selection| {
+                            desired_group
+                                .map(|group| selection_weapon_group(selection) == Some(group))
+                                .unwrap_or(true)
+                        })
+                        .map(|selection| selection.rank.max(1))
+                        .max()
+                        .unwrap_or(0)
+                };
                 if current_rank < required_rank {
                     failures.push(TalentRequirementFailure::RequiresTalent {
                         id: id.clone(),
@@ -818,6 +875,10 @@ fn resolve_talent_modifiers(
     modifiers
 }
 
+fn player_has_talent(player: &PlayerConfig, id: &str) -> bool {
+    player.talents.iter().any(|talent| talent.id == id)
+}
+
 fn resolve_misc_modifiers(player: &PlayerConfig) -> MiscRollModifiers {
     let mut modifiers = player.misc_modifiers;
     if let Some(race_id) = player.race_id.as_deref() {
@@ -827,9 +888,16 @@ fn resolve_misc_modifiers(player: &PlayerConfig) -> MiscRollModifiers {
                 modifiers.initiative_die_bonus += 1;
             }
             "vorova_female" | "vorova_male" => {
-                let temp = player.environment.temperature_f;
-                let cold_bonus = if temp < 32 { 1 } else { 0 };
-                let hot_penalty = if temp > 104 { -2 } else if temp > 86 { -1 } else { 0 };
+                let temp = player.environment.temperature_c;
+                let mut cold_bonus = if temp < 0 { 1 } else { 0 };
+                let mut hot_penalty = if temp > 40 { -2 } else if temp > 30 { -1 } else { 0 };
+                if player_has_talent(player, "heat_adaptation") && hot_penalty < 0 {
+                    hot_penalty += 1;
+                }
+                if player_has_talent(player, "frostheart") {
+                    cold_bonus *= 3;
+                    hot_penalty *= 3;
+                }
                 modifiers.all_roll_bonus += cold_bonus + hot_penalty;
             }
             _ => {}
@@ -1813,6 +1881,109 @@ mod tests {
     }
 
     #[test]
+    fn talent_requirements_enforce_weapon_group_match() {
+        let spec = TalentSpec {
+            id: "weapon_specialization".to_string(),
+            name: "Weapon Specialization".to_string(),
+            description: "".to_string(),
+            cost_bp: None,
+            cost_lp: None,
+            cost_rp: None,
+            category: "Test".to_string(),
+            race_categories: Vec::new(),
+            race_ids: Vec::new(),
+            requirements: vec![TalentRequirement::RequiresTalent {
+                id: "weapon_focus".to_string(),
+                min_rank: Some(1),
+            }],
+            max_rank: 1,
+            effects: Vec::new(),
+        };
+        let stats = AbilitySet {
+            strength: AbilityScore::new(10, 1),
+            intelligence: 10,
+            wisdom: 10,
+            dexterity: AbilityScore::new(10, 1),
+            constitution: 10,
+            looks: 10,
+            charisma: 10,
+        };
+        let context = TalentContext {
+            level: 1,
+            stats: &stats,
+            talents: &[
+                TalentSelection {
+                    id: "weapon_focus".to_string(),
+                    rank: 1,
+                    weapon: Some("Axes".to_string()),
+                },
+                TalentSelection {
+                    id: "weapon_specialization".to_string(),
+                    rank: 1,
+                    weapon: Some("Polearms".to_string()),
+                },
+            ],
+        };
+        let failures = evaluate_talent_requirements(&spec, &context);
+        assert_eq!(
+            failures,
+            vec![TalentRequirementFailure::RequiresTalent {
+                id: "weapon_focus".to_string(),
+                required_rank: 1,
+                current_rank: 0
+            }]
+        );
+    }
+
+    #[test]
+    fn talent_requirements_allow_matching_weapon_group() {
+        let spec = TalentSpec {
+            id: "weapon_specialization".to_string(),
+            name: "Weapon Specialization".to_string(),
+            description: "".to_string(),
+            cost_bp: None,
+            cost_lp: None,
+            cost_rp: None,
+            category: "Test".to_string(),
+            race_categories: Vec::new(),
+            race_ids: Vec::new(),
+            requirements: vec![TalentRequirement::RequiresTalent {
+                id: "weapon_focus".to_string(),
+                min_rank: Some(1),
+            }],
+            max_rank: 1,
+            effects: Vec::new(),
+        };
+        let stats = AbilitySet {
+            strength: AbilityScore::new(10, 1),
+            intelligence: 10,
+            wisdom: 10,
+            dexterity: AbilityScore::new(10, 1),
+            constitution: 10,
+            looks: 10,
+            charisma: 10,
+        };
+        let context = TalentContext {
+            level: 1,
+            stats: &stats,
+            talents: &[
+                TalentSelection {
+                    id: "weapon_focus".to_string(),
+                    rank: 1,
+                    weapon: Some("Axes".to_string()),
+                },
+                TalentSelection {
+                    id: "weapon_specialization".to_string(),
+                    rank: 1,
+                    weapon: Some("Axes".to_string()),
+                },
+            ],
+        };
+        let failures = evaluate_talent_requirements(&spec, &context);
+        assert!(failures.is_empty());
+    }
+
+    #[test]
     fn material_bonuses_melee_use_weapon_tier() {
         let (attack, damage) = material_bonuses(2, 4, false, false);
         assert_eq!((attack, damage), (2, 2));
@@ -2646,12 +2817,44 @@ mod tests {
         let weapon_id = one_handed_weapon_id(&weapons);
         let mut player = base_player(weapon_id);
         player.race_id = Some("vorova_female".to_string());
-        player.environment.temperature_f = 20;
+        player.environment.temperature_c = -5;
         let summary = player_summary(&player, &weapons, &armor, &shields, &talents);
         let mut baseline = player.clone();
-        baseline.environment.temperature_f = 70;
+        baseline.environment.temperature_c = 20;
         let baseline_summary = player_summary(&baseline, &weapons, &armor, &shields, &talents);
         assert_eq!(summary.roll.attack_bonus - baseline_summary.roll.attack_bonus, 1);
+    }
+
+    #[test]
+    fn race_vorova_heat_adaptation_reduces_hot_penalty() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let weapon_id = one_handed_weapon_id(&weapons);
+        let mut player = base_player(weapon_id);
+        player.race_id = Some("vorova_female".to_string());
+        player.environment.temperature_c = 32;
+        add_talent(&mut player, "heat_adaptation", None);
+        let summary = player_summary(&player, &weapons, &armor, &shields, &talents);
+        let mut baseline = player.clone();
+        baseline.talents.clear();
+        let baseline_summary = player_summary(&baseline, &weapons, &armor, &shields, &talents);
+        assert_eq!(summary.roll.attack_bonus - baseline_summary.roll.attack_bonus, 1);
+    }
+
+    #[test]
+    fn race_vorova_frostheart_triples_temperature_effects() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let weapon_id = one_handed_weapon_id(&weapons);
+        let mut player = base_player(weapon_id);
+        player.race_id = Some("vorova_female".to_string());
+        player.environment.temperature_c = -5;
+        add_talent(&mut player, "frostheart", None);
+        let summary = player_summary(&player, &weapons, &armor, &shields, &talents);
+        let mut baseline = player.clone();
+        baseline.talents.clear();
+        let baseline_summary = player_summary(&baseline, &weapons, &armor, &shields, &talents);
+        assert_eq!(summary.roll.attack_bonus - baseline_summary.roll.attack_bonus, 2);
     }
 
     #[test]
