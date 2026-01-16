@@ -11,6 +11,7 @@ mod weapons;
 
 use crate::game_logic::{ArmorCatalog, ShieldCatalog, WeaponCatalog};
 use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 pub use armor::load_armor_catalog;
@@ -49,6 +50,33 @@ pub fn resolve_data_path(path: &str) -> PathBuf {
         }
     }
     raw.to_path_buf()
+}
+
+pub fn resolve_writable_data_path(path: &str) -> PathBuf {
+    let raw = Path::new(path);
+    if raw.is_absolute() {
+        return raw.to_path_buf();
+    }
+    let stripped = raw.strip_prefix("data").unwrap_or(raw);
+    if let Ok(data_dir) = env::var("HACKMASTER_SIM_DATA_DIR") {
+        return PathBuf::from(data_dir).join(stripped);
+    }
+    if let Ok(exe_path) = env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            return exe_dir.join("data").join(stripped);
+        }
+    }
+    if let Ok(cwd) = env::current_dir() {
+        return cwd.join("data").join(stripped);
+    }
+    raw.to_path_buf()
+}
+
+pub fn ensure_parent_dir(path: &Path) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    }
+    Ok(())
 }
 
 pub fn load_catalogs() -> Result<(WeaponCatalog, ArmorCatalog, ShieldCatalog), String> {

@@ -1905,6 +1905,160 @@
     }
 
     #[test]
+    fn throwing_axe_cooldown_resets_on_melee_engagement() {
+        let throwing_axe = WeaponProfile {
+            name: "Throwing axe".to_string(),
+            damage_expr: "1d1".to_string(),
+            damage_expr_cache: DamageExprCache::new("1d1"),
+            shield_damage_expr: None,
+            shield_damage_expr_cache: None,
+            armor_penetration: 0,
+            speed: 20.0,
+            reach_ft: 1.0,
+            range_bands_feet: Some([20.0, 30.0, 40.0, 60.0]),
+            range_distance_multiplier: 1.0,
+            two_hand_grip: false,
+            use_jab: false,
+            jab_special_expr: None,
+            jab_special_expr_cache: None,
+            has_weapon: true,
+            defense_bonus_always: false,
+            uses_projectiles: false,
+            is_small_weapon: false,
+            is_unarmed: false,
+            crit_min_roll: 20,
+            crit_min_roll_ranged: None,
+            crit_severity_bonus: 0,
+        };
+        let melee_weapon = WeaponProfile {
+            name: "Sword".to_string(),
+            damage_expr: "1d1".to_string(),
+            damage_expr_cache: DamageExprCache::new("1d1"),
+            shield_damage_expr: None,
+            shield_damage_expr_cache: None,
+            armor_penetration: 0,
+            speed: 1.0,
+            reach_ft: 1.0,
+            range_bands_feet: None,
+            range_distance_multiplier: 1.0,
+            two_hand_grip: false,
+            use_jab: false,
+            jab_special_expr: None,
+            jab_special_expr_cache: None,
+            has_weapon: true,
+            defense_bonus_always: false,
+            uses_projectiles: false,
+            is_small_weapon: false,
+            is_unarmed: false,
+            crit_min_roll: 20,
+            crit_min_roll_ranged: None,
+            crit_severity_bonus: 0,
+        };
+        let attacker = Combatant::new(CombatantSheet {
+            name: "Thrower".to_string(),
+            offense: OffenseProfile {
+                attack_bonus: 0,
+                attack_bonus_base: 0,
+                strength_damage: 0,
+                strength_damage_base: 0,
+                unarmed_damage_bonus: 0,
+                weapon: throwing_axe,
+                offhand: None,
+            },
+            defense: DefenseProfile {
+                ranged_defense_mod: 0,
+                defense_mod: 0,
+                armor_dr: 0,
+                natural_dr: 0,
+                knockback_step: 15,
+                armor_is_heavy: false,
+                shield_name: None,
+                shield_defense_bonus: 0,
+                shield_dr: 0,
+                shield_cover_value: None,
+                shield_breakage: None,
+            },
+            mobility: MobilityProfile { move_speed: 20.0 },
+            vitals: Vitals {
+                trauma_die_sides: 20,
+                trauma_die_penetrating: false,
+                max_hp: 1000,
+                constitution: 10,
+                threshold_of_pain: 0,
+            },
+            maneuvers: ManeuverProfile::default(),
+            modifiers: ModifierStack::default(),
+        });
+        let defender = Combatant::new(CombatantSheet {
+            name: "Defender".to_string(),
+            offense: OffenseProfile {
+                attack_bonus: 0,
+                attack_bonus_base: 0,
+                strength_damage: 0,
+                strength_damage_base: 0,
+                unarmed_damage_bonus: 0,
+                weapon: melee_weapon,
+                offhand: None,
+            },
+            defense: DefenseProfile {
+                ranged_defense_mod: 0,
+                defense_mod: 0,
+                armor_dr: 0,
+                natural_dr: 0,
+                knockback_step: 15,
+                armor_is_heavy: false,
+                shield_name: None,
+                shield_defense_bonus: 0,
+                shield_dr: 0,
+                shield_cover_value: None,
+                shield_breakage: None,
+            },
+            mobility: MobilityProfile { move_speed: 0.0 },
+            vitals: Vitals {
+                trauma_die_sides: 20,
+                trauma_die_penetrating: false,
+                max_hp: 1000,
+                constitution: 10,
+                threshold_of_pain: 0,
+            },
+            maneuvers: ManeuverProfile::default(),
+            modifiers: ModifierStack::default(),
+        });
+
+        let mut sim = SimState::new(SimConfig::new(20.0, 1.0));
+        sim.reset_with_combatants([attacker, defender]);
+
+        let mut first_ranged_time: Option<u32> = None;
+        let mut first_melee_time: Option<u32> = None;
+        let mut seen_events = 0usize;
+
+        for _ in 0..5 {
+            sim.tick();
+            if sim.combat_events.len() > seen_events {
+                for event in &sim.combat_events[seen_events..] {
+                    if event.attacker_idx != 0 {
+                        continue;
+                    }
+                    if let CombatEventKind::Attack(attack) = &event.kind {
+                        if attack.is_ranged && first_ranged_time.is_none() {
+                            first_ranged_time = Some(event.time);
+                        } else if !attack.is_ranged && first_melee_time.is_none() {
+                            first_melee_time = Some(event.time);
+                        }
+                    }
+                }
+                seen_events = sim.combat_events.len();
+            }
+            if first_ranged_time.is_some() && first_melee_time.is_some() {
+                break;
+            }
+        }
+
+        assert_eq!(first_ranged_time, Some(0));
+        assert_eq!(first_melee_time, Some(1));
+    }
+
+    #[test]
     fn penetrating_roll_subtracts_one_on_extra_rolls() {
         let mut rolls = vec![6, 2].into_iter();
         let total = penetrating_roll_with(6, || rolls.next().unwrap_or(1));

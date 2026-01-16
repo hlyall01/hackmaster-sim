@@ -32,6 +32,9 @@ Compression=lzma
 SolidCompression=yes
 ArchitecturesInstallIn64BitMode=x64
 
+[Dirs]
+Name: "{app}\data"; Permissions: users-modify
+
 [Files]
 Source: "{#SourcePath}\..\{#BinDir}\sim_gui.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourcePath}\..\{#BinDir}\autobattler.exe"; DestDir: "{app}"; Flags: ignoreversion

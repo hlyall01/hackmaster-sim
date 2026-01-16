@@ -694,6 +694,7 @@ mod tests {
 }
 
 fn main() -> eframe::Result<()> {
+    hackmaster_sim::console::maybe_enable_console();
     apply_wsl_winit_workaround();
     let adjustments = GlobalAdjustments::default();
     let sim_duration = DEFAULT_SIM_DURATION;

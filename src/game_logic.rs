@@ -155,6 +155,44 @@ pub struct FighterMasteries {
     pub shield_speed: i32,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct CombatManeuverConfig {
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub use_jab: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub hold_at_bay: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub aggressive_attack: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub charge: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub ready_against_charge: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub tactical_move: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub fight_defensively: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub full_parry: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub give_ground: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub scamper_back: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub fighting_withdrawal: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub flee: bool,
+}
+
+impl CombatManeuverConfig {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 pub struct FighterPreset {
     pub name: String,
@@ -187,9 +225,8 @@ pub struct FighterPreset {
     pub offhand_projectile_material_tier: i32,
     pub shield_material_tier: i32,
     pub two_hand_grip: bool,
-    pub use_jab: bool,
-    #[serde(default)]
-    pub hold_at_bay: bool,
+    #[serde(default, skip_serializing_if = "CombatManeuverConfig::is_default")]
+    pub maneuvers: CombatManeuverConfig,
     #[serde(default)]
     pub defensive_dualwielding: bool,
     #[serde(default)]
@@ -265,6 +302,16 @@ pub struct PlayerConfig {
     pub two_hand_grip: bool,
     pub use_jab: bool,
     pub hold_at_bay: bool,
+    pub aggressive_attack: bool,
+    pub charge: bool,
+    pub ready_against_charge: bool,
+    pub tactical_move: bool,
+    pub fight_defensively: bool,
+    pub full_parry: bool,
+    pub give_ground: bool,
+    pub scamper_back: bool,
+    pub fighting_withdrawal: bool,
+    pub flee: bool,
     pub defensive_dualwielding: bool,
     pub offensive_dualwielding: bool,
     pub environment: EnvironmentConfig,
@@ -313,6 +360,16 @@ impl PlayerConfig {
             two_hand_grip: false,
             use_jab: false,
             hold_at_bay: false,
+            aggressive_attack: false,
+            charge: false,
+            ready_against_charge: false,
+            tactical_move: false,
+            fight_defensively: false,
+            full_parry: false,
+            give_ground: false,
+            scamper_back: false,
+            fighting_withdrawal: false,
+            flee: false,
             defensive_dualwielding: false,
             offensive_dualwielding: false,
             environment: EnvironmentConfig::default(),
@@ -1796,6 +1853,16 @@ pub fn build_combatant(
         },
         maneuvers: sim::ManeuverProfile {
             hold_at_bay: player.hold_at_bay,
+            aggressive_attack: player.aggressive_attack,
+            charge: player.charge,
+            ready_against_charge: player.ready_against_charge,
+            tactical_move: player.tactical_move,
+            fight_defensively: player.fight_defensively,
+            full_parry: player.full_parry,
+            give_ground: player.give_ground,
+            scamper_back: player.scamper_back,
+            fighting_withdrawal: player.fighting_withdrawal,
+            flee: player.flee,
             defensive_dualwielding,
             offensive_dualwielding,
         },
@@ -1959,6 +2026,10 @@ mod tests {
         crate::data::load_talents("data/talents.json").expect("Failed to load talents")
     }
 
+    fn sample_npc_presets() -> NpcPresetCatalog {
+        crate::data::load_npc_presets("data/npc_presets.json").expect("Failed to load NPC presets")
+    }
+
     fn one_handed_weapon_id(weapons: &WeaponCatalog) -> WeaponId {
         weapons
             .entries()
@@ -1975,6 +2046,24 @@ mod tests {
             .position(|weapon| weapon.group == WeaponGroup::Unarmed)
             .and_then(|idx| weapons.id_from_index(idx))
             .unwrap_or(WeaponId::new(0))
+    }
+
+    fn jab_weapon_id(weapons: &WeaponCatalog) -> WeaponId {
+        weapons
+            .entries()
+            .iter()
+            .position(|weapon| weapon.jab_speed.is_some())
+            .and_then(|idx| weapons.id_from_index(idx))
+            .expect("No jab-capable weapon found")
+    }
+
+    fn non_jab_weapon_id(weapons: &WeaponCatalog) -> WeaponId {
+        weapons
+            .entries()
+            .iter()
+            .position(|weapon| weapon.jab_speed.is_none())
+            .and_then(|idx| weapons.id_from_index(idx))
+            .expect("No non-jab weapon found")
     }
 
     fn weapon_name(weapons: &WeaponCatalog, id: WeaponId) -> String {
@@ -2015,6 +2104,92 @@ mod tests {
         player.charisma = 15;
         player.dex_pct = 1;
         player
+    }
+
+    #[test]
+    fn combat_maneuvers_propagate_to_combatant_sheet() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npc_presets = sample_npc_presets();
+        let weapon_id = one_handed_weapon_id(&weapons);
+        let base = base_player(weapon_id);
+        let build_maneuvers = |player: &PlayerConfig| {
+            build_combatant(player, &weapons, &armor, &shields, &npc_presets, &talents)
+                .sheet
+                .maneuvers
+        };
+
+        let mut player = base.clone();
+        player.hold_at_bay = true;
+        assert!(build_maneuvers(&player).hold_at_bay);
+
+        let mut player = base.clone();
+        player.aggressive_attack = true;
+        assert!(build_maneuvers(&player).aggressive_attack);
+
+        let mut player = base.clone();
+        player.charge = true;
+        assert!(build_maneuvers(&player).charge);
+
+        let mut player = base.clone();
+        player.ready_against_charge = true;
+        assert!(build_maneuvers(&player).ready_against_charge);
+
+        let mut player = base.clone();
+        player.tactical_move = true;
+        assert!(build_maneuvers(&player).tactical_move);
+
+        let mut player = base.clone();
+        player.fight_defensively = true;
+        assert!(build_maneuvers(&player).fight_defensively);
+
+        let mut player = base.clone();
+        player.full_parry = true;
+        assert!(build_maneuvers(&player).full_parry);
+
+        let mut player = base.clone();
+        player.give_ground = true;
+        assert!(build_maneuvers(&player).give_ground);
+
+        let mut player = base.clone();
+        player.scamper_back = true;
+        assert!(build_maneuvers(&player).scamper_back);
+
+        let mut player = base.clone();
+        player.fighting_withdrawal = true;
+        assert!(build_maneuvers(&player).fighting_withdrawal);
+
+        let mut player = base.clone();
+        player.flee = true;
+        assert!(build_maneuvers(&player).flee);
+
+        let mut player = base.clone();
+        player.defensive_dualwielding = true;
+        assert!(build_maneuvers(&player).defensive_dualwielding);
+
+        let mut player = base.clone();
+        player.offensive_dualwielding = true;
+        player.offhand_weapon_id = Some(one_handed_weapon_id(&weapons));
+        assert!(build_maneuvers(&player).offensive_dualwielding);
+    }
+
+    #[test]
+    fn jab_toggle_requires_jab_weapon() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npc_presets = sample_npc_presets();
+
+        let mut jab_player = base_player(jab_weapon_id(&weapons));
+        jab_player.use_jab = true;
+        let jab_combatant =
+            build_combatant(&jab_player, &weapons, &armor, &shields, &npc_presets, &talents);
+        assert!(jab_combatant.sheet.offense.weapon.use_jab);
+
+        let mut no_jab_player = base_player(non_jab_weapon_id(&weapons));
+        no_jab_player.use_jab = true;
+        let no_jab_combatant =
+            build_combatant(&no_jab_player, &weapons, &armor, &shields, &npc_presets, &talents);
+        assert!(!no_jab_combatant.sheet.offense.weapon.use_jab);
     }
 
     fn add_talent(player: &mut PlayerConfig, id: &str, weapon: Option<String>) {

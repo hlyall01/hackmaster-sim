@@ -75,6 +75,16 @@ pub struct WeaponProfile {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ManeuverProfile {
     pub hold_at_bay: bool,
+    pub aggressive_attack: bool,
+    pub charge: bool,
+    pub ready_against_charge: bool,
+    pub tactical_move: bool,
+    pub fight_defensively: bool,
+    pub full_parry: bool,
+    pub give_ground: bool,
+    pub scamper_back: bool,
+    pub fighting_withdrawal: bool,
+    pub flee: bool,
     pub defensive_dualwielding: bool,
     pub offensive_dualwielding: bool,
 }

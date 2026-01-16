@@ -36,6 +36,7 @@ enum WeaponIcon {
 enum PlayerEditorTab {
     Core,
     Gear,
+    CombatManeuvers,
     Stats,
     Talents,
     Derived,
@@ -46,6 +47,7 @@ impl PlayerEditorTab {
         match self {
             PlayerEditorTab::Core => "Core",
             PlayerEditorTab::Gear => "Gear",
+            PlayerEditorTab::CombatManeuvers => "Combat Maneuvers",
             PlayerEditorTab::Stats => "Stats",
             PlayerEditorTab::Talents => "Talents",
             PlayerEditorTab::Derived => "Derived",
@@ -53,9 +55,10 @@ impl PlayerEditorTab {
     }
 }
 
-const PLAYER_EDITOR_TABS: [PlayerEditorTab; 5] = [
+const PLAYER_EDITOR_TABS: [PlayerEditorTab; 6] = [
     PlayerEditorTab::Core,
     PlayerEditorTab::Gear,
+    PlayerEditorTab::CombatManeuvers,
     PlayerEditorTab::Stats,
     PlayerEditorTab::Talents,
     PlayerEditorTab::Derived,
@@ -923,6 +926,11 @@ fn render_player_editor(
         return;
     }
     game_logic::sanitize_player_ids(player, weapon_catalog, armor_catalog, shield_catalog);
+    if let Some(weapon) = weapon_catalog.get(player.weapon_id) {
+        if weapon.jab_speed.is_none() {
+            player.use_jab = false;
+        }
+    }
 
     render_player_editor_tabs(ui, id_prefix, active_tab);
 
@@ -1218,26 +1226,6 @@ fn render_player_editor(
                 "Speed {}{} | Damage {} | Reach/Range {}",
                 weapon.speed_label, jab_label, weapon.damage_expr, weapon.reach_label
             ));
-            let has_jab = weapon.jab_speed.is_some();
-            if !has_jab {
-                player.use_jab = false;
-            }
-            ui.horizontal(|ui| {
-                ui.add_enabled_ui(has_jab, |ui| {
-                    ui.checkbox(&mut player.use_jab, "Jab attack");
-                });
-                if !has_jab {
-                    ui.label("Unavailable");
-                }
-                ui.checkbox(&mut player.hold_at_bay, "Hold at bay");
-            });
-            if player.use_jab {
-                if let Some(jab_special) = weapon.jab_special_expr.as_ref() {
-                    ui.label(format!("Jab special damage: {jab_special} (non-penetrating)"));
-                } else {
-                    ui.label("Jab damage: half, non-penetrating");
-                }
-            }
             if player.two_hand_grip && can_two_hand {
                 ui.label("Two-hand grip: +3 damage, +2 speed");
             }
@@ -1410,6 +1398,61 @@ fn render_player_editor(
                     player.offhand_weapon_material_tier = 0;
                     player.offhand_projectile_material_tier = 0;
                 }
+            });
+        }
+        PlayerEditorTab::CombatManeuvers => {
+            let weapon = weapon_catalog
+                .get(player.weapon_id)
+                .unwrap_or_else(|| weapon_catalog.entries().first().expect("weapon catalog empty"));
+            let has_jab = weapon.jab_speed.is_some();
+            ui.label("Toggle to always attempt maneuvers when eligible.");
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.add_enabled_ui(has_jab, |ui| {
+                    ui.checkbox(&mut player.use_jab, "Jab");
+                });
+                if !has_jab {
+                    ui.label("Unavailable");
+                }
+            });
+            if player.use_jab {
+                if let Some(jab_special) = weapon.jab_special_expr.as_ref() {
+                    ui.label(format!("Jab special damage: {jab_special} (non-penetrating)"));
+                } else {
+                    ui.label("Jab damage: half, non-penetrating");
+                }
+            }
+            ui.checkbox(&mut player.hold_at_bay, "Hold at bay");
+            ui.separator();
+            ui.add_enabled_ui(false, |ui| {
+                ui.checkbox(&mut player.aggressive_attack, "Aggressive attack (NYI)");
+            });
+            ui.add_enabled_ui(false, |ui| {
+                ui.checkbox(&mut player.charge, "Charge (NYI)");
+            });
+            ui.add_enabled_ui(false, |ui| {
+                ui.checkbox(&mut player.ready_against_charge, "Ready against charge (NYI)");
+            });
+            ui.add_enabled_ui(false, |ui| {
+                ui.checkbox(&mut player.tactical_move, "Tactical move (NYI)");
+            });
+            ui.add_enabled_ui(false, |ui| {
+                ui.checkbox(&mut player.fight_defensively, "Fight defensively (NYI)");
+            });
+            ui.add_enabled_ui(false, |ui| {
+                ui.checkbox(&mut player.full_parry, "Full parry (NYI)");
+            });
+            ui.add_enabled_ui(false, |ui| {
+                ui.checkbox(&mut player.give_ground, "Give ground (NYI)");
+            });
+            ui.add_enabled_ui(false, |ui| {
+                ui.checkbox(&mut player.scamper_back, "Scamper back (NYI)");
+            });
+            ui.add_enabled_ui(false, |ui| {
+                ui.checkbox(&mut player.fighting_withdrawal, "Fighting withdrawal (NYI)");
+            });
+            ui.add_enabled_ui(false, |ui| {
+                ui.checkbox(&mut player.flee, "Flee (NYI)");
             });
         }
         PlayerEditorTab::Stats => {
@@ -1845,8 +1888,19 @@ fn apply_fighter_preset(
     player.offhand_projectile_material_tier = preset.offhand_projectile_material_tier;
     player.shield_material_tier = preset.shield_material_tier;
     player.two_hand_grip = preset.two_hand_grip;
-    player.use_jab = preset.use_jab;
-    player.hold_at_bay = preset.hold_at_bay;
+    let maneuvers = preset.maneuvers;
+    player.use_jab = maneuvers.use_jab;
+    player.hold_at_bay = maneuvers.hold_at_bay;
+    player.aggressive_attack = maneuvers.aggressive_attack;
+    player.charge = maneuvers.charge;
+    player.ready_against_charge = maneuvers.ready_against_charge;
+    player.tactical_move = maneuvers.tactical_move;
+    player.fight_defensively = maneuvers.fight_defensively;
+    player.full_parry = maneuvers.full_parry;
+    player.give_ground = maneuvers.give_ground;
+    player.scamper_back = maneuvers.scamper_back;
+    player.fighting_withdrawal = maneuvers.fighting_withdrawal;
+    player.flee = maneuvers.flee;
     player.defensive_dualwielding = preset.defensive_dualwielding;
     player.offensive_dualwielding = preset.offensive_dualwielding;
     player.environment = game_logic::EnvironmentConfig::default();
@@ -1936,8 +1990,20 @@ fn fighter_preset_from_player(
         offhand_projectile_material_tier: player.offhand_projectile_material_tier,
         shield_material_tier: player.shield_material_tier,
         two_hand_grip: player.two_hand_grip,
-        use_jab: player.use_jab,
-        hold_at_bay: player.hold_at_bay,
+        maneuvers: game_logic::CombatManeuverConfig {
+            use_jab: player.use_jab,
+            hold_at_bay: player.hold_at_bay,
+            aggressive_attack: player.aggressive_attack,
+            charge: player.charge,
+            ready_against_charge: player.ready_against_charge,
+            tactical_move: player.tactical_move,
+            fight_defensively: player.fight_defensively,
+            full_parry: player.full_parry,
+            give_ground: player.give_ground,
+            scamper_back: player.scamper_back,
+            fighting_withdrawal: player.fighting_withdrawal,
+            flee: player.flee,
+        },
         defensive_dualwielding: player.defensive_dualwielding,
         offensive_dualwielding: player.offensive_dualwielding,
         race_id: player.race_id.clone(),
@@ -2571,6 +2637,7 @@ fn armor_display_name(entry: Option<&ArmorEntry>) -> String {
 }
 
 fn main() -> eframe::Result<()> {
+    hackmaster_sim::console::maybe_enable_console();
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size([980.0, 560.0])
         .with_min_inner_size([640.0, 360.0]);

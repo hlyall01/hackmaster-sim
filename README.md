@@ -16,7 +16,7 @@ export CODESIGN_PFX_PASSWORD="your-strong-password"
 ```
 This builds in WSL and then signs any `target/**/release/*.exe` using Windows `signtool.exe`.
 
-single command: HACKMASTER_SIGN_THUMBPRINT="$(tr -d '\r\n' < /home/hazzal/projects/HackmasterSim/secrets/codesign/thumbprint.txt)" powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(wslpath -w /home/hazzal/projects/HackmasterSim/installer/build_installer.ps1)"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(wslpath -w /home/hazzal/projects/HackmasterSim/installer/build_installer.ps1)"
 
 ### Notes
 - If `signtool.exe` is missing, install the Windows SDK or Visual Studio Build Tools with the Windows SDK + Signing Tools components.

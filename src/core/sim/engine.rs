@@ -143,19 +143,19 @@ impl SimState {
             .max(1.0);
         let max_reach = self.config.stop_distance.max(1.0);
         let min_reach = reach_a.min(reach_b);
-        let weapon_a = &self.combatants[0].sheet.offense.weapon;
-        let weapon_b = &self.combatants[1].sheet.offense.weapon;
+        let weapon_a = self.combatants[0].sheet.offense.weapon.clone();
+        let weapon_b = self.combatants[1].sheet.offense.weapon.clone();
         let ranged_projectile_a = weapon_a.uses_projectiles;
         let ranged_projectile_b = weapon_b.uses_projectiles;
         let max_range_a = max_range_cached(
             &mut self.combatants[0].state,
             WeaponSlot::Primary,
-            weapon_a,
+            &weapon_a,
         );
         let max_range_b = max_range_cached(
             &mut self.combatants[1].state,
             WeaponSlot::Primary,
-            weapon_b,
+            &weapon_b,
         );
         let ranged_a = max_range_a.is_some();
         let ranged_b = max_range_b.is_some();
@@ -217,6 +217,20 @@ impl SimState {
             }
         }
         let distance_after_combat = self.distance();
+        if max_range_a.is_some()
+            && !weapon_a.uses_projectiles
+            && distance_before_combat > reach_a
+            && distance_after_combat <= reach_a
+        {
+            self.combatants[0].state.clear_attack_timers();
+        }
+        if max_range_b.is_some()
+            && !weapon_b.uses_projectiles
+            && distance_before_combat > reach_b
+            && distance_after_combat <= reach_b
+        {
+            self.combatants[1].state.clear_attack_timers();
+        }
         self.maybe_start_hold_at_bay(distance_before_combat, distance_after_combat, reach_a, reach_b);
         if self
             .combatants

@@ -36,8 +36,9 @@
       "projectile_material_tier": 0,
       "shield_material_tier": 0,
       "two_hand_grip": true,
-      "use_jab": false,
-      "hold_at_bay": false,
+      "maneuvers": {
+        "charge": true
+      },
       "defensive_dualwielding": false,
       "race_id": "midlander",
       "talents": [
@@ -109,8 +110,9 @@
       "projectile_material_tier": 0,
       "shield_material_tier": 1,
       "two_hand_grip": false,
-      "use_jab": false,
-      "hold_at_bay": false,
+      "maneuvers": {
+        "charge": true
+      },
       "defensive_dualwielding": false,
       "race_id": "vorova_female",
       "talents": [
@@ -187,8 +189,10 @@
       "projectile_material_tier": 0,
       "shield_material_tier": 0,
       "two_hand_grip": false,
-      "use_jab": true,
-      "hold_at_bay": true,
+      "maneuvers": {
+        "use_jab": true,
+        "hold_at_bay": true
+      },
       "defensive_dualwielding": false,
       "race_id": "katlakehan",
       "talents": [
@@ -250,8 +254,6 @@
       "projectile_material_tier": 0,
       "shield_material_tier": 0,
       "two_hand_grip": false,
-      "use_jab": false,
-      "hold_at_bay": false,
       "defensive_dualwielding": true,
       "race_id": "ithican",
       "talents": [
