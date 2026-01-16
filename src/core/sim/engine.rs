@@ -2,10 +2,7 @@ use crate::core::rng::SimRng;
 
 use super::combat::{resolve_attack, resolve_knock_aside, AttackMode};
 use super::modifiers::StatIdF32;
-use super::movement::{
-    max_range_for_bands, max_range_for_weapon, max_range_for_weapon_name,
-    range_modifier_for_weapon_with_scale,
-};
+use super::movement::{max_range_for_weapon, range_modifier_for_weapon_with_scale};
 use super::types::{
     AttackEvent, CombatEvent, CombatEventKind, Combatant, KnockAsideEvent, SimActor, SimConfig,
     WeaponSlot,
@@ -148,16 +145,18 @@ impl SimState {
         let min_reach = reach_a.min(reach_b);
         let weapon_a = &self.combatants[0].sheet.offense.weapon;
         let weapon_b = &self.combatants[1].sheet.offense.weapon;
-        let range_bands_a = weapon_a.range_bands_feet;
-        let range_bands_b = weapon_b.range_bands_feet;
         let ranged_projectile_a = weapon_a.uses_projectiles;
         let ranged_projectile_b = weapon_b.uses_projectiles;
-        let max_range_a = range_bands_a
-            .map(max_range_for_bands)
-            .or_else(|| max_range_for_weapon_name(&weapon_a.name));
-        let max_range_b = range_bands_b
-            .map(max_range_for_bands)
-            .or_else(|| max_range_for_weapon_name(&weapon_b.name));
+        let max_range_a = max_range_cached(
+            &mut self.combatants[0].state,
+            WeaponSlot::Primary,
+            weapon_a,
+        );
+        let max_range_b = max_range_cached(
+            &mut self.combatants[1].state,
+            WeaponSlot::Primary,
+            weapon_b,
+        );
         let ranged_a = max_range_a.is_some();
         let ranged_b = max_range_b.is_some();
         let ranged_projectile_a = ranged_a && ranged_projectile_a;
@@ -178,13 +177,14 @@ impl SimState {
             let step_a = self.move_step(0);
             let step_b = self.move_step(1);
             if any_ranged {
-                let backstep = 5.0;
+                let backstep_a = step_a;
+                let backstep_b = step_b;
                 let engaged = distance <= min_reach;
                 if !engaged {
                     if ranged_projectile_a {
                         if let Some(max_range) = max_range_a {
                             if distance <= max_range {
-                                self.actors[0].position -= backstep;
+                                self.actors[0].position -= backstep_a;
                             } else {
                                 self.actors[0].position += step_a;
                             }
@@ -195,7 +195,7 @@ impl SimState {
                     if ranged_projectile_b {
                         if let Some(max_range) = max_range_b {
                             if distance <= max_range {
-                                self.actors[1].position += backstep;
+                                self.actors[1].position += backstep_b;
                             } else {
                                 self.actors[1].position -= step_b;
                             }
@@ -404,13 +404,18 @@ impl SimState {
                 continue;
             }
             let weapon = &self.combatants[attacker_idx].sheet.offense.weapon;
-            let has_range = max_range_for_weapon(weapon).is_some();
+            let max_range = max_range_cached(
+                &mut self.combatants[attacker_idx].state,
+                WeaponSlot::Primary,
+                weapon,
+            );
+            let has_range = max_range.is_some();
             let attacker_reach = weapon.reach_ft.max(1.0);
-            let mut use_ranged = if has_range && !weapon.uses_projectiles {
-                distance > attacker_reach
-            } else {
-                has_range
-            };
+                let mut use_ranged = if has_range && !weapon.uses_projectiles {
+                    distance > attacker_reach
+                } else {
+                    has_range
+                };
             let mut attack_mode = AttackMode::Normal;
             if self.hold_at_bay.pending && self.hold_at_bay.holder_idx == attacker_idx {
                 let defender_reach =
@@ -583,7 +588,12 @@ impl SimState {
                     .map(|offhand| offhand.weapon.clone())
                     .expect("offhand missing");
                 let weapon = &offhand_weapon;
-                let has_range = max_range_for_weapon(weapon).is_some();
+                let max_range = max_range_cached(
+                    &mut self.combatants[attacker_idx].state,
+                    WeaponSlot::Secondary,
+                    weapon,
+                );
+                let has_range = max_range.is_some();
                 let attacker_reach = weapon.reach_ft.max(1.0);
                 let use_ranged = if has_range && !weapon.uses_projectiles {
                     distance > attacker_reach
@@ -730,6 +740,20 @@ impl SimState {
             self.done = true;
         }
     }
+}
+
+fn max_range_cached(
+    state: &mut super::types::CombatantState,
+    slot: WeaponSlot,
+    weapon: &super::types::WeaponProfile,
+) -> Option<f32> {
+    let cache = state.weapon_cache_mut(slot);
+    if let Some(value) = cache.max_range {
+        return value;
+    }
+    let computed = max_range_for_weapon(weapon);
+    cache.max_range = Some(computed);
+    computed
 }
 
 #[derive(Clone, Copy, Debug, Default)]

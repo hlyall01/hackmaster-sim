@@ -4,4 +4,5 @@ pub mod character;
 pub mod core;
 pub mod data;
 pub mod game_logic;
+pub mod assets;
 pub mod sim;

@@ -4,8 +4,8 @@ use crate::core::rules::{clean_damage_expr, penetrating_roll, roll_damage_expr};
 
 use super::types::{
     defense_plus_four_ready_at, AttackRollBreakdown, Combatant, CombatantState, CriticalHit,
-    DamageBreakdown, KnockAsideRollBreakdown, ShieldBreakageStep, ShieldDamageBreakdown,
-    WeaponSlot,
+    DamageBreakdown, DamageDie, KnockAsideRollBreakdown, ShieldBreakageStep, ShieldDamageBreakdown,
+    WeaponCache, WeaponSlot,
 };
 use super::modifiers::{StatIdF32, StatIdI32};
 
@@ -15,8 +15,8 @@ pub(crate) enum AttackMode {
     HoldAtBay,
 }
 
-struct AttackProfile<'a> {
-    weapon: &'a super::types::WeaponProfile,
+struct AttackProfile {
+    weapon: super::types::WeaponProfile,
     attack_bonus: i32,
     strength_damage: i32,
     armor_penetration: i32,
@@ -25,13 +25,10 @@ struct AttackProfile<'a> {
     damage_penalty: i32,
 }
 
-fn attack_profile_for_slot<'a>(
-    attacker: &'a Combatant,
-    slot: WeaponSlot,
-) -> Option<AttackProfile<'a>> {
+fn attack_profile_for_slot(attacker: &Combatant, slot: WeaponSlot) -> Option<AttackProfile> {
     match slot {
         WeaponSlot::Primary => Some(AttackProfile {
-            weapon: &attacker.sheet.offense.weapon,
+            weapon: attacker.sheet.offense.weapon.clone(),
             attack_bonus: attacker.apply_i32(
                 StatIdI32::AttackBonus,
                 attacker.sheet.offense.attack_bonus,
@@ -50,7 +47,7 @@ fn attack_profile_for_slot<'a>(
         }),
         WeaponSlot::Secondary => attacker.sheet.offense.offhand.as_ref().map(|offhand| {
             AttackProfile {
-                weapon: &offhand.weapon,
+                weapon: offhand.weapon.clone(),
                 attack_bonus: attacker.apply_i32(StatIdI32::AttackBonus, offhand.attack_bonus),
                 strength_damage: attacker.apply_i32(
                     StatIdI32::StrengthDamage,
@@ -180,12 +177,6 @@ pub(crate) struct CriticalEffect {
     pub instant_kill: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct DamageDie {
-    pub sides: i32,
-    pub penetrating: bool,
-}
-
 pub(crate) fn critical_effect_for(severity: i32) -> CriticalEffect {
     let severity = severity.max(1);
     match severity {
@@ -301,12 +292,23 @@ pub(crate) fn extra_damage_dice_sequence(
         return Vec::new();
     }
     let pool = parse_damage_dice(expr, force_nonpenetrating);
-    if pool.is_empty() {
+    extra_damage_dice_sequence_from_cache(&pool, dice, force_nonpenetrating)
+}
+
+fn extra_damage_dice_sequence_from_cache(
+    pool: &[DamageDie],
+    dice: i32,
+    force_nonpenetrating: bool,
+) -> Vec<DamageDie> {
+    if dice <= 0 || pool.is_empty() {
         return Vec::new();
     }
     let mut sequence = Vec::new();
     for idx in 0..dice {
-        let die = pool[idx as usize % pool.len()];
+        let mut die = pool[idx as usize % pool.len()];
+        if force_nonpenetrating {
+            die.penetrating = false;
+        }
         sequence.push(die);
     }
     sequence
@@ -321,6 +323,52 @@ fn roll_extra_damage(expr: &str, dice: i32, force_nonpenetrating: bool, rng: &mu
         } else {
             roll_die(die.sides, rng)
         };
+    }
+    total
+}
+
+fn cached_damage_dice<'a>(
+    cache: &'a mut WeaponCache,
+    weapon: &super::types::WeaponProfile,
+    use_jab: bool,
+) -> &'a [DamageDie] {
+    let slot = if use_jab {
+        &mut cache.jab_damage_dice
+    } else {
+        &mut cache.damage_dice
+    };
+    if slot.is_none() {
+        let expr = if use_jab {
+            weapon
+                .jab_special_expr
+                .as_deref()
+                .unwrap_or(weapon.damage_expr.as_str())
+        } else {
+            weapon.damage_expr.as_str()
+        };
+        *slot = Some(parse_damage_dice(expr, false));
+    }
+    slot.as_deref().unwrap_or(&[])
+}
+
+fn roll_extra_damage_cached(
+    cache: &mut WeaponCache,
+    weapon: &super::types::WeaponProfile,
+    use_jab: bool,
+    dice: i32,
+    force_nonpenetrating: bool,
+    rng: &mut impl Rng,
+) -> i32 {
+    let pool = cached_damage_dice(cache, weapon, use_jab);
+    let sequence = extra_damage_dice_sequence_from_cache(pool, dice, force_nonpenetrating);
+    let mut total = 0;
+    for die in sequence {
+        let value = if die.penetrating {
+            penetrating_roll(die.sides, rng)
+        } else {
+            roll_die(die.sides, rng)
+        };
+        total += value;
     }
     total
 }
@@ -384,7 +432,6 @@ fn resolve_counter_attack(
     superior_unarmed: bool,
     rng: &mut impl Rng,
 ) -> CounterAttackOutcome {
-    let attacker = &combatants[attacker_idx];
     let defender_state = combatants[defender_idx].state.clone();
     let defender = &combatants[defender_idx];
     let (
@@ -397,18 +444,29 @@ fn resolve_counter_attack(
         damage_penalty,
         weapon_profile,
     ) = if use_weapon {
-        let profile = attack_profile_for_slot(attacker, weapon_slot)
-            .expect("weapon slot missing for counter attack");
-        (
-            profile.attack_bonus,
-            profile.strength_damage,
-            profile.weapon.damage_expr.as_str(),
-            profile.armor_penetration,
-            attacker.apply_i32(StatIdI32::CritMinRoll, profile.weapon.crit_min_roll),
+        let profile = {
+            let attacker = &combatants[attacker_idx];
+            attack_profile_for_slot(attacker, weapon_slot)
+                .expect("weapon slot missing for counter attack")
+        };
+        let crit_min_roll = {
+            let attacker = &combatants[attacker_idx];
+            attacker.apply_i32(StatIdI32::CritMinRoll, profile.weapon.crit_min_roll)
+        };
+        let crit_severity = {
+            let attacker = &combatants[attacker_idx];
             attacker.apply_i32(
                 StatIdI32::CritSeverityBonus,
                 profile.weapon.crit_severity_bonus,
-            ),
+            )
+        };
+        (
+            profile.attack_bonus,
+            profile.strength_damage,
+            profile.weapon.damage_expr.clone(),
+            profile.armor_penetration,
+            crit_min_roll,
+            crit_severity,
             profile.damage_penalty,
             Some(profile.weapon),
         )
@@ -416,24 +474,29 @@ fn resolve_counter_attack(
         let damage_expr = if superior_unarmed {
             "(d4p)+(d4p)"
         } else {
-                "(d4p-2)+(d4p-2)"
-            };
-            let attack_bonus = attacker.apply_i32(
-                StatIdI32::AttackBonusBase,
-                attacker.sheet.offense.attack_bonus_base,
-            );
-            let strength_damage_base = attacker.apply_i32(
-                StatIdI32::StrengthDamageBase,
-                attacker.sheet.offense.strength_damage_base,
-            );
-            let unarmed_damage_bonus = attacker.apply_i32(
-                StatIdI32::UnarmedDamageBonus,
-                attacker.sheet.offense.unarmed_damage_bonus,
-            );
+            "(d4p-2)+(d4p-2)"
+        };
+        let (attack_bonus, strength_damage_base, unarmed_damage_bonus) = {
+            let attacker = &combatants[attacker_idx];
+            (
+                attacker.apply_i32(
+                    StatIdI32::AttackBonusBase,
+                    attacker.sheet.offense.attack_bonus_base,
+                ),
+                attacker.apply_i32(
+                    StatIdI32::StrengthDamageBase,
+                    attacker.sheet.offense.strength_damage_base,
+                ),
+                attacker.apply_i32(
+                    StatIdI32::UnarmedDamageBonus,
+                    attacker.sheet.offense.unarmed_damage_bonus,
+                ),
+            )
+        };
         (
             attack_bonus,
             strength_damage_base + unarmed_damage_bonus,
-            damage_expr,
+            damage_expr.to_string(),
             0,
             20,
             0,
@@ -542,17 +605,17 @@ fn resolve_counter_attack(
 
     if hit {
         let mut rolled_damage = if use_weapon {
-            let weapon = weapon_profile.expect("weapon profile missing");
+            let weapon = weapon_profile.as_ref().expect("weapon profile missing");
             weapon.damage_expr_cache.roll(rng, false)
         } else {
-            roll_damage_expr(damage_expr, rng, false)
+            roll_damage_expr(damage_expr.as_str(), rng, false)
         };
         if crit_trigger && defender_defiant {
             let second = if use_weapon {
-                let weapon = weapon_profile.expect("weapon profile missing");
+                let weapon = weapon_profile.as_ref().expect("weapon profile missing");
                 weapon.damage_expr_cache.roll(rng, false)
             } else {
-                roll_damage_expr(damage_expr, rng, false)
+                roll_damage_expr(damage_expr.as_str(), rng, false)
             };
             rolled_damage = rolled_damage.min(second);
         }
@@ -584,7 +647,14 @@ fn resolve_counter_attack(
                     instant_kill: true,
                 });
             } else {
-                let extra_damage = roll_extra_damage(damage_expr, effect.extra_dice, false, rng);
+                let extra_damage = if let Some(weapon_profile) = weapon_profile.as_ref() {
+                    let cache = combatants[attacker_idx]
+                        .state
+                        .weapon_cache_mut(weapon_slot);
+                    roll_extra_damage_cached(cache, weapon_profile, false, effect.extra_dice, false, rng)
+                } else {
+                    roll_extra_damage(damage_expr.as_str(), effect.extra_dice, false, rng)
+                };
                 raw += extra_damage;
                 effective_dr = if ignore_armor {
                     natural_dr.max(0)
@@ -649,14 +719,14 @@ fn resolve_counter_attack(
         if miss_margin < 10 {
             shield_block = true;
             let rolled_damage = if use_weapon {
-                let weapon = weapon_profile.expect("weapon profile missing");
+                let weapon = weapon_profile.as_ref().expect("weapon profile missing");
                 weapon
                     .shield_damage_expr_cache
                     .as_ref()
                     .unwrap_or(&weapon.damage_expr_cache)
                     .roll(rng, false)
             } else {
-                roll_damage_expr(damage_expr, rng, false)
+                roll_damage_expr(damage_expr.as_str(), rng, false)
             };
             let mut raw = rolled_damage + strength_damage + damage_penalty;
             if raw < 0 {
@@ -744,9 +814,10 @@ pub(crate) fn resolve_attack(
     let defender_state = state_snapshot
         .map(|snapshot| &snapshot[defender_idx])
         .unwrap_or(&combatants[defender_idx].state);
-    let attacker = &combatants[attacker_idx];
-    let attack_profile = attack_profile_for_slot(attacker, weapon_slot)
-        .expect("weapon slot missing for attack");
+    let attack_profile = {
+        let attacker = &combatants[attacker_idx];
+        attack_profile_for_slot(attacker, weapon_slot).expect("weapon slot missing for attack")
+    };
     let attack_bonus = attack_profile.attack_bonus;
     let strength_damage = attack_profile.strength_damage;
     let armor_penetration = attack_profile.armor_penetration;
@@ -885,11 +956,16 @@ pub(crate) fn resolve_attack(
     let mut damage_breakdown = None;
     let mut shield_damage_breakdown = None;
     let mut critical = None;
-    let mut crit_min_roll =
-        attacker.apply_i32(StatIdI32::CritMinRoll, weapon.crit_min_roll);
+    let mut crit_min_roll = {
+        let attacker = &combatants[attacker_idx];
+        attacker.apply_i32(StatIdI32::CritMinRoll, weapon.crit_min_roll)
+    };
     if is_ranged {
         if let Some(ranged_min) = weapon.crit_min_roll_ranged {
-            let ranged_min = attacker.apply_i32(StatIdI32::CritMinRoll, ranged_min);
+            let ranged_min = {
+                let attacker = &combatants[attacker_idx];
+                attacker.apply_i32(StatIdI32::CritMinRoll, ranged_min)
+            };
             crit_min_roll = crit_min_roll.min(ranged_min);
         }
     }
@@ -952,25 +1028,31 @@ pub(crate) fn resolve_attack(
                     - defense_roll
                     + raw_base
                     - effective_dr
-                    + attacker.apply_i32(
-                        StatIdI32::CritSeverityBonus,
-                        weapon.crit_severity_bonus,
-                    ))
+                    + {
+                        let attacker = &combatants[attacker_idx];
+                        attacker.apply_i32(
+                            StatIdI32::CritSeverityBonus,
+                            weapon.crit_severity_bonus,
+                        )
+                    })
                     .max(1);
                 let effect = critical_effect_for(severity);
                 if effect.instant_kill {
                     crit_effect = Some(effect);
                 } else {
-                    let damage_expr = if use_jab {
-                        weapon
-                            .jab_special_expr
-                            .as_deref()
-                            .unwrap_or(weapon.damage_expr.as_str())
-                    } else {
-                        weapon.damage_expr.as_str()
+                    crit_extra_damage = {
+                        let cache = combatants[attacker_idx]
+                            .state
+                            .weapon_cache_mut(weapon_slot);
+                        roll_extra_damage_cached(
+                            cache,
+                            &weapon,
+                            use_jab,
+                            effect.extra_dice,
+                            use_jab,
+                            rng,
+                        )
                     };
-                    crit_extra_damage =
-                        roll_extra_damage(damage_expr, effect.extra_dice, use_jab, rng);
                     raw += crit_extra_damage;
                     crit_effect = Some(effect);
                 }

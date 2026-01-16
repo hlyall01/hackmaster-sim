@@ -1,4 +1,5 @@
 use crate::character::WeaponGroup;
+use crate::data::resolve_data_path;
 use crate::game_logic::{
     ShieldCatalog, ShieldEntry, ShieldPreset, WeaponCatalog, WeaponHandedness, WeaponPreset,
     WeaponSize,
@@ -47,7 +48,8 @@ struct ShieldJson {
 }
 
 pub fn load_weapon_catalog(path: &str) -> Result<WeaponCatalog, String> {
-    let data = fs::read_to_string(path).unwrap_or_else(|_| EMBEDDED_WEAPONS_JSON.to_string());
+    let data = fs::read_to_string(resolve_data_path(path))
+        .unwrap_or_else(|_| EMBEDDED_WEAPONS_JSON.to_string());
     let parsed: WeaponsFile = serde_json::from_str(&data).map_err(|err| err.to_string())?;
     let mut catalog = Vec::new();
     for entry in parsed.weapons {
@@ -107,7 +109,8 @@ pub fn load_weapon_catalog(path: &str) -> Result<WeaponCatalog, String> {
 }
 
 pub fn load_shield_catalog(path: &str) -> Result<ShieldCatalog, String> {
-    let data = fs::read_to_string(path).unwrap_or_else(|_| EMBEDDED_WEAPONS_JSON.to_string());
+    let data = fs::read_to_string(resolve_data_path(path))
+        .unwrap_or_else(|_| EMBEDDED_WEAPONS_JSON.to_string());
     let parsed: WeaponsFile = serde_json::from_str(&data).map_err(|err| err.to_string())?;
     let mut catalog = Vec::new();
     catalog.push(ShieldEntry {

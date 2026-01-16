@@ -10,6 +10,8 @@ mod talents;
 mod weapons;
 
 use crate::game_logic::{ArmorCatalog, ShieldCatalog, WeaponCatalog};
+use std::env;
+use std::path::{Path, PathBuf};
 
 pub use armor::load_armor_catalog;
 pub use autobattler::load_autobattler_config;
@@ -19,6 +21,35 @@ pub use npc_presets::load_npc_presets;
 pub use races::load_races;
 pub use talents::load_talents;
 pub use weapons::{load_shield_catalog, load_weapon_catalog};
+
+pub fn resolve_data_path(path: &str) -> PathBuf {
+    let raw = Path::new(path);
+    if raw.is_absolute() {
+        return raw.to_path_buf();
+    }
+    let stripped = raw.strip_prefix("data").unwrap_or(raw);
+    let mut candidates = Vec::new();
+    if let Ok(data_dir) = env::var("HACKMASTER_SIM_DATA_DIR") {
+        candidates.push(PathBuf::from(data_dir).join(stripped));
+    }
+    if let Ok(exe_path) = env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            candidates.push(exe_dir.join("data").join(stripped));
+        }
+    }
+    if let Ok(cwd) = env::current_dir() {
+        candidates.push(cwd.join("data").join(stripped));
+        candidates.push(cwd.join(raw));
+    } else {
+        candidates.push(raw.to_path_buf());
+    }
+    for candidate in candidates {
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+    raw.to_path_buf()
+}
 
 pub fn load_catalogs() -> Result<(WeaponCatalog, ArmorCatalog, ShieldCatalog), String> {
     let weapons = load_weapon_catalog("data/weapons.json")?;

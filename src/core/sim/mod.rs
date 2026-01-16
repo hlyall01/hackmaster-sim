@@ -14,10 +14,10 @@ pub use modifiers::{
 };
 pub use types::{
     AttackEvent, AttackRollBreakdown, CombatEvent, CombatEventKind, Combatant, CombatantSheet,
-    CombatantState, CriticalHit, DamageBreakdown, DefenseProfile, KnockAsideEvent,
-    KnockAsideRollBreakdown, ManeuverProfile, MobilityProfile, OffenseProfile, OffhandProfile,
-    ShieldBreakageStep, ShieldDamageBreakdown, SimActor, SimConfig, Vitals, WeaponProfile,
-    WeaponSlot,
+    CombatantState, CombatantCache, CriticalHit, DamageBreakdown, DamageDie, DefenseProfile,
+    KnockAsideEvent, KnockAsideRollBreakdown, ManeuverProfile, MobilityProfile, OffenseProfile,
+    OffhandProfile, ShieldBreakageStep, ShieldDamageBreakdown, SimActor, SimConfig, Vitals,
+    WeaponCache, WeaponProfile, WeaponSlot,
 };
 
 #[cfg(test)]

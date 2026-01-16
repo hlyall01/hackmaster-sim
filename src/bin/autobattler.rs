@@ -398,8 +398,10 @@ fn player_config_from_preset(
     player.looks = preset.looks;
     player.charisma = preset.charisma;
     player.weapon_material_tier = preset.weapon_material_tier;
+    player.offhand_weapon_material_tier = preset.offhand_weapon_material_tier;
     player.armor_material_tier = preset.armor_material_tier;
     player.projectile_material_tier = preset.projectile_material_tier;
+    player.offhand_projectile_material_tier = preset.offhand_projectile_material_tier;
     player.shield_material_tier = preset.shield_material_tier;
     player.two_hand_grip = preset.two_hand_grip;
     player.use_jab = preset.use_jab;

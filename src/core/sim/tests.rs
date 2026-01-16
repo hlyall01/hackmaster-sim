@@ -1,13 +1,14 @@
     use super::*;
     use super::combat::{
         critical_effect_for, extra_damage_dice_sequence, defense_die_sides, resolve_attack,
-        AttackMode, DamageDie,
+        AttackMode,
     };
     use crate::core::rng::SimRng;
     use crate::core::rules::{
         clean_damage_expr, evaluate_expression_with_detail, penetrating_roll_with,
         roll_damage_expr_with_detail, DamageExprCache,
     };
+    use crate::core::sim::DamageDie;
     use rand::SeedableRng;
     use std::time::{Duration, Instant};
 
@@ -674,6 +675,67 @@
         sim.tick();
         assert!(sim.combatants[0].state.hp < sim.combatants[0].sheet.vitals.max_hp);
         assert!(sim.combatants[1].state.hp < sim.combatants[1].sheet.vitals.max_hp);
+    }
+
+    #[test]
+    fn offensive_dualwielding_schedules_offhand_after_primary() {
+        let mut attacker = combatant_basic(
+            "Attacker".to_string(),
+            "Short Sword".to_string(),
+            0,
+            0,
+            0,
+            false,
+            0,
+            "1d1".to_string(),
+            0,
+            10.0,
+            1.0,
+            5.0,
+            false,
+            false,
+            None,
+            true,
+            false,
+            20,
+        );
+        attacker.sheet.offense.weapon.crit_min_roll = 21;
+        let mut offhand_weapon = attacker.sheet.offense.weapon.clone();
+        offhand_weapon.name = "Offhand".to_string();
+        offhand_weapon.speed = 6.0;
+        attacker.sheet.offense.offhand = Some(OffhandProfile {
+            attack_bonus: attacker.sheet.offense.attack_bonus,
+            strength_damage: attacker.sheet.offense.strength_damage,
+            weapon: offhand_weapon,
+        });
+        attacker.sheet.maneuvers.offensive_dualwielding = true;
+
+        let defender = combatant_basic(
+            "Defender".to_string(),
+            "Fist".to_string(),
+            0,
+            -1000,
+            0,
+            false,
+            0,
+            "1d1".to_string(),
+            0,
+            10.0,
+            1.0,
+            5.0,
+            false,
+            false,
+            None,
+            true,
+            false,
+            200,
+        );
+        let mut sim = SimState::new(SimConfig::new(1.0, 1.0));
+        sim.combatants = [attacker, defender];
+        sim.set_rng(SimRng::from_seed(1));
+        sim.tick();
+        assert_eq!(sim.combatants[0].state.next_attack_time_primary, Some(12.0));
+        assert_eq!(sim.combatants[0].state.next_attack_time_secondary, Some(7.0));
     }
 
     #[test]

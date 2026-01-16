@@ -1,4 +1,5 @@
 use crate::character::{Material, MaterialKind};
+use crate::data::resolve_data_path;
 use serde::Deserialize;
 use std::fs;
 
@@ -20,7 +21,8 @@ struct MaterialJson {
 }
 
 pub fn load_materials(path: &str) -> Result<Vec<Material>, String> {
-    let data = fs::read_to_string(path).unwrap_or_else(|_| EMBEDDED_MATERIALS_JSON.to_string());
+    let data = fs::read_to_string(resolve_data_path(path))
+        .unwrap_or_else(|_| EMBEDDED_MATERIALS_JSON.to_string());
     let parsed: MaterialsFile = serde_json::from_str(&data).map_err(|err| err.to_string())?;
     let mut materials = Vec::new();
     materials.extend(parsed.metals.into_iter().map(|entry| Material {

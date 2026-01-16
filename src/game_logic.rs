@@ -179,8 +179,12 @@ pub struct FighterPreset {
     pub armor: String,
     pub shield: String,
     pub weapon_material_tier: i32,
+    #[serde(default)]
+    pub offhand_weapon_material_tier: i32,
     pub armor_material_tier: i32,
     pub projectile_material_tier: i32,
+    #[serde(default)]
+    pub offhand_projectile_material_tier: i32,
     pub shield_material_tier: i32,
     pub two_hand_grip: bool,
     pub use_jab: bool,
@@ -244,8 +248,10 @@ pub struct PlayerConfig {
     pub offhand_weapon_id: Option<WeaponId>,
     pub armor_id: ArmorId,
     pub weapon_material_tier: i32,
+    pub offhand_weapon_material_tier: i32,
     pub armor_material_tier: i32,
     pub projectile_material_tier: i32,
+    pub offhand_projectile_material_tier: i32,
     pub shield_id: ShieldId,
     pub shield_material_tier: i32,
     pub npc_preset: Option<NpcPresetId>,
@@ -290,8 +296,10 @@ impl PlayerConfig {
             offhand_weapon_id: None,
             armor_id: ArmorId::new(0),
             weapon_material_tier: 0,
+            offhand_weapon_material_tier: 0,
             armor_material_tier: 0,
             projectile_material_tier: 0,
+            offhand_projectile_material_tier: 0,
             shield_id: ShieldId::new(0),
             shield_material_tier: 0,
             npc_preset: None,
@@ -1615,8 +1623,8 @@ pub fn build_combatant(
                         offhand_preset.ammunition.is_some(),
                     );
                     let (material_attack_bonus, material_damage_bonus) = material_bonuses(
-                        player.weapon_material_tier,
-                        player.projectile_material_tier,
+                        player.offhand_weapon_material_tier,
+                        player.offhand_projectile_material_tier,
                         offhand_is_ranged,
                         offhand_uses_projectiles,
                     );

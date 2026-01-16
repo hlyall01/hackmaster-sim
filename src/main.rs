@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use eframe::egui::epaint::Hsva;
 use eframe::egui::{self, Color32};
 use egui_plot::{GridInput, GridMark, Legend, Line, Plot, PlotPoints, Points, VLine};
@@ -712,10 +714,16 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_inner_size(egui::vec2(1100.0, 750.0))
+        .with_min_inner_size(egui::vec2(600.0, 400.0));
+    if let Some(icon) = hackmaster_sim::assets::app_icon(
+        hackmaster_sim::assets::AppIcon::WeaponPlot,
+    ) {
+        viewport = viewport.with_icon(icon);
+    }
     let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size(egui::vec2(1100.0, 750.0))
-            .with_min_inner_size(egui::vec2(600.0, 400.0)),
+        viewport,
         ..Default::default()
     };
 

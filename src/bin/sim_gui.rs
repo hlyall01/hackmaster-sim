@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use hackmaster_sim::{character, data, game_logic, sim};
 use character::{Progression, ProgressionTier, WeaponGroup};
 use eframe::egui::{self, Color32, Pos2, Rect};
@@ -374,10 +376,15 @@ impl SimGuiApp {
                 painter.circle_filled(pos, 6.0, player_color);
             }
             if let Some(next) = self.sim.combatants[idx].state.next_attack_time_secondary {
+                let secondary_color = Color32::from_rgb(
+                    ((player_color.r() as u16 + 255) / 2) as u8,
+                    ((player_color.g() as u16 + 255) / 2) as u8,
+                    ((player_color.b() as u16 + 255) / 2) as u8,
+                );
                 let t = (next - now).max(0.0).min(horizon);
                 let x = left + t * scale;
                 let pos = Pos2::new(x, y - 4.0);
-                painter.circle_filled(pos, 4.0, player_color);
+                painter.circle_filled(pos, 4.0, secondary_color);
             }
         }
     }
@@ -1290,6 +1297,45 @@ fn render_player_editor(
                         &mut player.armor_material_tier,
                     );
                 });
+                let shield_allowed = weapon.handedness == WeaponHandedness::OneHanded
+                    && !player.two_hand_grip
+                    && !game_logic::defensive_dualwielding_active(player, weapon)
+                    && !game_logic::offensive_dualwielding_active(player, weapon);
+                ui.horizontal(|ui| {
+                    ui.label("Shield");
+                    let mut selection = shield_catalog.index_of(player.shield_id);
+                    let selected_name = shield_catalog
+                        .get(player.shield_id)
+                        .map(|entry| entry.label.as_str())
+                        .unwrap_or("None");
+                    ui.add_enabled_ui(shield_allowed, |ui| {
+                        egui::ComboBox::from_id_source(format!("{id_prefix}_shield"))
+                            .selected_text(selected_name)
+                            .show_ui(ui, |ui| {
+                                for (idx, shield) in shield_catalog.entries().iter().enumerate() {
+                                    ui.selectable_value(&mut selection, idx, shield.label.as_str());
+                                }
+                            });
+                    });
+                    if let Some(id) = shield_catalog.id_from_index(selection) {
+                        player.shield_id = id;
+                    }
+                    let shield_selected = player.shield_id.index() > 0;
+                    if !shield_selected {
+                        player.shield_material_tier = 0;
+                    }
+                    ui.add_enabled_ui(shield_allowed && shield_selected, |ui| {
+                        material_tier_combo(
+                            ui,
+                            format!("{id_prefix}_shield_material"),
+                            "Material",
+                            &mut player.shield_material_tier,
+                        );
+                    });
+                    if !shield_allowed {
+                        ui.label("Unavailable");
+                    }
+                });
                 ui.horizontal(|ui| {
                     ui.label("Offhand weapon");
                     let can_use_offhand = player.offensive_dualwielding
@@ -1319,10 +1365,51 @@ fn render_player_editor(
                         player.offhand_weapon_id =
                             selection.and_then(|idx| weapon_catalog.id_from_index(idx));
                     });
+                    let offhand = player
+                        .offhand_weapon_id
+                        .and_then(|id| weapon_catalog.get(id));
+                    let offhand_enabled = offhand.is_some() && can_use_offhand;
+                    ui.add_enabled_ui(offhand_enabled, |ui| {
+                        material_tier_combo(
+                            ui,
+                            format!("{id_prefix}_offhand_material"),
+                            "Material",
+                            &mut player.offhand_weapon_material_tier,
+                        );
+                        if offhand
+                            .map(game_logic::weapon_uses_projectiles)
+                            .unwrap_or(false)
+                        {
+                            material_tier_combo(
+                                ui,
+                                format!("{id_prefix}_offhand_ammo_material"),
+                                "Ammo material",
+                                &mut player.offhand_projectile_material_tier,
+                            );
+                        } else {
+                            player.offhand_projectile_material_tier = 0;
+                        }
+                    });
                     if !can_use_offhand {
                         ui.label("Unavailable");
                     }
                 });
+                if let Some(offhand_id) = player.offhand_weapon_id {
+                    if let Some(offhand) = weapon_catalog.get(offhand_id) {
+                        let jab_label = offhand
+                            .jab_speed_label
+                            .as_ref()
+                            .map(|jab| format!(" (jab {jab})"))
+                            .unwrap_or_default();
+                        ui.label(format!(
+                            "Offhand speed {}{} | Damage {} | Reach/Range {}",
+                            offhand.speed_label, jab_label, offhand.damage_expr, offhand.reach_label
+                        ));
+                    }
+                } else {
+                    player.offhand_weapon_material_tier = 0;
+                    player.offhand_projectile_material_tier = 0;
+                }
             });
         }
         PlayerEditorTab::Stats => {
@@ -1620,10 +1707,24 @@ fn render_player_editor(
 
             let attack_bonus = roll.attack_bonus;
             let strength_damage = roll.strength_damage;
+            let target_dr = opponent
+                .npc_preset
+                .and_then(|id| npc_presets.get(id))
+                .map(|preset| preset.armor_dr)
+                .unwrap_or_else(|| {
+                    game_logic::player_summary(
+                        opponent,
+                        weapon_catalog,
+                        armor_catalog,
+                        shield_catalog,
+                        talent_catalog,
+                    )
+                    .derived
+                    .armor_dr
+                });
 
             ui.separator();
-            ui.label("Rolls");
-            ui.label(format!("Attack roll: d20p + {}", attack_bonus));
+            ui.label("Defense");
             if roll.is_ranged_weapon {
                 if let Some(shield_bonus) = shield_bonus {
                     ui.label(format!(
@@ -1663,26 +1764,44 @@ fn render_player_editor(
                     ));
                 }
             }
-            let target_dr = opponent
-                .npc_preset
-                .and_then(|id| npc_presets.get(id))
-                .map(|preset| preset.armor_dr)
-                .unwrap_or_else(|| {
-                    game_logic::player_summary(
-                        opponent,
-                        weapon_catalog,
-                        armor_catalog,
-                        shield_catalog,
-                        talent_catalog,
-                    )
-                    .derived
-                    .armor_dr
-                });
-            ui.label(format!("Your armor DR: {}", derived.armor_dr));
+            ui.separator();
+            ui.label("Mainhand");
+            let weapon_shield_damage = combatant
+                .sheet
+                .offense
+                .weapon
+                .shield_damage_expr
+                .as_deref()
+                .unwrap_or("-");
+            ui.label(format!(
+                "Weapon speed: {}",
+                combatant.sheet.offense.weapon.speed
+            ));
+            ui.label(format!("Weapon shield damage: {}", weapon_shield_damage));
+            ui.label(format!("Attack roll: d20p + {}", attack_bonus));
             ui.label(format!(
                 "Damage roll: {} + {} vs target DR {} (AP {})",
                 weapon.damage_expr, strength_damage, target_dr, weapon.armor_pen
             ));
+            if let Some(offhand) = combatant.sheet.offense.offhand.as_ref() {
+                ui.separator();
+                ui.label("Offhand");
+                ui.label(format!("Weapon speed: {}", offhand.weapon.speed));
+                let offhand_shield_damage =
+                    offhand.weapon.shield_damage_expr.as_deref().unwrap_or("-");
+                ui.label(format!(
+                    "Weapon shield damage: {}",
+                    offhand_shield_damage
+                ));
+                ui.label(format!("Attack roll: d20p + {}", offhand.attack_bonus));
+                ui.label(format!(
+                    "Damage roll: {} + {} - 2 vs target DR {} (AP {})",
+                    offhand.weapon.damage_expr,
+                    offhand.strength_damage,
+                    target_dr,
+                    offhand.weapon.armor_penetration
+                ));
+            }
         }
     }
 }
@@ -1720,8 +1839,10 @@ fn apply_fighter_preset(
     player.looks = preset.looks;
     player.charisma = preset.charisma;
     player.weapon_material_tier = preset.weapon_material_tier;
+    player.offhand_weapon_material_tier = preset.offhand_weapon_material_tier;
     player.armor_material_tier = preset.armor_material_tier;
     player.projectile_material_tier = preset.projectile_material_tier;
+    player.offhand_projectile_material_tier = preset.offhand_projectile_material_tier;
     player.shield_material_tier = preset.shield_material_tier;
     player.two_hand_grip = preset.two_hand_grip;
     player.use_jab = preset.use_jab;
@@ -1809,8 +1930,10 @@ fn fighter_preset_from_player(
         armor,
         shield,
         weapon_material_tier: player.weapon_material_tier,
+        offhand_weapon_material_tier: player.offhand_weapon_material_tier,
         armor_material_tier: player.armor_material_tier,
         projectile_material_tier: player.projectile_material_tier,
+        offhand_projectile_material_tier: player.offhand_projectile_material_tier,
         shield_material_tier: player.shield_material_tier,
         two_hand_grip: player.two_hand_grip,
         use_jab: player.use_jab,
@@ -2440,6 +2563,7 @@ fn material_tier_combo(ui: &mut egui::Ui, id_source: String, label: &str, select
         });
 }
 
+
 fn armor_display_name(entry: Option<&ArmorEntry>) -> String {
     entry
         .map(|armor| armor.label.clone())
@@ -2447,10 +2571,14 @@ fn armor_display_name(entry: Option<&ArmorEntry>) -> String {
 }
 
 fn main() -> eframe::Result<()> {
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_inner_size([980.0, 560.0])
+        .with_min_inner_size([640.0, 360.0]);
+    if let Some(icon) = hackmaster_sim::assets::app_icon(hackmaster_sim::assets::AppIcon::SimGui) {
+        viewport = viewport.with_icon(icon);
+    }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([980.0, 560.0])
-            .with_min_inner_size([640.0, 360.0]),
+        viewport,
         ..Default::default()
     };
     eframe::run_native(

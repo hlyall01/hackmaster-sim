@@ -1,2 +1,5 @@
 /target
 /.venv
+/secrets/codesign/
+*.pfx
+*.exe

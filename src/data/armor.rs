@@ -1,4 +1,5 @@
 use crate::character::{Armor, ArmorRegion, ArmorType};
+use crate::data::resolve_data_path;
 use crate::game_logic::{ArmorCatalog, ArmorEntry};
 use serde::Deserialize;
 use std::fs;
@@ -25,7 +26,8 @@ struct ArmorJson {
 }
 
 pub fn load_armor_catalog(path: &str) -> Result<ArmorCatalog, String> {
-    let data = fs::read_to_string(path).unwrap_or_else(|_| EMBEDDED_ARMOR_JSON.to_string());
+    let data = fs::read_to_string(resolve_data_path(path))
+        .unwrap_or_else(|_| EMBEDDED_ARMOR_JSON.to_string());
     let parsed: ArmorFile = serde_json::from_str(&data).map_err(|err| err.to_string())?;
     let mut catalog = Vec::new();
     catalog.push(ArmorEntry {

@@ -27,6 +27,25 @@ pub enum WeaponSlot {
     Secondary,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DamageDie {
+    pub sides: i32,
+    pub penetrating: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct WeaponCache {
+    pub max_range: Option<Option<f32>>,
+    pub damage_dice: Option<Vec<DamageDie>>,
+    pub jab_damage_dice: Option<Vec<DamageDie>>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct CombatantCache {
+    pub primary: WeaponCache,
+    pub secondary: WeaponCache,
+}
+
 #[derive(Clone, Debug)]
 pub struct WeaponProfile {
     pub name: String,
@@ -130,6 +149,7 @@ pub struct CombatantState {
     pub knockback_applied_this_tick: bool,
     pub shield_intact: bool,
     pub active_effects: Vec<TemporaryEffect>,
+    pub cache: CombatantCache,
 }
 
 #[derive(Clone, Debug)]
@@ -349,6 +369,7 @@ impl CombatantState {
             knockback_applied_this_tick: false,
             shield_intact: sheet.defense.shield_name.is_some(),
             active_effects: Vec::new(),
+            cache: CombatantCache::default(),
         };
         state.refresh_defense_plus_four_ready(sheet, 0.0);
         state
@@ -369,6 +390,31 @@ impl CombatantState {
         }
         self.active_effects
             .retain(|effect| effect.remaining_seconds > 0);
+    }
+
+    pub(crate) fn weapon_cache_mut(&mut self, slot: WeaponSlot) -> &mut WeaponCache {
+        match slot {
+            WeaponSlot::Primary => &mut self.cache.primary,
+            WeaponSlot::Secondary => &mut self.cache.secondary,
+        }
+    }
+
+    pub fn invalidate_weapon_cache(&mut self, slot: WeaponSlot) {
+        match slot {
+            WeaponSlot::Primary => self.cache.primary = WeaponCache::default(),
+            WeaponSlot::Secondary => self.cache.secondary = WeaponCache::default(),
+        }
+    }
+
+    pub fn invalidate_range_cache(&mut self, slot: WeaponSlot) {
+        let cache = self.weapon_cache_mut(slot);
+        cache.max_range = None;
+    }
+
+    pub fn invalidate_damage_dice_cache(&mut self, slot: WeaponSlot) {
+        let cache = self.weapon_cache_mut(slot);
+        cache.damage_dice = None;
+        cache.jab_damage_dice = None;
     }
 
     pub(crate) fn set_next_attack_time(&mut self, slot: WeaponSlot, time: Option<f32>) {
