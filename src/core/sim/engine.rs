@@ -1,12 +1,14 @@
 use crate::core::rng::SimRng;
 
 use super::combat::{resolve_attack, resolve_knock_aside, AttackMode};
+use super::modifiers::StatIdF32;
 use super::movement::{
     max_range_for_bands, max_range_for_weapon, max_range_for_weapon_name,
-    range_modifier_for_weapon,
+    range_modifier_for_weapon_with_scale,
 };
 use super::types::{
     AttackEvent, CombatEvent, CombatEventKind, Combatant, KnockAsideEvent, SimActor, SimConfig,
+    WeaponSlot,
 };
 
 #[derive(Clone, Debug)]
@@ -123,6 +125,7 @@ impl SimState {
         }
         for combatant in &mut self.combatants {
             combatant.state.knockback_applied_this_tick = false;
+            combatant.state.tick_effects();
             if combatant.state.trauma_remaining_seconds > 0 {
                 combatant.state.trauma_remaining_seconds -= 1;
             }
@@ -133,8 +136,14 @@ impl SimState {
         let old_positions = [self.actors[0].position, self.actors[1].position];
         let distance = self.distance();
         let distance_before_combat = distance;
-        let reach_a = self.combatants[0].sheet.offense.weapon.reach_ft.max(1.0);
-        let reach_b = self.combatants[1].sheet.offense.weapon.reach_ft.max(1.0);
+        let reach_a = self
+            .combatants[0]
+            .apply_f32(StatIdF32::WeaponReach, self.combatants[0].sheet.offense.weapon.reach_ft)
+            .max(1.0);
+        let reach_b = self
+            .combatants[1]
+            .apply_f32(StatIdF32::WeaponReach, self.combatants[1].sheet.offense.weapon.reach_ft)
+            .max(1.0);
         let max_reach = self.config.stop_distance.max(1.0);
         let min_reach = reach_a.min(reach_b);
         let weapon_a = &self.combatants[0].sheet.offense.weapon;
@@ -161,7 +170,7 @@ impl SimState {
             self.actors[0].position += step_a;
             self.actors[1].position -= step_b;
             for combatant in &mut self.combatants {
-                combatant.state.next_attack_time = None;
+                combatant.state.clear_attack_timers();
             }
         } else {
             self.resolve_combat_round();
@@ -246,7 +255,9 @@ impl SimState {
         {
             0.0
         } else {
-            combatant.sheet.mobility.move_speed.max(0.0)
+            combatant
+                .apply_f32(StatIdF32::MoveSpeed, combatant.sheet.mobility.move_speed)
+                .max(0.0)
         }
     }
 
@@ -271,8 +282,14 @@ impl SimState {
     fn resolve_combat_round(&mut self) {
         let now = self.elapsed_seconds as f32;
         let distance = self.distance();
-        let reach_a = self.combatants[0].sheet.offense.weapon.reach_ft.max(1.0);
-        let reach_b = self.combatants[1].sheet.offense.weapon.reach_ft.max(1.0);
+        let reach_a = self
+            .combatants[0]
+            .apply_f32(StatIdF32::WeaponReach, self.combatants[0].sheet.offense.weapon.reach_ft)
+            .max(1.0);
+        let reach_b = self
+            .combatants[1]
+            .apply_f32(StatIdF32::WeaponReach, self.combatants[1].sheet.offense.weapon.reach_ft)
+            .max(1.0);
         let simultaneous = (reach_a - reach_b).abs() < f32::EPSILON;
         let state_snapshot = if simultaneous {
             Some([self.combatants[0].state.clone(), self.combatants[1].state.clone()])
@@ -284,9 +301,12 @@ impl SimState {
             self.combatants[1].state.hp > 0,
         ];
         for (attacker_idx, defender_idx) in [(0usize, 1usize), (1usize, 0usize)] {
-            let snapshot_next_attack = state_snapshot
+            let snapshot_next_attack_primary = state_snapshot
                 .as_ref()
-                .and_then(|snapshot| snapshot[attacker_idx].next_attack_time);
+                .and_then(|snapshot| snapshot[attacker_idx].next_attack_time_primary);
+            let snapshot_next_attack_secondary = state_snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot[attacker_idx].next_attack_time_secondary);
             let use_snapshot_timing = state_snapshot.is_some();
             let attacker_alive = if simultaneous {
                 alive_start[attacker_idx]
@@ -305,7 +325,7 @@ impl SimState {
             };
             if self.hold_at_bay.active && self.hold_at_bay.holder_idx == attacker_idx {
                 if attacker_trauma {
-                    self.combatants[attacker_idx].state.next_attack_time = None;
+                    self.combatants[attacker_idx].state.clear_attack_timers();
                     continue;
                 }
             }
@@ -314,27 +334,35 @@ impl SimState {
                 continue;
             }
             if attacker_trauma {
-                self.combatants[attacker_idx].state.next_attack_time = None;
+                self.combatants[attacker_idx].state.clear_attack_timers();
                 continue;
             }
             if self.hold_at_bay.active && self.hold_at_bay.target_idx == attacker_idx {
                 let weapon_speed = self.combatants[attacker_idx]
-                    .sheet
-                    .offense
-                    .weapon
-                    .speed
+                    .apply_f32(
+                        StatIdF32::WeaponSpeed,
+                        self.combatants[attacker_idx].sheet.offense.weapon.speed,
+                    )
                     .max(1.0);
-                if snapshot_next_attack.is_none()
-                    && self.combatants[attacker_idx].state.next_attack_time.is_none()
+                if snapshot_next_attack_primary.is_none()
+                    && self.combatants[attacker_idx]
+                        .state
+                        .next_attack_time_primary
+                        .is_none()
                 {
-                    self.combatants[attacker_idx].state.next_attack_time = Some(now);
+                    self.combatants[attacker_idx]
+                        .state
+                        .set_next_attack_time(WeaponSlot::Primary, Some(now));
+                    self.combatants[attacker_idx]
+                        .state
+                        .set_next_attack_time(WeaponSlot::Secondary, None);
                 }
                 let next_attack = if use_snapshot_timing {
-                    snapshot_next_attack.unwrap_or(now)
+                    snapshot_next_attack_primary.unwrap_or(now)
                 } else {
                     self.combatants[attacker_idx]
                         .state
-                        .next_attack_time
+                        .next_attack_time_primary
                         .unwrap_or(now)
                 };
                 if now + 0.0001 >= next_attack {
@@ -348,10 +376,16 @@ impl SimState {
                     );
                     if event.success {
                         self.hold_at_bay = HoldAtBayState::default();
-                        self.combatants[attacker_idx].state.next_attack_time = Some(now + 1.0);
+                        self.combatants[attacker_idx]
+                            .state
+                            .set_next_attack_time(WeaponSlot::Primary, Some(now + 1.0));
                     } else {
-                        self.combatants[attacker_idx].state.next_attack_time =
-                            Some(next_attack + weapon_speed);
+                        self.combatants[attacker_idx]
+                            .state
+                            .set_next_attack_time(
+                                WeaponSlot::Primary,
+                                Some(next_attack + weapon_speed),
+                            );
                     }
                     if self.log_events {
                         let event_struct = CombatEvent {
@@ -392,34 +426,49 @@ impl SimState {
                 use_ranged = false;
             }
             let ranged_mod = if use_ranged {
-                range_modifier_for_weapon(weapon, distance)
+                let range_scale = self.combatants[attacker_idx].apply_f32(
+                    StatIdF32::RangeDistanceMultiplier,
+                    weapon.range_distance_multiplier,
+                );
+                range_modifier_for_weapon_with_scale(weapon, distance, range_scale)
             } else {
                 None
             };
+            let primary_speed_base = self.combatants[attacker_idx]
+                .apply_f32(StatIdF32::WeaponSpeed, weapon.speed)
+                .max(1.0);
+            let mut primary_attack_time = None;
             if !use_ranged && distance > attacker_reach {
                 continue;
             }
             if use_ranged && ranged_mod.is_none() {
                 continue;
             }
-            if self.combatants[attacker_idx].state.next_attack_time.is_none() {
+            if self.combatants[attacker_idx]
+                .state
+                .next_attack_time_primary
+                .is_none()
+            {
                 let defender_reach = self.combatants[defender_idx].sheet.offense.weapon.reach_ft;
                 let delay = if !use_ranged && attacker_reach < defender_reach {
                     1.0
                 } else {
                     0.0
                 };
-                self.combatants[attacker_idx].state.next_attack_time = Some(now + delay);
+                self.combatants[attacker_idx]
+                    .state
+                    .set_next_attack_time(WeaponSlot::Primary, Some(now + delay));
             }
             let next_attack = if use_snapshot_timing {
-                snapshot_next_attack.unwrap_or(now)
+                snapshot_next_attack_primary.unwrap_or(now)
             } else {
                 self.combatants[attacker_idx]
                     .state
-                    .next_attack_time
+                    .next_attack_time_primary
                     .unwrap_or(now)
             };
             if now + 0.0001 >= next_attack {
+                primary_attack_time = Some(next_attack);
                 let mut event = resolve_attack(
                     &mut self.combatants,
                     attacker_idx,
@@ -428,6 +477,7 @@ impl SimState {
                     use_ranged,
                     distance,
                     attack_mode,
+                    WeaponSlot::Primary,
                     now,
                     state_snapshot.as_ref(),
                     &mut self.rng,
@@ -504,16 +554,172 @@ impl SimState {
                         self.combat_events.push(counter_event);
                     }
                 }
-                let mut speed = self.combatants[attacker_idx]
-                    .sheet
-                    .offense
-                    .weapon
-                    .speed
-                    .max(1.0);
+                let mut speed = primary_speed_base;
+                if self.combatants[attacker_idx].sheet.maneuvers.offensive_dualwielding {
+                    speed += 2.0;
+                }
                 if self.combatants[defender_idx].state.trauma_remaining_seconds > 0 {
                     speed = (speed / 2.0).ceil().max(1.0);
                 }
-                self.combatants[attacker_idx].state.next_attack_time = Some(next_attack + speed);
+                self.combatants[attacker_idx]
+                    .state
+                    .set_next_attack_time(WeaponSlot::Primary, Some(next_attack + speed));
+            }
+
+            if self.combatants[attacker_idx]
+                .sheet
+                .maneuvers
+                .offensive_dualwielding
+                && self.combatants[attacker_idx].sheet.offense.offhand.is_some()
+                && !self.hold_at_bay.pending
+                && !self.hold_at_bay.active
+                && self.combatants[defender_idx].state.hp > 0
+            {
+                let offhand_weapon = self.combatants[attacker_idx]
+                    .sheet
+                    .offense
+                    .offhand
+                    .as_ref()
+                    .map(|offhand| offhand.weapon.clone())
+                    .expect("offhand missing");
+                let weapon = &offhand_weapon;
+                let has_range = max_range_for_weapon(weapon).is_some();
+                let attacker_reach = weapon.reach_ft.max(1.0);
+                let use_ranged = if has_range && !weapon.uses_projectiles {
+                    distance > attacker_reach
+                } else {
+                    has_range
+                };
+                if !use_ranged && distance > attacker_reach {
+                    continue;
+                }
+                let ranged_mod = if use_ranged {
+                    let range_scale = self.combatants[attacker_idx].apply_f32(
+                        StatIdF32::RangeDistanceMultiplier,
+                        weapon.range_distance_multiplier,
+                    );
+                    range_modifier_for_weapon_with_scale(weapon, distance, range_scale)
+                } else {
+                    None
+                };
+                if use_ranged && ranged_mod.is_none() {
+                    continue;
+                }
+                if self.combatants[attacker_idx]
+                    .state
+                    .next_attack_time_secondary
+                    .is_none()
+                {
+                    let primary_anchor = primary_attack_time
+                        .or_else(|| self.combatants[attacker_idx].state.next_attack_time_primary)
+                        .unwrap_or(now);
+                    let offset = 2.0 + (primary_speed_base / 2.0).ceil();
+                    self.combatants[attacker_idx]
+                        .state
+                        .set_next_attack_time(WeaponSlot::Secondary, Some(primary_anchor + offset));
+                }
+                let next_attack = if use_snapshot_timing {
+                    snapshot_next_attack_secondary.unwrap_or_else(|| {
+                        self.combatants[attacker_idx]
+                            .state
+                            .next_attack_time_secondary
+                            .unwrap_or(now)
+                    })
+                } else {
+                    self.combatants[attacker_idx]
+                        .state
+                        .next_attack_time_secondary
+                        .unwrap_or(now)
+                };
+                if now + 0.0001 >= next_attack {
+                    let mut event = resolve_attack(
+                        &mut self.combatants,
+                        attacker_idx,
+                        defender_idx,
+                        ranged_mod.unwrap_or(0),
+                        use_ranged,
+                        distance,
+                        AttackMode::Normal,
+                        WeaponSlot::Secondary,
+                        now,
+                        state_snapshot.as_ref(),
+                        &mut self.rng,
+                    );
+                    self.apply_knockback(
+                        event.attacker_idx,
+                        event.defender_idx,
+                        event.knockback_ft,
+                    );
+                    if self.log_events {
+                        let event_struct = CombatEvent {
+                            time: self.elapsed_seconds,
+                            attacker_idx: event.attacker_idx,
+                            defender_idx: event.defender_idx,
+                            kind: CombatEventKind::Attack(AttackEvent {
+                                hit: event.hit,
+                                shield_block: event.shield_block,
+                                damage: event.damage,
+                                shield_damage: event.shield_damage,
+                                knockback_ft: event.knockback_ft,
+                                hold_at_bay: event.hold_at_bay,
+                                use_jab: event.use_jab,
+                                is_ranged: event.is_ranged,
+                                trauma_applied: event.trauma_applied,
+                                trauma_seconds: event.trauma_seconds,
+                                roll: event.roll,
+                                damage_breakdown: event.damage_breakdown,
+                                shield_damage_breakdown: event.shield_damage_breakdown,
+                                defender_hp_after: event.defender_hp_after,
+                                critical: event.critical,
+                            }),
+                        };
+                        self.last_event = Some(event_struct.clone());
+                        self.combat_events.push(event_struct);
+                    }
+                    if let Some(counter) = event.counter_attack.take() {
+                        self.apply_knockback(
+                            counter.attacker_idx,
+                            counter.defender_idx,
+                            counter.knockback_ft,
+                        );
+                        if self.log_events {
+                            let counter_event = CombatEvent {
+                                time: self.elapsed_seconds,
+                                attacker_idx: counter.attacker_idx,
+                                defender_idx: counter.defender_idx,
+                                kind: CombatEventKind::Attack(AttackEvent {
+                                    hit: counter.hit,
+                                    shield_block: counter.shield_block,
+                                    damage: counter.damage,
+                                    shield_damage: counter.shield_damage,
+                                    knockback_ft: counter.knockback_ft,
+                                    hold_at_bay: false,
+                                    use_jab: counter.use_jab,
+                                    is_ranged: counter.is_ranged,
+                                    trauma_applied: counter.trauma_applied,
+                                    trauma_seconds: counter.trauma_seconds,
+                                    roll: counter.roll,
+                                    damage_breakdown: counter.damage_breakdown,
+                                    shield_damage_breakdown: counter.shield_damage_breakdown,
+                                    defender_hp_after: counter.defender_hp_after,
+                                    critical: counter.critical,
+                                }),
+                            };
+                            self.last_event = Some(counter_event.clone());
+                            self.combat_events.push(counter_event);
+                        }
+                    }
+                    let mut speed = self.combatants[attacker_idx]
+                        .apply_f32(StatIdF32::WeaponSpeed, weapon.speed)
+                        .max(1.0)
+                        + 2.0;
+                    if self.combatants[defender_idx].state.trauma_remaining_seconds > 0 {
+                        speed = (speed / 2.0).ceil().max(1.0);
+                    }
+                    self.combatants[attacker_idx]
+                        .state
+                        .set_next_attack_time(WeaponSlot::Secondary, Some(next_attack + speed));
+                }
             }
         }
         if self

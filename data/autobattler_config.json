@@ -1,0 +1,16 @@
+{
+  "seed": 7,
+  "fights_to_run": 5,
+  "max_fight_seconds": 120,
+  "rest_days_between_encounters": 8,
+  "enemy_weapon": "Battle axe",
+  "player_preset_name": "Arthur Du Randt",
+  "start_distance": 20.0,
+  "stop_distance": 1.0,
+  "loot": {
+    "gold_min": 8,
+    "gold_max": 16,
+    "xp_per_level": 0,
+    "items": []
+  }
+}

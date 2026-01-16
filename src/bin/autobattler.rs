@@ -1,24 +1,23 @@
 use hackmaster_sim::character::{AbilityScore, AbilitySet, Progression, ProgressionTier};
 use hackmaster_sim::core::gameplay::{
-    run_next_fight, CombatantBuilder, EnemySpawnEntry, EnemySpawner, LootTable, RunState, Wound,
+    run_next_fight, AutobattlerConfig, CombatantBuilder, EnemySpawnEntry, EnemySpawner, RunState,
+    Wound,
 };
 use hackmaster_sim::core::ids::NpcPresetId;
 use hackmaster_sim::core::rng::SimRng;
 use hackmaster_sim::core::sim::{CombatEvent, CombatEventKind, SimConfig};
-use hackmaster_sim::core::types::{EnemyProfile, Inventory, PlayerProfile};
+use hackmaster_sim::core::types::{EnemyProfile, Inventory, PlayerProfile, RaceSpec};
 use hackmaster_sim::data;
 use hackmaster_sim::game_logic::{
     self, ArmorCatalog, ArmorId, FighterPreset, FighterPresetCatalog, NpcPresetCatalog,
     PlayerConfig, ShieldCatalog, ShieldId, TalentCatalog, WeaponCatalog, WeaponId,
 };
+use std::{env, process};
 
+const AUTOBATTLER_CONFIG_PATH: &str = "data/autobattler_config.json";
 const FIGHTER_PRESETS_PATH: &str = "data/fighter_presets.json";
 const NPC_PRESETS_PATH: &str = "data/npc_presets.json";
 const TALENTS_PATH: &str = "data/talents.json";
-const FIGHTS_TO_RUN: u32 = 5;
-const MAX_FIGHT_SECONDS: u32 = 120;
-const REST_DAYS_BETWEEN_ENCOUNTERS: u32 = 8;
-const DEFAULT_ENEMY_WEAPON: &str = "Battle axe";
 
 struct AutobattlerBuilder<'a> {
     player_base: PlayerConfig,
@@ -77,15 +76,25 @@ impl CombatantBuilder for AutobattlerBuilder<'_> {
 }
 
 fn main() {
+    let cli_overrides = CliOverrides::parse_or_exit();
+    let config_path = cli_overrides
+        .config_path
+        .as_deref()
+        .unwrap_or(AUTOBATTLER_CONFIG_PATH);
+    let mut config = data::load_autobattler_config(config_path)
+        .unwrap_or_else(|err| panic!("Failed to load autobattler config: {err}"));
+    cli_overrides.apply(&mut config);
+
     let (weapon_catalog, armor_catalog, shield_catalog) = data::load_catalogs()
         .unwrap_or_else(|err| panic!("Failed to load JSON catalogs: {err}"));
     let npc_presets =
         data::load_npc_presets(NPC_PRESETS_PATH).expect("Failed to load NPC presets");
     let fighter_presets =
         data::load_fighter_presets(FIGHTER_PRESETS_PATH).expect("Failed to load fighter presets");
+    let race_catalog = data::load_races("data/races.json").expect("Failed to load races");
     let talent_catalog = data::load_talents(TALENTS_PATH).expect("Failed to load talents");
 
-    let arthur_preset = find_fighter_preset(&fighter_presets, "Arthur Du Randt")
+    let arthur_preset = find_fighter_preset(&fighter_presets, &config.player_preset_name)
         .or_else(|| fighter_presets.entries().first())
         .expect("No fighter presets found");
     let player_config = player_config_from_preset(
@@ -93,20 +102,17 @@ fn main() {
         &weapon_catalog,
         &armor_catalog,
         &shield_catalog,
+        &race_catalog,
     );
     let player_profile = player_profile_from_config(&player_config);
     let mut run_state = RunState::new(player_profile, Inventory::default());
 
     let spawner = hobgoblin_spawner(&npc_presets);
-    let loot_table = LootTable {
-        gold_range: 8..=16,
-        xp_per_level: 0,
-        item_table: Vec::new(),
-    };
-    let sim_config = SimConfig::new(20.0, 1.0);
-    let mut rng = SimRng::from_seed(7);
+    let loot_table = config.to_loot_table();
+    let sim_config = SimConfig::new(config.start_distance, config.stop_distance);
+    let mut rng = SimRng::from_seed(config.seed);
 
-    let enemy_weapon_id = find_weapon_id_by_name(&weapon_catalog, DEFAULT_ENEMY_WEAPON)
+    let enemy_weapon_id = find_weapon_id_by_name(&weapon_catalog, &config.enemy_weapon)
         .or_else(|| weapon_catalog.first_id())
         .unwrap_or(WeaponId::new(0));
     let builder = AutobattlerBuilder {
@@ -120,15 +126,15 @@ fn main() {
     };
 
     println!("Autobattler run start: {}", run_state.player.name);
-    for fight_index in 1..=FIGHTS_TO_RUN {
+    for fight_index in 1..=config.fights_to_run {
         let outcome = run_next_fight(
             run_state,
             &spawner,
             &loot_table,
             None,
             sim_config,
-            MAX_FIGHT_SECONDS,
-            REST_DAYS_BETWEEN_ENCOUNTERS,
+            config.max_fight_seconds,
+            config.rest_days_between_encounters,
             &builder,
             &mut rng,
         );
@@ -172,6 +178,136 @@ fn main() {
             break;
         }
     }
+}
+
+#[derive(Default)]
+struct CliOverrides {
+    config_path: Option<String>,
+    seed: Option<u64>,
+    fights_to_run: Option<u32>,
+    max_fight_seconds: Option<u32>,
+    rest_days_between_encounters: Option<u32>,
+    enemy_weapon: Option<String>,
+    player_preset_name: Option<String>,
+    start_distance: Option<f32>,
+    stop_distance: Option<f32>,
+}
+
+impl CliOverrides {
+    fn parse_or_exit() -> Self {
+        let mut overrides = CliOverrides::default();
+        let mut args = env::args().skip(1);
+        while let Some(arg) = args.next() {
+            match arg.as_str() {
+                "--help" | "-h" => {
+                    print_usage();
+                    process::exit(0);
+                }
+                "--config" => {
+                    overrides.config_path = Some(next_arg(&mut args, "--config"));
+                }
+                "--seed" => {
+                    overrides.seed = Some(parse_value("--seed", next_arg(&mut args, "--seed")));
+                }
+                "--fights" => {
+                    overrides.fights_to_run =
+                        Some(parse_value("--fights", next_arg(&mut args, "--fights")));
+                }
+                "--max-seconds" => {
+                    overrides.max_fight_seconds = Some(parse_value(
+                        "--max-seconds",
+                        next_arg(&mut args, "--max-seconds"),
+                    ));
+                }
+                "--rest-days" => {
+                    overrides.rest_days_between_encounters = Some(parse_value(
+                        "--rest-days",
+                        next_arg(&mut args, "--rest-days"),
+                    ));
+                }
+                "--enemy-weapon" => {
+                    overrides.enemy_weapon = Some(next_arg(&mut args, "--enemy-weapon"));
+                }
+                "--preset" => {
+                    overrides.player_preset_name = Some(next_arg(&mut args, "--preset"));
+                }
+                "--start-distance" => {
+                    overrides.start_distance = Some(parse_value(
+                        "--start-distance",
+                        next_arg(&mut args, "--start-distance"),
+                    ));
+                }
+                "--stop-distance" => {
+                    overrides.stop_distance = Some(parse_value(
+                        "--stop-distance",
+                        next_arg(&mut args, "--stop-distance"),
+                    ));
+                }
+                _ => {
+                    eprintln!("Unknown argument: {arg}");
+                    print_usage();
+                    process::exit(2);
+                }
+            }
+        }
+        overrides
+    }
+
+    fn apply(self, config: &mut AutobattlerConfig) {
+        if let Some(seed) = self.seed {
+            config.seed = seed;
+        }
+        if let Some(fights_to_run) = self.fights_to_run {
+            config.fights_to_run = fights_to_run;
+        }
+        if let Some(max_fight_seconds) = self.max_fight_seconds {
+            config.max_fight_seconds = max_fight_seconds;
+        }
+        if let Some(rest_days_between_encounters) = self.rest_days_between_encounters {
+            config.rest_days_between_encounters = rest_days_between_encounters;
+        }
+        if let Some(enemy_weapon) = self.enemy_weapon {
+            config.enemy_weapon = enemy_weapon;
+        }
+        if let Some(player_preset_name) = self.player_preset_name {
+            config.player_preset_name = player_preset_name;
+        }
+        if let Some(start_distance) = self.start_distance {
+            config.start_distance = start_distance;
+        }
+        if let Some(stop_distance) = self.stop_distance {
+            config.stop_distance = stop_distance;
+        }
+    }
+}
+
+fn parse_value<T>(flag: &str, value: String) -> T
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    value.parse::<T>().unwrap_or_else(|err| {
+        eprintln!("Invalid value for {flag}: {err}");
+        print_usage();
+        process::exit(2);
+    })
+}
+
+fn next_arg(args: &mut impl Iterator<Item = String>, flag: &str) -> String {
+    match args.next() {
+        Some(value) => value,
+        None => {
+            eprintln!("Missing value for {flag}");
+            print_usage();
+            process::exit(2);
+        }
+    }
+}
+
+fn print_usage() {
+    eprintln!(
+        "Usage: autobattler [options]\n\nOptions:\n  --config PATH\n  --seed N\n  --fights N\n  --max-seconds N\n  --rest-days N\n  --enemy-weapon NAME\n  --preset NAME\n  --start-distance N\n  --stop-distance N\n  -h, --help"
+    );
 }
 
 fn format_wound_tracker(wounds: &[Wound]) -> String {
@@ -229,6 +365,7 @@ fn player_config_from_preset(
     weapon_catalog: &WeaponCatalog,
     armor_catalog: &ArmorCatalog,
     shield_catalog: &ShieldCatalog,
+    race_catalog: &[RaceSpec],
 ) -> PlayerConfig {
     let attack = tier_from_label(&preset.progression.attack).unwrap_or(ProgressionTier::I);
     let speed = tier_from_label(&preset.progression.speed).unwrap_or(ProgressionTier::I);
@@ -268,12 +405,19 @@ fn player_config_from_preset(
     player.use_jab = preset.use_jab;
     player.hold_at_bay = preset.hold_at_bay;
     player.defensive_dualwielding = preset.defensive_dualwielding;
+    player.offensive_dualwielding = preset.offensive_dualwielding;
     player.talents = preset.talents.clone();
     player.race_id = preset.race_id.clone();
     player.race_applied = false;
+    player.knockback_step =
+        game_logic::knockback_step_for_race_id(player.race_id.as_deref(), race_catalog);
     player.weapon_id = find_weapon_id_by_name(weapon_catalog, &preset.weapon)
         .or_else(|| weapon_catalog.first_id())
         .unwrap_or_else(|| WeaponId::new(0));
+    player.offhand_weapon_id = preset
+        .offhand_weapon
+        .as_deref()
+        .and_then(|name| find_weapon_id_by_name(weapon_catalog, name));
     player.armor_id = find_armor_id_by_name(armor_catalog, &preset.armor)
         .or_else(|| armor_catalog.first_id())
         .unwrap_or_else(|| ArmorId::new(0));

@@ -7,7 +7,7 @@ use sim::{bulk_simulate, BulkSimResult, SimConfig, SimState};
 use std::{collections::BTreeMap, time::Instant};
 use game_logic::{
     ArmorCatalog, ArmorEntry, ArmorId, FighterMasteries, FighterPreset, FighterPresetCatalog,
-    FighterProgression, NpcPresetCatalog, PlayerConfig, ShieldCatalog, ShieldEntry, ShieldId,
+    FighterProgression, NpcPresetCatalog, PlayerConfig, ShieldCatalog, ShieldId,
     TalentCatalog, WeaponCatalog, WeaponHandedness, WeaponId, WeaponSize,
 };
 
@@ -367,11 +367,17 @@ impl SimGuiApp {
 
         for (idx, _) in self.players.iter().enumerate() {
             let player_color = self.player_colors[idx];
-            if let Some(next) = self.sim.combatants[idx].state.next_attack_time {
+            if let Some(next) = self.sim.combatants[idx].state.next_attack_time_primary {
                 let t = (next - now).max(0.0).min(horizon);
                 let x = left + t * scale;
                 let pos = Pos2::new(x, y - 14.0);
                 painter.circle_filled(pos, 6.0, player_color);
+            }
+            if let Some(next) = self.sim.combatants[idx].state.next_attack_time_secondary {
+                let t = (next - now).max(0.0).min(horizon);
+                let x = left + t * scale;
+                let pos = Pos2::new(x, y - 4.0);
+                painter.circle_filled(pos, 4.0, player_color);
             }
         }
     }
@@ -951,6 +957,7 @@ fn render_player_editor(
                                     weapon_catalog,
                                     armor_catalog,
                                     shield_catalog,
+                                    race_catalog,
                                 );
                                 player.npc_preset = None;
                                 fighter_preset_name.clear();
@@ -1181,9 +1188,18 @@ fn render_player_editor(
             } else if !can_two_hand {
                 player.two_hand_grip = false;
             }
-            let can_defensive_dualwield =
+            let can_dualwield =
                 weapon.handedness == WeaponHandedness::OneHanded && !player.two_hand_grip;
-            if !can_defensive_dualwield {
+            let can_defensive_dualwield = can_dualwield && !player.offensive_dualwielding;
+            let can_offensive_dualwield = can_dualwield && !player.defensive_dualwielding;
+            if !can_dualwield {
+                player.defensive_dualwielding = false;
+                player.offensive_dualwielding = false;
+            }
+            if player.defensive_dualwielding {
+                player.offensive_dualwielding = false;
+            }
+            if player.offensive_dualwielding {
                 player.defensive_dualwielding = false;
             }
             let jab_label = weapon
@@ -1237,8 +1253,19 @@ fn render_player_editor(
                     ui.label("Unavailable");
                 }
             });
+            ui.horizontal(|ui| {
+                ui.add_enabled_ui(can_offensive_dualwield, |ui| {
+                    ui.checkbox(&mut player.offensive_dualwielding, "Offensive dualwielding");
+                });
+                if !can_offensive_dualwield {
+                    ui.label("Unavailable");
+                }
+            });
             if player.defensive_dualwielding {
                 ui.label("Defensive dualwielding: double defense mastery & weapon defense talent bonus");
+            }
+            if player.offensive_dualwielding {
+                ui.label("Offensive dualwielding: alternate primary/offhand attacks");
             }
 
             let npc_active = player.npc_preset.is_some();
@@ -1264,39 +1291,37 @@ fn render_player_editor(
                     );
                 });
                 ui.horizontal(|ui| {
-                    ui.label("Shield");
-                    let can_use_shield = weapon.handedness == WeaponHandedness::OneHanded
-                        && !player.two_hand_grip
-                        && !player.defensive_dualwielding;
-                    if !can_use_shield {
-                        player.shield_id = ShieldId::new(0);
-                        player.shield_material_tier = 0;
+                    ui.label("Offhand weapon");
+                    let can_use_offhand = player.offensive_dualwielding
+                        && weapon.handedness == WeaponHandedness::OneHanded
+                        && !player.two_hand_grip;
+                    if !can_use_offhand {
+                        player.offhand_weapon_id = None;
                     }
-                    ui.add_enabled_ui(can_use_shield, |ui| {
-                        let mut selection = shield_catalog.index_of(player.shield_id);
-                        egui::ComboBox::from_id_source(format!("{id_prefix}_shield"))
-                            .selected_text(shield_display_name(shield_catalog.get(player.shield_id)))
+                    ui.add_enabled_ui(can_use_offhand, |ui| {
+                        let mut selection =
+                            player.offhand_weapon_id.map(|id| weapon_catalog.index_of(id));
+                        let selected_name = selection
+                            .and_then(|idx| weapon_catalog.entries().get(idx))
+                            .map(|weapon| weapon.name.as_str())
+                            .unwrap_or("None");
+                        egui::ComboBox::from_id_source(format!("{id_prefix}_offhand"))
+                            .selected_text(selected_name)
                             .show_ui(ui, |ui| {
-                                for (idx, shield) in shield_catalog.entries().iter().enumerate() {
-                                    ui.selectable_value(&mut selection, idx, shield.label.clone());
+                                ui.selectable_value(&mut selection, None, "None");
+                                for (idx, weapon) in weapon_catalog.entries().iter().enumerate() {
+                                    if weapon.handedness != WeaponHandedness::OneHanded {
+                                        continue;
+                                    }
+                                    ui.selectable_value(&mut selection, Some(idx), weapon.name.as_str());
                                 }
                             });
-                        if let Some(id) = shield_catalog.id_from_index(selection) {
-                            player.shield_id = id;
-                        }
+                        player.offhand_weapon_id =
+                            selection.and_then(|idx| weapon_catalog.id_from_index(idx));
                     });
-                    if !can_use_shield {
+                    if !can_use_offhand {
                         ui.label("Unavailable");
                     }
-                    let shield_enabled = can_use_shield && player.shield_id.index() > 0;
-                    ui.add_enabled_ui(shield_enabled, |ui| {
-                        material_tier_combo(
-                            ui,
-                            format!("{id_prefix}_shield_material"),
-                            "Material",
-                            &mut player.shield_material_tier,
-                        );
-                    });
                 });
             });
         }
@@ -1344,16 +1369,20 @@ fn render_player_editor(
                         }
                     }
                 });
-                player.race_id = if selection == usize::MAX {
-                    None
-                } else {
-                    race_catalog.get(selection).map(|race| race.id.clone())
-                };
-                if let Some(race) = player
-                    .race_id
-                    .as_ref()
-                    .and_then(|id| race_catalog.iter().find(|race| race.id == *id))
-                {
+                    let selected_race = if selection == usize::MAX {
+                        None
+                    } else {
+                        race_catalog.get(selection)
+                    };
+                    player.race_id = selected_race.map(|race| race.id.clone());
+                    player.knockback_step = selected_race
+                        .map(game_logic::knockback_step_for_race)
+                        .unwrap_or(game_logic::DEFAULT_KNOCKBACK_STEP);
+                    if let Some(race) = player
+                        .race_id
+                        .as_ref()
+                        .and_then(|id| race_catalog.iter().find(|race| race.id == *id))
+                    {
                     ui.label(format!(
                         "Base HP {} | {}",
                         race.base_hp,
@@ -1425,9 +1454,7 @@ fn render_player_editor(
                     .unwrap_or_else(|| {
                         weapon_catalog.entries().first().expect("weapon catalog empty")
                     });
-                let shield_active = player.shield_id.index() > 0
-                    && weapon.handedness == WeaponHandedness::OneHanded
-                    && !player.two_hand_grip;
+                let shield_active = game_logic::shield_equipped(player, weapon);
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
                         ui.label("Weapon masteries");
@@ -1478,11 +1505,15 @@ fn render_player_editor(
                             });
                     });
                 });
-                player.race_id = if selection == usize::MAX {
+                let selected_race = if selection == usize::MAX {
                     None
                 } else {
-                    race_catalog.get(selection).map(|race| race.id.clone())
+                    race_catalog.get(selection)
                 };
+                player.race_id = selected_race.map(|race| race.id.clone());
+                player.knockback_step = selected_race
+                    .map(game_logic::knockback_step_for_race)
+                    .unwrap_or(game_logic::DEFAULT_KNOCKBACK_STEP);
                 if race_locked {
                     ui.label("Race selection is locked by the preset.");
                 }
@@ -1533,11 +1564,7 @@ fn render_player_editor(
             let weapon = weapon_catalog
                 .get(player.weapon_id)
                 .unwrap_or_else(|| weapon_catalog.entries().first().expect("weapon catalog empty"));
-            let shield_bonus = if player.shield_id.index() > 0
-                && weapon.handedness == WeaponHandedness::OneHanded
-                && !player.two_hand_grip
-                && !player.defensive_dualwielding
-            {
+            let shield_bonus = if game_logic::shield_equipped(player, weapon) {
                 shield_catalog
                     .get(player.shield_id)
                     .and_then(|entry| entry.shield.as_ref())
@@ -1608,9 +1635,15 @@ fn render_player_editor(
                 }
             } else {
                 let weapon_def = if weapon.defense_bonus_always { " (+4 weapon)" } else { "" };
+                let melee_die = if player.offensive_dualwielding {
+                    "d10p"
+                } else {
+                    "d20p"
+                };
                 if let Some(shield_bonus) = shield_bonus {
                     ui.label(format!(
-                        "Defense roll (melee): d20p + {} + {}{}",
+                        "Defense roll (melee): {} + {} + {}{}",
+                        melee_die,
                         derived.base_dv + defense_mastery + 4,
                         shield_bonus,
                         weapon_def
@@ -1622,7 +1655,8 @@ fn render_player_editor(
                         ""
                     };
                     ui.label(format!(
-                        "Defense roll (melee): d20p + {}{}{}",
+                        "Defense roll (melee): {} + {}{}{}",
+                        melee_die,
                         derived.base_dv + defense_mastery,
                         weapon_def,
                         dual_note
@@ -1659,6 +1693,7 @@ fn apply_fighter_preset(
     weapon_catalog: &WeaponCatalog,
     armor_catalog: &ArmorCatalog,
     shield_catalog: &ShieldCatalog,
+    race_catalog: &[RaceSpec],
 ) {
     let attack = tier_from_label(&preset.progression.attack).unwrap_or(ProgressionTier::I);
     let speed = tier_from_label(&preset.progression.speed).unwrap_or(ProgressionTier::I);
@@ -1692,12 +1727,17 @@ fn apply_fighter_preset(
     player.use_jab = preset.use_jab;
     player.hold_at_bay = preset.hold_at_bay;
     player.defensive_dualwielding = preset.defensive_dualwielding;
+    player.offensive_dualwielding = preset.offensive_dualwielding;
     player.environment = game_logic::EnvironmentConfig::default();
     player.misc_modifiers = game_logic::MiscRollModifiers::default();
     player.talents = preset.talents.clone();
     player.weapon_id = find_weapon_id_by_name(weapon_catalog, &preset.weapon)
         .or_else(|| weapon_catalog.first_id())
         .unwrap_or(WeaponId::new(0));
+    player.offhand_weapon_id = preset
+        .offhand_weapon
+        .as_deref()
+        .and_then(|name| find_weapon_id_by_name(weapon_catalog, name));
     player.armor_id = find_armor_id_by_name(armor_catalog, &preset.armor)
         .or_else(|| armor_catalog.first_id())
         .unwrap_or(ArmorId::new(0));
@@ -1706,6 +1746,8 @@ fn apply_fighter_preset(
         .unwrap_or(ShieldId::new(0));
     player.race_id = preset.race_id.clone();
     player.race_applied = false;
+    player.knockback_step =
+        game_logic::knockback_step_for_race_id(player.race_id.as_deref(), race_catalog);
     if let Some(weapon) = weapon_catalog.get(player.weapon_id) {
         game_logic::sanitize_projectile_tier(player, weapon);
     }
@@ -1730,6 +1772,10 @@ fn fighter_preset_from_player(
         .get(player.shield_id)
         .and_then(|entry| entry.shield.as_ref().map(|shield| shield.name.to_string()))
         .unwrap_or_else(|| "None".to_string());
+    let offhand_weapon = player
+        .offhand_weapon_id
+        .and_then(|id| weapon_catalog.get(id))
+        .map(|weapon| weapon.name.clone());
     FighterPreset {
         name: name.to_string(),
         level: player.level,
@@ -1759,6 +1805,7 @@ fn fighter_preset_from_player(
         looks: player.looks,
         charisma: player.charisma,
         weapon,
+        offhand_weapon,
         armor,
         shield,
         weapon_material_tier: player.weapon_material_tier,
@@ -1769,6 +1816,7 @@ fn fighter_preset_from_player(
         use_jab: player.use_jab,
         hold_at_bay: player.hold_at_bay,
         defensive_dualwielding: player.defensive_dualwielding,
+        offensive_dualwielding: player.offensive_dualwielding,
         race_id: player.race_id.clone(),
         talents: player.talents.clone(),
     }
@@ -2395,12 +2443,6 @@ fn material_tier_combo(ui: &mut egui::Ui, id_source: String, label: &str, select
 fn armor_display_name(entry: Option<&ArmorEntry>) -> String {
     entry
         .map(|armor| armor.label.clone())
-        .unwrap_or_else(|| "None".to_string())
-}
-
-fn shield_display_name(entry: Option<&ShieldEntry>) -> String {
-    entry
-        .map(|shield| shield.label.clone())
         .unwrap_or_else(|| "None".to_string())
 }
 

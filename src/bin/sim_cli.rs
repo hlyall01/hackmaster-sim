@@ -185,13 +185,18 @@ fn main() {
                 uses_projectiles,
                 is_small_weapon: false,
                 is_unarmed: weapon.group == WeaponGroup::Unarmed,
+                crit_min_roll: 20,
+                crit_min_roll_ranged: None,
+                crit_severity_bonus: 0,
             },
+            offhand: None,
         },
         defense: DefenseProfile {
             defense_mod: derived.base_dv,
             ranged_defense_mod: 0,
             armor_dr: derived.armor_dr,
             natural_dr: 0,
+            knockback_step: game_logic::DEFAULT_KNOCKBACK_STEP,
             armor_is_heavy,
             shield_name: None,
             shield_defense_bonus: 0,
@@ -213,7 +218,9 @@ fn main() {
         maneuvers: sim::ManeuverProfile {
             hold_at_bay: false,
             defensive_dualwielding: false,
+            offensive_dualwielding: false,
         },
+        modifiers: sim::ModifierStack::default(),
     };
     let combatant = Combatant::new(sheet);
     sim.reset_with_combatants([combatant.clone(), combatant]);

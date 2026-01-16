@@ -2852,7 +2852,12 @@
         "pather"
       ],
       "max_rank": 1,
-      "effects": []
+      "effects": [
+        {
+          "type": "heavy_armor_damage_bonus",
+          "amount": 1
+        }
+      ]
     },
     {
       "id": "ironworker",

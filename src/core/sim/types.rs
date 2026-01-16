@@ -1,3 +1,6 @@
+use super::modifiers::{ModifierStack, StatIdF32, StatIdI32, TemporaryEffect};
+use crate::core::rules::DamageExprCache;
+
 #[derive(Clone, Copy, Debug)]
 pub struct SimConfig {
     pub start_distance: f32,
@@ -16,6 +19,12 @@ impl SimConfig {
 #[derive(Clone, Copy, Debug)]
 pub struct SimActor {
     pub position: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WeaponSlot {
+    Primary,
+    Secondary,
 }
 
 #[derive(Clone, Debug)]
@@ -39,12 +48,16 @@ pub struct WeaponProfile {
     pub uses_projectiles: bool,
     pub is_small_weapon: bool,
     pub is_unarmed: bool,
+    pub crit_min_roll: i32,
+    pub crit_min_roll_ranged: Option<i32>,
+    pub crit_severity_bonus: i32,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ManeuverProfile {
     pub hold_at_bay: bool,
     pub defensive_dualwielding: bool,
+    pub offensive_dualwielding: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -55,6 +68,14 @@ pub struct OffenseProfile {
     pub strength_damage_base: i32,
     pub unarmed_damage_bonus: i32,
     pub weapon: WeaponProfile,
+    pub offhand: Option<OffhandProfile>,
+}
+
+#[derive(Clone, Debug)]
+pub struct OffhandProfile {
+    pub attack_bonus: i32,
+    pub strength_damage: i32,
+    pub weapon: WeaponProfile,
 }
 
 #[derive(Clone, Debug)]
@@ -63,6 +84,7 @@ pub struct DefenseProfile {
     pub ranged_defense_mod: i32,
     pub armor_dr: i32,
     pub natural_dr: i32,
+    pub knockback_step: i32,
     pub armor_is_heavy: bool,
     pub shield_name: Option<String>,
     pub shield_defense_bonus: i32,
@@ -93,18 +115,21 @@ pub struct CombatantSheet {
     pub mobility: MobilityProfile,
     pub vitals: Vitals,
     pub maneuvers: ManeuverProfile,
+    pub modifiers: ModifierStack,
 }
 
 #[derive(Clone, Debug)]
 pub struct CombatantState {
     pub hp: i32,
-    pub next_attack_time: Option<f32>,
+    pub next_attack_time_primary: Option<f32>,
+    pub next_attack_time_secondary: Option<f32>,
     pub defense_plus_four_ready: bool,
     pub moved_last_tick: bool,
     pub trauma_remaining_seconds: i32,
     pub knockback_immobile_seconds: i32,
     pub knockback_applied_this_tick: bool,
     pub shield_intact: bool,
+    pub active_effects: Vec<TemporaryEffect>,
 }
 
 #[derive(Clone, Debug)]
@@ -240,6 +265,9 @@ impl Default for WeaponProfile {
             uses_projectiles: false,
             is_small_weapon: false,
             is_unarmed: false,
+            crit_min_roll: 20,
+            crit_min_roll_ranged: None,
+            crit_severity_bonus: 0,
         }
     }
 }
@@ -253,6 +281,7 @@ impl Default for OffenseProfile {
             strength_damage_base: 0,
             unarmed_damage_bonus: 0,
             weapon: WeaponProfile::default(),
+            offhand: None,
         }
     }
 }
@@ -264,6 +293,7 @@ impl Default for DefenseProfile {
             ranged_defense_mod: 0,
             armor_dr: 0,
             natural_dr: 0,
+            knockback_step: 15,
             armor_is_heavy: false,
             shield_name: None,
             shield_defense_bonus: 0,
@@ -301,6 +331,7 @@ impl Default for CombatantSheet {
             mobility: MobilityProfile::default(),
             vitals: Vitals::default(),
             maneuvers: ManeuverProfile::default(),
+            modifiers: ModifierStack::default(),
         }
     }
 }
@@ -309,13 +340,15 @@ impl CombatantState {
     pub(crate) fn new(sheet: &CombatantSheet) -> Self {
         let mut state = Self {
             hp: sheet.vitals.max_hp,
-            next_attack_time: None,
+            next_attack_time_primary: None,
+            next_attack_time_secondary: None,
             defense_plus_four_ready: false,
             moved_last_tick: false,
             trauma_remaining_seconds: 0,
             knockback_immobile_seconds: 0,
             knockback_applied_this_tick: false,
             shield_intact: sheet.defense.shield_name.is_some(),
+            active_effects: Vec::new(),
         };
         state.refresh_defense_plus_four_ready(sheet, 0.0);
         state
@@ -324,6 +357,30 @@ impl CombatantState {
     pub(crate) fn refresh_defense_plus_four_ready(&mut self, sheet: &CombatantSheet, now: f32) {
         let ready = defense_plus_four_ready_at(sheet, self, now);
         self.defense_plus_four_ready = ready;
+    }
+
+    pub fn add_effect(&mut self, effect: TemporaryEffect) {
+        self.active_effects.push(effect);
+    }
+
+    pub fn tick_effects(&mut self) {
+        for effect in &mut self.active_effects {
+            effect.remaining_seconds -= 1;
+        }
+        self.active_effects
+            .retain(|effect| effect.remaining_seconds > 0);
+    }
+
+    pub(crate) fn set_next_attack_time(&mut self, slot: WeaponSlot, time: Option<f32>) {
+        match slot {
+            WeaponSlot::Primary => self.next_attack_time_primary = time,
+            WeaponSlot::Secondary => self.next_attack_time_secondary = time,
+        }
+    }
+
+    pub(crate) fn clear_attack_timers(&mut self) {
+        self.next_attack_time_primary = None;
+        self.next_attack_time_secondary = None;
     }
 }
 
@@ -345,7 +402,7 @@ pub(crate) fn defense_plus_four_ready_at(
     if state.trauma_remaining_seconds > 0 {
         return false;
     }
-    match state.next_attack_time {
+    match state.next_attack_time_primary {
         Some(next_attack) => now + 0.0001 >= next_attack,
         None => true,
     }
@@ -360,6 +417,22 @@ impl Combatant {
     pub(crate) fn reset_state(&mut self) {
         self.state = CombatantState::new(&self.sheet);
     }
+
+    pub(crate) fn apply_i32(&self, stat: StatIdI32, base: i32) -> i32 {
+        let mut value = self.sheet.modifiers.apply_i32(base, stat);
+        for effect in &self.state.active_effects {
+            value = effect.modifiers.apply_i32(value, stat);
+        }
+        value
+    }
+
+    pub(crate) fn apply_f32(&self, stat: StatIdF32, base: f32) -> f32 {
+        let mut value = self.sheet.modifiers.apply_f32(base, stat);
+        for effect in &self.state.active_effects {
+            value = effect.modifiers.apply_f32(value, stat);
+        }
+        value
+    }
 }
 
 impl Default for Combatant {
@@ -367,4 +440,3 @@ impl Default for Combatant {
         Self::new(CombatantSheet::default())
     }
 }
-use crate::core::rules::DamageExprCache;

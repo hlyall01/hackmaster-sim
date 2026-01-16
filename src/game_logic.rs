@@ -174,6 +174,8 @@ pub struct FighterPreset {
     pub looks: u8,
     pub charisma: u8,
     pub weapon: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offhand_weapon: Option<String>,
     pub armor: String,
     pub shield: String,
     pub weapon_material_tier: i32,
@@ -186,6 +188,8 @@ pub struct FighterPreset {
     pub hold_at_bay: bool,
     #[serde(default)]
     pub defensive_dualwielding: bool,
+    #[serde(default)]
+    pub offensive_dualwielding: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub race_id: Option<String>,
     #[serde(default)]
@@ -237,6 +241,7 @@ pub struct PlayerConfig {
     pub looks: u8,
     pub charisma: u8,
     pub weapon_id: WeaponId,
+    pub offhand_weapon_id: Option<WeaponId>,
     pub armor_id: ArmorId,
     pub weapon_material_tier: i32,
     pub armor_material_tier: i32,
@@ -255,8 +260,10 @@ pub struct PlayerConfig {
     pub use_jab: bool,
     pub hold_at_bay: bool,
     pub defensive_dualwielding: bool,
+    pub offensive_dualwielding: bool,
     pub environment: EnvironmentConfig,
     pub misc_modifiers: MiscRollModifiers,
+    pub knockback_step: i32,
     pub race_id: Option<String>,
     pub race_applied: bool,
     pub talents: Vec<TalentSelection>,
@@ -280,6 +287,7 @@ impl PlayerConfig {
             looks: 10,
             charisma: 10,
             weapon_id,
+            offhand_weapon_id: None,
             armor_id: ArmorId::new(0),
             weapon_material_tier: 0,
             armor_material_tier: 0,
@@ -298,8 +306,10 @@ impl PlayerConfig {
             use_jab: false,
             hold_at_bay: false,
             defensive_dualwielding: false,
+            offensive_dualwielding: false,
             environment: EnvironmentConfig::default(),
             misc_modifiers: MiscRollModifiers::default(),
+            knockback_step: DEFAULT_KNOCKBACK_STEP,
             race_id: None,
             race_applied: false,
             talents: Vec::new(),
@@ -337,10 +347,18 @@ struct TalentModifiers {
     medium_armor_dr_bonus: i32,
     medium_armor_defense_penalty_reduction: i32,
     heavy_armor_damage_bonus_divisor: Option<i32>,
+    heavy_armor_damage_bonus_flat: i32,
     reach_bonus_by_group: HashMap<WeaponGroup, i32>,
     range_distance_multiplier: f32,
     threshold_of_pain_multiplier: f32,
     threshold_of_pain_level_bonus: f32,
+    crit_min_by_group: HashMap<WeaponGroup, i32>,
+    crit_min_ranged_by_group: HashMap<WeaponGroup, i32>,
+    crit_severity_bonus_by_group: HashMap<WeaponGroup, i32>,
+    knockback_step_bumps: i32,
+    defiant: bool,
+    superior_defense: bool,
+    edge_counter: bool,
 }
 
 impl Default for TalentModifiers {
@@ -368,10 +386,18 @@ impl Default for TalentModifiers {
             medium_armor_dr_bonus: 0,
             medium_armor_defense_penalty_reduction: 0,
             heavy_armor_damage_bonus_divisor: None,
+            heavy_armor_damage_bonus_flat: 0,
             reach_bonus_by_group: HashMap::new(),
             range_distance_multiplier: 1.0,
             threshold_of_pain_multiplier: 1.0,
             threshold_of_pain_level_bonus: 0.0,
+            crit_min_by_group: HashMap::new(),
+            crit_min_ranged_by_group: HashMap::new(),
+            crit_severity_bonus_by_group: HashMap::new(),
+            knockback_step_bumps: 0,
+            defiant: false,
+            superior_defense: false,
+            edge_counter: false,
         }
     }
 }
@@ -399,6 +425,22 @@ impl TalentModifiers {
 
     fn reach_bonus_for_group(&self, group: WeaponGroup) -> i32 {
         *self.reach_bonus_by_group.get(&group).unwrap_or(&0)
+    }
+
+    fn crit_min_for_group(&self, group: WeaponGroup) -> i32 {
+        self.crit_min_by_group
+            .get(&group)
+            .copied()
+            .unwrap_or(20)
+            .clamp(2, 20)
+    }
+
+    fn crit_min_ranged_for_group(&self, group: WeaponGroup) -> Option<i32> {
+        self.crit_min_ranged_by_group.get(&group).copied()
+    }
+
+    fn crit_severity_bonus_for_group(&self, group: WeaponGroup) -> i32 {
+        *self.crit_severity_bonus_by_group.get(&group).unwrap_or(&0)
     }
 }
 
@@ -457,6 +499,9 @@ fn armor_talent_adjustments(
                 if divisor > 0 {
                     adjustments.heavy_armor_damage_bonus += armor_dr / divisor;
                 }
+            }
+            if modifiers.heavy_armor_damage_bonus_flat != 0 {
+                adjustments.heavy_armor_damage_bonus += modifiers.heavy_armor_damage_bonus_flat;
             }
         }
         ArmorType::None => {}
@@ -863,6 +908,9 @@ fn resolve_talent_modifiers(
                 TalentEffect::HeavyArmorDamageBonusFromDr { divisor } => {
                     modifiers.heavy_armor_damage_bonus_divisor = Some(*divisor);
                 }
+                TalentEffect::HeavyArmorDamageBonus { amount } => {
+                    modifiers.heavy_armor_damage_bonus_flat += amount * rank;
+                }
                 TalentEffect::ShieldDefenseBonus { amount } => {
                     modifiers.shield_defense_bonus += amount * rank;
                 }
@@ -870,6 +918,48 @@ fn resolve_talent_modifiers(
                     modifiers.shield_cover_value_adjustment += amount * rank;
                 }
             }
+        }
+        match spec.id.as_str() {
+            "improved_critical" => {
+                if let Some(group) = selection_weapon_group(selection) {
+                    let entry = modifiers.crit_min_by_group.entry(group).or_insert(20);
+                    *entry = (*entry).min(19);
+                }
+            }
+            "critical_mastery" => {
+                if let Some(group) = selection_weapon_group(selection) {
+                    let entry = modifiers.crit_min_by_group.entry(group).or_insert(20);
+                    *entry = (*entry).min(18);
+                }
+            }
+            "ranged_critical_mastery" => {
+                if let Some(group) = selection_weapon_group(selection) {
+                    let entry = modifiers.crit_min_ranged_by_group.entry(group).or_insert(20);
+                    *entry = (*entry).min(18);
+                }
+            }
+            "wounding_criticals" => {
+                if let Some(group) = selection_weapon_group(selection) {
+                    let entry = modifiers
+                        .crit_severity_bonus_by_group
+                        .entry(group)
+                        .or_insert(0);
+                    *entry += 3 * rank;
+                }
+            }
+            "stout" | "sturdy" => {
+                modifiers.knockback_step_bumps += rank;
+            }
+            "defiant" => {
+                modifiers.defiant = true;
+            }
+            "superior_defense" => {
+                modifiers.superior_defense = true;
+            }
+            "edge_counter" => {
+                modifiers.edge_counter = true;
+            }
+            _ => {}
         }
     }
     modifiers
@@ -917,6 +1007,11 @@ pub fn sanitize_player_ids(
             player.weapon_id = id;
         }
     }
+    if let Some(offhand_id) = player.offhand_weapon_id {
+        if weapon_catalog.get(offhand_id).is_none() {
+            player.offhand_weapon_id = None;
+        }
+    }
     if armor_catalog.get(player.armor_id).is_none() {
         if let Some(id) = armor_catalog.first_id() {
             player.armor_id = id;
@@ -943,6 +1038,47 @@ pub fn normalize_percentile(value: u8) -> u8 {
     if value >= 51 { 51 } else { 1 }
 }
 
+pub const DEFAULT_KNOCKBACK_STEP: i32 = 15;
+
+pub fn knockback_step_for_race(race: &RaceSpec) -> i32 {
+    let size = race
+        .knockback_size
+        .as_deref()
+        .unwrap_or(race.size.as_str());
+    knockback_step_for_size_label(size)
+}
+
+pub fn knockback_step_for_race_id(race_id: Option<&str>, races: &[RaceSpec]) -> i32 {
+    let Some(race_id) = race_id else {
+        return DEFAULT_KNOCKBACK_STEP;
+    };
+    races
+        .iter()
+        .find(|race| race.id == race_id)
+        .map(knockback_step_for_race)
+        .unwrap_or(DEFAULT_KNOCKBACK_STEP)
+}
+
+fn knockback_step_for_size_label(label: &str) -> i32 {
+    match label.trim().to_ascii_lowercase().as_str() {
+        "small" => 10,
+        "large" => 20,
+        _ => DEFAULT_KNOCKBACK_STEP,
+    }
+}
+
+fn bump_knockback_step(step: i32, bumps: i32) -> i32 {
+    let mut step = step.max(1);
+    for _ in 0..bumps.max(0) {
+        step = match step {
+            0..=10 => 15,
+            11..=15 => 20,
+            _ => 20,
+        };
+    }
+    step
+}
+
 pub fn apply_race_adjustments(player: &mut PlayerConfig, race: &RaceSpec) {
     player.base_hp = race.base_hp.max(1);
     player.strength_base =
@@ -957,6 +1093,7 @@ pub fn apply_race_adjustments(player: &mut PlayerConfig, race: &RaceSpec) {
     player.looks = clamp_stat_adjustment(player.looks, race.ability_adjustments.looks);
     player.charisma = clamp_stat_adjustment(player.charisma, race.ability_adjustments.charisma);
     player.race_id = Some(race.id.clone());
+    player.knockback_step = knockback_step_for_race(race);
     player.race_applied = true;
 }
 
@@ -975,6 +1112,14 @@ pub fn shield_equipped(player: &PlayerConfig, weapon: &WeaponPreset) -> bool {
 
 pub fn defensive_dualwielding_active(player: &PlayerConfig, weapon: &WeaponPreset) -> bool {
     player.defensive_dualwielding
+        && !player.offensive_dualwielding
+        && weapon.handedness == WeaponHandedness::OneHanded
+        && !player.two_hand_grip
+}
+
+pub fn offensive_dualwielding_active(player: &PlayerConfig, weapon: &WeaponPreset) -> bool {
+    player.offensive_dualwielding
+        && !player.defensive_dualwielding
         && weapon.handedness == WeaponHandedness::OneHanded
         && !player.two_hand_grip
 }
@@ -1319,18 +1464,36 @@ pub fn build_combatant(
     };
 
     let mut name = character.name;
-    let is_ranged_weapon = is_ranged_weapon(weapon_preset);
-    let uses_projectiles =
+    let primary_is_ranged = is_ranged_weapon(weapon_preset);
+    let mut crit_min_roll = modifiers.crit_min_for_group(weapon_preset.group);
+    if primary_is_ranged {
+        if let Some(ranged_min) = modifiers.crit_min_ranged_for_group(weapon_preset.group) {
+            crit_min_roll = crit_min_roll.min(ranged_min);
+        }
+    }
+    let mut crit_min_roll_ranged = if primary_is_ranged {
+        modifiers
+            .crit_min_ranged_for_group(weapon_preset.group)
+            .map(|value| value.min(crit_min_roll))
+    } else {
+        None
+    };
+    let mut crit_severity_bonus = modifiers.crit_severity_bonus_for_group(weapon_preset.group);
+    let primary_uses_projectiles =
         uses_projectiles(&weapon_preset.name, weapon_preset.ammunition.is_some());
     let (material_attack_bonus, material_damage_bonus) = material_bonuses(
         player.weapon_material_tier,
         player.projectile_material_tier,
-        is_ranged_weapon,
-        uses_projectiles,
+        primary_is_ranged,
+        primary_uses_projectiles,
     );
     let attack_mastery = effective_attack_mastery(player);
     let mut attack_bonus_base = derived.attack_bonus + attack_mastery;
     let mut defensive_dualwielding = defensive_dualwielding_active(player, weapon_preset);
+    let mut offensive_dualwielding = offensive_dualwielding_active(player, weapon_preset);
+    if offensive_dualwielding {
+        defensive_dualwielding = false;
+    }
     let defense_mastery = effective_defense_mastery(player, weapon_preset)
         * if defensive_dualwielding { 2 } else { 1 };
     let defense_bonus_weapon =
@@ -1355,7 +1518,7 @@ pub fn build_combatant(
         + modifiers.damage_bonus_for_group(weapon_preset.group)
         + misc_modifiers.damage_bonus
         + misc_modifiers.all_roll_bonus;
-    if !is_ranged_weapon {
+    if !primary_is_ranged {
         strength_damage += armor_adjustments.heavy_armor_damage_bonus;
     }
     let mut max_hp =
@@ -1403,6 +1566,9 @@ pub fn build_combatant(
         unarmed_damage_bonus = 0;
         max_hp = preset.hp.max(1);
         threshold_of_pain = preset.top.max(1);
+        crit_min_roll = 20;
+        crit_min_roll_ranged = None;
+        crit_severity_bonus = 0;
         shield_name = None;
         shield_defense_bonus = 0;
         shield_dr = 0;
@@ -1412,6 +1578,7 @@ pub fn build_combatant(
         trauma_die_sides = 20;
         trauma_die_penetrating = false;
         defensive_dualwielding = false;
+        offensive_dualwielding = false;
     }
 
     let weapon_speed = if use_jab {
@@ -1433,6 +1600,135 @@ pub fn build_combatant(
         .map(DamageExprCache::new);
     let is_unarmed_weapon = weapon_preset.group == WeaponGroup::Unarmed;
     let is_small_weapon = matches!(weapon_preset.size, WeaponSize::Small);
+    let knockback_step = bump_knockback_step(
+        player.knockback_step.max(1),
+        modifiers.knockback_step_bumps,
+    );
+    let mut offhand_profile = None;
+    if offensive_dualwielding {
+        if let Some(offhand_id) = player.offhand_weapon_id {
+            if let Some(offhand_preset) = weapon_catalog.get(offhand_id) {
+                if offhand_preset.handedness == WeaponHandedness::OneHanded {
+                    let offhand_is_ranged = is_ranged_weapon(offhand_preset);
+                    let offhand_uses_projectiles = uses_projectiles(
+                        &offhand_preset.name,
+                        offhand_preset.ammunition.is_some(),
+                    );
+                    let (material_attack_bonus, material_damage_bonus) = material_bonuses(
+                        player.weapon_material_tier,
+                        player.projectile_material_tier,
+                        offhand_is_ranged,
+                        offhand_uses_projectiles,
+                    );
+                    let offhand_attack_bonus = derived.attack_bonus
+                        + attack_mastery
+                        + material_attack_bonus
+                        + modifiers.attack_bonus_for_weapon(offhand_id);
+                    let mut offhand_strength_damage = strength_damage_for_weapon(
+                        offhand_preset,
+                        strength_damage_base,
+                    ) + material_damage_bonus
+                        + damage_mastery
+                        + modifiers.damage_bonus_for_weapon(offhand_id)
+                        + modifiers.damage_bonus_for_group(offhand_preset.group)
+                        + misc_modifiers.damage_bonus
+                        + misc_modifiers.all_roll_bonus;
+                    if !offhand_is_ranged {
+                        offhand_strength_damage += armor_adjustments.heavy_armor_damage_bonus;
+                    }
+                    let offhand_reach = (offhand_preset.reach_ft.max(1.0)
+                        + modifiers.reach_bonus_for_group(offhand_preset.group) as f32)
+                        .max(1.0);
+                    let offhand_speed_mastery =
+                        effective_speed_mastery(player, offhand_preset) as f32;
+                    let offhand_min_speed = offhand_preset.size.min_speed();
+                    let offhand_speed = (offhand_preset.speed
+                        + speed_mod
+                        - offhand_speed_mastery
+                        + modifiers.weapon_speed_bonus_for_weapon(offhand_id) as f32)
+                        .max(offhand_min_speed);
+                    let offhand_damage_expr = offhand_preset.damage_expr.clone();
+                    let offhand_damage_expr_cache = DamageExprCache::new(&offhand_damage_expr);
+                    let offhand_shield_damage_expr = offhand_preset
+                        .shield_damage_expr
+                        .clone()
+                        .filter(|expr| expr != "-" && !expr.is_empty());
+                    let offhand_shield_damage_expr_cache =
+                        offhand_shield_damage_expr.as_deref().map(DamageExprCache::new);
+                    let offhand_range_bands = offhand_preset
+                        .range_bands_feet
+                        .or_else(|| sim::range_bands_for_weapon_name(&offhand_preset.name));
+                    let mut offhand_crit_min_roll =
+                        modifiers.crit_min_for_group(offhand_preset.group);
+                    if offhand_is_ranged {
+                        if let Some(ranged_min) =
+                            modifiers.crit_min_ranged_for_group(offhand_preset.group)
+                        {
+                            offhand_crit_min_roll = offhand_crit_min_roll.min(ranged_min);
+                        }
+                    }
+                    let offhand_crit_min_roll_ranged = if offhand_is_ranged {
+                        modifiers
+                            .crit_min_ranged_for_group(offhand_preset.group)
+                            .map(|value| value.min(offhand_crit_min_roll))
+                    } else {
+                        None
+                    };
+                    let offhand_crit_severity_bonus =
+                        modifiers.crit_severity_bonus_for_group(offhand_preset.group);
+                    let offhand_is_unarmed = offhand_preset.group == WeaponGroup::Unarmed;
+                    let offhand_is_small = matches!(offhand_preset.size, WeaponSize::Small);
+                    offhand_profile = Some(sim::OffhandProfile {
+                        attack_bonus: offhand_attack_bonus,
+                        strength_damage: offhand_strength_damage,
+                        weapon: WeaponProfile {
+                            name: offhand_preset.name.clone(),
+                            damage_expr: offhand_damage_expr,
+                            damage_expr_cache: offhand_damage_expr_cache,
+                            shield_damage_expr: offhand_shield_damage_expr,
+                            shield_damage_expr_cache: offhand_shield_damage_expr_cache,
+                            armor_penetration: offhand_preset.armor_pen,
+                            speed: offhand_speed,
+                            reach_ft: offhand_reach,
+                            range_bands_feet: offhand_range_bands,
+                            range_distance_multiplier: modifiers.range_distance_multiplier,
+                            two_hand_grip: false,
+                            use_jab: false,
+                            jab_special_expr: None,
+                            jab_special_expr_cache: None,
+                            has_weapon: true,
+                            defense_bonus_always: offhand_preset.defense_bonus_always,
+                            uses_projectiles: offhand_uses_projectiles,
+                            is_small_weapon: offhand_is_small,
+                            is_unarmed: offhand_is_unarmed,
+                            crit_min_roll: offhand_crit_min_roll,
+                            crit_min_roll_ranged: offhand_crit_min_roll_ranged,
+                            crit_severity_bonus: offhand_crit_severity_bonus,
+                        },
+                    });
+                }
+            }
+        }
+    }
+    if offhand_profile.is_none() {
+        offensive_dualwielding = false;
+    }
+    let mut sheet_modifiers = sim::ModifierStack::default();
+    if modifiers.defiant {
+        sheet_modifiers.add_i32(sim::StatIdI32::FlagDefiant, sim::ModifierOpI32::Set(1));
+    }
+    if modifiers.superior_defense {
+        sheet_modifiers.add_i32(
+            sim::StatIdI32::FlagSuperiorDefense,
+            sim::ModifierOpI32::Set(1),
+        );
+    }
+    if modifiers.edge_counter {
+        sheet_modifiers.add_i32(
+            sim::StatIdI32::FlagEdgeCounter,
+            sim::ModifierOpI32::Set(1),
+        );
+    }
     let sheet = CombatantSheet {
         name,
         offense: OffenseProfile {
@@ -1458,16 +1754,21 @@ pub fn build_combatant(
                 jab_special_expr_cache,
                 has_weapon,
                 defense_bonus_always: weapon_defense_always,
-                uses_projectiles,
+                uses_projectiles: primary_uses_projectiles,
                 is_small_weapon,
                 is_unarmed: is_unarmed_weapon,
+                crit_min_roll,
+                crit_min_roll_ranged,
+                crit_severity_bonus,
             },
+            offhand: offhand_profile,
         },
         defense: DefenseProfile {
             defense_mod,
             ranged_defense_mod,
             armor_dr,
             natural_dr,
+            knockback_step,
             armor_is_heavy,
             shield_name,
             shield_defense_bonus,
@@ -1488,7 +1789,9 @@ pub fn build_combatant(
         maneuvers: sim::ManeuverProfile {
             hold_at_bay: player.hold_at_bay,
             defensive_dualwielding,
+            offensive_dualwielding,
         },
+        modifiers: sheet_modifiers,
     };
 
     Combatant::new(sheet)
@@ -1530,6 +1833,7 @@ fn can_equip_shield(player: &PlayerConfig, weapon: &WeaponPreset) -> bool {
     weapon.handedness == WeaponHandedness::OneHanded
         && !player.two_hand_grip
         && !defensive_dualwielding_active(player, weapon)
+        && !offensive_dualwielding_active(player, weapon)
 }
 
 fn apply_shield_material_tier(shield: ShieldPreset, tier: i32) -> Shield {
@@ -1670,6 +1974,25 @@ mod tests {
             .get(id)
             .map(|weapon| weapon.name.clone())
             .unwrap_or_else(|| "Fist".to_string())
+    }
+
+    fn weapon_id_by_group(weapons: &WeaponCatalog, group: WeaponGroup) -> WeaponId {
+        weapons
+            .entries()
+            .iter()
+            .position(|weapon| weapon.group == group)
+            .and_then(|idx| weapons.id_from_index(idx))
+            .expect("No weapon found for weapon group")
+    }
+
+    fn weapon_id_by_group_ranged(weapons: &WeaponCatalog, group: WeaponGroup) -> WeaponId {
+        weapons
+            .entries()
+            .iter()
+            .enumerate()
+            .find(|(_, weapon)| weapon.group == group && is_ranged_weapon(weapon))
+            .and_then(|(idx, _)| weapons.id_from_index(idx))
+            .expect("No ranged weapon found for weapon group")
     }
 
     fn base_player(weapon_id: WeaponId) -> PlayerConfig {
@@ -2961,6 +3284,134 @@ mod tests {
             with_unbreakable.sheet.defense.armor_dr
                 - without_unbreakable.sheet.defense.armor_dr,
             1
+        );
+    }
+
+    #[test]
+    fn talent_stout_increases_knockback_step() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npc_presets = Catalog::new(Vec::new());
+        let weapon_id = one_handed_weapon_id(&weapons);
+        let mut player = base_player(weapon_id);
+        player.knockback_step = DEFAULT_KNOCKBACK_STEP;
+        add_talent(&mut player, "stout", None);
+        let combatant =
+            build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
+        assert_eq!(combatant.sheet.defense.knockback_step, 20);
+    }
+
+    #[test]
+    fn talent_sturdy_increases_knockback_step() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npc_presets = Catalog::new(Vec::new());
+        let weapon_id = one_handed_weapon_id(&weapons);
+        let mut player = base_player(weapon_id);
+        player.knockback_step = DEFAULT_KNOCKBACK_STEP;
+        add_talent(&mut player, "sturdy", None);
+        let combatant =
+            build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
+        assert_eq!(combatant.sheet.defense.knockback_step, 20);
+    }
+
+    #[test]
+    fn talent_armored_to_the_teeth_adds_heavy_armor_damage() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npc_presets = Catalog::new(Vec::new());
+        let weapon_id = one_handed_weapon_id(&weapons);
+        let (armor_id, _) = find_armor(&armor, |entry| entry.armor_type == ArmorType::Heavy);
+        let mut player = base_player(weapon_id);
+        player.armor_id = armor_id;
+        add_talent(&mut player, "armored_to_the_teeth", None);
+        let with_talent =
+            build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
+        let mut baseline = player.clone();
+        baseline.talents.clear();
+        let without_talent =
+            build_combatant(&baseline, &weapons, &armor, &shields, &npc_presets, &talents);
+        assert_eq!(
+            with_talent.sheet.offense.strength_damage
+                - without_talent.sheet.offense.strength_damage,
+            1
+        );
+    }
+
+    #[test]
+    fn knockback_step_respects_race_override_size() {
+        let races = crate::data::load_races("data/races.json").expect("Failed to load races");
+        let armeroci = races
+            .iter()
+            .find(|race| race.id == "armeroci")
+            .expect("Missing armeroci race");
+        let limmtrig = races
+            .iter()
+            .find(|race| race.id == "limmtrig")
+            .expect("Missing limmtrig race");
+        assert_eq!(knockback_step_for_race(armeroci), 10);
+        assert_eq!(knockback_step_for_race(limmtrig), 20);
+    }
+
+    #[test]
+    fn talent_improved_critical_lowers_crit_min() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npc_presets = Catalog::new(Vec::new());
+        let weapon_id = weapon_id_by_group(&weapons, WeaponGroup::Axes);
+        let mut player = base_player(weapon_id);
+        add_talent(&mut player, "improved_critical", Some("axes".to_string()));
+        let combatant = build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
+        assert_eq!(combatant.sheet.offense.weapon.crit_min_roll, 19);
+    }
+
+    #[test]
+    fn talent_critical_mastery_lowers_crit_min_further() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npc_presets = Catalog::new(Vec::new());
+        let weapon_id = weapon_id_by_group(&weapons, WeaponGroup::Axes);
+        let mut player = base_player(weapon_id);
+        player.level = 15;
+        add_talent(&mut player, "improved_critical", Some("axes".to_string()));
+        add_talent(&mut player, "critical_mastery", Some("axes".to_string()));
+        let combatant = build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
+        assert_eq!(combatant.sheet.offense.weapon.crit_min_roll, 18);
+    }
+
+    #[test]
+    fn talent_wounding_criticals_increases_severity() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npc_presets = Catalog::new(Vec::new());
+        let weapon_id = weapon_id_by_group(&weapons, WeaponGroup::Axes);
+        let mut player = base_player(weapon_id);
+        player.level = 11;
+        add_talent(&mut player, "improved_critical", Some("axes".to_string()));
+        add_talent(&mut player, "wounding_criticals", Some("axes".to_string()));
+        let combatant = build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
+        assert_eq!(combatant.sheet.offense.weapon.crit_severity_bonus, 3);
+    }
+
+    #[test]
+    fn talent_ranged_critical_mastery_lowers_ranged_crit_min() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npc_presets = Catalog::new(Vec::new());
+        let weapon_id = weapon_id_by_group_ranged(&weapons, WeaponGroup::Bows);
+        let mut player = base_player(weapon_id);
+        player.level = 15;
+        add_talent(&mut player, "improved_critical", Some("bows".to_string()));
+        add_talent(
+            &mut player,
+            "ranged_critical_mastery",
+            Some("bows".to_string()),
+        );
+        let combatant = build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
+        assert_eq!(combatant.sheet.offense.weapon.crit_min_roll, 18);
+        assert_eq!(
+            combatant.sheet.offense.weapon.crit_min_roll_ranged,
+            Some(18)
         );
     }
 }

@@ -195,6 +195,7 @@ pub enum TalentEffect {
     MediumArmorDrBonus { amount: i32 },
     MediumArmorDefensePenaltyReduction { amount: i32 },
     HeavyArmorDamageBonusFromDr { divisor: i32 },
+    HeavyArmorDamageBonus { amount: i32 },
     ShieldDefenseBonus { amount: i32 },
     ShieldCoverValueAdjustment { amount: i32 },
 }

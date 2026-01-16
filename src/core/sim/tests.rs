@@ -75,17 +75,22 @@
                     uses_projectiles,
                     is_small_weapon: false,
                     is_unarmed: false,
+                    crit_min_roll: 20,
+                    crit_min_roll_ranged: None,
+                    crit_severity_bonus: 0,
                 },
+                offhand: None,
             },
-            defense: DefenseProfile {
-                defense_mod,
-                ranged_defense_mod: 0,
-                armor_dr,
-                natural_dr: 0,
-                armor_is_heavy,
-                shield_name: None,
-                shield_defense_bonus: 0,
-                shield_dr: 0,
+        defense: DefenseProfile {
+            defense_mod,
+            ranged_defense_mod: 0,
+            armor_dr,
+            natural_dr: 0,
+            knockback_step: 15,
+            armor_is_heavy,
+            shield_name: None,
+            shield_defense_bonus: 0,
+            shield_dr: 0,
                 shield_cover_value: None,
                 shield_breakage: None,
             },
@@ -98,6 +103,7 @@
                 threshold_of_pain: 3,
             },
             maneuvers: ManeuverProfile::default(),
+            modifiers: ModifierStack::default(),
         };
         Combatant::new(sheet)
     }
@@ -300,6 +306,7 @@
             false,
             1.0,
             AttackMode::Normal,
+            WeaponSlot::Primary,
             0.0,
             None,
             &mut rng,
@@ -483,6 +490,7 @@
             false,
             1.0,
             AttackMode::HoldAtBay,
+            WeaponSlot::Primary,
             0.0,
             None,
             &mut rng,
@@ -542,6 +550,7 @@
             false,
             1.0,
             AttackMode::HoldAtBay,
+            WeaponSlot::Primary,
             0.0,
             None,
             &mut rng,
@@ -630,13 +639,18 @@
                     uses_projectiles: false,
                     is_small_weapon: false,
                     is_unarmed: false,
+                    crit_min_roll: 20,
+                    crit_min_roll_ranged: None,
+                    crit_severity_bonus: 0,
                 },
+                offhand: None,
             },
             defense: DefenseProfile {
                 ranged_defense_mod: 0,
                 defense_mod: 0,
                 armor_dr: 0,
                 natural_dr: 0,
+                knockback_step: 15,
                 armor_is_heavy: false,
                 shield_name: None,
                 shield_defense_bonus: 0,
@@ -653,6 +667,7 @@
                 threshold_of_pain: 0,
             },
             maneuvers: ManeuverProfile::default(),
+            modifiers: ModifierStack::default(),
         };
         let mut sim = SimState::new(SimConfig::new(1.0, 1.0));
         sim.combatants = [Combatant::new(sheet.clone()), Combatant::new(sheet)];
@@ -691,13 +706,18 @@
                     uses_projectiles: false,
                     is_small_weapon: false,
                     is_unarmed: false,
+                    crit_min_roll: 20,
+                    crit_min_roll_ranged: None,
+                    crit_severity_bonus: 0,
                 },
+                offhand: None,
             },
             defense: DefenseProfile {
                 ranged_defense_mod: 0,
                 defense_mod: 0,
                 armor_dr: 0,
                 natural_dr: 0,
+                knockback_step: 15,
                 armor_is_heavy: false,
                 shield_name: None,
                 shield_defense_bonus: 0,
@@ -714,6 +734,7 @@
                 threshold_of_pain: 0,
             },
             maneuvers: ManeuverProfile::default(),
+            modifiers: ModifierStack::default(),
         };
         let mut sim = SimState::new(SimConfig::new(1.0, 1.0));
         sim.combatants = [Combatant::new(sheet.clone()), Combatant::new(sheet)];
@@ -775,6 +796,7 @@
             false,
             1.0,
             AttackMode::Normal,
+            WeaponSlot::Primary,
             0.0,
             None,
             &mut rng,
@@ -834,6 +856,7 @@
             false,
             1.0,
             AttackMode::Normal,
+            WeaponSlot::Primary,
             0.0,
             None,
             &mut rng,
@@ -893,6 +916,7 @@
             false,
             1.0,
             AttackMode::Normal,
+            WeaponSlot::Primary,
             0.0,
             None,
             &mut rng,
@@ -952,6 +976,7 @@
             false,
             1.0,
             AttackMode::Normal,
+            WeaponSlot::Primary,
             0.0,
             None,
             &mut rng,
@@ -983,6 +1008,384 @@
     }
 
     #[test]
+    fn temporary_effects_apply_and_expire() {
+        let mut combatant = Combatant::default();
+        let mut effect = TemporaryEffect::new("test_buff", 2);
+        effect
+            .modifiers
+            .add_i32(StatIdI32::AttackBonus, ModifierOpI32::Add(5));
+        combatant.state.add_effect(effect);
+        let base = combatant.sheet.offense.attack_bonus;
+        assert_eq!(
+            combatant.apply_i32(StatIdI32::AttackBonus, base),
+            base + 5
+        );
+        combatant.state.tick_effects();
+        assert_eq!(
+            combatant.apply_i32(StatIdI32::AttackBonus, base),
+            base + 5
+        );
+        combatant.state.tick_effects();
+        assert_eq!(combatant.apply_i32(StatIdI32::AttackBonus, base), base);
+    }
+
+    #[test]
+    fn defiant_uses_lower_damage_roll_on_crit() {
+        let mut attacker = combatant_basic(
+            "Attacker".to_string(),
+            "Sword".to_string(),
+            20,
+            0,
+            0,
+            false,
+            0,
+            "1d6".to_string(),
+            0,
+            10.0,
+            1.0,
+            5.0,
+            false,
+            false,
+            None,
+            true,
+            false,
+            20,
+        );
+        attacker.sheet.offense.weapon.crit_min_roll = 1;
+        let mut defender = combatant_basic(
+            "Defender".to_string(),
+            "Shield".to_string(),
+            0,
+            0,
+            0,
+            false,
+            0,
+            "1d1".to_string(),
+            0,
+            10.0,
+            1.0,
+            5.0,
+            false,
+            false,
+            None,
+            true,
+            false,
+            20,
+        );
+        defender
+            .sheet
+            .modifiers
+            .add_i32(StatIdI32::FlagDefiant, ModifierOpI32::Set(1));
+        let mut baseline = defender.clone();
+        baseline
+            .sheet
+            .modifiers
+            .add_i32(StatIdI32::FlagDefiant, ModifierOpI32::Set(0));
+        let mut found = false;
+        for seed in 0..1000u64 {
+            let mut state = make_state(attacker.clone(), baseline.clone());
+            let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+            let baseline_outcome = resolve_attack(
+                &mut state.combatants,
+                0,
+                1,
+                0,
+                false,
+                1.0,
+                AttackMode::Normal,
+                WeaponSlot::Primary,
+                0.0,
+                None,
+                &mut rng,
+            );
+            let baseline_roll = baseline_outcome
+                .damage_breakdown
+                .as_ref()
+                .map(|detail| detail.rolled_damage)
+                .unwrap_or(0);
+            let mut state = make_state(attacker.clone(), defender.clone());
+            let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+            let defiant_outcome = resolve_attack(
+                &mut state.combatants,
+                0,
+                1,
+                0,
+                false,
+                1.0,
+                AttackMode::Normal,
+                WeaponSlot::Primary,
+                0.0,
+                None,
+                &mut rng,
+            );
+            let defiant_roll = defiant_outcome
+                .damage_breakdown
+                .as_ref()
+                .map(|detail| detail.rolled_damage)
+                .unwrap_or(0);
+            if defiant_roll < baseline_roll {
+                found = true;
+                break;
+            }
+        }
+        assert!(found, "defiant should lower rolled damage for some seeds");
+    }
+
+    #[test]
+    fn superior_defense_uses_upgraded_unarmed_counter_damage() {
+        let attacker = combatant_basic(
+            "Attacker".to_string(),
+            "Sword".to_string(),
+            0,
+            0,
+            0,
+            false,
+            0,
+            "1d1".to_string(),
+            0,
+            10.0,
+            1.0,
+            5.0,
+            false,
+            false,
+            None,
+            true,
+            false,
+            20,
+        );
+        let mut defender = combatant_basic(
+            "Defender".to_string(),
+            "Shield".to_string(),
+            10,
+            10,
+            0,
+            false,
+            0,
+            "1d1".to_string(),
+            0,
+            10.0,
+            3.0,
+            5.0,
+            false,
+            false,
+            None,
+            true,
+            false,
+            20,
+        );
+        defender
+            .sheet
+            .modifiers
+            .add_i32(StatIdI32::FlagSuperiorDefense, ModifierOpI32::Set(1));
+        let mut baseline = defender.clone();
+        baseline
+            .sheet
+            .modifiers
+            .add_i32(StatIdI32::FlagSuperiorDefense, ModifierOpI32::Set(0));
+        let mut found_threshold = false;
+        for seed in 0..2000u64 {
+            let mut state = make_state(attacker.clone(), baseline.clone());
+            let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+            let baseline_outcome = resolve_attack(
+                &mut state.combatants,
+                0,
+                1,
+                0,
+                false,
+                4.0,
+                AttackMode::Normal,
+                WeaponSlot::Primary,
+                0.0,
+                None,
+                &mut rng,
+            );
+            if baseline_outcome.counter_attack.is_some() {
+                continue;
+            }
+            let mut state = make_state(attacker.clone(), defender.clone());
+            let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+            let superior_outcome = resolve_attack(
+                &mut state.combatants,
+                0,
+                1,
+                0,
+                false,
+                4.0,
+                AttackMode::Normal,
+                WeaponSlot::Primary,
+                0.0,
+                None,
+                &mut rng,
+            );
+            if superior_outcome.counter_attack.is_some() {
+                found_threshold = true;
+                break;
+            }
+        }
+        assert!(found_threshold, "expected superior defense to trigger on 18");
+
+        let mut found_damage = false;
+        for seed in 0..2000u64 {
+            let mut state = make_state(attacker.clone(), baseline.clone());
+            let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+            let baseline_outcome = resolve_attack(
+                &mut state.combatants,
+                0,
+                1,
+                0,
+                false,
+                4.0,
+                AttackMode::Normal,
+                WeaponSlot::Primary,
+                0.0,
+                None,
+                &mut rng,
+            );
+            let baseline_damage = baseline_outcome
+                .counter_attack
+                .as_ref()
+                .and_then(|counter| counter.damage_breakdown.as_ref())
+                .map(|detail| detail.rolled_damage);
+            let Some(baseline_damage) = baseline_damage else {
+                continue;
+            };
+            let mut state = make_state(attacker.clone(), defender.clone());
+            let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+            let superior_outcome = resolve_attack(
+                &mut state.combatants,
+                0,
+                1,
+                0,
+                false,
+                4.0,
+                AttackMode::Normal,
+                WeaponSlot::Primary,
+                0.0,
+                None,
+                &mut rng,
+            );
+            let superior_damage = superior_outcome
+                .counter_attack
+                .as_ref()
+                .and_then(|counter| counter.damage_breakdown.as_ref())
+                .map(|detail| detail.rolled_damage);
+            let Some(superior_damage) = superior_damage else {
+                continue;
+            };
+            if superior_damage == baseline_damage + 4 {
+                found_damage = true;
+                break;
+            }
+        }
+        assert!(found_damage, "expected superior defense to add 4 to counter damage");
+    }
+
+    #[test]
+    fn edge_counter_forces_critical_on_perfect_defense_riposte() {
+        let attacker = combatant_basic(
+            "Attacker".to_string(),
+            "Sword".to_string(),
+            0,
+            0,
+            0,
+            false,
+            0,
+            "1d1".to_string(),
+            0,
+            10.0,
+            1.0,
+            5.0,
+            false,
+            false,
+            None,
+            true,
+            false,
+            20,
+        );
+        let mut defender = combatant_basic(
+            "Defender".to_string(),
+            "Shield".to_string(),
+            0,
+            10,
+            0,
+            false,
+            0,
+            "1d1".to_string(),
+            0,
+            10.0,
+            10.0,
+            5.0,
+            false,
+            false,
+            None,
+            true,
+            false,
+            20,
+        );
+        defender
+            .sheet
+            .modifiers
+            .add_i32(StatIdI32::FlagEdgeCounter, ModifierOpI32::Set(1));
+        let mut baseline = defender.clone();
+        baseline
+            .sheet
+            .modifiers
+            .add_i32(StatIdI32::FlagEdgeCounter, ModifierOpI32::Set(0));
+        let mut found = false;
+        for seed in 0..2000u64 {
+            let mut state = make_state(attacker.clone(), baseline.clone());
+            let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+            let baseline_outcome = resolve_attack(
+                &mut state.combatants,
+                0,
+                1,
+                0,
+                false,
+                6.0,
+                AttackMode::Normal,
+                WeaponSlot::Primary,
+                0.0,
+                None,
+                &mut rng,
+            );
+            let Some(counter) = baseline_outcome.counter_attack.as_ref() else {
+                continue;
+            };
+            if !counter.hit {
+                continue;
+            }
+            if counter.critical.is_some() {
+                continue;
+            }
+            let mut state = make_state(attacker.clone(), defender.clone());
+            let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+            let edge_outcome = resolve_attack(
+                &mut state.combatants,
+                0,
+                1,
+                0,
+                false,
+                6.0,
+                AttackMode::Normal,
+                WeaponSlot::Primary,
+                0.0,
+                None,
+                &mut rng,
+            );
+            let is_critical = edge_outcome
+                .counter_attack
+                .as_ref()
+                .and_then(|counter| counter.critical.as_ref())
+                .is_some();
+            if is_critical {
+                found = true;
+                break;
+            }
+        }
+        assert!(found, "expected edge counter to force a critical riposte");
+    }
+
+    #[test]
     fn two_hand_grip_bonus_ready_on_attack_timer() {
         let mut combatant = combatant_basic(
             "Attacker".to_string(),
@@ -1006,7 +1409,7 @@
         );
         assert!(combatant.state.defense_plus_four_ready);
 
-        combatant.state.next_attack_time = Some(2.0);
+        combatant.state.next_attack_time_primary = Some(2.0);
         combatant
             .state
             .refresh_defense_plus_four_ready(&combatant.sheet, 1.0);
@@ -1046,7 +1449,7 @@
             .refresh_defense_plus_four_ready(&combatant.sheet, 0.0);
         assert!(combatant.state.defense_plus_four_ready);
 
-        combatant.state.next_attack_time = Some(2.0);
+        combatant.state.next_attack_time_primary = Some(2.0);
         combatant
             .state
             .refresh_defense_plus_four_ready(&combatant.sheet, 1.0);
@@ -1110,6 +1513,7 @@
             false,
             1.0,
             AttackMode::Normal,
+            WeaponSlot::Primary,
             0.0,
             None,
             &mut rng,
@@ -1119,17 +1523,106 @@
 
     #[test]
     fn ranged_stationary_uses_d12p_defense() {
-        assert_eq!(defense_die_sides(true, false, false, false), 12);
+        assert_eq!(defense_die_sides(true, false, false, false, false), 12);
     }
 
     #[test]
     fn ranged_moving_uses_d20p_defense() {
-        assert_eq!(defense_die_sides(true, true, false, false), 20);
+        assert_eq!(defense_die_sides(true, true, false, false, false), 20);
     }
 
     #[test]
     fn ranged_stationary_with_shield_uses_d20p_defense() {
-        assert_eq!(defense_die_sides(true, false, true, false), 20);
+        assert_eq!(defense_die_sides(true, false, true, false, false), 20);
+    }
+
+    #[test]
+    fn offensive_dualwielding_uses_d10p_defense() {
+        assert_eq!(defense_die_sides(false, false, false, false, true), 10);
+    }
+
+    #[test]
+    fn offhand_attack_applies_damage_penalty() {
+        let mut attacker = combatant_basic(
+            "Attacker".to_string(),
+            "Short Sword".to_string(),
+            100,
+            0,
+            0,
+            false,
+            0,
+            "1d1".to_string(),
+            0,
+            10.0,
+            1.0,
+            5.0,
+            false,
+            false,
+            None,
+            true,
+            false,
+            20,
+        );
+        let mut offhand_weapon = attacker.sheet.offense.weapon.clone();
+        offhand_weapon.name = "Offhand".to_string();
+        attacker.sheet.offense.offhand = Some(OffhandProfile {
+            attack_bonus: attacker.sheet.offense.attack_bonus,
+            strength_damage: attacker.sheet.offense.strength_damage,
+            weapon: offhand_weapon,
+        });
+        attacker.sheet.maneuvers.offensive_dualwielding = true;
+        let defender = combatant_basic(
+            "Defender".to_string(),
+            "Fist".to_string(),
+            0,
+            0,
+            0,
+            false,
+            0,
+            "1d1".to_string(),
+            0,
+            10.0,
+            1.0,
+            5.0,
+            false,
+            false,
+            None,
+            true,
+            false,
+            20,
+        );
+        let mut state_primary = make_state(attacker.clone(), defender.clone());
+        let mut rng = FixedRng(0);
+        let primary = resolve_attack(
+            &mut state_primary.combatants,
+            0,
+            1,
+            0,
+            false,
+            1.0,
+            AttackMode::Normal,
+            WeaponSlot::Primary,
+            0.0,
+            None,
+            &mut rng,
+        );
+        let mut state_secondary = make_state(attacker, defender);
+        let mut rng = FixedRng(0);
+        let secondary = resolve_attack(
+            &mut state_secondary.combatants,
+            0,
+            1,
+            0,
+            false,
+            1.0,
+            AttackMode::Normal,
+            WeaponSlot::Secondary,
+            0.0,
+            None,
+            &mut rng,
+        );
+        assert_eq!(primary.damage, 1);
+        assert_eq!(secondary.damage, 0);
     }
 
     #[test]
@@ -1212,6 +1705,9 @@
             uses_projectiles: false,
             is_small_weapon: false,
             is_unarmed: false,
+            crit_min_roll: 20,
+            crit_min_roll_ranged: None,
+            crit_severity_bonus: 0,
         };
         let melee_weapon = WeaponProfile {
             name: "Sword".to_string(),
@@ -1233,6 +1729,9 @@
             uses_projectiles: false,
             is_small_weapon: false,
             is_unarmed: false,
+            crit_min_roll: 20,
+            crit_min_roll_ranged: None,
+            crit_severity_bonus: 0,
         };
         let attacker = Combatant::new(CombatantSheet {
             name: "Thrower".to_string(),
@@ -1243,12 +1742,14 @@
                 strength_damage_base: 0,
                 unarmed_damage_bonus: 0,
                 weapon: throwing_axe,
+                offhand: None,
             },
             defense: DefenseProfile {
                 ranged_defense_mod: 0,
                 defense_mod: 0,
                 armor_dr: 0,
                 natural_dr: 0,
+                knockback_step: 15,
                 armor_is_heavy: false,
                 shield_name: None,
                 shield_defense_bonus: 0,
@@ -1265,6 +1766,7 @@
                 threshold_of_pain: 0,
             },
             maneuvers: ManeuverProfile::default(),
+            modifiers: ModifierStack::default(),
         });
         let defender = Combatant::new(CombatantSheet {
             name: "Defender".to_string(),
@@ -1275,12 +1777,14 @@
                 strength_damage_base: 0,
                 unarmed_damage_bonus: 0,
                 weapon: melee_weapon,
+                offhand: None,
             },
             defense: DefenseProfile {
                 ranged_defense_mod: 0,
                 defense_mod: 0,
                 armor_dr: 0,
                 natural_dr: 0,
+                knockback_step: 15,
                 armor_is_heavy: false,
                 shield_name: None,
                 shield_defense_bonus: 0,
@@ -1297,6 +1801,7 @@
                 threshold_of_pain: 0,
             },
             maneuvers: ManeuverProfile::default(),
+            modifiers: ModifierStack::default(),
         });
 
         let mut sim = SimState::new(SimConfig::new(40.0, 1.0));
@@ -1431,6 +1936,7 @@
             false,
             1.0,
             AttackMode::Normal,
+            WeaponSlot::Primary,
             0.0,
             None,
             &mut rng,
@@ -1446,6 +1952,7 @@
             false,
             1.0,
             AttackMode::Normal,
+            WeaponSlot::Primary,
             0.0,
             None,
             &mut rng,

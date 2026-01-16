@@ -124,22 +124,22 @@ fn ranged_bands_for_weapon(weapon: &WeaponProfile) -> Option<RangeBands> {
         .or_else(|| ranged_bands_for_weapon_name(&weapon.name))
 }
 
-pub(crate) fn range_modifier_for_weapon(weapon: &WeaponProfile, distance: f32) -> Option<i32> {
+pub(crate) fn range_modifier_for_weapon_with_scale(
+    weapon: &WeaponProfile,
+    distance: f32,
+    scale: f32,
+) -> Option<i32> {
     let bands = ranged_bands_for_weapon(weapon)?;
     let max_range = bands
         .band_8
         .max(bands.band_6)
         .max(bands.band_4)
         .max(bands.band_0);
-    if max_range > 0.0 && distance > max_range {
+    let scale = if scale > 0.0 { scale } else { 1.0 };
+    let effective_distance = distance * scale;
+    if max_range > 0.0 && effective_distance > max_range {
         return None;
     }
-    let scale = if weapon.range_distance_multiplier > 0.0 {
-        weapon.range_distance_multiplier
-    } else {
-        1.0
-    };
-    let effective_distance = distance * scale;
     if effective_distance <= bands.band_0 {
         Some(0)
     } else if effective_distance <= bands.band_4 {
@@ -152,6 +152,7 @@ pub(crate) fn range_modifier_for_weapon(weapon: &WeaponProfile, distance: f32) -
         None
     }
 }
+
 
 pub fn max_range_for_bands(bands: [f32; 4]) -> f32 {
     let bands = RangeBands::from_array(bands);
