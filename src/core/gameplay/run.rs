@@ -91,6 +91,7 @@ pub fn run_next_fight<B: CombatantBuilder>(
     sim_config: SimConfig,
     max_seconds: u32,
     rest_days: u32,
+    resting: bool,
     builder: &B,
     rng: &mut SimRng,
 ) -> RunOutcome {
@@ -134,7 +135,7 @@ pub fn run_next_fight<B: CombatantBuilder>(
         state.wounds.append(&mut new_wounds);
     }
     let fast_healer = player_has_talent(&state.player, "fast_healer");
-    heal_wounds(&mut state.wounds, rest_days, fast_healer);
+    heal_wounds(&mut state.wounds, rest_days, fast_healer, resting);
 
     let reward = if won {
         let loot = loot_table.roll(enemy_profile.level, rng);
@@ -193,8 +194,11 @@ fn player_has_talent(player: &PlayerProfile, id: &str) -> bool {
     player.talents.iter().any(|talent| talent.id == id)
 }
 
-fn heal_wounds(wounds: &mut Vec<Wound>, rest_days: u32, fast_healer: bool) {
-    let rest_quarter_days = rest_days.saturating_mul(4);
+fn heal_wounds(wounds: &mut Vec<Wound>, rest_days: u32, fast_healer: bool, resting: bool) {
+    let mut rest_quarter_days = rest_days.saturating_mul(4);
+    if !resting {
+        rest_quarter_days /= 2;
+    }
     for wound in wounds.iter_mut() {
         if wound.damage == 0 {
             continue;
@@ -321,12 +325,29 @@ mod tests {
             healing_progress_quarter_days: 0,
         }];
 
-        heal_wounds(&mut wounds, 1, false);
+        heal_wounds(&mut wounds, 1, false, true);
         assert_eq!(
             wounds,
             vec![Wound {
                 damage: 6,
                 healing_progress_quarter_days: 4
+            }]
+        );
+    }
+
+    #[test]
+    fn halves_healing_without_rest() {
+        let mut wounds = vec![Wound {
+            damage: 7,
+            healing_progress_quarter_days: 0,
+        }];
+
+        heal_wounds(&mut wounds, 1, false, false);
+        assert_eq!(
+            wounds,
+            vec![Wound {
+                damage: 6,
+                healing_progress_quarter_days: 2
             }]
         );
     }
@@ -339,8 +360,8 @@ mod tests {
         }];
         let mut fast = normal.clone();
 
-        heal_wounds(&mut normal, 1, false);
-        heal_wounds(&mut fast, 1, true);
+        heal_wounds(&mut normal, 1, false, true);
+        heal_wounds(&mut fast, 1, true, true);
 
         assert_eq!(
             normal,

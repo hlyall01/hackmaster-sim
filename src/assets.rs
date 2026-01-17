@@ -6,12 +6,14 @@ use eframe::egui::IconData;
 pub enum AppIcon {
     SimGui,
     WeaponPlot,
+    Autobattler,
 }
 
 pub fn app_icon(icon: AppIcon) -> Option<Arc<IconData>> {
     let bytes: &[u8] = match icon {
         AppIcon::SimGui => include_bytes!("../assets/icon_sim_gui.png"),
         AppIcon::WeaponPlot => include_bytes!("../assets/icon_weapon_plot.png"),
+        AppIcon::Autobattler => include_bytes!("../assets/icon_autobattler.png"),
     };
     match eframe::icon_data::from_png_bytes(bytes) {
         Ok(icon) => Some(Arc::new(icon)),

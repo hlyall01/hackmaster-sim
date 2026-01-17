@@ -882,6 +882,10 @@ fn lookup_looks(score: u8) -> LooksMods {
         .unwrap_or_default()
 }
 
+pub fn looks_charisma_adjustment(score: u8) -> i32 {
+    lookup_looks(score).charisma
+}
+
 fn lookup_cha(score: u8) -> ChaMods {
     CHA_TABLE
         .iter()
