@@ -227,7 +227,7 @@ pub enum ArmorType {
 
 #[derive(Clone, Debug)]
 pub struct Armor {
-    pub name: &'static str,
+    pub name: String,
     pub region: ArmorRegion,
     pub damage_reduction: i32,
     pub defense_adj: i32,
@@ -239,7 +239,7 @@ pub struct Armor {
 
 #[derive(Clone, Debug)]
 pub struct Shield {
-    pub name: &'static str,
+    pub name: String,
     pub defense_bonus: i32,
     pub dr: i32,
     pub cover_value: i32,
@@ -315,7 +315,7 @@ pub enum MaterialKind {
 #[derive(Clone, Debug)]
 pub struct Material {
     pub tier: i32,
-    pub name: &'static str,
+    pub name: String,
     pub weight_mult: f32,
     pub kind: MaterialKind,
 }
@@ -446,7 +446,7 @@ impl Character {
             total += w.reach_ft; // placeholder until weapon weights are wired
         }
         if let Some(s) = self.equipment.shield.as_ref() {
-            total += match s.name {
+            total += match s.name.as_str() {
                 "Buckler" => 2.0,
                 "Small Shield" => 3.0,
                 "Medium Shield" => 6.0,
@@ -1139,7 +1139,7 @@ mod tests {
             charisma: 10,
         };
         let armor = Armor {
-            name: "Test Armor",
+            name: "Test Armor".to_string(),
             region: ArmorRegion::Northern,
             damage_reduction: 5,
             defense_adj: -5,

@@ -1941,11 +1941,11 @@ fn fighter_preset_from_player(
         .unwrap_or_else(|| "Fist".to_string());
     let armor = armor_catalog
         .get(player.armor_id)
-        .and_then(|entry| entry.armor.as_ref().map(|armor| armor.name.to_string()))
+        .and_then(|entry| entry.armor.as_ref().map(|armor| armor.name.clone()))
         .unwrap_or_else(|| "None".to_string());
     let shield = shield_catalog
         .get(player.shield_id)
-        .and_then(|entry| entry.shield.as_ref().map(|shield| shield.name.to_string()))
+        .and_then(|entry| entry.shield.as_ref().map(|shield| shield.name.clone()))
         .unwrap_or_else(|| "None".to_string());
     let offhand_weapon = player
         .offhand_weapon_id

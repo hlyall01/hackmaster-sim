@@ -17,6 +17,7 @@ use crate::sim::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 pub type WeaponCatalog = Catalog<WeaponTag, WeaponPreset>;
 pub type ArmorCatalog = Catalog<ArmorTag, ArmorEntry>;
@@ -758,14 +759,6 @@ pub fn evaluate_talent_requirements(
     failures
 }
 
-fn weapon_id_by_name(catalog: &WeaponCatalog, name: &str) -> Option<WeaponId> {
-    catalog
-        .entries()
-        .iter()
-        .position(|weapon| weapon.name.eq_ignore_ascii_case(name))
-        .and_then(|idx| catalog.id_from_index(idx))
-}
-
 fn weapon_group_from_str(value: &str) -> Option<WeaponGroup> {
     match value.trim().to_ascii_lowercase().as_str() {
         "unarmed" => Some(WeaponGroup::Unarmed),
@@ -807,6 +800,17 @@ fn resolve_talent_modifiers(
         stats: &stats,
         talents: &player.talents,
     };
+    let mut weapon_id_lookup: HashMap<String, WeaponId> = HashMap::new();
+    for (idx, weapon) in weapon_catalog.entries().iter().enumerate() {
+        if let Some(id) = weapon_catalog.id_from_index(idx) {
+            weapon_id_lookup.insert(weapon.name.to_ascii_lowercase(), id);
+        }
+    }
+    let weapon_id_by_name_cached = |name: &str| {
+        weapon_id_lookup
+            .get(&name.to_ascii_lowercase())
+            .copied()
+    };
     for selection in &player.talents {
         let Some(spec) = find_talent(talent_catalog, &selection.id) else {
             continue;
@@ -837,7 +841,7 @@ fn resolve_talent_modifiers(
                 }
                 TalentEffect::AttackBonusWeapon { amount } => {
                     if let Some(weapon_name) = selection.weapon.as_deref() {
-                        if let Some(weapon_id) = weapon_id_by_name(weapon_catalog, weapon_name) {
+                        if let Some(weapon_id) = weapon_id_by_name_cached(weapon_name) {
                             let entry =
                                 modifiers.attack_bonus_by_weapon.entry(weapon_id).or_insert(0);
                             *entry += amount * rank;
@@ -846,7 +850,7 @@ fn resolve_talent_modifiers(
                 }
                 TalentEffect::DamageBonusWeapon { amount } => {
                     if let Some(weapon_name) = selection.weapon.as_deref() {
-                        if let Some(weapon_id) = weapon_id_by_name(weapon_catalog, weapon_name) {
+                        if let Some(weapon_id) = weapon_id_by_name_cached(weapon_name) {
                             let entry =
                                 modifiers.damage_bonus_by_weapon.entry(weapon_id).or_insert(0);
                             *entry += amount * rank;
@@ -865,7 +869,7 @@ fn resolve_talent_modifiers(
                 }
                 TalentEffect::DefenseBonusWeapon { amount } => {
                     if let Some(weapon_name) = selection.weapon.as_deref() {
-                        if let Some(weapon_id) = weapon_id_by_name(weapon_catalog, weapon_name) {
+                        if let Some(weapon_id) = weapon_id_by_name_cached(weapon_name) {
                             let entry = modifiers
                                 .defense_bonus_by_weapon
                                 .entry(weapon_id)
@@ -915,7 +919,7 @@ fn resolve_talent_modifiers(
                         }
                         player.weapon_id
                     } else if let Some(weapon_name) = selection.weapon.as_deref() {
-                        let Some(weapon_id) = weapon_id_by_name(weapon_catalog, weapon_name) else {
+                        let Some(weapon_id) = weapon_id_by_name_cached(weapon_name) else {
                             continue;
                         };
                         weapon_id
@@ -936,7 +940,7 @@ fn resolve_talent_modifiers(
                 }
                 TalentEffect::WeaponReachBonus { amount } => {
                     if let Some(weapon_name) = selection.weapon.as_deref() {
-                        if let Some(weapon_id) = weapon_id_by_name(weapon_catalog, weapon_name) {
+                        if let Some(weapon_id) = weapon_id_by_name_cached(weapon_name) {
                             if let Some(weapon) = weapon_catalog.get(weapon_id) {
                                 let entry = modifiers
                                     .reach_bonus_by_group
@@ -1600,7 +1604,7 @@ pub fn build_combatant(
             ((threshold_of_pain as f32) * modifiers.threshold_of_pain_multiplier).ceil() as i32;
         threshold_of_pain = threshold_of_pain.max(1);
     }
-    let mut shield_name = shield_data.map(|shield| shield.name.to_string());
+    let mut shield_name = shield_data.map(|shield| shield.name.clone());
     let mut shield_defense_bonus = shield_data.map(|shield| shield.defense_bonus).unwrap_or(0)
         + modifiers.shield_defense_bonus;
     let mut shield_dr = shield_data.map(|shield| shield.dr).unwrap_or(0);
@@ -1746,7 +1750,7 @@ pub fn build_combatant(
                     offhand_profile = Some(sim::OffhandProfile {
                         attack_bonus: offhand_attack_bonus,
                         strength_damage: offhand_strength_damage,
-                        weapon: WeaponProfile {
+                        weapon: Arc::new(WeaponProfile {
                             name: offhand_preset.name.clone(),
                             damage_expr: offhand_damage_expr,
                             damage_expr_cache: offhand_damage_expr_cache,
@@ -1769,7 +1773,7 @@ pub fn build_combatant(
                             crit_min_roll: offhand_crit_min_roll,
                             crit_min_roll_ranged: offhand_crit_min_roll_ranged,
                             crit_severity_bonus: offhand_crit_severity_bonus,
-                        },
+                        }),
                     });
                 }
             }
@@ -1802,7 +1806,7 @@ pub fn build_combatant(
             strength_damage,
             strength_damage_base,
             unarmed_damage_bonus,
-            weapon: WeaponProfile {
+            weapon: Arc::new(WeaponProfile {
                 name: weapon_name,
                 damage_expr: weapon_damage,
                 damage_expr_cache,
@@ -1825,7 +1829,7 @@ pub fn build_combatant(
                 crit_min_roll,
                 crit_min_roll_ranged,
                 crit_severity_bonus,
-            },
+            }),
             offhand: offhand_profile,
         },
         defense: DefenseProfile {
@@ -1900,10 +1904,6 @@ pub fn stop_distance_for_players(
 }
 
 
-fn leak_str(value: String) -> &'static str {
-    Box::leak(value.into_boxed_str())
-}
-
 fn can_equip_shield(player: &PlayerConfig, weapon: &WeaponPreset) -> bool {
     weapon.handedness == WeaponHandedness::OneHanded
         && !player.two_hand_grip
@@ -1927,7 +1927,7 @@ fn apply_shield_material_tier(shield: ShieldPreset, tier: i32) -> Shield {
         ];
     }
     Shield {
-        name: leak_str(shield.name),
+        name: shield.name,
         defense_bonus,
         dr,
         cover_value: shield.cover_value,
@@ -2516,7 +2516,7 @@ mod tests {
     #[test]
     fn armor_material_increases_dr_and_reduces_penalty() {
         let armor = Armor {
-            name: "Test",
+            name: "Test".to_string(),
             region: character::ArmorRegion::Northern,
             damage_reduction: 4,
             defense_adj: -2,

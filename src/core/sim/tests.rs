@@ -10,6 +10,7 @@
     };
     use crate::core::sim::DamageDie;
     use rand::SeedableRng;
+    use std::sync::Arc;
     use std::time::{Duration, Instant};
 
     fn combatant_basic(
@@ -56,7 +57,7 @@
                 strength_damage,
                 strength_damage_base: strength_damage,
                 unarmed_damage_bonus: 0,
-                weapon: WeaponProfile {
+                weapon: Arc::new(WeaponProfile {
                     name: weapon_name,
                     damage_expr,
                     damage_expr_cache,
@@ -79,7 +80,7 @@
                     crit_min_roll: 20,
                     crit_min_roll_ranged: None,
                     crit_severity_bonus: 0,
-                },
+                }),
                 offhand: None,
             },
         defense: DefenseProfile {
@@ -620,7 +621,7 @@
                 strength_damage: 0,
                 strength_damage_base: 0,
                 unarmed_damage_bonus: 0,
-                weapon: WeaponProfile {
+                weapon: Arc::new(WeaponProfile {
                     name: "Test Blade".to_string(),
                     damage_expr: "1d1".to_string(),
                     damage_expr_cache: DamageExprCache::new("1d1"),
@@ -643,7 +644,7 @@
                     crit_min_roll: 20,
                     crit_min_roll_ranged: None,
                     crit_severity_bonus: 0,
-                },
+                }),
                 offhand: None,
             },
             defense: DefenseProfile {
@@ -699,14 +700,16 @@
             false,
             20,
         );
-        attacker.sheet.offense.weapon.crit_min_roll = 21;
-        let mut offhand_weapon = attacker.sheet.offense.weapon.clone();
+        let mut weapon = attacker.sheet.offense.weapon.as_ref().clone();
+        weapon.crit_min_roll = 21;
+        attacker.sheet.offense.weapon = Arc::new(weapon);
+        let mut offhand_weapon = attacker.sheet.offense.weapon.as_ref().clone();
         offhand_weapon.name = "Offhand".to_string();
         offhand_weapon.speed = 6.0;
         attacker.sheet.offense.offhand = Some(OffhandProfile {
             attack_bonus: attacker.sheet.offense.attack_bonus,
             strength_damage: attacker.sheet.offense.strength_damage,
-            weapon: offhand_weapon,
+            weapon: Arc::new(offhand_weapon),
         });
         attacker.sheet.maneuvers.offensive_dualwielding = true;
 
@@ -748,7 +751,7 @@
                 strength_damage: 0,
                 strength_damage_base: 0,
                 unarmed_damage_bonus: 0,
-                weapon: WeaponProfile {
+                weapon: Arc::new(WeaponProfile {
                     name: "Test Blade".to_string(),
                     damage_expr: "30".to_string(),
                     damage_expr_cache: DamageExprCache::new("30"),
@@ -771,7 +774,7 @@
                     crit_min_roll: 20,
                     crit_min_roll_ranged: None,
                     crit_severity_bonus: 0,
-                },
+                }),
                 offhand: None,
             },
             defense: DefenseProfile {
@@ -1113,7 +1116,9 @@
             false,
             20,
         );
-        attacker.sheet.offense.weapon.crit_min_roll = 1;
+        let mut weapon = attacker.sheet.offense.weapon.as_ref().clone();
+        weapon.crit_min_roll = 1;
+        attacker.sheet.offense.weapon = Arc::new(weapon);
         let mut defender = combatant_basic(
             "Defender".to_string(),
             "Shield".to_string(),
@@ -1625,12 +1630,12 @@
             false,
             20,
         );
-        let mut offhand_weapon = attacker.sheet.offense.weapon.clone();
+        let mut offhand_weapon = attacker.sheet.offense.weapon.as_ref().clone();
         offhand_weapon.name = "Offhand".to_string();
         attacker.sheet.offense.offhand = Some(OffhandProfile {
             attack_bonus: attacker.sheet.offense.attack_bonus,
             strength_damage: attacker.sheet.offense.strength_damage,
-            weapon: offhand_weapon,
+            weapon: Arc::new(offhand_weapon),
         });
         attacker.sheet.maneuvers.offensive_dualwielding = true;
         let defender = combatant_basic(
@@ -1747,7 +1752,7 @@
 
     #[test]
     fn throwing_axe_switches_to_melee_at_close_range() {
-        let throwing_axe = WeaponProfile {
+        let throwing_axe = Arc::new(WeaponProfile {
             name: "Throwing axe".to_string(),
             damage_expr: "1d1".to_string(),
             damage_expr_cache: DamageExprCache::new("1d1"),
@@ -1770,8 +1775,8 @@
             crit_min_roll: 20,
             crit_min_roll_ranged: None,
             crit_severity_bonus: 0,
-        };
-        let melee_weapon = WeaponProfile {
+        });
+        let melee_weapon = Arc::new(WeaponProfile {
             name: "Sword".to_string(),
             damage_expr: "1d1".to_string(),
             damage_expr_cache: DamageExprCache::new("1d1"),
@@ -1794,7 +1799,7 @@
             crit_min_roll: 20,
             crit_min_roll_ranged: None,
             crit_severity_bonus: 0,
-        };
+        });
         let attacker = Combatant::new(CombatantSheet {
             name: "Thrower".to_string(),
             offense: OffenseProfile {
@@ -1906,7 +1911,7 @@
 
     #[test]
     fn throwing_axe_cooldown_resets_on_melee_engagement() {
-        let throwing_axe = WeaponProfile {
+        let throwing_axe = Arc::new(WeaponProfile {
             name: "Throwing axe".to_string(),
             damage_expr: "1d1".to_string(),
             damage_expr_cache: DamageExprCache::new("1d1"),
@@ -1929,8 +1934,8 @@
             crit_min_roll: 20,
             crit_min_roll_ranged: None,
             crit_severity_bonus: 0,
-        };
-        let melee_weapon = WeaponProfile {
+        });
+        let melee_weapon = Arc::new(WeaponProfile {
             name: "Sword".to_string(),
             damage_expr: "1d1".to_string(),
             damage_expr_cache: DamageExprCache::new("1d1"),
@@ -1953,7 +1958,7 @@
             crit_min_roll: 20,
             crit_min_roll_ranged: None,
             crit_severity_bonus: 0,
-        };
+        });
         let attacker = Combatant::new(CombatantSheet {
             name: "Thrower".to_string(),
             offense: OffenseProfile {

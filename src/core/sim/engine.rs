@@ -72,7 +72,6 @@ impl SimState {
         self.done = false;
         self.last_event = None;
         self.combat_events.clear();
-        self.rng = SimRng::default();
         for combatant in &mut self.combatants {
             combatant.reset_state();
         }
@@ -82,9 +81,7 @@ impl SimState {
 
     #[allow(dead_code)]
     pub fn reset_preserve_rng(&mut self) {
-        let rng = self.rng.clone();
         self.reset();
-        self.rng = rng;
     }
 
     pub fn reset_with_combatants(&mut self, combatants: [Combatant; 2]) {
@@ -150,12 +147,12 @@ impl SimState {
         let max_range_a = max_range_cached(
             &mut self.combatants[0].state,
             WeaponSlot::Primary,
-            &weapon_a,
+            weapon_a.as_ref(),
         );
         let max_range_b = max_range_cached(
             &mut self.combatants[1].state,
             WeaponSlot::Primary,
-            &weapon_b,
+            weapon_b.as_ref(),
         );
         let ranged_a = max_range_a.is_some();
         let ranged_b = max_range_b.is_some();
@@ -421,7 +418,7 @@ impl SimState {
             let max_range = max_range_cached(
                 &mut self.combatants[attacker_idx].state,
                 WeaponSlot::Primary,
-                weapon,
+                weapon.as_ref(),
             );
             let has_range = max_range.is_some();
             let attacker_reach = weapon.reach_ft.max(1.0);
@@ -449,7 +446,7 @@ impl SimState {
                     StatIdF32::RangeDistanceMultiplier,
                     weapon.range_distance_multiplier,
                 );
-                range_modifier_for_weapon_with_scale(weapon, distance, range_scale)
+                range_modifier_for_weapon_with_scale(weapon.as_ref(), distance, range_scale)
             } else {
                 None
             };
@@ -605,7 +602,7 @@ impl SimState {
                 let max_range = max_range_cached(
                     &mut self.combatants[attacker_idx].state,
                     WeaponSlot::Secondary,
-                    weapon,
+                    weapon.as_ref(),
                 );
                 let has_range = max_range.is_some();
                 let attacker_reach = weapon.reach_ft.max(1.0);
@@ -622,7 +619,7 @@ impl SimState {
                         StatIdF32::RangeDistanceMultiplier,
                         weapon.range_distance_multiplier,
                     );
-                    range_modifier_for_weapon_with_scale(weapon, distance, range_scale)
+                    range_modifier_for_weapon_with_scale(weapon.as_ref(), distance, range_scale)
                 } else {
                     None
                 };

@@ -84,7 +84,7 @@ fn scaled_enemy_level(player_level: u8, run_depth: u32) -> u8 {
 }
 
 pub fn run_next_fight<B: CombatantBuilder>(
-    mut state: RunState,
+    state: RunState,
     spawner: &EnemySpawner,
     loot_table: &LootTable,
     xp_curve: Option<&XpCurve>,
@@ -130,14 +130,45 @@ pub fn run_next_fight<B: CombatantBuilder>(
         events: sim.combat_events.clone(),
     };
 
-    let mut new_wounds = collect_wounds(&sim.combat_events);
+    apply_fight_result(
+        state,
+        Some(enemy_profile),
+        fight,
+        loot_table,
+        xp_curve,
+        rest_days,
+        resting,
+        rng,
+    )
+}
+
+pub fn apply_fight_result(
+    mut state: RunState,
+    enemy: Option<EnemyProfile>,
+    fight: FightResult,
+    loot_table: &LootTable,
+    xp_curve: Option<&XpCurve>,
+    rest_days: u32,
+    resting: bool,
+    rng: &mut SimRng,
+) -> RunOutcome {
+    let Some(enemy_profile) = enemy else {
+        return RunOutcome {
+            state,
+            fight,
+            reward: None,
+            enemy: None,
+        };
+    };
+
+    let mut new_wounds = collect_wounds(&fight.events);
     if !new_wounds.is_empty() {
         state.wounds.append(&mut new_wounds);
     }
     let fast_healer = player_has_talent(&state.player, "fast_healer");
     heal_wounds(&mut state.wounds, rest_days, fast_healer, resting);
 
-    let reward = if won {
+    let reward = if fight.won {
         let loot = loot_table.roll(enemy_profile.level, rng);
         Some(Reward {
             gold: loot.gold,
@@ -160,7 +191,7 @@ pub fn run_next_fight<B: CombatantBuilder>(
         }
     }
 
-    if won {
+    if fight.won {
         state.run_depth = state.run_depth.saturating_add(1);
     }
 

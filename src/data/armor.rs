@@ -46,9 +46,9 @@ pub fn load_armor_catalog(path: &str) -> Result<ArmorCatalog, String> {
             Some(kind) => kind,
             None => continue,
         };
-        let label = format!("{} ({})", entry.name, entry.region);
+        let label = format!("{} ({})", entry.name.as_str(), entry.region);
         let armor = Armor {
-            name: leak_str(entry.name),
+            name: entry.name,
             region,
             damage_reduction: entry.damage_reduction,
             defense_adj: entry.defense_adjustment,
@@ -81,8 +81,4 @@ fn armor_type_from_str(kind: &str) -> Option<ArmorType> {
         "Heavy" => Some(ArmorType::Heavy),
         _ => None,
     }
-}
-
-fn leak_str(value: String) -> &'static str {
-    Box::leak(value.into_boxed_str())
 }

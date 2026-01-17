@@ -1,12 +1,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use eframe::egui::{self, Color32};
-use hackmaster_sim::{character, data, game_logic};
+use eframe::egui::{self, Color32, Pos2, Rect};
+use hackmaster_sim::{character, data, game_logic, sim};
 use hackmaster_sim::character::{AbilityScore, AbilitySet, WeaponGroup};
 use hackmaster_sim::core::catalog::Catalog;
 use hackmaster_sim::core::gameplay::{
-    run_next_fight, AutobattlerConfig, CombatantBuilder, EnemySpawnEntry, EnemySpawner, LootTable,
-    RunOutcome, RunState,
+    apply_fight_result, AutobattlerConfig, CombatantBuilder, EnemySpawnEntry, EnemySpawner,
+    FightResult, LootTable, RunOutcome, RunState,
 };
 use hackmaster_sim::core::rng::SimRng;
 use hackmaster_sim::core::sim::SimConfig;
@@ -17,7 +17,7 @@ use hackmaster_sim::game_logic::{
     ArmorCatalog, NpcPresetCatalog, PlayerConfig, ShieldCatalog, TalentCatalog, WeaponCatalog,
     WeaponId,
 };
-use rand::Rng;
+use rand::{Rng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
@@ -28,10 +28,14 @@ const START_LP: i32 = 15;
 const START_AP: i32 = 15;
 const START_RP: i32 = 6;
 const SAVE_VERSION: u32 = 1;
+const RUN_SAVE_VERSION: u32 = 1;
 const CHARACTER_SAVE_DIR: &str = "saves/autobattler";
 const CHARACTER_SAVE_EXTENSION: &str = "json";
+const RUN_SAVE_DIR: &str = "saves/autobattler_runs";
+const RUN_SAVE_EXTENSION: &str = "json";
 const AUTOBATTLER_CONFIG_PATH: &str = "data/autobattler_config.json";
 const NPC_PRESETS_PATH: &str = "data/npc_presets.json";
+const LOG_DISPLAY_LIMIT: usize = 200;
 
 const STAT_COUNT: usize = 7;
 const STAT_LABELS: [&str; STAT_COUNT] = ["STR", "INT", "WIS", "DEX", "CON", "LKS", "CHA"];
@@ -112,7 +116,7 @@ impl CreationStep {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 enum RunAction {
     FightOn,
     RestDay,
@@ -142,9 +146,11 @@ struct RunViewState {
     run_state: RunState,
     last_outcome: Option<RunOutcome>,
     last_action: Option<RunAction>,
+    last_log: Vec<String>,
     days_elapsed: u32,
     training_days: u32,
     run_over: bool,
+    live_fight: Option<LiveFight>,
 }
 
 impl RunViewState {
@@ -153,11 +159,40 @@ impl RunViewState {
             run_state,
             last_outcome: None,
             last_action: None,
+            last_log: Vec::new(),
             days_elapsed: 0,
             training_days: 0,
             run_over: false,
+            live_fight: None,
         }
     }
+}
+
+#[derive(Clone, Debug)]
+struct LiveFight {
+    sim: hackmaster_sim::core::sim::SimState,
+    enemy: EnemyProfile,
+    action: Option<RunAction>,
+    rest_days: u32,
+    resting: bool,
+    running: bool,
+    time_scale: f32,
+    max_seconds: u32,
+    ui_elapsed: f32,
+    seen_events: usize,
+    log_lines: Vec<String>,
+    float_seed: u32,
+    floaters: Vec<DamageFloat>,
+    pending_step: bool,
+}
+
+#[derive(Clone, Debug)]
+struct DamageFloat {
+    value: i32,
+    target_idx: usize,
+    start_time: f32,
+    offset: f32,
+    is_shield: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -193,6 +228,159 @@ struct CharacterSave {
     race_id: Option<String>,
     talents: Vec<TalentSelection>,
     bp_history: Vec<Vec<u8>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct AbilitySetSave {
+    strength: AbilityScoreSave,
+    intelligence: u8,
+    wisdom: u8,
+    dexterity: AbilityScoreSave,
+    constitution: u8,
+    looks: u8,
+    charisma: u8,
+}
+
+impl AbilitySetSave {
+    fn from_set(set: AbilitySet) -> Self {
+        Self {
+            strength: AbilityScoreSave::from_score(set.strength),
+            intelligence: set.intelligence,
+            wisdom: set.wisdom,
+            dexterity: AbilityScoreSave::from_score(set.dexterity),
+            constitution: set.constitution,
+            looks: set.looks,
+            charisma: set.charisma,
+        }
+    }
+
+    fn to_set(&self) -> AbilitySet {
+        AbilitySet {
+            strength: self.strength.to_score(),
+            intelligence: self.intelligence,
+            wisdom: self.wisdom,
+            dexterity: self.dexterity.to_score(),
+            constitution: self.constitution,
+            looks: self.looks,
+            charisma: self.charisma,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct PlayerProfileSave {
+    name: String,
+    level: u8,
+    xp: u32,
+    base_stats: AbilitySetSave,
+    talents: Vec<TalentSelection>,
+}
+
+impl PlayerProfileSave {
+    fn from_profile(profile: &PlayerProfile) -> Self {
+        Self {
+            name: profile.name.clone(),
+            level: profile.level,
+            xp: profile.xp,
+            base_stats: AbilitySetSave::from_set(profile.base_stats),
+            talents: profile.talents.clone(),
+        }
+    }
+
+    fn to_profile(&self) -> PlayerProfile {
+        PlayerProfile {
+            name: self.name.clone(),
+            level: self.level,
+            xp: self.xp,
+            base_stats: self.base_stats.to_set(),
+            talents: self.talents.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct InventorySave {
+    gold: u32,
+    items: Vec<String>,
+}
+
+impl InventorySave {
+    fn from_inventory(inventory: &Inventory) -> Self {
+        Self {
+            gold: inventory.gold,
+            items: inventory.items.clone(),
+        }
+    }
+
+    fn to_inventory(&self) -> Inventory {
+        Inventory {
+            gold: self.gold,
+            items: self.items.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct WoundSave {
+    damage: u32,
+    healing_progress_quarter_days: u32,
+}
+
+impl WoundSave {
+    fn from_wound(wound: &hackmaster_sim::core::gameplay::Wound) -> Self {
+        Self {
+            damage: wound.damage,
+            healing_progress_quarter_days: wound.healing_progress_quarter_days,
+        }
+    }
+
+    fn to_wound(&self) -> hackmaster_sim::core::gameplay::Wound {
+        hackmaster_sim::core::gameplay::Wound {
+            damage: self.damage,
+            healing_progress_quarter_days: self.healing_progress_quarter_days,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct RunStateSave {
+    player: PlayerProfileSave,
+    inventory: InventorySave,
+    run_depth: u32,
+    wounds: Vec<WoundSave>,
+}
+
+impl RunStateSave {
+    fn from_state(state: &RunState) -> Self {
+        Self {
+            player: PlayerProfileSave::from_profile(&state.player),
+            inventory: InventorySave::from_inventory(&state.inventory),
+            run_depth: state.run_depth,
+            wounds: state.wounds.iter().map(WoundSave::from_wound).collect(),
+        }
+    }
+
+    fn to_state(&self) -> RunState {
+        RunState {
+            player: self.player.to_profile(),
+            inventory: self.inventory.to_inventory(),
+            run_depth: self.run_depth,
+            wounds: self.wounds.iter().map(WoundSave::to_wound).collect(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct RunSave {
+    version: u32,
+    name: String,
+    character: CharacterSave,
+    run_state: RunStateSave,
+    days_elapsed: u32,
+    training_days: u32,
+    run_over: bool,
+    last_action: Option<RunAction>,
+    last_log: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -393,8 +581,12 @@ struct AutobattlerApp {
     creation_done: bool,
     save_entries: Vec<SaveEntry>,
     selected_save: Option<usize>,
+    run_save_entries: Vec<SaveEntry>,
+    selected_run_save: Option<usize>,
     save_name: String,
     save_status: Option<String>,
+    run_save_name: String,
+    run_save_status: Option<String>,
     needs_save_refresh: bool,
     run_state: Option<RunViewState>,
     autobattler_config: AutobattlerConfig,
@@ -453,8 +645,12 @@ impl AutobattlerApp {
             creation_done: false,
             save_entries: Vec::new(),
             selected_save: None,
+            run_save_entries: Vec::new(),
+            selected_run_save: None,
             save_name: String::new(),
             save_status: None,
+            run_save_name: String::new(),
+            run_save_status: None,
             needs_save_refresh: true,
             run_state: None,
             autobattler_config,
@@ -517,6 +713,8 @@ impl AutobattlerApp {
         self.creation_done = false;
         self.save_name.clear();
         self.save_status = None;
+        self.run_save_name.clear();
+        self.run_save_status = None;
         self.run_state = None;
     }
 
@@ -547,6 +745,15 @@ impl AutobattlerApp {
                 .unwrap_or(false)
         {
             self.selected_save = None;
+        }
+        self.run_save_entries = scan_run_save_entries();
+        if self.selected_run_save.is_some()
+            && self
+                .selected_run_save
+                .map(|idx| idx >= self.run_save_entries.len())
+                .unwrap_or(false)
+        {
+            self.selected_run_save = None;
         }
     }
 
@@ -592,6 +799,68 @@ impl AutobattlerApp {
         }
     }
 
+    fn save_run(&mut self) -> bool {
+        let Some(run_view) = self.run_state.as_ref() else {
+            self.run_save_status = Some("No active run to save.".to_string());
+            return false;
+        };
+        if run_view.live_fight.is_some() {
+            self.run_save_status = Some("Finish the live fight before saving.".to_string());
+            return false;
+        }
+        let suggested = format!(
+            "{}-depth{}",
+            self.creation.name.trim(),
+            run_view.run_state.run_depth
+        );
+        if self.run_save_name.trim().is_empty() {
+            self.run_save_name = suggested;
+        }
+        let name = self.run_save_name.trim();
+        if name.is_empty() {
+            self.run_save_status = Some("Enter a run save name.".to_string());
+            return false;
+        }
+
+        let file_name = format!("{}.{}", sanitize_filename(name), RUN_SAVE_EXTENSION);
+        let path = run_save_path_for(&file_name);
+        let character = CharacterSave {
+            version: SAVE_VERSION,
+            name: self.creation.name.clone(),
+            stats: self
+                .creation
+                .stats
+                .iter()
+                .map(|score| AbilityScoreSave::from_score(*score))
+                .collect(),
+            race_id: self.creation.player.race_id.clone(),
+            talents: self.creation.player.talents.clone(),
+            bp_history: self.creation.bp_history.iter().cloned().collect(),
+        };
+        let run_save = RunSave {
+            version: RUN_SAVE_VERSION,
+            name: name.to_string(),
+            character,
+            run_state: RunStateSave::from_state(&run_view.run_state),
+            days_elapsed: run_view.days_elapsed,
+            training_days: run_view.training_days,
+            run_over: run_view.run_over,
+            last_action: run_view.last_action,
+            last_log: run_view.last_log.clone(),
+        };
+        match write_run_save(&path, &run_save) {
+            Ok(()) => {
+                self.run_save_status = Some(format!("Run saved to {}", path.display()));
+                self.needs_save_refresh = true;
+                true
+            }
+            Err(err) => {
+                self.run_save_status = Some(format!("Run save failed: {err}"));
+                false
+            }
+        }
+    }
+
     fn load_selected_character(&mut self) {
         let Some(index) = self.selected_save else {
             return;
@@ -614,16 +883,50 @@ impl AutobattlerApp {
         }
     }
 
+    fn load_selected_run(&mut self) {
+        let Some(index) = self.selected_run_save else {
+            return;
+        };
+        let Some(entry) = self.run_save_entries.get(index) else {
+            self.run_save_status = Some("Selected run save no longer exists.".to_string());
+            return;
+        };
+        let path = run_save_path_for(&entry.file_name);
+        match read_run_save(&path) {
+            Ok(save) => {
+                self.creation.apply_save(&save.character, &self.race_catalog);
+                self.creation_step = CreationStep::Talents;
+                self.creation_done = true;
+                let mut run_view = RunViewState::new(save.run_state.to_state());
+                run_view.days_elapsed = save.days_elapsed;
+                run_view.training_days = save.training_days;
+                run_view.run_over = save.run_over;
+                run_view.last_action = save.last_action;
+                run_view.last_log = save.last_log;
+                self.run_state = Some(run_view);
+                self.run_rng = SimRng::from_seed(self.autobattler_config.seed);
+                self.screen = AppScreen::Run;
+                self.run_save_name = save.name;
+                self.run_save_status = None;
+            }
+            Err(err) => {
+                self.run_save_status = Some(format!("Run load failed: {err}"));
+            }
+        }
+    }
+
     fn start_run_from_creation(&mut self) {
         let player_profile = player_profile_from_config(&self.creation.player);
         let run_state = RunState::new(player_profile, Inventory::default());
         self.run_state = Some(RunViewState::new(run_state));
         self.run_rng = SimRng::from_seed(self.autobattler_config.seed);
+        self.run_save_name.clear();
+        self.run_save_status = None;
         self.screen = AppScreen::Run;
-        self.run_next_fight_internal(0, false, None);
+        self.start_live_fight(0, false, None);
     }
 
-    fn run_next_fight_internal(
+    fn start_live_fight(
         &mut self,
         rest_days: u32,
         resting: bool,
@@ -632,7 +935,7 @@ impl AutobattlerApp {
         let Some(run_view) = self.run_state.as_mut() else {
             return;
         };
-        if run_view.run_over {
+        if run_view.run_over || run_view.live_fight.is_some() {
             return;
         }
         if rest_days > 0 {
@@ -641,6 +944,22 @@ impl AutobattlerApp {
                 run_view.training_days = run_view.training_days.saturating_add(rest_days);
             }
         }
+        run_view.last_log.clear();
+
+        let effective_level = scaled_enemy_level(
+            run_view.run_state.player.level,
+            run_view.run_state.run_depth,
+        );
+        let enemy_profile = match self
+            .enemy_spawner
+            .spawn_for_level(effective_level, &mut self.run_rng)
+        {
+            Some(enemy) => enemy,
+            None => {
+                run_view.run_over = true;
+                return;
+            }
+        };
 
         let builder = AutobattlerBuilder {
             player_base: self.creation.player.clone(),
@@ -652,33 +971,81 @@ impl AutobattlerApp {
             talent_catalog: &self.talent_catalog,
         };
 
-        let outcome = run_next_fight(
-            run_view.run_state.clone(),
-            &self.enemy_spawner,
-            &self.loot_table,
-            None,
+        let player_combatant = builder.build_player(&run_view.run_state);
+        let enemy_combatant = builder.build_enemy(&enemy_profile);
+        let fight_seed = self.run_rng.next_u64();
+        let mut sim = hackmaster_sim::core::sim::SimState::with_rng(
             self.sim_config,
-            self.autobattler_config.max_fight_seconds,
+            SimRng::from_seed(fight_seed),
+        );
+        sim.reset_with_combatants([player_combatant, enemy_combatant]);
+
+        run_view.live_fight = Some(LiveFight {
+            sim,
+            enemy: enemy_profile,
+            action,
             rest_days,
             resting,
-            &builder,
+            running: true,
+            time_scale: 1.0,
+            max_seconds: self.autobattler_config.max_fight_seconds,
+            ui_elapsed: 0.0,
+            seen_events: 0,
+            log_lines: Vec::new(),
+            float_seed: 0,
+            floaters: Vec::new(),
+            pending_step: false,
+        });
+    }
+
+    fn run_action(&mut self, action: RunAction) {
+        let rest_days = if action == RunAction::FightOn {
+            0
+        } else {
+            action.rest_days()
+        };
+        let resting = action.is_resting();
+        self.start_live_fight(rest_days, resting, Some(action));
+    }
+
+    fn complete_live_fight(&mut self) {
+        let Some(run_view) = self.run_state.as_mut() else {
+            return;
+        };
+        let Some(live) = run_view.live_fight.take() else {
+            return;
+        };
+
+        run_view.last_log = live.log_lines.clone();
+        let player_hp = live.sim.combatants[0].state.hp;
+        let enemy_hp = live.sim.combatants[1].state.hp;
+        let won = live.sim.done && player_hp > 0 && enemy_hp <= 0;
+        let fight = FightResult {
+            won,
+            remaining_hp: player_hp,
+            turns: live.sim.elapsed_seconds,
+            events: live.sim.combat_events.clone(),
+        };
+
+        let outcome = apply_fight_result(
+            run_view.run_state.clone(),
+            Some(live.enemy),
+            fight,
+            &self.loot_table,
+            None,
+            live.rest_days,
+            live.resting,
             &mut self.run_rng,
         );
 
         run_view.run_state = outcome.state.clone();
         run_view.last_outcome = Some(outcome);
-        run_view.last_action = action;
+        run_view.last_action = live.action;
         run_view.run_over = !run_view
             .last_outcome
             .as_ref()
             .map(|outcome| outcome.fight.won)
             .unwrap_or(false);
-    }
-
-    fn run_action(&mut self, action: RunAction) {
-        let rest_days = action.rest_days();
-        let resting = action.is_resting();
-        self.run_next_fight_internal(rest_days, resting, Some(action));
     }
 
     fn start_new_character(&mut self) {
@@ -733,6 +1100,35 @@ impl eframe::App for AutobattlerApp {
                         }
                     });
                     if let Some(status) = self.save_status.as_ref() {
+                        ui.separator();
+                        ui.label(status);
+                    }
+
+                    ui.separator();
+                    ui.label("Saved runs");
+                    if self.run_save_entries.is_empty() {
+                        ui.label("No run saves found.");
+                    } else {
+                        egui::ScrollArea::vertical()
+                            .max_height(240.0)
+                            .show(ui, |ui| {
+                                for (idx, entry) in self.run_save_entries.iter().enumerate() {
+                                    let selected = self.selected_run_save == Some(idx);
+                                    let label =
+                                        format!("{} ({})", entry.display_name, entry.file_name);
+                                    if ui.selectable_label(selected, label).clicked() {
+                                        self.selected_run_save = Some(idx);
+                                    }
+                                }
+                            });
+                    }
+                    ui.horizontal(|ui| {
+                        let can_load = self.selected_run_save.is_some();
+                        if ui.add_enabled(can_load, egui::Button::new("Load run")).clicked() {
+                            self.load_selected_run();
+                        }
+                    });
+                    if let Some(status) = self.run_save_status.as_ref() {
                         ui.separator();
                         ui.label(status);
                     }
@@ -1070,6 +1466,42 @@ impl eframe::App for AutobattlerApp {
                 });
             }
             AppScreen::Run => {
+                let dt = ctx.input(|i| i.unstable_dt).min(0.05);
+                let mut finalize_live = false;
+                let mut repaint = false;
+                if let Some(run_view) = self.run_state.as_mut() {
+                    if let Some(live) = run_view.live_fight.as_mut() {
+                        let mut sim_advanced = false;
+                        if live.pending_step {
+                            live.pending_step = false;
+                            live.sim.tick();
+                            live.ui_elapsed += 1.0;
+                            sim_advanced = true;
+                        } else if live.running {
+                            let step = dt * live.time_scale;
+                            live.sim.update(step);
+                            live.ui_elapsed += step;
+                            sim_advanced = true;
+                        }
+                        if sim_advanced {
+                            ingest_live_events(live);
+                            prune_floaters(live);
+                            repaint = true;
+                        } else if live.running {
+                            repaint = true;
+                        }
+                        if live.sim.done || live.sim.elapsed_seconds >= live.max_seconds {
+                            finalize_live = true;
+                        }
+                    }
+                }
+                if repaint {
+                    ctx.request_repaint();
+                }
+                if finalize_live {
+                    self.complete_live_fight();
+                }
+
                 let available_points = self.available_points();
                 let (effective_cha, looks_delta) = self.effective_charisma();
                 render_character_summary(
@@ -1103,85 +1535,184 @@ impl eframe::App for AutobattlerApp {
 
                 let mut next_action: Option<RunAction> = None;
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    let Some(run_view) = self.run_state.as_ref() else {
+                    let Some(run_view) = self.run_state.as_mut() else {
                         ui.label("No run loaded.");
                         return;
                     };
 
-                    ui.heading("Last Fight");
-                    ui.separator();
-                    if let Some(outcome) = run_view.last_outcome.as_ref() {
-                        let enemy_name = outcome
-                            .enemy
-                            .as_ref()
-                            .and_then(|enemy| self.npc_presets.get(enemy.preset_id))
+                    if let Some(live) = run_view.live_fight.as_mut() {
+                        ui.heading("Live Fight");
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            let label = if live.running { "Pause" } else { "Resume" };
+                            if ui.button(label).clicked() {
+                                live.running = !live.running;
+                            }
+                            if !live.running && ui.button("Next second").clicked() {
+                                live.pending_step = true;
+                                ctx.request_repaint();
+                            }
+                            ui.label("Speed");
+                            ui.add(egui::Slider::new(&mut live.time_scale, 0.25..=4.0).step_by(0.25));
+                            ui.label(format!("Time: {}s", live.sim.elapsed_seconds));
+                        });
+                        let enemy_name = self
+                            .npc_presets
+                            .get(live.enemy.preset_id)
                             .map(|preset| preset.name.as_str())
                             .unwrap_or("Unknown");
-                        let result = if outcome.fight.won { "WIN" } else { "LOSS" };
-                        ui.label(format!("Result: {result} vs {enemy_name}"));
-                        ui.label(format!("Remaining HP: {}", outcome.fight.remaining_hp));
-                        ui.label(format!("Turns: {}", outcome.fight.turns));
-                        if let Some(reward) = outcome.reward.as_ref() {
-                            if reward.is_empty() {
-                                ui.label("Reward: none");
-                            } else {
-                                ui.label(format!(
-                                    "Reward: +{}g +{}xp",
-                                    reward.gold, reward.xp
-                                ));
-                                if !reward.items.is_empty() {
-                                    ui.label(format!(
-                                        "Items: {}",
-                                        reward.items.join(", ")
-                                    ));
+                        ui.label(format!("Enemy: {enemy_name}"));
+                        let arena_height = ui.available_height().min(360.0).max(220.0);
+                        let (rect, _response) = ui.allocate_exact_size(
+                            egui::vec2(ui.available_width(), arena_height),
+                            egui::Sense::hover(),
+                        );
+                        draw_live_arena(
+                            ui,
+                            rect,
+                            &live.sim,
+                            &self.creation.name,
+                            enemy_name,
+                            &live.floaters,
+                            live.ui_elapsed,
+                        );
+                        ui.separator();
+                        ui.label("Fight in progress...");
+                        ui.separator();
+                        ui.label("Combat log");
+                        egui::ScrollArea::vertical()
+                            .max_height(ui.available_height().min(180.0).max(120.0))
+                            .show(ui, |ui| {
+                                let start = live
+                                    .log_lines
+                                    .len()
+                                    .saturating_sub(LOG_DISPLAY_LIMIT);
+                                for line in &live.log_lines[start..] {
+                                    ui.label(line);
                                 }
+                            });
+                    } else {
+                        ui.heading("Last Fight");
+                        ui.separator();
+                        if let Some(outcome) = run_view.last_outcome.as_ref() {
+                            let enemy_name = outcome
+                                .enemy
+                                .as_ref()
+                                .and_then(|enemy| self.npc_presets.get(enemy.preset_id))
+                                .map(|preset| preset.name.as_str())
+                                .unwrap_or("Unknown");
+                            let result = if outcome.fight.won { "WIN" } else { "LOSS" };
+                            ui.label(format!("Result: {result} vs {enemy_name}"));
+                            ui.label(format!("Remaining HP: {}", outcome.fight.remaining_hp));
+                            ui.label(format!("Turns: {}", outcome.fight.turns));
+                            if let Some(reward) = outcome.reward.as_ref() {
+                                if reward.is_empty() {
+                                    ui.label("Reward: none");
+                                } else {
+                                    ui.label(format!(
+                                        "Reward: +{}g +{}xp",
+                                        reward.gold, reward.xp
+                                    ));
+                                    if !reward.items.is_empty() {
+                                        ui.label(format!(
+                                            "Items: {}",
+                                            reward.items.join(", ")
+                                        ));
+                                    }
+                                }
+                            } else {
+                                ui.label("Reward: none");
+                            }
+                            let wound_list = if run_view.run_state.wounds.is_empty() {
+                                "none".to_string()
+                            } else {
+                                run_view
+                                    .run_state
+                                    .wounds
+                                    .iter()
+                                    .map(|wound| wound.damage.to_string())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            };
+                            ui.label(format!("Wounds: {wound_list}"));
+                            if let Some(action) = run_view.last_action {
+                                ui.label(format!("Last choice: {}", action.label()));
                             }
                         } else {
-                            ui.label("Reward: none");
+                            ui.label("No fights resolved yet.");
                         }
-                        let wound_list = if run_view.run_state.wounds.is_empty() {
-                            "none".to_string()
-                        } else {
-                            run_view
-                                .run_state
-                                .wounds
-                                .iter()
-                                .map(|wound| wound.damage.to_string())
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        };
-                        ui.label(format!("Wounds: {wound_list}"));
-                        if let Some(action) = run_view.last_action {
-                            ui.label(format!("Last choice: {}", action.label()));
-                        }
-                    } else {
-                        ui.label("No fights resolved yet.");
-                    }
 
-                    ui.separator();
-                    if run_view.run_over {
-                        ui.colored_label(Color32::from_rgb(180, 70, 70), "Defeated.");
-                        ui.label("Return to start to begin again.");
-                    } else {
-                        ui.label("Choose next action:");
-                        ui.horizontal(|ui| {
-                            if ui.button("Fight on").clicked() {
-                                next_action = Some(RunAction::FightOn);
-                            }
-                            if ui.button("Rest a day").clicked() {
-                                next_action = Some(RunAction::RestDay);
-                            }
-                            if ui.button("Train").clicked() {
-                                next_action = Some(RunAction::Train);
-                            }
-                        });
-                        ui.label("Wound healing is halved unless you rest.");
+                        ui.separator();
+                        if run_view.run_over {
+                            ui.colored_label(Color32::from_rgb(180, 70, 70), "Defeated.");
+                            ui.label("Return to start to begin again.");
+                        } else {
+                            ui.label("Choose next action:");
+                            ui.horizontal(|ui| {
+                                if ui.button("Fight on").clicked() {
+                                    next_action = Some(RunAction::FightOn);
+                                }
+                                if ui.button("Rest a day").clicked() {
+                                    next_action = Some(RunAction::RestDay);
+                                }
+                                if ui.button("Train").clicked() {
+                                    next_action = Some(RunAction::Train);
+                                }
+                            });
+                            ui.label("Wound healing is halved unless you rest.");
+                        }
+                        ui.separator();
+                        ui.label("Combat log");
+                        if run_view.last_log.is_empty() {
+                            ui.label("No combat log available.");
+                        } else {
+                            egui::ScrollArea::vertical()
+                                .max_height(ui.available_height().min(180.0).max(120.0))
+                                .show(ui, |ui| {
+                                    let start = run_view
+                                        .last_log
+                                        .len()
+                                        .saturating_sub(LOG_DISPLAY_LIMIT);
+                                    for line in &run_view.last_log[start..] {
+                                        ui.label(line);
+                                    }
+                                });
+                        }
                     }
                 });
 
                 if let Some(action) = next_action {
                     self.run_action(action);
                 }
+
+                egui::TopBottomPanel::bottom("run_footer").show(ctx, |ui| {
+                    let (run_depth, can_save) = match self.run_state.as_ref() {
+                        Some(run_view) => (
+                            run_view.run_state.run_depth,
+                            run_view.live_fight.is_none(),
+                        ),
+                        None => return,
+                    };
+                    ui.horizontal(|ui| {
+                        let suggested =
+                            format!("{}-depth{}", self.creation.name.trim(), run_depth);
+                        if self.run_save_name.trim().is_empty() {
+                            self.run_save_name = suggested;
+                        }
+                        ui.label("Run save");
+                        ui.text_edit_singleline(&mut self.run_save_name);
+                        if ui.add_enabled(can_save, egui::Button::new("Save run")).clicked() {
+                            self.save_run();
+                        }
+                        if !can_save {
+                            ui.label("Finish the fight to save.");
+                        }
+                    });
+                    if let Some(status) = self.run_save_status.as_ref() {
+                        ui.separator();
+                        ui.label(status);
+                    }
+                });
             }
         }
     }
@@ -1354,6 +1885,237 @@ fn render_character_summary(
         });
 }
 
+fn scaled_enemy_level(player_level: u8, run_depth: u32) -> u8 {
+    let depth_bonus = (run_depth / 2) as u8;
+    player_level.saturating_add(depth_bonus)
+}
+
+fn draw_live_arena(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    sim: &hackmaster_sim::core::sim::SimState,
+    player_name: &str,
+    enemy_name: &str,
+    floaters: &[DamageFloat],
+    ui_time: f32,
+) {
+    let padding = 16.0;
+    if rect.width() <= padding * 2.0 || rect.height() <= padding * 2.0 {
+        return;
+    }
+    let painter = ui.painter();
+    let bg = ui.style().visuals.panel_fill;
+    painter.rect_filled(rect, 0.0, bg);
+
+    let left = rect.left() + padding;
+    let right = rect.right() - padding;
+    let arena_width = (right - left).max(1.0);
+    let scale = arena_width / sim.config.start_distance.max(1.0);
+    if !scale.is_finite() {
+        return;
+    }
+
+    let bar_height = 8.0;
+    let gap = 16.0;
+    let bar_width = ((right - left) - gap).max(1.0) * 0.5;
+    let bar_y = rect.top() + padding * 0.5;
+    let timeline_y = bar_y + bar_height + 18.0;
+
+    draw_swing_timeline(ui, left, right, timeline_y, sim);
+
+    let ground_y = rect.center().y + rect.height() * 0.1;
+    painter.line_segment(
+        [Pos2::new(left, ground_y), Pos2::new(right, ground_y)],
+        (2.0, Color32::from_gray(80)),
+    );
+
+    let mut x0 = left + sim.actors[0].position * scale;
+    let mut x1 = left + sim.actors[1].position * scale;
+    x0 = x0.clamp(left, right);
+    x1 = x1.clamp(left, right);
+    let min_gap = 24.0;
+    if (x1 - x0).abs() < min_gap {
+        let dir = if x1 >= x0 { 1.0 } else { -1.0 };
+        x1 = (x0 + dir * min_gap).clamp(left, right);
+    }
+
+    let player_color = Color32::from_rgb(214, 93, 69);
+    let enemy_color = Color32::from_rgb(70, 140, 210);
+    painter.circle_filled(Pos2::new(x0, ground_y - 12.0), 7.0, player_color);
+    painter.circle_filled(Pos2::new(x1, ground_y - 12.0), 7.0, enemy_color);
+
+    for idx in 0..2 {
+        let hp = sim.combatants[idx].state.hp.max(0) as f32;
+        let max_hp = sim.combatants[idx].sheet.vitals.max_hp.max(1) as f32;
+        let ratio = (hp / max_hp).clamp(0.0, 1.0);
+        let bar_x = if idx == 0 { left } else { right - bar_width };
+        let bg_rect =
+            Rect::from_min_size(Pos2::new(bar_x, bar_y), egui::vec2(bar_width, bar_height));
+        painter.rect_filled(bg_rect, 2.0, Color32::from_gray(40));
+        let fill_width = bar_width * ratio;
+        let fill_x = if idx == 0 {
+            bar_x
+        } else {
+            bar_x + (bar_width - fill_width)
+        };
+        let fill_rect =
+            Rect::from_min_size(Pos2::new(fill_x, bar_y), egui::vec2(fill_width, bar_height));
+        let bar_color = if idx == 0 { player_color } else { enemy_color };
+        painter.rect_filled(fill_rect, 2.0, bar_color);
+        let name = if idx == 0 { player_name } else { enemy_name };
+        let align = if idx == 0 {
+            egui::Align2::LEFT_CENTER
+        } else {
+            egui::Align2::RIGHT_CENTER
+        };
+        let text_x = if idx == 0 { bar_x } else { bar_x + bar_width };
+        painter.text(
+            Pos2::new(text_x, bar_y - 4.0),
+            align,
+            name,
+            egui::TextStyle::Body.resolve(ui.style()),
+            Color32::from_gray(220),
+        );
+    }
+
+    draw_damage_floaters(
+        ui,
+        floaters,
+        ui_time,
+        x0,
+        x1,
+        ground_y - 26.0,
+    );
+}
+
+fn draw_swing_timeline(
+    ui: &egui::Ui,
+    left: f32,
+    right: f32,
+    y: f32,
+    sim: &hackmaster_sim::core::sim::SimState,
+) {
+    let painter = ui.painter();
+    if right <= left {
+        return;
+    }
+    let horizon = 8.0;
+    let now = sim.elapsed_seconds as f32;
+    let scale = (right - left) / horizon;
+    let line_color = Color32::from_gray(70);
+    painter.line_segment([Pos2::new(left, y), Pos2::new(right, y)], (2.0, line_color));
+
+    for tick in 0..=8 {
+        let x = left + tick as f32 * scale;
+        let tick_h = if tick % 2 == 0 { 6.0 } else { 4.0 };
+        painter.line_segment(
+            [Pos2::new(x, y - tick_h), Pos2::new(x, y + tick_h)],
+            (1.0, line_color),
+        );
+    }
+
+    let player_color = Color32::from_rgb(214, 93, 69);
+    let enemy_color = Color32::from_rgb(70, 140, 210);
+    for idx in 0..2 {
+        let color = if idx == 0 { player_color } else { enemy_color };
+        if let Some(next) = sim.combatants[idx].state.next_attack_time_primary {
+            let t = (next - now).max(0.0).min(horizon);
+            let x = left + t * scale;
+            let pos = Pos2::new(x, y - 14.0);
+            painter.circle_filled(pos, 6.0, color);
+        }
+        if let Some(next) = sim.combatants[idx].state.next_attack_time_secondary {
+            let t = (next - now).max(0.0).min(horizon);
+            let x = left + t * scale;
+            let pos = Pos2::new(x, y - 4.0);
+            let secondary_color = Color32::from_rgb(
+                ((color.r() as u16 + 255) / 2) as u8,
+                ((color.g() as u16 + 255) / 2) as u8,
+                ((color.b() as u16 + 255) / 2) as u8,
+            );
+            painter.circle_filled(pos, 4.0, secondary_color);
+        }
+    }
+}
+
+fn draw_damage_floaters(
+    ui: &egui::Ui,
+    floaters: &[DamageFloat],
+    ui_time: f32,
+    player_x: f32,
+    enemy_x: f32,
+    base_y: f32,
+) {
+    let painter = ui.painter();
+    let lifetime = 1.2;
+    let rise_per_sec = 26.0;
+    for floater in floaters {
+        let age = ui_time - floater.start_time;
+        if age < 0.0 || age > lifetime {
+            continue;
+        }
+        let alpha = 1.0 - (age / lifetime);
+        let alpha_u8 = (alpha * 255.0).clamp(0.0, 255.0) as u8;
+        let color = if floater.is_shield {
+            Color32::from_rgba_premultiplied(80, 180, 220, alpha_u8)
+        } else {
+            Color32::from_rgba_premultiplied(230, 70, 70, alpha_u8)
+        };
+        let x = if floater.target_idx == 0 {
+            player_x
+        } else {
+            enemy_x
+        } + floater.offset;
+        let y = base_y - age * rise_per_sec;
+        painter.text(
+            Pos2::new(x, y),
+            egui::Align2::CENTER_CENTER,
+            floater.value.to_string(),
+            egui::TextStyle::Heading.resolve(ui.style()),
+            color,
+        );
+    }
+}
+
+fn ingest_live_events(live: &mut LiveFight) {
+    let end = live.sim.combat_events.len();
+    for idx in live.seen_events..end {
+        let event = &live.sim.combat_events[idx];
+        live.log_lines
+            .push(sim::format_combat_event_line(event, &live.sim.combatants));
+        let (damage, shield_damage) = match &event.kind {
+            sim::CombatEventKind::Attack(attack) => (attack.damage, attack.shield_damage),
+            _ => (0, 0),
+        };
+        let defender_idx = event.defender_idx;
+        if damage > 0 {
+            push_damage_float(live, damage, defender_idx, false);
+        }
+        if shield_damage > 0 {
+            push_damage_float(live, shield_damage, defender_idx, true);
+        }
+    }
+    live.seen_events = end;
+}
+
+fn prune_floaters(live: &mut LiveFight) {
+    let lifetime = 1.2;
+    live.floaters
+        .retain(|floater| live.ui_elapsed - floater.start_time <= lifetime);
+}
+
+fn push_damage_float(live: &mut LiveFight, value: i32, target_idx: usize, is_shield: bool) {
+    let offset = ((live.float_seed % 5) as f32 - 2.0) * 8.0;
+    live.float_seed = live.float_seed.wrapping_add(1);
+    live.floaters.push(DamageFloat {
+        value,
+        target_idx,
+        start_time: live.ui_elapsed,
+        offset,
+        is_shield,
+    });
+}
+
 struct AutobattlerBuilder<'a> {
     player_base: PlayerConfig,
     enemy_weapon_id: WeaponId,
@@ -1487,6 +2249,11 @@ fn save_path_for(file_name: &str) -> PathBuf {
     dir.join(file_name)
 }
 
+fn run_save_path_for(file_name: &str) -> PathBuf {
+    let dir = data::resolve_writable_data_path(RUN_SAVE_DIR);
+    dir.join(file_name)
+}
+
 fn scan_save_entries() -> Vec<SaveEntry> {
     let dir = data::resolve_writable_data_path(CHARACTER_SAVE_DIR);
     let mut entries = Vec::new();
@@ -1514,13 +2281,51 @@ fn scan_save_entries() -> Vec<SaveEntry> {
     entries
 }
 
+fn scan_run_save_entries() -> Vec<SaveEntry> {
+    let dir = data::resolve_writable_data_path(RUN_SAVE_DIR);
+    let mut entries = Vec::new();
+    let Ok(read_dir) = fs::read_dir(&dir) else {
+        return entries;
+    };
+    for item in read_dir.flatten() {
+        let path = item.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some(RUN_SAVE_EXTENSION) {
+            continue;
+        }
+        let file_name = match path.file_name().and_then(|name| name.to_str()) {
+            Some(name) => name.to_string(),
+            None => continue,
+        };
+        let display_name = read_run_save(&path)
+            .map(|save| save.name)
+            .unwrap_or_else(|_| file_name.clone());
+        entries.push(SaveEntry {
+            file_name,
+            display_name,
+        });
+    }
+    entries.sort_by(|a, b| a.display_name.cmp(&b.display_name));
+    entries
+}
+
 fn write_character_save(path: &Path, save: &CharacterSave) -> Result<(), String> {
     data::ensure_parent_dir(path)?;
     let json = serde_json::to_string_pretty(save).map_err(|err| err.to_string())?;
     fs::write(path, json).map_err(|err| err.to_string())
 }
 
+fn write_run_save(path: &Path, save: &RunSave) -> Result<(), String> {
+    data::ensure_parent_dir(path)?;
+    let json = serde_json::to_string_pretty(save).map_err(|err| err.to_string())?;
+    fs::write(path, json).map_err(|err| err.to_string())
+}
+
 fn read_character_save(path: &Path) -> Result<CharacterSave, String> {
+    let contents = fs::read_to_string(path).map_err(|err| err.to_string())?;
+    serde_json::from_str(&contents).map_err(|err| err.to_string())
+}
+
+fn read_run_save(path: &Path) -> Result<RunSave, String> {
     let contents = fs::read_to_string(path).map_err(|err| err.to_string())?;
     serde_json::from_str(&contents).map_err(|err| err.to_string())
 }

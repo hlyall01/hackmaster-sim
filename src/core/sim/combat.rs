@@ -8,6 +8,7 @@ use super::types::{
     WeaponCache, WeaponSlot,
 };
 use super::modifiers::{StatIdF32, StatIdI32};
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AttackMode {
@@ -16,7 +17,7 @@ pub(crate) enum AttackMode {
 }
 
 struct AttackProfile {
-    weapon: super::types::WeaponProfile,
+    weapon: Arc<super::types::WeaponProfile>,
     attack_bonus: i32,
     strength_damage: i32,
     armor_penetration: i32,
@@ -437,12 +438,12 @@ fn resolve_counter_attack(
     let (
         attack_bonus,
         strength_damage,
-        damage_expr,
         armor_penetration,
         crit_min_roll,
         crit_severity,
         damage_penalty,
         weapon_profile,
+        unarmed_expr,
     ) = if use_weapon {
         let profile = {
             let attacker = &combatants[attacker_idx];
@@ -463,12 +464,12 @@ fn resolve_counter_attack(
         (
             profile.attack_bonus,
             profile.strength_damage,
-            profile.weapon.damage_expr.clone(),
             profile.armor_penetration,
             crit_min_roll,
             crit_severity,
             profile.damage_penalty,
             Some(profile.weapon),
+            None,
         )
     } else {
         let damage_expr = if superior_unarmed {
@@ -496,14 +497,15 @@ fn resolve_counter_attack(
         (
             attack_bonus,
             strength_damage_base + unarmed_damage_bonus,
-            damage_expr.to_string(),
             0,
             20,
             0,
             0,
             None,
+            Some(damage_expr),
         )
     };
+    let unarmed_expr = unarmed_expr.unwrap_or("d4p");
 
     let (
         defense_mod,
@@ -608,14 +610,14 @@ fn resolve_counter_attack(
             let weapon = weapon_profile.as_ref().expect("weapon profile missing");
             weapon.damage_expr_cache.roll(rng, false)
         } else {
-            roll_damage_expr(damage_expr.as_str(), rng, false)
+            roll_damage_expr(unarmed_expr, rng, false)
         };
         if crit_trigger && defender_defiant {
             let second = if use_weapon {
                 let weapon = weapon_profile.as_ref().expect("weapon profile missing");
                 weapon.damage_expr_cache.roll(rng, false)
             } else {
-                roll_damage_expr(damage_expr.as_str(), rng, false)
+                roll_damage_expr(unarmed_expr, rng, false)
             };
             rolled_damage = rolled_damage.min(second);
         }
@@ -651,9 +653,16 @@ fn resolve_counter_attack(
                     let cache = combatants[attacker_idx]
                         .state
                         .weapon_cache_mut(weapon_slot);
-                    roll_extra_damage_cached(cache, weapon_profile, false, effect.extra_dice, false, rng)
+                    roll_extra_damage_cached(
+                        cache,
+                        weapon_profile.as_ref(),
+                        false,
+                        effect.extra_dice,
+                        false,
+                        rng,
+                    )
                 } else {
-                    roll_extra_damage(damage_expr.as_str(), effect.extra_dice, false, rng)
+                    roll_extra_damage(unarmed_expr, effect.extra_dice, false, rng)
                 };
                 raw += extra_damage;
                 effective_dr = if ignore_armor {
@@ -726,7 +735,7 @@ fn resolve_counter_attack(
                     .unwrap_or(&weapon.damage_expr_cache)
                     .roll(rng, false)
             } else {
-                roll_damage_expr(damage_expr.as_str(), rng, false)
+                roll_damage_expr(unarmed_expr, rng, false)
             };
             let mut raw = rolled_damage + strength_damage + damage_penalty;
             if raw < 0 {
@@ -1046,7 +1055,7 @@ pub(crate) fn resolve_attack(
                             .weapon_cache_mut(weapon_slot);
                         roll_extra_damage_cached(
                             cache,
-                            &weapon,
+                            weapon.as_ref(),
                             use_jab,
                             effect.extra_dice,
                             use_jab,

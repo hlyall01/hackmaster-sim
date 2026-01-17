@@ -27,25 +27,21 @@ pub fn load_materials(path: &str) -> Result<Vec<Material>, String> {
     let mut materials = Vec::new();
     materials.extend(parsed.metals.into_iter().map(|entry| Material {
         tier: entry.tier,
-        name: leak_str(entry.name),
+        name: entry.name,
         weight_mult: entry.weight_multiplier,
         kind: MaterialKind::Metal,
     }));
     materials.extend(parsed.fabrics.into_iter().map(|entry| Material {
         tier: entry.tier,
-        name: leak_str(entry.name),
+        name: entry.name,
         weight_mult: entry.weight_multiplier,
         kind: MaterialKind::Fabric,
     }));
     materials.extend(parsed.woods.into_iter().map(|entry| Material {
         tier: entry.tier,
-        name: leak_str(entry.name),
+        name: entry.name,
         weight_mult: entry.weight_multiplier,
         kind: MaterialKind::Wood,
     }));
     Ok(materials)
-}
-
-fn leak_str(value: String) -> &'static str {
-    Box::leak(value.into_boxed_str())
 }

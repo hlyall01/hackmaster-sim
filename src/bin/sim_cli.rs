@@ -8,6 +8,7 @@ use sim::{
     Combatant, CombatantSheet, DefenseProfile, MobilityProfile, OffenseProfile, SimConfig,
     SimState, Vitals, WeaponProfile,
 };
+use std::sync::Arc;
 
 fn main() {
     let abilities = AbilitySet {
@@ -165,7 +166,7 @@ fn main() {
             strength_damage,
             strength_damage_base: character.ability_mods.strength.damage,
             unarmed_damage_bonus: 0,
-            weapon: WeaponProfile {
+            weapon: Arc::new(WeaponProfile {
                 name: weapon_name,
                 damage_expr: weapon_damage_expr,
                 damage_expr_cache: weapon_damage_cache,
@@ -188,7 +189,7 @@ fn main() {
                 crit_min_roll: 20,
                 crit_min_roll_ranged: None,
                 crit_severity_bonus: 0,
-            },
+            }),
             offhand: None,
         },
         defense: DefenseProfile {

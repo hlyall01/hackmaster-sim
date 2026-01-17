@@ -1,5 +1,6 @@
 use super::modifiers::{ModifierStack, StatIdF32, StatIdI32, TemporaryEffect};
 use crate::core::rules::DamageExprCache;
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug)]
 pub struct SimConfig {
@@ -96,7 +97,7 @@ pub struct OffenseProfile {
     pub strength_damage: i32,
     pub strength_damage_base: i32,
     pub unarmed_damage_bonus: i32,
-    pub weapon: WeaponProfile,
+    pub weapon: Arc<WeaponProfile>,
     pub offhand: Option<OffhandProfile>,
 }
 
@@ -104,7 +105,7 @@ pub struct OffenseProfile {
 pub struct OffhandProfile {
     pub attack_bonus: i32,
     pub strength_damage: i32,
-    pub weapon: WeaponProfile,
+    pub weapon: Arc<WeaponProfile>,
 }
 
 #[derive(Clone, Debug)]
@@ -310,7 +311,7 @@ impl Default for OffenseProfile {
             strength_damage: 0,
             strength_damage_base: 0,
             unarmed_damage_bonus: 0,
-            weapon: WeaponProfile::default(),
+            weapon: Arc::new(WeaponProfile::default()),
             offhand: None,
         }
     }
