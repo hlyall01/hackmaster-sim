@@ -375,7 +375,7 @@ fn roll_extra_damage_cached(
 }
 
 fn maybe_apply_trauma(
-    combatants: &mut [Combatant; 2],
+    combatants: &mut [Combatant],
     defender_idx: usize,
     damage: i32,
     rng: &mut impl Rng,
@@ -408,7 +408,7 @@ fn maybe_apply_trauma(
 }
 
 fn apply_trauma_duration(
-    combatants: &mut [Combatant; 2],
+    combatants: &mut [Combatant],
     defender_idx: usize,
     duration: i32,
 ) -> i32 {
@@ -421,7 +421,7 @@ fn apply_trauma_duration(
 }
 
 fn resolve_counter_attack(
-    combatants: &mut [Combatant; 2],
+    combatants: &mut [Combatant],
     attacker_idx: usize,
     defender_idx: usize,
     now: f32,
@@ -808,7 +808,7 @@ fn resolve_counter_attack(
 }
 
 pub(crate) fn resolve_attack(
-    combatants: &mut [Combatant; 2],
+    combatants: &mut [Combatant],
     attacker_idx: usize,
     defender_idx: usize,
     range_mod: i32,
@@ -817,11 +817,11 @@ pub(crate) fn resolve_attack(
     attack_mode: AttackMode,
     weapon_slot: WeaponSlot,
     now: f32,
-    state_snapshot: Option<&[CombatantState; 2]>,
+    state_snapshot: Option<&[CombatantState]>,
     rng: &mut impl Rng,
 ) -> AttackOutcome {
     let defender_state = state_snapshot
-        .map(|snapshot| &snapshot[defender_idx])
+        .and_then(|snapshot| snapshot.get(defender_idx))
         .unwrap_or(&combatants[defender_idx].state);
     let attack_profile = {
         let attacker = &combatants[attacker_idx];
@@ -1292,15 +1292,15 @@ pub(crate) fn resolve_attack(
 }
 
 pub(crate) fn resolve_knock_aside(
-    combatants: &mut [Combatant; 2],
+    combatants: &mut [Combatant],
     attacker_idx: usize,
     defender_idx: usize,
     now: f32,
-    state_snapshot: Option<&[CombatantState; 2]>,
+    state_snapshot: Option<&[CombatantState]>,
     rng: &mut impl Rng,
 ) -> KnockAsideOutcome {
     let defender_state = state_snapshot
-        .map(|snapshot| &snapshot[defender_idx])
+        .and_then(|snapshot| snapshot.get(defender_idx))
         .unwrap_or(&combatants[defender_idx].state);
     let attacker = &combatants[attacker_idx];
     let defender = &combatants[defender_idx];

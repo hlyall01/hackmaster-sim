@@ -112,7 +112,11 @@
 
     fn make_state(attacker: Combatant, defender: Combatant) -> SimState {
         let mut state = SimState::new(SimConfig::new(10.0, 1.0));
-        state.combatants = [attacker, defender];
+        let mut attacker = attacker;
+        let mut defender = defender;
+        attacker.team_id = 0;
+        defender.team_id = 1;
+        state.reset_with_combatants(vec![attacker, defender]);
         state
     }
 
@@ -363,7 +367,11 @@
         );
         let config = SimConfig::new(200.0, 3.0);
         let start = Instant::now();
-        let _ = bulk_simulate(config, [attacker, defender], 100_000, 60);
+        let mut attacker = attacker;
+        let mut defender = defender;
+        attacker.team_id = 0;
+        defender.team_id = 1;
+        let _ = bulk_simulate(config, vec![attacker, defender], 100_000, 60);
         let elapsed = start.elapsed();
         assert!(
             elapsed <= Duration::from_secs(1),
@@ -400,7 +408,11 @@
         let config = SimConfig::new(4.0, 1.0);
         let runs = 100_000u32;
         let mut sim = SimState::with_logging(config, false);
-        sim.reset_with_combatants([combatant.clone(), combatant]);
+        let mut combatant_a = combatant.clone();
+        let mut combatant_b = combatant;
+        combatant_a.team_id = 0;
+        combatant_b.team_id = 1;
+        sim.reset_with_combatants(vec![combatant_a, combatant_b]);
         sim.set_rng(SimRng::from_seed(42));
         let mut wins = [0u32; 2];
         let mut ties = 0u32;
@@ -603,7 +615,11 @@
             1,
         );
         let mut sim = SimState::new(SimConfig::new(1.0, 1.0));
-        sim.combatants = [attacker, defender];
+        let mut attacker = attacker;
+        let mut defender = defender;
+        attacker.team_id = 0;
+        defender.team_id = 1;
+        sim.reset_with_combatants(vec![attacker, defender]);
         sim.set_rng(SimRng::from_seed(1));
         sim.tick();
         assert!(sim.done);
@@ -672,7 +688,11 @@
             modifiers: ModifierStack::default(),
         };
         let mut sim = SimState::new(SimConfig::new(1.0, 1.0));
-        sim.combatants = [Combatant::new(sheet.clone()), Combatant::new(sheet)];
+        let mut first = Combatant::new(sheet.clone());
+        let mut second = Combatant::new(sheet);
+        first.team_id = 0;
+        second.team_id = 1;
+        sim.reset_with_combatants(vec![first, second]);
         sim.tick();
         assert!(sim.combatants[0].state.hp < sim.combatants[0].sheet.vitals.max_hp);
         assert!(sim.combatants[1].state.hp < sim.combatants[1].sheet.vitals.max_hp);
@@ -734,7 +754,11 @@
             200,
         );
         let mut sim = SimState::new(SimConfig::new(1.0, 1.0));
-        sim.combatants = [attacker, defender];
+        let mut attacker = attacker;
+        let mut defender = defender;
+        attacker.team_id = 0;
+        defender.team_id = 1;
+        sim.reset_with_combatants(vec![attacker, defender]);
         sim.set_rng(SimRng::from_seed(1));
         sim.tick();
         assert_eq!(sim.combatants[0].state.next_attack_time_primary, Some(12.0));
@@ -802,7 +826,11 @@
             modifiers: ModifierStack::default(),
         };
         let mut sim = SimState::new(SimConfig::new(1.0, 1.0));
-        sim.combatants = [Combatant::new(sheet.clone()), Combatant::new(sheet)];
+        let mut first = Combatant::new(sheet.clone());
+        let mut second = Combatant::new(sheet);
+        first.team_id = 0;
+        second.team_id = 1;
+        sim.reset_with_combatants(vec![first, second]);
         sim.set_rng(SimRng::from_seed(1));
         sim.tick();
         assert!(sim.combatants[0].state.hp < sim.combatants[0].sheet.vitals.max_hp);
@@ -1715,7 +1743,11 @@
             false,
             10,
         );
-        state.reset_with_combatants([ranged.clone(), ranged]);
+        let mut ranged_a = ranged.clone();
+        let mut ranged_b = ranged;
+        ranged_a.team_id = 0;
+        ranged_b.team_id = 1;
+        state.reset_with_combatants(vec![ranged_a, ranged_b]);
         state.tick();
         assert!(state.combatants[0].state.moved_last_tick);
         assert!(state.combatants[1].state.moved_last_tick);
@@ -1744,7 +1776,11 @@
             false,
             10,
         );
-        state.reset_with_combatants([melee.clone(), melee]);
+        let mut melee_a = melee.clone();
+        let mut melee_b = melee;
+        melee_a.team_id = 0;
+        melee_b.team_id = 1;
+        state.reset_with_combatants(vec![melee_a, melee_b]);
         state.tick();
         assert!(!state.combatants[0].state.moved_last_tick);
         assert!(!state.combatants[1].state.moved_last_tick);
@@ -1872,7 +1908,11 @@
         });
 
         let mut sim = SimState::new(SimConfig::new(40.0, 1.0));
-        sim.reset_with_combatants([attacker, defender]);
+        let mut attacker = attacker;
+        let mut defender = defender;
+        attacker.team_id = 0;
+        defender.team_id = 1;
+        sim.reset_with_combatants(vec![attacker, defender]);
 
         let mut first_ranged: Option<bool> = None;
         let mut melee_after_close: Option<bool> = None;
@@ -2031,7 +2071,11 @@
         });
 
         let mut sim = SimState::new(SimConfig::new(20.0, 1.0));
-        sim.reset_with_combatants([attacker, defender]);
+        let mut attacker = attacker;
+        let mut defender = defender;
+        attacker.team_id = 0;
+        defender.team_id = 1;
+        sim.reset_with_combatants(vec![attacker, defender]);
 
         let mut first_ranged_time: Option<u32> = None;
         let mut first_melee_time: Option<u32> = None;

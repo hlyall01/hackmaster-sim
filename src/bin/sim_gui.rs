@@ -231,6 +231,9 @@ impl SimGuiApp {
         if rect.width() <= padding * 2.0 || rect.height() <= 0.0 {
             return;
         }
+        if self.sim.actors.len() < 2 {
+            return;
+        }
         let bg = ui.style().visuals.panel_fill;
         ui.painter().rect_filled(rect, 0.0, bg);
         let hud_bottom = self.draw_hud(ui, rect, padding);
@@ -250,8 +253,13 @@ impl SimGuiApp {
             (2.0, Color32::from_gray(80)),
         );
 
-        let mut x0 = left + self.sim.actors[0].position * scale;
-        let mut x1 = left + self.sim.actors[1].position * scale;
+        let tile_size = self.sim.config.tile_size_ft.max(0.01);
+        let start_tiles = (self.sim.config.start_distance / tile_size).ceil() as i32;
+        let padding_tiles = ((self.sim.config.grid_width - 1 - start_tiles) / 2).max(0);
+        let x0_ft = (self.sim.actors[0].position.x - padding_tiles) as f32 * tile_size;
+        let x1_ft = (self.sim.actors[1].position.x - padding_tiles) as f32 * tile_size;
+        let mut x0 = left + x0_ft * scale;
+        let mut x1 = left + x1_ft * scale;
         x0 = x0.clamp(left, right);
         x1 = x1.clamp(left, right);
         let gap = (x1 - x0).abs();
@@ -755,13 +763,15 @@ impl eframe::App for SimGuiApp {
                     self.run_bulk_sim();
                 }
                 if let Some(result) = &self.bulk_result {
+                    let wins_a = result.wins.get(0).copied().unwrap_or(0);
+                    let wins_b = result.wins.get(1).copied().unwrap_or(0);
                     ui.label(format!(
                         "{} wins: {}",
-                        self.players[0].name, result.wins[0]
+                        self.players[0].name, wins_a
                     ));
                     ui.label(format!(
                         "{} wins: {}",
-                        self.players[1].name, result.wins[1]
+                        self.players[1].name, wins_b
                     ));
                     if result.ties > 0 {
                         ui.label(format!("Ties/timeouts: {}", result.ties));

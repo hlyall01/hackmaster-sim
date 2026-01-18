@@ -1413,25 +1413,26 @@ pub fn build_combatants(
     shield_catalog: &ShieldCatalog,
     npc_presets: &NpcPresetCatalog,
     talent_catalog: &TalentCatalog,
-) -> [Combatant; 2] {
-    [
-        build_combatant(
-            &players[0],
-            weapon_catalog,
-            armor_catalog,
-            shield_catalog,
-            npc_presets,
-            talent_catalog,
-        ),
-        build_combatant(
-            &players[1],
-            weapon_catalog,
-            armor_catalog,
-            shield_catalog,
-            npc_presets,
-            talent_catalog,
-        ),
-    ]
+) -> Vec<Combatant> {
+    let mut first = build_combatant(
+        &players[0],
+        weapon_catalog,
+        armor_catalog,
+        shield_catalog,
+        npc_presets,
+        talent_catalog,
+    );
+    let mut second = build_combatant(
+        &players[1],
+        weapon_catalog,
+        armor_catalog,
+        shield_catalog,
+        npc_presets,
+        talent_catalog,
+    );
+    first.team_id = 0;
+    second.team_id = 1;
+    vec![first, second]
 }
 
 pub fn build_combatant(

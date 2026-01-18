@@ -13,11 +13,11 @@ pub use modifiers::{
     TemporaryEffect,
 };
 pub use types::{
-    AttackEvent, AttackRollBreakdown, CombatEvent, CombatEventKind, Combatant, CombatantSheet,
-    CombatantState, CombatantCache, CriticalHit, DamageBreakdown, DamageDie, DefenseProfile,
-    KnockAsideEvent, KnockAsideRollBreakdown, ManeuverProfile, MobilityProfile, OffenseProfile,
-    OffhandProfile, ShieldBreakageStep, ShieldDamageBreakdown, SimActor, SimConfig, Vitals,
-    WeaponCache, WeaponProfile, WeaponSlot,
+    AttackEvent, AttackRollBreakdown, CombatEvent, CombatEventKind, Combatant, CombatantCache,
+    CombatantSheet, CombatantState, CriticalHit, DamageBreakdown, DamageDie, DefenseProfile,
+    GridPos, KnockAsideEvent, KnockAsideRollBreakdown, ManeuverProfile, MobilityProfile,
+    OffenseProfile, OffhandProfile, ShieldBreakageStep, ShieldDamageBreakdown, SimActor, SimConfig,
+    Vitals, WeaponCache, WeaponProfile, WeaponSlot,
 };
 
 #[cfg(test)]

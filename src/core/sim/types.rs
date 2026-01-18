@@ -2,24 +2,59 @@ use super::modifiers::{ModifierStack, StatIdF32, StatIdI32, TemporaryEffect};
 use crate::core::rules::DamageExprCache;
 use std::sync::Arc;
 
+const DEFAULT_GRID_HEIGHT: i32 = 7;
+const DEFAULT_GRID_PADDING: i32 = 4;
+const DEFAULT_TILE_SIZE_FT: f32 = 1.0;
+
 #[derive(Clone, Copy, Debug)]
 pub struct SimConfig {
     pub start_distance: f32,
     pub stop_distance: f32,
+    pub grid_width: i32,
+    pub grid_height: i32,
+    pub tile_size_ft: f32,
 }
 
 impl SimConfig {
     pub fn new(start_distance: f32, stop_distance: f32) -> Self {
+        let start_tiles = (start_distance / DEFAULT_TILE_SIZE_FT).ceil() as i32;
+        let grid_width = (start_tiles + DEFAULT_GRID_PADDING * 2 + 1).max(10);
         Self {
             start_distance,
             stop_distance,
+            grid_width,
+            grid_height: DEFAULT_GRID_HEIGHT,
+            tile_size_ft: DEFAULT_TILE_SIZE_FT,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GridPos {
+    pub x: i32,
+    pub y: i32,
+}
+
+impl GridPos {
+    pub fn new(x: i32, y: i32) -> Self {
+        Self { x, y }
+    }
+
+    pub fn manhattan_distance(self, other: GridPos) -> i32 {
+        (self.x - other.x).abs() + (self.y - other.y).abs()
+    }
+
+    pub fn clamp(self, width: i32, height: i32) -> Self {
+        Self {
+            x: self.x.clamp(0, width.saturating_sub(1)),
+            y: self.y.clamp(0, height.saturating_sub(1)),
         }
     }
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct SimActor {
-    pub position: f32,
+    pub position: GridPos,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -167,6 +202,7 @@ pub struct CombatantState {
 pub struct Combatant {
     pub sheet: CombatantSheet,
     pub state: CombatantState,
+    pub team_id: u8,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -467,8 +503,16 @@ pub(crate) fn defense_plus_four_ready_at(
 
 impl Combatant {
     pub fn new(sheet: CombatantSheet) -> Self {
+        Self::new_with_team(sheet, 0)
+    }
+
+    pub fn new_with_team(sheet: CombatantSheet, team_id: u8) -> Self {
         let state = CombatantState::new(&sheet);
-        Self { sheet, state }
+        Self {
+            sheet,
+            state,
+            team_id,
+        }
     }
 
     pub(crate) fn reset_state(&mut self) {

@@ -111,11 +111,13 @@ pub fn run_next_fight<B: CombatantBuilder>(
         };
     };
 
-    let player_combatant = builder.build_player(&state);
-    let enemy_combatant = builder.build_enemy(&enemy_profile);
+    let mut player_combatant = builder.build_player(&state);
+    let mut enemy_combatant = builder.build_enemy(&enemy_profile);
+    player_combatant.team_id = 0;
+    enemy_combatant.team_id = 1;
     let fight_seed = rng.next_u64();
     let mut sim = SimState::with_rng(sim_config, SimRng::from_seed(fight_seed));
-    sim.reset_with_combatants([player_combatant, enemy_combatant]);
+    sim.reset_with_combatants(vec![player_combatant, enemy_combatant]);
     while !sim.done && sim.elapsed_seconds < max_seconds {
         sim.update(1.0);
     }

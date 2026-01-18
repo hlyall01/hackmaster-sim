@@ -234,7 +234,11 @@ fn main() {
         modifiers: sim::ModifierStack::default(),
     };
     let combatant = Combatant::new(sheet);
-    sim.reset_with_combatants([combatant.clone(), combatant]);
+    let mut combatant_a = combatant.clone();
+    let mut combatant_b = combatant;
+    combatant_a.team_id = 0;
+    combatant_b.team_id = 1;
+    sim.reset_with_combatants(vec![combatant_a, combatant_b]);
     println!("--- Simulation (1s ticks) ---");
     let mut printed_events = 0usize;
     while !sim.done {

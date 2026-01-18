@@ -4,15 +4,16 @@ use super::combat::{resolve_attack, resolve_knock_aside, AttackMode};
 use super::modifiers::StatIdF32;
 use super::movement::{max_range_for_weapon, range_modifier_for_weapon_with_scale};
 use super::types::{
-    AttackEvent, CombatEvent, CombatEventKind, Combatant, KnockAsideEvent, SimActor, SimConfig,
-    WeaponSlot,
+    AttackEvent, CombatEvent, CombatEventKind, Combatant, GridPos, KnockAsideEvent, SimActor,
+    SimConfig, WeaponSlot,
 };
+use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Debug)]
 pub struct SimState {
     pub config: SimConfig,
-    pub actors: [SimActor; 2],
-    pub combatants: [Combatant; 2],
+    pub actors: Vec<SimActor>,
+    pub combatants: Vec<Combatant>,
     pub elapsed_seconds: u32,
     pub done: bool,
     pub last_event: Option<CombatEvent>,
@@ -23,7 +24,7 @@ pub struct SimState {
     hold_at_bay: HoldAtBayState,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 struct HoldAtBayState {
     pending: bool,
     active: bool,
@@ -47,13 +48,8 @@ impl SimState {
     fn with_rng_and_log(config: SimConfig, rng: SimRng, log_events: bool) -> Self {
         Self {
             config,
-            actors: [
-                SimActor { position: 0.0 },
-                SimActor {
-                    position: config.start_distance,
-                },
-            ],
-            combatants: [Combatant::default(), Combatant::default()],
+            actors: Vec::new(),
+            combatants: Vec::new(),
             elapsed_seconds: 0,
             done: false,
             last_event: None,
@@ -66,8 +62,7 @@ impl SimState {
     }
 
     pub fn reset(&mut self) {
-        self.actors[0].position = 0.0;
-        self.actors[1].position = self.config.start_distance;
+        self.actors = self.spawn_positions();
         self.elapsed_seconds = 0;
         self.done = false;
         self.last_event = None;
@@ -84,13 +79,75 @@ impl SimState {
         self.reset();
     }
 
-    pub fn reset_with_combatants(&mut self, combatants: [Combatant; 2]) {
+    fn spawn_positions(&self) -> Vec<SimActor> {
+        let count = self.combatants.len();
+        if count == 0 {
+            return Vec::new();
+        }
+        let grid_width = self.config.grid_width.max(1);
+        let grid_height = self.config.grid_height.max(1);
+        let center_x = grid_width / 2;
+        let center_y = grid_height / 2;
+        let tile_size_ft = self.config.tile_size_ft.max(0.01);
+        let start_tiles = (self.config.start_distance / tile_size_ft).ceil() as i32;
+
+        let mut teams: Vec<u8> = self.combatants.iter().map(|c| c.team_id).collect();
+        teams.sort_unstable();
+        teams.dedup();
+        if teams.is_empty() {
+            teams.push(0);
+        }
+
+        let mut team_sizes: HashMap<u8, usize> = HashMap::new();
+        for combatant in &self.combatants {
+            *team_sizes.entry(combatant.team_id).or_insert(0) += 1;
+        }
+
+        let mut base_x_by_team: HashMap<u8, i32> = HashMap::new();
+        match teams.len() {
+            1 => {
+                base_x_by_team.insert(teams[0], center_x);
+            }
+            2 => {
+                let padding = ((grid_width - 1 - start_tiles) / 2).max(0);
+                let left_x = padding;
+                let right_x = (padding + start_tiles).min(grid_width - 1);
+                base_x_by_team.insert(teams[0], left_x);
+                base_x_by_team.insert(teams[1], right_x);
+            }
+            _ => {
+                let span = (grid_width - 1).max(1);
+                let spacing = span / (teams.len() as i32 - 1);
+                for (idx, team_id) in teams.iter().enumerate() {
+                    let x = (idx as i32 * spacing).clamp(0, grid_width - 1);
+                    base_x_by_team.insert(*team_id, x);
+                }
+            }
+        }
+
+        let mut team_offsets: HashMap<u8, usize> = HashMap::new();
+        let mut actors = Vec::with_capacity(count);
+        for combatant in &self.combatants {
+            let team_id = combatant.team_id;
+            let team_size = *team_sizes.get(&team_id).unwrap_or(&1);
+            let slot = team_offsets.entry(team_id).or_insert(0);
+            let offset = *slot as i32 - (team_size as i32 - 1) / 2;
+            *slot += 1;
+            let base_x = *base_x_by_team.get(&team_id).unwrap_or(&center_x);
+            let pos = GridPos::new(base_x, center_y + offset)
+                .clamp(grid_width, grid_height);
+            actors.push(SimActor { position: pos });
+        }
+        actors
+    }
+
+    pub fn reset_with_combatants(&mut self, combatants: Vec<Combatant>) {
         self.combatants = combatants;
         self.reset();
     }
 
     #[allow(dead_code)]
-    pub fn reset_with_combatants_preserve_rng(&mut self, combatants: [Combatant; 2]) {
+    pub fn reset_with_combatants_preserve_rng(&mut self, combatants: Vec<Combatant>) {
         self.combatants = combatants;
         self.reset_preserve_rng();
     }
@@ -117,6 +174,9 @@ impl SimState {
         if self.done {
             return;
         }
+        if self.actors.len() != self.combatants.len() {
+            self.actors = self.spawn_positions();
+        }
         for combatant in &mut self.combatants {
             combatant.state.knockback_applied_this_tick = false;
             combatant.state.tick_effects();
@@ -127,124 +187,142 @@ impl SimState {
                 combatant.state.knockback_immobile_seconds -= 1;
             }
         }
-        let old_positions = [self.actors[0].position, self.actors[1].position];
-        let distance = self.distance();
-        let distance_before_combat = distance;
-        let reach_a = self
-            .combatants[0]
-            .apply_f32(StatIdF32::WeaponReach, self.combatants[0].sheet.offense.weapon.reach_ft)
-            .max(1.0);
-        let reach_b = self
-            .combatants[1]
-            .apply_f32(StatIdF32::WeaponReach, self.combatants[1].sheet.offense.weapon.reach_ft)
-            .max(1.0);
-        let max_reach = self.config.stop_distance.max(1.0);
-        let min_reach = reach_a.min(reach_b);
-        let weapon_a = self.combatants[0].sheet.offense.weapon.clone();
-        let weapon_b = self.combatants[1].sheet.offense.weapon.clone();
-        let ranged_projectile_a = weapon_a.uses_projectiles;
-        let ranged_projectile_b = weapon_b.uses_projectiles;
-        let max_range_a = max_range_cached(
-            &mut self.combatants[0].state,
-            WeaponSlot::Primary,
-            weapon_a.as_ref(),
-        );
-        let max_range_b = max_range_cached(
-            &mut self.combatants[1].state,
-            WeaponSlot::Primary,
-            weapon_b.as_ref(),
-        );
-        let ranged_a = max_range_a.is_some();
-        let ranged_b = max_range_b.is_some();
-        let ranged_projectile_a = ranged_a && ranged_projectile_a;
-        let ranged_projectile_b = ranged_b && ranged_projectile_b;
-        let any_ranged = ranged_a || ranged_b;
+        let old_positions: Vec<GridPos> = self.actors.iter().map(|actor| actor.position).collect();
+        let active_pair = self.active_pair();
+        if let Some((a_idx, b_idx)) = active_pair {
+            if (self.hold_at_bay.active || self.hold_at_bay.pending)
+                && self.hold_at_bay.holder_idx != a_idx
+                && self.hold_at_bay.holder_idx != b_idx
+                && self.hold_at_bay.target_idx != a_idx
+                && self.hold_at_bay.target_idx != b_idx
+            {
+                self.hold_at_bay = HoldAtBayState::default();
+            }
 
-        if distance > max_reach && !any_ranged {
-            let step_a = self.move_step(0);
-            let step_b = self.move_step(1);
-            self.actors[0].position += step_a;
-            self.actors[1].position -= step_b;
-            for combatant in &mut self.combatants {
-                combatant.state.clear_attack_timers();
-            }
-        } else {
-            self.resolve_combat_round();
-            let distance = self.distance();
-            let step_a = self.move_step(0);
-            let step_b = self.move_step(1);
-            if any_ranged {
-                let backstep_a = step_a;
-                let backstep_b = step_b;
-                let engaged = distance <= min_reach;
-                if !engaged {
-                    if ranged_projectile_a {
-                        if let Some(max_range) = max_range_a {
-                            if distance <= max_range {
-                                self.actors[0].position -= backstep_a;
-                            } else {
-                                self.actors[0].position += step_a;
+            let distance_before_combat = self.distance_between(a_idx, b_idx).unwrap_or(0.0);
+            let reach_a = self.combatants[a_idx]
+                .apply_f32(
+                    StatIdF32::WeaponReach,
+                    self.combatants[a_idx].sheet.offense.weapon.reach_ft,
+                )
+                .max(1.0);
+            let reach_b = self.combatants[b_idx]
+                .apply_f32(
+                    StatIdF32::WeaponReach,
+                    self.combatants[b_idx].sheet.offense.weapon.reach_ft,
+                )
+                .max(1.0);
+            let max_reach = self.config.stop_distance.max(1.0);
+            let min_reach = reach_a.min(reach_b);
+            let weapon_a = self.combatants[a_idx].sheet.offense.weapon.clone();
+            let weapon_b = self.combatants[b_idx].sheet.offense.weapon.clone();
+            let ranged_projectile_a = weapon_a.uses_projectiles;
+            let ranged_projectile_b = weapon_b.uses_projectiles;
+            let max_range_a = max_range_cached(
+                &mut self.combatants[a_idx].state,
+                WeaponSlot::Primary,
+                weapon_a.as_ref(),
+            );
+            let max_range_b = max_range_cached(
+                &mut self.combatants[b_idx].state,
+                WeaponSlot::Primary,
+                weapon_b.as_ref(),
+            );
+            let ranged_a = max_range_a.is_some();
+            let ranged_b = max_range_b.is_some();
+            let ranged_projectile_a = ranged_a && ranged_projectile_a;
+            let ranged_projectile_b = ranged_b && ranged_projectile_b;
+            let any_ranged = ranged_a || ranged_b;
+
+            if distance_before_combat > max_reach && !any_ranged {
+                let step_a = self.move_tiles(a_idx);
+                let step_b = self.move_tiles(b_idx);
+                self.move_toward(a_idx, b_idx, step_a, max_reach);
+                self.move_toward(b_idx, a_idx, step_b, max_reach);
+                for combatant in &mut self.combatants {
+                    combatant.state.clear_attack_timers();
+                }
+            } else {
+                self.resolve_combat_round(a_idx, b_idx);
+                let distance = self.distance_between(a_idx, b_idx).unwrap_or(0.0);
+                let step_a = self.move_tiles(a_idx);
+                let step_b = self.move_tiles(b_idx);
+                if any_ranged {
+                    let engaged = distance <= min_reach;
+                    if !engaged {
+                        if ranged_projectile_a {
+                            if let Some(max_range) = max_range_a {
+                                if distance <= max_range {
+                                    self.move_away(a_idx, b_idx, step_a);
+                                } else {
+                                    self.move_toward(a_idx, b_idx, step_a, max_reach);
+                                }
                             }
+                        } else if distance > reach_a {
+                            self.move_toward(a_idx, b_idx, step_a, max_reach);
                         }
-                    } else if distance > reach_a {
-                        self.actors[0].position += step_a;
+                        if ranged_projectile_b {
+                            if let Some(max_range) = max_range_b {
+                                if distance <= max_range {
+                                    self.move_away(b_idx, a_idx, step_b);
+                                } else {
+                                    self.move_toward(b_idx, a_idx, step_b, max_reach);
+                                }
+                            }
+                        } else if distance > reach_b {
+                            self.move_toward(b_idx, a_idx, step_b, max_reach);
+                        }
                     }
-                    if ranged_projectile_b {
-                        if let Some(max_range) = max_range_b {
-                            if distance <= max_range {
-                                self.actors[1].position += backstep_b;
-                            } else {
-                                self.actors[1].position -= step_b;
-                            }
+                } else if distance > min_reach {
+                    if reach_a < reach_b {
+                        if !self.hold_at_bay.blocks_advance(a_idx) {
+                            self.move_toward(a_idx, b_idx, step_a, max_reach);
                         }
-                    } else if distance > reach_b {
-                        self.actors[1].position -= step_b;
+                    } else if reach_b < reach_a {
+                        if !self.hold_at_bay.blocks_advance(b_idx) {
+                            self.move_toward(b_idx, a_idx, step_b, max_reach);
+                        }
                     }
                 }
-            } else if distance > min_reach {
-                if reach_a < reach_b {
-                    if !self.hold_at_bay.blocks_advance(0) {
-                        self.actors[0].position += step_a;
-                    }
-                } else if reach_b < reach_a {
-                    if !self.hold_at_bay.blocks_advance(1) {
-                        self.actors[1].position -= step_b;
-                    }
-                }
             }
-        }
-        let distance_after_combat = self.distance();
-        if max_range_a.is_some()
-            && !weapon_a.uses_projectiles
-            && distance_before_combat > reach_a
-            && distance_after_combat <= reach_a
-        {
-            self.combatants[0].state.clear_attack_timers();
-        }
-        if max_range_b.is_some()
-            && !weapon_b.uses_projectiles
-            && distance_before_combat > reach_b
-            && distance_after_combat <= reach_b
-        {
-            self.combatants[1].state.clear_attack_timers();
-        }
-        self.maybe_start_hold_at_bay(distance_before_combat, distance_after_combat, reach_a, reach_b);
-        if self
-            .combatants
-            .iter()
-            .any(|combatant| combatant.state.knockback_applied_this_tick)
-            && self.distance() < distance_before_combat
-        {
-            self.actors[1].position = self.actors[0].position + distance_before_combat;
-        }
-        if self.actors[0].position > self.actors[1].position {
-            let midpoint = (self.actors[0].position + self.actors[1].position) * 0.5;
-            self.actors[0].position = midpoint;
-            self.actors[1].position = midpoint;
+            let distance_after_combat = self.distance_between(a_idx, b_idx).unwrap_or(0.0);
+            if max_range_a.is_some()
+                && !weapon_a.uses_projectiles
+                && distance_before_combat > reach_a
+                && distance_after_combat <= reach_a
+            {
+                self.combatants[a_idx].state.clear_attack_timers();
+            }
+            if max_range_b.is_some()
+                && !weapon_b.uses_projectiles
+                && distance_before_combat > reach_b
+                && distance_after_combat <= reach_b
+            {
+                self.combatants[b_idx].state.clear_attack_timers();
+            }
+            self.maybe_start_hold_at_bay(
+                a_idx,
+                b_idx,
+                distance_before_combat,
+                distance_after_combat,
+                reach_a,
+                reach_b,
+            );
+            if (self.combatants[a_idx].state.knockback_applied_this_tick
+                || self.combatants[b_idx].state.knockback_applied_this_tick)
+                && distance_after_combat < distance_before_combat
+            {
+                self.enforce_min_distance(a_idx, b_idx, distance_before_combat);
+            }
         }
         for (idx, combatant) in self.combatants.iter_mut().enumerate() {
-            combatant.state.moved_last_tick =
-                (self.actors[idx].position - old_positions[idx]).abs() > f32::EPSILON;
+            let moved = self
+                .actors
+                .get(idx)
+                .zip(old_positions.get(idx))
+                .map(|(actor, old)| actor.position.x != old.x || actor.position.y != old.y)
+                .unwrap_or(false);
+            combatant.state.moved_last_tick = moved;
         }
         self.elapsed_seconds += 1;
         let now = self.elapsed_seconds as f32;
@@ -253,22 +331,89 @@ impl SimState {
                 .state
                 .refresh_defense_plus_four_ready(&combatant.sheet, now);
         }
+        self.done = self.remaining_team_count() <= 1;
     }
 
     pub fn distance(&self) -> f32 {
-        (self.actors[1].position - self.actors[0].position).max(0.0)
+        self.distance_between(0, 1).unwrap_or(0.0)
     }
 
-    fn move_step(&self, idx: usize) -> f32 {
+    pub fn distance_between(&self, a_idx: usize, b_idx: usize) -> Option<f32> {
+        let tiles = self.grid_distance_tiles(a_idx, b_idx)?;
+        Some(tiles as f32 * self.config.tile_size_ft)
+    }
+
+    fn grid_distance_tiles(&self, a_idx: usize, b_idx: usize) -> Option<i32> {
+        let pos_a = self.actors.get(a_idx)?.position;
+        let pos_b = self.actors.get(b_idx)?.position;
+        Some(pos_a.manhattan_distance(pos_b))
+    }
+
+    fn move_tiles(&self, idx: usize) -> i32 {
         let combatant = &self.combatants[idx];
         if combatant.state.trauma_remaining_seconds > 0
             || combatant.state.knockback_immobile_seconds > 0
         {
-            0.0
+            return 0;
+        }
+        let speed_ft = combatant
+            .apply_f32(StatIdF32::MoveSpeed, combatant.sheet.mobility.move_speed)
+            .max(0.0);
+        if speed_ft <= 0.0 {
+            return 0;
+        }
+        let tile_size_ft = self.config.tile_size_ft.max(0.01);
+        let tiles = (speed_ft / tile_size_ft).round();
+        if tiles <= 0.0 {
+            1
         } else {
-            combatant
-                .apply_f32(StatIdF32::MoveSpeed, combatant.sheet.mobility.move_speed)
-                .max(0.0)
+            tiles as i32
+        }
+    }
+
+    fn move_toward(
+        &mut self,
+        mover_idx: usize,
+        target_idx: usize,
+        steps: i32,
+        stop_distance_ft: f32,
+    ) {
+        if steps <= 0 {
+            return;
+        }
+        for _ in 0..steps {
+            let distance = self.distance_between(mover_idx, target_idx).unwrap_or(0.0);
+            if distance <= stop_distance_ft {
+                break;
+            }
+            let from = self.actors[mover_idx].position;
+            let to = self.actors[target_idx].position;
+            let next = Self::step_toward(from, to).clamp(
+                self.config.grid_width,
+                self.config.grid_height,
+            );
+            if next.x == from.x && next.y == from.y {
+                break;
+            }
+            self.actors[mover_idx].position = next;
+        }
+    }
+
+    fn move_away(&mut self, mover_idx: usize, target_idx: usize, steps: i32) {
+        if steps <= 0 {
+            return;
+        }
+        for _ in 0..steps {
+            let from = self.actors[mover_idx].position;
+            let away_from = self.actors[target_idx].position;
+            let next = Self::step_away(from, away_from).clamp(
+                self.config.grid_width,
+                self.config.grid_height,
+            );
+            if next.x == from.x && next.y == from.y {
+                break;
+            }
+            self.actors[mover_idx].position = next;
         }
     }
 
@@ -279,58 +424,163 @@ impl SimState {
         if let Some(defender) = self.combatants.get_mut(defender_idx) {
             defender.state.knockback_applied_this_tick = true;
         }
-        match (attacker_idx, defender_idx) {
-            (0, 1) => {
-                self.actors[1].position += knockback_ft;
-            }
-            (1, 0) => {
-                self.actors[0].position = (self.actors[0].position - knockback_ft).max(0.0);
-            }
-            _ => {}
+        let tile_size_ft = self.config.tile_size_ft.max(0.01);
+        let tiles = (knockback_ft / tile_size_ft).ceil() as i32;
+        self.move_away(defender_idx, attacker_idx, tiles);
+    }
+
+    fn step_toward(from: GridPos, to: GridPos) -> GridPos {
+        let dx = to.x - from.x;
+        let dy = to.y - from.y;
+        if dx.abs() >= dy.abs() && dx != 0 {
+            GridPos::new(from.x + dx.signum(), from.y)
+        } else if dy != 0 {
+            GridPos::new(from.x, from.y + dy.signum())
+        } else {
+            from
         }
     }
 
-    fn resolve_combat_round(&mut self) {
+    fn step_away(from: GridPos, away_from: GridPos) -> GridPos {
+        let dx = from.x - away_from.x;
+        let dy = from.y - away_from.y;
+        if dx.abs() >= dy.abs() && dx != 0 {
+            GridPos::new(from.x + dx.signum(), from.y)
+        } else if dy != 0 {
+            GridPos::new(from.x, from.y + dy.signum())
+        } else {
+            from
+        }
+    }
+
+    fn enforce_min_distance(&mut self, a_idx: usize, b_idx: usize, distance_ft: f32) {
+        let tile_size_ft = self.config.tile_size_ft.max(0.01);
+        let min_tiles = (distance_ft / tile_size_ft).round() as i32;
+        let current_tiles = self.grid_distance_tiles(a_idx, b_idx).unwrap_or(0);
+        if current_tiles >= min_tiles {
+            return;
+        }
+        let mover_idx = if self.combatants[a_idx].state.knockback_applied_this_tick {
+            a_idx
+        } else if self.combatants[b_idx].state.knockback_applied_this_tick {
+            b_idx
+        } else {
+            b_idx
+        };
+        let other_idx = if mover_idx == a_idx { b_idx } else { a_idx };
+        let mut remaining = min_tiles - current_tiles;
+        while remaining > 0 {
+            let from = self.actors[mover_idx].position;
+            let next = Self::step_away(from, self.actors[other_idx].position).clamp(
+                self.config.grid_width,
+                self.config.grid_height,
+            );
+            if next.x == from.x && next.y == from.y {
+                break;
+            }
+            self.actors[mover_idx].position = next;
+            remaining -= 1;
+        }
+    }
+
+    fn remaining_team_count(&self) -> usize {
+        let mut teams = HashSet::new();
+        for combatant in &self.combatants {
+            if combatant.state.hp > 0 {
+                teams.insert(combatant.team_id);
+            }
+        }
+        teams.len()
+    }
+
+    fn active_pair(&self) -> Option<(usize, usize)> {
+        let mut best: Option<(usize, usize, i32)> = None;
+        for i in 0..self.combatants.len() {
+            if self.combatants[i].state.hp <= 0 {
+                continue;
+            }
+            for j in (i + 1)..self.combatants.len() {
+                if self.combatants[j].state.hp <= 0 {
+                    continue;
+                }
+                if self.combatants[i].team_id == self.combatants[j].team_id {
+                    continue;
+                }
+                let distance = self.grid_distance_tiles(i, j).unwrap_or(i32::MAX);
+                let replace = match best {
+                    None => true,
+                    Some((_, _, best_distance)) => distance < best_distance,
+                };
+                if replace {
+                    best = Some((i, j, distance));
+                }
+            }
+        }
+        best.map(|(i, j, _)| (i, j))
+    }
+
+    fn resolve_combat_round(&mut self, a_idx: usize, b_idx: usize) {
         let now = self.elapsed_seconds as f32;
-        let distance = self.distance();
-        let reach_a = self
-            .combatants[0]
-            .apply_f32(StatIdF32::WeaponReach, self.combatants[0].sheet.offense.weapon.reach_ft)
+        let distance = self.distance_between(a_idx, b_idx).unwrap_or(0.0);
+        let reach_a = self.combatants[a_idx]
+            .apply_f32(
+                StatIdF32::WeaponReach,
+                self.combatants[a_idx].sheet.offense.weapon.reach_ft,
+            )
             .max(1.0);
-        let reach_b = self
-            .combatants[1]
-            .apply_f32(StatIdF32::WeaponReach, self.combatants[1].sheet.offense.weapon.reach_ft)
+        let reach_b = self.combatants[b_idx]
+            .apply_f32(
+                StatIdF32::WeaponReach,
+                self.combatants[b_idx].sheet.offense.weapon.reach_ft,
+            )
             .max(1.0);
         let simultaneous = (reach_a - reach_b).abs() < f32::EPSILON;
         let state_snapshot = if simultaneous {
-            Some([self.combatants[0].state.clone(), self.combatants[1].state.clone()])
+            Some(
+                self.combatants
+                    .iter()
+                    .map(|combatant| combatant.state.clone())
+                    .collect::<Vec<_>>(),
+            )
         } else {
             None
         };
-        let alive_start = [
-            self.combatants[0].state.hp > 0,
-            self.combatants[1].state.hp > 0,
-        ];
-        for (attacker_idx, defender_idx) in [(0usize, 1usize), (1usize, 0usize)] {
+        let alive_start_a = self.combatants[a_idx].state.hp > 0;
+        let alive_start_b = self.combatants[b_idx].state.hp > 0;
+        let alive_start = |idx: usize| {
+            if idx == a_idx {
+                alive_start_a
+            } else if idx == b_idx {
+                alive_start_b
+            } else {
+                false
+            }
+        };
+        for (attacker_idx, defender_idx) in [(a_idx, b_idx), (b_idx, a_idx)] {
             let snapshot_next_attack_primary = state_snapshot
                 .as_ref()
-                .and_then(|snapshot| snapshot[attacker_idx].next_attack_time_primary);
+                .and_then(|snapshot| snapshot.get(attacker_idx))
+                .and_then(|state| state.next_attack_time_primary);
             let snapshot_next_attack_secondary = state_snapshot
                 .as_ref()
-                .and_then(|snapshot| snapshot[attacker_idx].next_attack_time_secondary);
+                .and_then(|snapshot| snapshot.get(attacker_idx))
+                .and_then(|state| state.next_attack_time_secondary);
             let use_snapshot_timing = state_snapshot.is_some();
             let attacker_alive = if simultaneous {
-                alive_start[attacker_idx]
+                alive_start(attacker_idx)
             } else {
                 self.combatants[attacker_idx].state.hp > 0
             };
             let defender_alive = if simultaneous {
-                alive_start[defender_idx]
+                alive_start(defender_idx)
             } else {
                 self.combatants[defender_idx].state.hp > 0
             };
             let attacker_trauma = if let Some(snapshot) = state_snapshot.as_ref() {
-                snapshot[attacker_idx].trauma_remaining_seconds > 0
+                snapshot
+                    .get(attacker_idx)
+                    .map(|state| state.trauma_remaining_seconds > 0)
+                    .unwrap_or(false)
             } else {
                 self.combatants[attacker_idx].state.trauma_remaining_seconds > 0
             };
@@ -382,7 +632,7 @@ impl SimState {
                         attacker_idx,
                         defender_idx,
                         now,
-                        state_snapshot.as_ref(),
+                        state_snapshot.as_deref(),
                         &mut self.rng,
                     );
                     if event.success {
@@ -414,7 +664,7 @@ impl SimState {
                 }
                 continue;
             }
-            let weapon = &self.combatants[attacker_idx].sheet.offense.weapon;
+            let weapon = self.combatants[attacker_idx].sheet.offense.weapon.clone();
             let max_range = max_range_cached(
                 &mut self.combatants[attacker_idx].state,
                 WeaponSlot::Primary,
@@ -422,11 +672,11 @@ impl SimState {
             );
             let has_range = max_range.is_some();
             let attacker_reach = weapon.reach_ft.max(1.0);
-                let mut use_ranged = if has_range && !weapon.uses_projectiles {
-                    distance > attacker_reach
-                } else {
-                    has_range
-                };
+            let mut use_ranged = if has_range && !weapon.uses_projectiles {
+                distance > attacker_reach
+            } else {
+                has_range
+            };
             let mut attack_mode = AttackMode::Normal;
             if self.hold_at_bay.pending && self.hold_at_bay.holder_idx == attacker_idx {
                 let defender_reach =
@@ -495,7 +745,7 @@ impl SimState {
                     attack_mode,
                     WeaponSlot::Primary,
                     now,
-                    state_snapshot.as_ref(),
+                    state_snapshot.as_deref(),
                     &mut self.rng,
                 );
                 if attack_mode == AttackMode::HoldAtBay && self.hold_at_bay.pending {
@@ -663,7 +913,7 @@ impl SimState {
                         AttackMode::Normal,
                         WeaponSlot::Secondary,
                         now,
-                        state_snapshot.as_ref(),
+                        state_snapshot.as_deref(),
                         &mut self.rng,
                     );
                     self.apply_knockback(
@@ -743,13 +993,6 @@ impl SimState {
                 }
             }
         }
-        if self
-            .combatants
-            .iter()
-            .any(|combatant| combatant.state.hp <= 0)
-        {
-            self.done = true;
-        }
     }
 }
 
@@ -767,10 +1010,10 @@ fn max_range_cached(
     computed
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 #[allow(dead_code)]
 pub struct BulkSimResult {
-    pub wins: [u32; 2],
+    pub wins: Vec<u32>,
     pub ties: u32,
     pub avg_duration: f32,
 }
@@ -778,16 +1021,23 @@ pub struct BulkSimResult {
 #[allow(dead_code)]
 pub fn bulk_simulate(
     config: SimConfig,
-    combatants: [Combatant; 2],
+    combatants: Vec<Combatant>,
     runs: u32,
     max_seconds: u32,
 ) -> BulkSimResult {
     if runs == 0 {
         return BulkSimResult::default();
     }
+    let mut team_ids: Vec<u8> = combatants.iter().map(|combatant| combatant.team_id).collect();
+    team_ids.sort_unstable();
+    team_ids.dedup();
+    let mut team_index = HashMap::new();
+    for (idx, team_id) in team_ids.iter().enumerate() {
+        team_index.insert(*team_id, idx);
+    }
     let mut sim = SimState::with_logging(config, false);
     sim.reset_with_combatants(combatants);
-    let mut wins = [0u32; 2];
+    let mut wins = vec![0u32; team_ids.len()];
     let mut ties = 0u32;
     let mut total_seconds = 0u64;
     for _ in 0..runs {
@@ -796,15 +1046,23 @@ pub fn bulk_simulate(
             sim.update(1.0);
         }
         total_seconds += sim.elapsed_seconds as u64;
-        let hp_a = sim.combatants[0].state.hp;
-        let hp_b = sim.combatants[1].state.hp;
         if sim.done {
-            if hp_a <= 0 && hp_b <= 0 {
-                ties += 1;
-            } else if hp_a <= 0 {
-                wins[1] += 1;
-            } else if hp_b <= 0 {
-                wins[0] += 1;
+            let mut alive_teams = HashSet::new();
+            for combatant in &sim.combatants {
+                if combatant.state.hp > 0 {
+                    alive_teams.insert(combatant.team_id);
+                }
+            }
+            if alive_teams.len() == 1 {
+                if let Some(team_id) = alive_teams.iter().next() {
+                    if let Some(&idx) = team_index.get(team_id) {
+                        wins[idx] += 1;
+                    } else {
+                        ties += 1;
+                    }
+                } else {
+                    ties += 1;
+                }
             } else {
                 ties += 1;
             }
@@ -821,7 +1079,7 @@ pub fn bulk_simulate(
 }
 
 impl HoldAtBayState {
-    fn blocks_advance(self, idx: usize) -> bool {
+    fn blocks_advance(&self, idx: usize) -> bool {
         self.active && self.target_idx == idx
     }
 }
@@ -842,6 +1100,8 @@ impl SimState {
 
     fn maybe_start_hold_at_bay(
         &mut self,
+        a_idx: usize,
+        b_idx: usize,
         distance_before: f32,
         distance_after: f32,
         reach_a: f32,
@@ -851,9 +1111,9 @@ impl SimState {
             return;
         }
         let (holder_idx, target_idx, holder_reach) = if reach_a > reach_b {
-            (0usize, 1usize, reach_a)
+            (a_idx, b_idx, reach_a)
         } else if reach_b > reach_a {
-            (1usize, 0usize, reach_b)
+            (b_idx, a_idx, reach_b)
         } else {
             return;
         };

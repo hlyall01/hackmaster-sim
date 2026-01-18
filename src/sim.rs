@@ -1,6 +1,6 @@
 pub use crate::core::sim::*;
 
-pub fn format_combat_event(event: &CombatEvent, combatants: &[Combatant; 2]) -> String {
+pub fn format_combat_event(event: &CombatEvent, combatants: &[Combatant]) -> String {
     let attacker_name = combatants
         .get(event.attacker_idx)
         .map(|combatant| combatant.sheet.name.as_str())
@@ -107,7 +107,7 @@ pub fn format_combat_event(event: &CombatEvent, combatants: &[Combatant; 2]) -> 
     }
 }
 
-pub fn format_combat_event_line(event: &CombatEvent, combatants: &[Combatant; 2]) -> String {
+pub fn format_combat_event_line(event: &CombatEvent, combatants: &[Combatant]) -> String {
     format!(
         "t={}s | {}",
         event.time,
