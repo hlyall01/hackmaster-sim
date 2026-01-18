@@ -185,6 +185,7 @@ class SpriteSpec:
     freckles: bool
     rugged: bool
     tattoo: tuple
+    face_style: str = "classic"
 
 
 @dataclass
@@ -685,6 +686,8 @@ def draw_head(canvas, spec, style, ramps, cx, head_top, head_radius):
     head_center_y = head_top + head_radius
     accessories = accessory_for_style(style.key)
     accent = apply_style_color(rgba(spec.accent), style)
+    face_style = getattr(spec, "face_style", "classic")
+    human_face = face_style == "human"
     for y in range(head_top - head_radius, head_top + head_radius + 1):
         for x in range(cx - head_radius - 1, cx + head_radius + 2):
             dx = x - cx
@@ -750,9 +753,12 @@ def draw_head(canvas, spec, style, ramps, cx, head_top, head_radius):
     )
 
     # Eyes
-    eye_y = head_center_y
-    canvas.set_px(cx - 2, eye_y, eyes)
-    canvas.set_px(cx + 2, eye_y, eyes)
+    eye_offset = 1 if human_face else 2
+    if human_face and head_radius >= 6:
+        eye_offset = 2
+    eye_y = head_center_y - 1 if human_face else head_center_y
+    canvas.set_px(cx - eye_offset, eye_y, eyes)
+    canvas.set_px(cx + eye_offset, eye_y, eyes)
 
     # Brows
     if spec.brow == "heavy":
@@ -764,16 +770,27 @@ def draw_head(canvas, spec, style, ramps, cx, head_top, head_radius):
         canvas.set_px(cx + 2, eye_y - 1, hair["base"])
 
     # Nose
+    nose_y = eye_y + 1
     if spec.nose == "bulbous":
-        canvas.set_px(cx, eye_y + 1, skin["dark"])
-        canvas.set_px(cx - 1, eye_y + 1, skin["dark"])
+        canvas.set_px(cx, nose_y, skin["dark"])
+        canvas.set_px(cx - 1, nose_y, skin["dark"])
     elif spec.nose == "prominent":
-        canvas.set_px(cx, eye_y + 1, skin["dark"])
+        canvas.set_px(cx, nose_y, skin["dark"])
     else:
-        canvas.set_px(cx, eye_y + 1, skin["base"])
+        nose_color = skin["light"] if human_face and style.shading else skin["base"]
+        canvas.set_px(cx, nose_y, nose_color)
 
     # Mouth
-    canvas.set_px(cx, eye_y + 3, skin["darker"] if style.detail >= 3 else skin["dark"])
+    mouth_color = skin["darker"] if style.detail >= 3 else skin["dark"]
+    if human_face:
+        mouth_y = eye_y + 2
+        canvas.set_px(cx - 1, mouth_y, mouth_color)
+        canvas.set_px(cx, mouth_y, mouth_color)
+        if head_radius >= 5:
+            canvas.set_px(cx + 1, mouth_y, mouth_color)
+    else:
+        mouth_y = eye_y + 3
+        canvas.set_px(cx, mouth_y, mouth_color)
 
     draw_head_accessory_face(canvas, accessories["head"], accent, cx, eye_y)
 
@@ -785,8 +802,10 @@ def draw_head(canvas, spec, style, ramps, cx, head_top, head_radius):
 
     # Rugged jaw
     if spec.rugged and style.detail >= 3:
-        canvas.set_px(cx - 3, eye_y + 3, skin["dark"])
-        canvas.set_px(cx + 3, eye_y + 3, skin["dark"])
+        jaw_y = mouth_y + (1 if human_face else 0)
+        jaw_dx = 2 if human_face else 3
+        canvas.set_px(cx - jaw_dx, jaw_y, skin["dark"])
+        canvas.set_px(cx + jaw_dx, jaw_y, skin["dark"])
 
     # Tattoo
     if spec.tattoo and style.detail >= 4:
@@ -2692,6 +2711,7 @@ def build_race_specs():
             freckles=True,
             rugged=False,
             tattoo=None,
+            face_style="human",
         ),
         SpriteSpec(
             race_id="fymblwngen",
@@ -2711,6 +2731,7 @@ def build_race_specs():
             freckles=False,
             rugged=False,
             tattoo=None,
+            face_style="human",
         ),
         SpriteSpec(
             race_id="ithican",
@@ -2730,6 +2751,7 @@ def build_race_specs():
             freckles=False,
             rugged=False,
             tattoo=None,
+            face_style="human",
         ),
         SpriteSpec(
             race_id="kanian",
@@ -2749,6 +2771,7 @@ def build_race_specs():
             freckles=False,
             rugged=True,
             tattoo=None,
+            face_style="human",
         ),
         SpriteSpec(
             race_id="katlakehan",
@@ -2768,6 +2791,7 @@ def build_race_specs():
             freckles=False,
             rugged=False,
             tattoo=None,
+            face_style="human",
         ),
         SpriteSpec(
             race_id="midlander",
@@ -2787,6 +2811,7 @@ def build_race_specs():
             freckles=False,
             rugged=True,
             tattoo=None,
+            face_style="human",
         ),
         SpriteSpec(
             race_id="pather",
@@ -2806,6 +2831,7 @@ def build_race_specs():
             freckles=False,
             rugged=False,
             tattoo=None,
+            face_style="human",
         ),
         SpriteSpec(
             race_id="vetlander",
@@ -2825,6 +2851,7 @@ def build_race_specs():
             freckles=False,
             rugged=True,
             tattoo=None,
+            face_style="human",
         ),
         SpriteSpec(
             race_id="limmtrig",
@@ -2844,6 +2871,7 @@ def build_race_specs():
             freckles=False,
             rugged=True,
             tattoo=None,
+            face_style="classic",
         ),
         SpriteSpec(
             race_id="vorova_female",
@@ -2863,6 +2891,7 @@ def build_race_specs():
             freckles=False,
             rugged=False,
             tattoo=(60, 90, 150),
+            face_style="classic",
         ),
         SpriteSpec(
             race_id="vorova_male",
@@ -2882,6 +2911,7 @@ def build_race_specs():
             freckles=False,
             rugged=True,
             tattoo=(160, 70, 70),
+            face_style="classic",
         ),
     ]
 
@@ -2905,6 +2935,7 @@ def build_hobgoblin_spec():
         freckles=False,
         rugged=True,
         tattoo=None,
+        face_style="classic",
     )
 
 
