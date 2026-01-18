@@ -2,5 +2,6 @@
 /.venv
 /secrets/codesign/
 /screenshots/
+/assets/sprites/
 *.pfx
 *.exe

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 SPRITE_W = 20
 SPRITE_H = 30
 DEFAULT_STYLE_KEY = "style10_painted"
+HIGHRES_SCALE = 10
 
 
 def clamp(value, low=0, high=255):
@@ -161,6 +162,8 @@ class Style:
     edge_soften_strength: float
     gradient_top: float
     gradient_bottom: float
+    render_mode: str = "classic"
+    weapon_mode: str = "classic"
 
 
 @dataclass
@@ -211,6 +214,225 @@ def apply_outline(canvas, outline_color):
                     new_pixels[idx : idx + 4] = bytes(outline_color)
                     break
     canvas.pixels = new_pixels
+
+
+def draw_rect_outline(canvas, x, y, w, h, color):
+    if w <= 0 or h <= 0:
+        return
+    for ix in range(x, x + w):
+        canvas.set_px(ix, y, color)
+        canvas.set_px(ix, y + h - 1, color)
+    for iy in range(y, y + h):
+        canvas.set_px(x, iy, color)
+        canvas.set_px(x + w - 1, iy, color)
+
+
+def draw_circle(canvas, cx, cy, r, color):
+    r2 = r * r
+    for y in range(cy - r, cy + r + 1):
+        for x in range(cx - r, cx + r + 1):
+            dx = x - cx
+            dy = y - cy
+            if dx * dx + dy * dy <= r2:
+                canvas.set_px(x, y, color)
+
+
+def draw_circle_outline(canvas, cx, cy, r, color):
+    r2 = r * r
+    for y in range(cy - r, cy + r + 1):
+        for x in range(cx - r, cx + r + 1):
+            dx = x - cx
+            dy = y - cy
+            dist2 = dx * dx + dy * dy
+            if r2 - r <= dist2 <= r2 + r:
+                canvas.set_px(x, y, color)
+
+
+def draw_ellipse(canvas, cx, cy, rx, ry, color):
+    if rx <= 0 or ry <= 0:
+        return
+    rx2 = rx * rx
+    ry2 = ry * ry
+    rxy2 = rx2 * ry2
+    for y in range(cy - ry, cy + ry + 1):
+        dy = y - cy
+        dy2 = dy * dy
+        for x in range(cx - rx, cx + rx + 1):
+            dx = x - cx
+            if dx * dx * ry2 + dy2 * rx2 <= rxy2:
+                canvas.set_px(x, y, color)
+
+
+def pick_ramp_color(ramp, dx_norm, dy_norm, highlight=True):
+    if dy_norm < -0.55:
+        return ramp["highlight"] if highlight else ramp["light"]
+    if dy_norm > 0.6:
+        return ramp["dark"]
+    if dx_norm < -0.55:
+        return ramp["light"]
+    if dx_norm > 0.55:
+        return ramp["dark"]
+    return ramp["base"]
+
+
+def fill_ellipse_shaded(canvas, cx, cy, rx, ry, ramp, highlight=True):
+    if rx <= 0 or ry <= 0:
+        return
+    rx2 = rx * rx
+    ry2 = ry * ry
+    rxy2 = rx2 * ry2
+    for y in range(cy - ry, cy + ry + 1):
+        dy = y - cy
+        dy2 = dy * dy
+        for x in range(cx - rx, cx + rx + 1):
+            dx = x - cx
+            if dx * dx * ry2 + dy2 * rx2 <= rxy2:
+                dx_norm = dx / rx
+                dy_norm = dy / ry
+                color = pick_ramp_color(ramp, dx_norm, dy_norm, highlight)
+                canvas.set_px(x, y, color)
+
+
+def fill_tapered_rect_shaded(canvas, cx, top, bottom, top_w, bottom_w, ramp):
+    if bottom <= top or top_w <= 0 or bottom_w <= 0:
+        return
+    height = bottom - top
+    for y in range(top, bottom):
+        t = (y - top) / max(1, height - 1)
+        width = int(top_w + (bottom_w - top_w) * t)
+        half = width // 2
+        for x in range(cx - half, cx + half + 1):
+            dx_norm = 0.0 if half == 0 else (x - cx) / half
+            dy_norm = 0.0 if height == 0 else (y - top) / height - 0.5
+            color = pick_ramp_color(ramp, dx_norm, dy_norm, True)
+            canvas.set_px(x, y, color)
+
+
+def fill_rect_shaded(canvas, x, y, w, h, ramp, vertical=True, horizontal=True):
+    if w <= 0 or h <= 0:
+        return
+    for iy in range(y, y + h):
+        for ix in range(x, x + w):
+            dx_norm = 0.0
+            dy_norm = 0.0
+            if horizontal:
+                dx_norm = (ix - (x + w / 2)) / max(1.0, w / 2)
+            if vertical:
+                dy_norm = (iy - (y + h / 2)) / max(1.0, h / 2)
+            color = pick_ramp_color(ramp, dx_norm, dy_norm, True)
+            canvas.set_px(ix, iy, color)
+
+
+def apply_outline_thick(canvas, outline_color, thickness):
+    for _ in range(thickness):
+        apply_outline(canvas, outline_color)
+
+
+def apply_hatching(canvas, step, color, strength=0.6):
+    w, h = canvas.width, canvas.height
+    out = bytearray(canvas.pixels)
+    for y in range(h):
+        for x in range(w):
+            if (x + y) % step != 0:
+                continue
+            idx = (y * w + x) * 4
+            a = out[idx + 3]
+            if a == 0:
+                continue
+            current = (out[idx], out[idx + 1], out[idx + 2])
+            mixed = blend(current, color[:3], strength)
+            out[idx] = mixed[0]
+            out[idx + 1] = mixed[1]
+            out[idx + 2] = mixed[2]
+    canvas.pixels = out
+
+
+def fill_ellipse_ink(canvas, cx, cy, rx, ry, ramp, hatch_step):
+    if rx <= 0 or ry <= 0:
+        return
+    rx2 = rx * rx
+    ry2 = ry * ry
+    rxy2 = rx2 * ry2
+    for y in range(cy - ry, cy + ry + 1):
+        dy = y - cy
+        dy2 = dy * dy
+        for x in range(cx - rx, cx + rx + 1):
+            dx = x - cx
+            if dx * dx * ry2 + dy2 * rx2 > rxy2:
+                continue
+            dx_norm = dx / rx
+            dy_norm = dy / ry
+            shadow = dy_norm > 0.35 or dx_norm > 0.45
+            deep_shadow = dy_norm > 0.6 or dx_norm > 0.65
+            if dy_norm < -0.6 or dx_norm < -0.6:
+                color = ramp["light"]
+            else:
+                color = ramp["base"]
+            if shadow:
+                color = ramp["dark"]
+            if deep_shadow:
+                color = ramp["darker"]
+            if dy_norm < -0.75 and dx_norm < -0.75:
+                color = ramp["highlight"]
+            if shadow and (x + y) % hatch_step == 0:
+                color = ramp["darker"]
+            if deep_shadow and (x - y) % (hatch_step + 2) == 0:
+                color = ramp["darker"]
+            canvas.set_px(x, y, color)
+
+
+def fill_tapered_rect_ink(canvas, cx, top, bottom, top_w, bottom_w, ramp, hatch_step):
+    if bottom <= top or top_w <= 0 or bottom_w <= 0:
+        return
+    height = bottom - top
+    for y in range(top, bottom):
+        t = (y - top) / max(1, height - 1)
+        width = int(top_w + (bottom_w - top_w) * t)
+        half = width // 2
+        for x in range(cx - half, cx + half + 1):
+            dx_norm = 0.0 if half == 0 else (x - cx) / half
+            dy_norm = 0.0 if height == 0 else (y - top) / height - 0.5
+            shadow = dy_norm > 0.2 or dx_norm > 0.55
+            deep_shadow = dy_norm > 0.45 or dx_norm > 0.75
+            color = ramp["base"]
+            if dy_norm < -0.4:
+                color = ramp["light"]
+            if shadow:
+                color = ramp["dark"]
+            if deep_shadow:
+                color = ramp["darker"]
+            if shadow and (x + y) % hatch_step == 0:
+                color = ramp["darker"]
+            if deep_shadow and (x - y) % (hatch_step + 2) == 0:
+                color = ramp["darker"]
+            canvas.set_px(x, y, color)
+
+
+def fill_rect_ink(canvas, x, y, w, h, ramp, hatch_step, vertical=True, horizontal=True):
+    if w <= 0 or h <= 0:
+        return
+    for iy in range(y, y + h):
+        for ix in range(x, x + w):
+            dx_norm = 0.0
+            dy_norm = 0.0
+            if horizontal:
+                dx_norm = (ix - (x + w / 2)) / max(1.0, w / 2)
+            if vertical:
+                dy_norm = (iy - (y + h / 2)) / max(1.0, h / 2)
+            shadow = dy_norm > 0.2 or dx_norm > 0.5
+            deep_shadow = dy_norm > 0.45 or dx_norm > 0.75
+            color = ramp["base"]
+            if dy_norm < -0.4:
+                color = ramp["light"]
+            if shadow:
+                color = ramp["dark"]
+            if deep_shadow:
+                color = ramp["darker"]
+            if shadow and (ix + iy) % hatch_step == 0:
+                color = ramp["darker"]
+            if deep_shadow and (ix - iy) % (hatch_step + 2) == 0:
+                color = ramp["darker"]
+            canvas.set_px(ix, iy, color)
 
 
 def silhouette_for_style(style_key):
@@ -337,10 +559,24 @@ def silhouette_for_style(style_key):
                 "arm_w": 1.0,
             }
         )
+    elif style_key == "style01_classic":
+        silhouette.update(
+            {
+                "head_scale": 1.2,
+                "torso_len": 1.0,
+                "shoulder": 1.0,
+                "waist": 1.0,
+                "hip": 1.0,
+                "leg_len": 1.0,
+                "leg_w": 1.0,
+                "arm_len": 1.0,
+                "arm_w": 1.0,
+            }
+        )
     elif style_key == "style10_painted":
         silhouette.update(
             {
-                "head_scale": 1.0,
+                "head_scale": 1.2,
                 "torso_len": 1.0,
                 "shoulder": 1.05,
                 "waist": 1.0,
@@ -714,7 +950,915 @@ def draw_body(canvas, spec, style, ramps, cx, torso_top, torso_bottom, silhouett
         canvas.set_px(cx + shoulder_w // 2, torso_top + 1, trim_color)
 
 
+def render_character_variant(spec, style):
+    mode = getattr(style, "render_mode", "classic")
+    if mode == "ink":
+        return render_character_ink(spec, style)
+    if mode == "highres":
+        return render_character_highres(spec, style)
+    if mode == "profile":
+        return render_character_profile(spec, style)
+    if mode == "chibi":
+        return render_character_chibi(spec, style)
+    if mode == "blocky":
+        return render_character_blocky(spec, style)
+    if mode == "silhouette":
+        return render_character_silhouette(spec, style)
+    if mode == "lineart":
+        return render_character_lineart(spec, style)
+    return render_character_blocky(spec, style)
+
+
+def render_character_ink(spec, style):
+    s = HIGHRES_SCALE
+    width = SPRITE_W * s
+    height = SPRITE_H * s
+    canvas = Canvas(width, height)
+    ramps = {
+        "skin": make_ramp(spec.skin, style),
+        "hair": make_ramp(spec.hair, style),
+        "tunic": make_ramp(spec.tunic, style),
+        "pants": make_ramp(spec.pants, style),
+        "boots": make_ramp(spec.boots, style),
+    }
+    skin = ramps["skin"]
+    hair = ramps["hair"]
+    tunic = ramps["tunic"]
+    pants = ramps["pants"]
+    boots = ramps["boots"]
+    accent = apply_style_color(rgba(spec.accent), style)
+    eyes = apply_style_color(rgba(spec.eyes), style)
+    hatch_step = max(4, s // 2)
+    skin_hatch = hatch_step + 3
+    cloth_hatch = hatch_step
+    pants_hatch = hatch_step + 1
+
+    cx = width // 2
+    head_rx = int(5.2 * s)
+    head_ry = int(6.4 * s)
+    head_top = int(2.6 * s)
+    head_cy = head_top + head_ry
+    fill_ellipse_ink(canvas, cx, head_cy, head_rx, head_ry, skin, skin_hatch)
+
+    hair_cap_bottom = head_cy - int(head_ry * 0.25)
+    for y in range(head_top - int(0.6 * s), hair_cap_bottom):
+        for x in range(cx - head_rx, cx + head_rx + 1):
+            dx = x - cx
+            dy = y - head_cy
+            if dx * dx * head_ry * head_ry + dy * dy * head_rx * head_rx <= head_rx * head_rx * head_ry * head_ry:
+                hair_shade = hair["base"]
+                if dy < -head_ry * 0.4:
+                    hair_shade = hair["light"]
+                if (x + y) % (hatch_step + 1) == 0:
+                    hair_shade = hair["dark"]
+                canvas.set_px(x, y, hair_shade)
+
+    if spec.hair_style == "long":
+        lock_w = int(3.0 * s)
+        lock_h = int(7.0 * s)
+        canvas.rect(cx - head_rx - lock_w + 2, hair_cap_bottom, lock_w, lock_h, hair["base"])
+        canvas.rect(cx + head_rx - 1, hair_cap_bottom, lock_w, lock_h, hair["base"])
+        for y in range(hair_cap_bottom, hair_cap_bottom + lock_h, 2):
+            canvas.set_px(cx - head_rx - 1, y, hair["dark"])
+            canvas.set_px(cx + head_rx + lock_w - 2, y, hair["dark"])
+    elif spec.hair_style == "wild":
+        spike_h = int(3.5 * s)
+        for i in range(-6, 7):
+            x0 = cx + int(i * 1.1 * s)
+            canvas.line(x0, head_top + int(0.6 * s), x0, head_top - spike_h, hair["dark"])
+
+    # Ears
+    ear_y = head_cy - int(0.2 * s)
+    ear_w = int(1.4 * s)
+    if spec.ear == "pointed":
+        for i in range(int(2.2 * s)):
+            canvas.set_px(cx - head_rx - i, ear_y - i, skin["dark"])
+            canvas.set_px(cx - head_rx - i, ear_y + i, skin["dark"])
+    elif spec.ear == "long":
+        canvas.rect(cx - head_rx - ear_w, ear_y, ear_w, int(3.4 * s), skin["dark"])
+    else:
+        canvas.rect(cx - head_rx - ear_w, ear_y, ear_w, ear_w, skin["dark"])
+
+    eye_y = head_cy - int(head_ry * 0.18)
+    eye_w = int(2.2 * s)
+    eye_h = max(2, int(0.8 * s))
+    left_eye_x = cx - int(3.6 * s)
+    right_eye_x = cx + int(1.6 * s)
+    canvas.rect(left_eye_x, eye_y, eye_w, eye_h, skin["light"])
+    canvas.rect(right_eye_x, eye_y, eye_w, eye_h, skin["light"])
+    canvas.rect(left_eye_x + eye_w // 3, eye_y + 1, eye_w // 2, eye_h - 1, eyes)
+    canvas.rect(right_eye_x + eye_w // 3, eye_y + 1, eye_w // 2, eye_h - 1, eyes)
+    canvas.set_px(left_eye_x + eye_w // 2, eye_y + 1, skin["dark"])
+    canvas.set_px(right_eye_x + eye_w // 2, eye_y + 1, skin["dark"])
+
+    brow_y = eye_y - int(0.8 * s)
+    brow_w = int(2.8 * s)
+    brow_h = int(0.6 * s)
+    brow_color = hair["dark"] if spec.brow == "heavy" else hair["base"]
+    canvas.rect(left_eye_x, brow_y, brow_w, brow_h, brow_color)
+    canvas.rect(right_eye_x, brow_y, brow_w, brow_h, brow_color)
+    if spec.brow == "heavy":
+        canvas.rect(left_eye_x, brow_y + 1, brow_w, brow_h, brow_color)
+        canvas.rect(right_eye_x, brow_y + 1, brow_w, brow_h, brow_color)
+
+    nose_x = cx + int(0.7 * s)
+    if spec.nose == "prominent":
+        canvas.rect(nose_x, eye_y + int(0.6 * s), int(0.6 * s), int(2.4 * s), skin["dark"])
+        canvas.rect(nose_x + 1, eye_y + int(0.9 * s), int(0.3 * s), int(1.6 * s), skin["light"])
+    elif spec.nose == "bulbous":
+        draw_circle(canvas, nose_x, eye_y + int(1.5 * s), int(0.9 * s), skin["dark"])
+    else:
+        canvas.set_px(nose_x, eye_y + int(1.0 * s), skin["dark"])
+    mouth_y = eye_y + int(2.8 * s)
+    canvas.rect(cx - int(1.0 * s), mouth_y, int(2.0 * s), int(0.5 * s), skin["darker"])
+
+    # Cheek and lip highlights for softer planes.
+    canvas.rect(cx - int(2.6 * s), eye_y + int(1.2 * s), int(1.4 * s), int(0.6 * s), skin["highlight"])
+    canvas.rect(cx + int(1.4 * s), eye_y + int(1.2 * s), int(1.0 * s), int(0.4 * s), skin["light"])
+    canvas.rect(cx - int(0.6 * s), mouth_y - int(0.4 * s), int(1.2 * s), int(0.3 * s), skin["light"])
+
+    # Neck
+    neck_w = int(2.8 * s)
+    neck_h = int(1.6 * s)
+    neck_x = cx - neck_w // 2
+    neck_y = head_cy + head_ry - int(0.2 * s)
+    fill_rect_ink(canvas, neck_x, neck_y, neck_w, neck_h, skin, skin_hatch, True, True)
+
+    if spec.freckles:
+        freckle = skin["darker"]
+        canvas.set_px(cx - int(2.0 * s), eye_y + int(1.4 * s), freckle)
+        canvas.set_px(cx - int(1.3 * s), eye_y + int(1.6 * s), freckle)
+        canvas.set_px(cx + int(1.8 * s), eye_y + int(1.5 * s), freckle)
+    if spec.rugged:
+        jaw_y = mouth_y + int(0.8 * s)
+        canvas.rect(cx - int(1.6 * s), jaw_y, int(3.2 * s), int(0.6 * s), skin["dark"])
+
+    if spec.tattoo and style.detail >= 3:
+        tattoo_color = apply_style_color(rgba(spec.tattoo), style)
+        canvas.rect(cx + int(1.5 * s), eye_y + int(1.8 * s), int(2.0 * s), int(0.8 * s), tattoo_color)
+
+    torso_top = head_cy + head_ry - int(1.2 * s)
+    torso_len = int(13 * s * spec.height)
+    torso_bottom = min(height - int(7 * s), torso_top + torso_len)
+    shoulder_w = int(11.5 * s * spec.build)
+    waist_w = int(7.8 * s * spec.build)
+    fill_tapered_rect_ink(canvas, cx, torso_top, torso_bottom, shoulder_w, waist_w, tunic, cloth_hatch)
+
+    # Cloak / mantle
+    cloak_top = torso_top - int(0.8 * s)
+    cloak_bottom = torso_top + int(3.2 * s)
+    cloak_w = int(shoulder_w * 1.15)
+    cloak_base = shade(rgba(spec.tunic), 0.7)
+    cloak_ramp = make_ramp(cloak_base, style)
+    fill_tapered_rect_ink(
+        canvas,
+        cx,
+        cloak_top,
+        cloak_bottom,
+        cloak_w,
+        cloak_w - int(2.0 * s),
+        cloak_ramp,
+        cloth_hatch,
+    )
+
+    collar_y = torso_top + int(0.5 * s)
+    canvas.rect(cx - int(3.4 * s), collar_y, int(6.8 * s), int(0.8 * s), tunic["dark"])
+    canvas.rect(cx - int(3.0 * s), collar_y + int(0.2 * s), int(6.0 * s), int(0.3 * s), tunic["light"])
+
+    belt_y = torso_bottom - int(1.6 * s)
+    canvas.rect(cx - waist_w // 2, belt_y, waist_w + 1, int(0.8 * s), accent)
+    buckle_w = int(1.2 * s)
+    canvas.rect(cx - buckle_w // 2, belt_y, buckle_w, int(0.8 * s), tunic["dark"])
+    # Belt loop and pouch
+    loop_x = cx - int(2.2 * s)
+    canvas.rect(loop_x, belt_y - int(0.6 * s), int(0.6 * s), int(1.6 * s), tunic["dark"])
+    pouch_w = int(2.4 * s)
+    pouch_h = int(2.0 * s)
+    pouch_x = cx + int(2.4 * s)
+    canvas.rect(pouch_x, belt_y - int(0.4 * s), pouch_w, pouch_h, tunic["darker"])
+    canvas.rect(pouch_x, belt_y - int(0.4 * s), pouch_w, int(0.4 * s), tunic["dark"])
+
+    if spec.rugged:
+        shoulder_patch_w = int(2.8 * s)
+        shoulder_patch_h = int(1.2 * s)
+        canvas.rect(cx - shoulder_w // 2, torso_top + int(0.8 * s), shoulder_patch_w, shoulder_patch_h, accent)
+        for i in range(int(3.0 * s)):
+            canvas.set_px(cx - shoulder_w // 2 + i, torso_top + int(0.8 * s) + i, tunic["dark"])
+
+    torso_h = torso_bottom - torso_top
+    arm_len = int(torso_h * 0.75)
+    sleeve_len = int(arm_len * 0.55)
+    arm_w = int(2.8 * s)
+    arm_x_left = cx - shoulder_w // 2 - arm_w
+    arm_x_right = cx + shoulder_w // 2
+    for i in range(arm_len):
+        y = torso_top + int(0.7 * s) + i
+        arm_color = tunic["dark"] if i < sleeve_len else skin["base"]
+        canvas.rect(arm_x_left, y, arm_w, 1, arm_color)
+        canvas.rect(arm_x_right, y, arm_w, 1, arm_color)
+        if i == sleeve_len - int(0.2 * s):
+            canvas.rect(arm_x_left, y, arm_w, int(0.3 * s), tunic["light"])
+            canvas.rect(arm_x_right, y, arm_w, int(0.3 * s), tunic["light"])
+    hand_h = int(1.0 * s)
+    canvas.rect(arm_x_left, torso_top + int(0.7 * s) + arm_len, arm_w, hand_h, skin["light"])
+    canvas.rect(arm_x_right, torso_top + int(0.7 * s) + arm_len, arm_w, hand_h, skin["light"])
+
+    if spec.tattoo and style.detail >= 3:
+        tattoo_color = apply_style_color(rgba(spec.tattoo), style)
+        canvas.rect(arm_x_left + int(0.6 * s), torso_top + int(2.0 * s), int(1.6 * s), int(0.6 * s), tattoo_color)
+
+    leg_top = torso_bottom - int(0.4 * s)
+    leg_len = int(8.8 * s)
+    leg_w = int(3.2 * s * spec.build)
+    fill_rect_ink(canvas, cx - leg_w - 2, leg_top, leg_w, leg_len, pants, pants_hatch, True, True)
+    fill_rect_ink(canvas, cx + 2, leg_top, leg_w, leg_len, pants, pants_hatch, True, True)
+
+    knee_y = leg_top + int(3.8 * s)
+    canvas.rect(cx - leg_w - 2, knee_y, leg_w, int(0.6 * s), pants["dark"])
+    canvas.rect(cx + 2, knee_y, leg_w, int(0.6 * s), pants["dark"])
+
+    boot_h = int(2.4 * s)
+    sole_h = int(0.5 * s)
+    fill_rect_ink(canvas, cx - leg_w - 2, leg_top + leg_len - 1, leg_w, boot_h, boots, pants_hatch, True, False)
+    fill_rect_ink(canvas, cx + 2, leg_top + leg_len - 1, leg_w, boot_h, boots, pants_hatch, True, False)
+    canvas.rect(cx - leg_w - 2, leg_top + leg_len - 1 + boot_h - sole_h, leg_w, sole_h, boots["dark"])
+    canvas.rect(cx + 2, leg_top + leg_len - 1 + boot_h - sole_h, leg_w, sole_h, boots["dark"])
+    cuff_h = int(0.6 * s)
+    canvas.rect(cx - leg_w - 2, leg_top + leg_len - boot_h, leg_w, cuff_h, boots["dark"])
+    canvas.rect(cx + 2, leg_top + leg_len - boot_h, leg_w, cuff_h, boots["dark"])
+
+    apply_outline_thick(canvas, style.outline_color, max(2, s // 6))
+    return canvas.width, canvas.height, canvas.pixels
+
+def render_character_highres(spec, style):
+    s = HIGHRES_SCALE
+    width = SPRITE_W * s
+    height = SPRITE_H * s
+    canvas = Canvas(width, height)
+    ramps = {
+        "skin": make_ramp(spec.skin, style),
+        "hair": make_ramp(spec.hair, style),
+        "tunic": make_ramp(spec.tunic, style),
+        "pants": make_ramp(spec.pants, style),
+        "boots": make_ramp(spec.boots, style),
+    }
+    skin = ramps["skin"]
+    hair = ramps["hair"]
+    tunic = ramps["tunic"]
+    pants = ramps["pants"]
+    boots = ramps["boots"]
+    accent = apply_style_color(rgba(spec.accent), style)
+    eyes = apply_style_color(rgba(spec.eyes), style)
+
+    cx = width // 2
+    head_rx = int(5.0 * s)
+    head_ry = int(6.2 * s)
+    head_top = int(3.0 * s)
+    head_cy = head_top + head_ry
+    fill_ellipse_shaded(canvas, cx, head_cy, head_rx, head_ry, skin, True)
+
+    # Hair cap and styles
+    hair_cap_bottom = head_cy - int(head_ry * 0.3)
+    if spec.hair_style == "cropped":
+        hair_cap_bottom = head_cy - int(head_ry * 0.1)
+    elif spec.hair_style == "short":
+        hair_cap_bottom = head_cy - int(head_ry * 0.2)
+    elif spec.hair_style == "long":
+        hair_cap_bottom = head_cy + int(head_ry * 0.2)
+    elif spec.hair_style == "wild":
+        hair_cap_bottom = head_cy - int(head_ry * 0.15)
+
+    for y in range(head_top - int(0.6 * s), hair_cap_bottom):
+        for x in range(cx - head_rx, cx + head_rx + 1):
+            dx = x - cx
+            dy = y - head_cy
+            if dx * dx * head_ry * head_ry + dy * dy * head_rx * head_rx <= head_rx * head_rx * head_ry * head_ry:
+                shade = hair["base"]
+                if dy < -head_ry * 0.4:
+                    shade = hair["light"]
+                elif dy > head_ry * 0.1:
+                    shade = hair["dark"]
+                canvas.set_px(x, y, shade)
+
+    if spec.hair_style == "long":
+        lock_w = int(2.6 * s)
+        lock_h = int(6.0 * s)
+        canvas.rect(cx - head_rx - lock_w + 2, hair_cap_bottom, lock_w, lock_h, hair["base"])
+        canvas.rect(cx + head_rx - 1, hair_cap_bottom, lock_w, lock_h, hair["base"])
+    elif spec.hair_style == "wild":
+        spike_h = int(3.0 * s)
+        for i in range(-5, 6):
+            x0 = cx + int(i * 1.2 * s)
+            canvas.line(x0, head_top + int(0.6 * s), x0, head_top - spike_h, hair["dark"])
+
+    for x in range(cx - head_rx + 2, cx + head_rx - 1):
+        canvas.set_px(x, head_top + int(1.0 * s), hair["light"])
+
+    # Ears
+    ear_y = head_cy - int(0.2 * s)
+    ear_w = int(1.4 * s)
+    if spec.ear == "pointed":
+        for i in range(int(2.0 * s)):
+            canvas.set_px(cx - head_rx - i, ear_y - i, skin["dark"])
+            canvas.set_px(cx - head_rx - i, ear_y + i, skin["dark"])
+    elif spec.ear == "long":
+        canvas.rect(cx - head_rx - ear_w, ear_y, ear_w, int(3.0 * s), skin["dark"])
+    else:
+        canvas.rect(cx - head_rx - ear_w, ear_y, ear_w, ear_w, skin["dark"])
+
+    # Brows + eyes
+    eye_y = head_cy - int(head_ry * 0.18)
+    eye_w = int(2.0 * s)
+    eye_h = max(2, int(0.8 * s))
+    left_eye_x = cx - int(3.4 * s)
+    right_eye_x = cx + int(1.4 * s)
+    canvas.rect(left_eye_x, eye_y, eye_w, eye_h, skin["light"])
+    canvas.rect(right_eye_x, eye_y, eye_w, eye_h, skin["light"])
+    canvas.rect(left_eye_x + eye_w // 3, eye_y + 1, eye_w // 2, eye_h - 1, eyes)
+    canvas.rect(right_eye_x + eye_w // 3, eye_y + 1, eye_w // 2, eye_h - 1, eyes)
+    canvas.set_px(left_eye_x + eye_w // 2, eye_y + 1, skin["dark"])
+    canvas.set_px(right_eye_x + eye_w // 2, eye_y + 1, skin["dark"])
+    brow_y = eye_y - int(0.8 * s)
+    brow_w = int(2.6 * s)
+    brow_h = int(0.6 * s)
+    brow_color = hair["dark"] if spec.brow == "heavy" else hair["base"]
+    canvas.rect(left_eye_x, brow_y, brow_w, brow_h, brow_color)
+    canvas.rect(right_eye_x, brow_y, brow_w, brow_h, brow_color)
+    if spec.brow == "heavy":
+        canvas.rect(left_eye_x, brow_y + 1, brow_w, brow_h, brow_color)
+        canvas.rect(right_eye_x, brow_y + 1, brow_w, brow_h, brow_color)
+
+    # Nose + mouth
+    nose_x = cx + int(0.7 * s)
+    if spec.nose == "prominent":
+        canvas.rect(nose_x, eye_y + int(0.6 * s), int(0.6 * s), int(2.2 * s), skin["dark"])
+        canvas.rect(nose_x + 1, eye_y + int(0.8 * s), int(0.3 * s), int(1.6 * s), skin["light"])
+    elif spec.nose == "bulbous":
+        draw_circle(canvas, nose_x, eye_y + int(1.4 * s), int(0.9 * s), skin["dark"])
+    else:
+        canvas.set_px(nose_x, eye_y + int(1.0 * s), skin["dark"])
+    mouth_y = eye_y + int(2.8 * s)
+    canvas.rect(cx - int(1.0 * s), mouth_y, int(2.0 * s), int(0.5 * s), skin["darker"])
+
+    # Freckles + rugged jaw
+    if spec.freckles:
+        freckle = skin["darker"]
+        canvas.set_px(cx - int(2.0 * s), eye_y + int(1.4 * s), freckle)
+        canvas.set_px(cx - int(1.3 * s), eye_y + int(1.6 * s), freckle)
+        canvas.set_px(cx + int(1.8 * s), eye_y + int(1.5 * s), freckle)
+    if spec.rugged:
+        jaw_y = mouth_y + int(0.8 * s)
+        canvas.rect(cx - int(1.6 * s), jaw_y, int(3.2 * s), int(0.6 * s), skin["dark"])
+
+    if spec.tattoo and style.detail >= 3:
+        tattoo_color = apply_style_color(rgba(spec.tattoo), style)
+        canvas.rect(cx + int(1.5 * s), eye_y + int(1.8 * s), int(2.0 * s), int(0.8 * s), tattoo_color)
+
+    # Torso
+    torso_top = head_cy + head_ry - int(1.2 * s)
+    torso_len = int(13 * s * spec.height)
+    torso_bottom = min(height - int(7 * s), torso_top + torso_len)
+    torso_h = torso_bottom - torso_top
+    shoulder_w = int(11.0 * s * spec.build)
+    waist_w = int(7.8 * s * spec.build)
+    fill_tapered_rect_shaded(canvas, cx, torso_top, torso_bottom, shoulder_w, waist_w, tunic)
+
+    collar_y = torso_top + int(0.6 * s)
+    canvas.rect(cx - int(3.2 * s), collar_y, int(6.4 * s), int(0.7 * s), tunic["dark"])
+
+    belt_y = torso_bottom - int(1.6 * s)
+    canvas.rect(cx - waist_w // 2, belt_y, waist_w + 1, int(0.8 * s), accent)
+    buckle_w = int(1.2 * s)
+    canvas.rect(cx - buckle_w // 2, belt_y, buckle_w, int(0.8 * s), tunic["dark"])
+
+    if spec.rugged:
+        shoulder_patch_w = int(2.6 * s)
+        shoulder_patch_h = int(1.2 * s)
+        canvas.rect(cx - shoulder_w // 2, torso_top + int(0.8 * s), shoulder_patch_w, shoulder_patch_h, accent)
+
+    # Arms
+    arm_len = int(torso_h * 0.75)
+    sleeve_len = int(arm_len * 0.55)
+    arm_w = int(2.6 * s)
+    arm_x_left = cx - shoulder_w // 2 - arm_w
+    arm_x_right = cx + shoulder_w // 2
+    for i in range(arm_len):
+        y = torso_top + int(0.7 * s) + i
+        if i < sleeve_len:
+            arm_color = tunic["dark"]
+        else:
+            arm_color = skin["base"]
+        canvas.rect(arm_x_left, y, arm_w, 1, arm_color)
+        canvas.rect(arm_x_right, y, arm_w, 1, arm_color)
+    hand_h = int(1.0 * s)
+    canvas.rect(arm_x_left, torso_top + int(0.7 * s) + arm_len, arm_w, hand_h, skin["light"])
+    canvas.rect(arm_x_right, torso_top + int(0.7 * s) + arm_len, arm_w, hand_h, skin["light"])
+
+    if spec.tattoo and style.detail >= 3:
+        tattoo_color = apply_style_color(rgba(spec.tattoo), style)
+        canvas.rect(arm_x_left + int(0.6 * s), torso_top + int(2.0 * s), int(1.6 * s), int(0.6 * s), tattoo_color)
+
+    # Legs
+    leg_top = torso_bottom - int(0.4 * s)
+    leg_len = int(8.5 * s)
+    leg_w = int(3.2 * s * spec.build)
+    for y in range(leg_top, leg_top + leg_len):
+        for x in range(cx - leg_w - 2, cx - 2):
+            color = pants["base"]
+            if x <= cx - leg_w - 1:
+                color = pants["light"]
+            if y >= leg_top + leg_len - int(1.8 * s):
+                color = pants["dark"]
+            canvas.set_px(x, y, color)
+        for x in range(cx + 2, cx + leg_w + 2):
+            color = pants["base"]
+            if x >= cx + leg_w + 1:
+                color = pants["dark"]
+            if y >= leg_top + leg_len - int(1.8 * s):
+                color = pants["dark"]
+            canvas.set_px(x, y, color)
+    knee_y = leg_top + int(3.8 * s)
+    canvas.rect(cx - leg_w - 2, knee_y, leg_w, int(0.6 * s), pants["dark"])
+    canvas.rect(cx + 2, knee_y, leg_w, int(0.6 * s), pants["dark"])
+
+    boot_h = int(2.4 * s)
+    sole_h = int(0.5 * s)
+    canvas.rect(cx - leg_w - 2, leg_top + leg_len - 1, leg_w, boot_h, boots["base"])
+    canvas.rect(cx + 2, leg_top + leg_len - 1, leg_w, boot_h, boots["base"])
+    canvas.rect(cx - leg_w - 2, leg_top + leg_len - 1 + boot_h - sole_h, leg_w, sole_h, boots["dark"])
+    canvas.rect(cx + 2, leg_top + leg_len - 1 + boot_h - sole_h, leg_w, sole_h, boots["dark"])
+
+    if style.outline:
+        apply_outline(canvas, style.outline_color)
+    return canvas.width, canvas.height, canvas.pixels
+
+
+def render_character_profile(spec, style):
+    canvas = Canvas(SPRITE_W, SPRITE_H)
+    ramps = {
+        "skin": make_ramp(spec.skin, style),
+        "hair": make_ramp(spec.hair, style),
+        "tunic": make_ramp(spec.tunic, style),
+        "pants": make_ramp(spec.pants, style),
+        "boots": make_ramp(spec.boots, style),
+    }
+    skin = ramps["skin"]["base"]
+    hair = ramps["hair"]["base"]
+    tunic = ramps["tunic"]["base"]
+    pants = ramps["pants"]["base"]
+    boots = ramps["boots"]["base"]
+    accent = apply_style_color(rgba(spec.accent), style)
+    eyes = apply_style_color(rgba(spec.eyes), style)
+
+    head_r = 4
+    head_cx = 6
+    head_cy = 8
+    draw_circle(canvas, head_cx, head_cy, head_r, skin)
+    for y in range(head_cy - head_r, head_cy - head_r + 2):
+        for x in range(head_cx - head_r, head_cx + head_r + 1):
+            canvas.set_px(x, y, hair)
+    canvas.set_px(head_cx + head_r - 1, head_cy, eyes)
+    canvas.set_px(head_cx + head_r, head_cy + 1, skin)
+    canvas.set_px(head_cx - head_r, head_cy + 1, skin)
+
+    torso_x = head_cx + head_r - 1
+    torso_y = head_cy + head_r - 1
+    torso_w = 6
+    torso_h = 9
+    canvas.rect(torso_x, torso_y, torso_w, torso_h, tunic)
+    canvas.rect(torso_x, torso_y + 4, torso_w, 1, accent)
+
+    arm_y = torso_y + 3
+    canvas.line(torso_x + 1, arm_y, torso_x + torso_w + 2, arm_y + 1, skin)
+
+    leg_y = torso_y + torso_h - 1
+    canvas.rect(torso_x + 1, leg_y, 2, 6, pants)
+    canvas.rect(torso_x + 3, leg_y + 1, 2, 5, pants)
+    canvas.rect(torso_x + 1, leg_y + 5, 2, 2, boots)
+    canvas.rect(torso_x + 3, leg_y + 5, 2, 2, boots)
+
+    if style.outline:
+        apply_outline(canvas, style.outline_color)
+    return canvas.width, canvas.height, canvas.pixels
+
+
+def render_character_chibi(spec, style):
+    canvas = Canvas(SPRITE_W, SPRITE_H)
+    ramps = {
+        "skin": make_ramp(spec.skin, style),
+        "hair": make_ramp(spec.hair, style),
+        "tunic": make_ramp(spec.tunic, style),
+        "pants": make_ramp(spec.pants, style),
+        "boots": make_ramp(spec.boots, style),
+    }
+    skin = ramps["skin"]["base"]
+    hair = ramps["hair"]["base"]
+    tunic = ramps["tunic"]["base"]
+    pants = ramps["pants"]["base"]
+    boots = ramps["boots"]["base"]
+    eyes = apply_style_color(rgba(spec.eyes), style)
+
+    head_r = 6
+    head_cx = SPRITE_W // 2
+    head_cy = 8
+    draw_circle(canvas, head_cx, head_cy, head_r, skin)
+    for y in range(head_cy - head_r, head_cy - head_r + 3):
+        for x in range(head_cx - head_r, head_cx + head_r + 1):
+            canvas.set_px(x, y, hair)
+    canvas.set_px(head_cx - 2, head_cy, eyes)
+    canvas.set_px(head_cx + 2, head_cy, eyes)
+
+    body_w = 8
+    body_h = 6
+    body_x = head_cx - body_w // 2
+    body_y = head_cy + head_r - 1
+    canvas.rect(body_x, body_y, body_w, body_h, tunic)
+
+    canvas.rect(body_x - 2, body_y + 2, 2, 3, skin)
+    canvas.rect(body_x + body_w, body_y + 2, 2, 3, skin)
+
+    leg_y = body_y + body_h
+    canvas.rect(body_x + 1, leg_y, 3, 4, pants)
+    canvas.rect(body_x + body_w - 4, leg_y, 3, 4, pants)
+    canvas.rect(body_x + 1, leg_y + 3, 3, 2, boots)
+    canvas.rect(body_x + body_w - 4, leg_y + 3, 3, 2, boots)
+
+    if style.outline:
+        apply_outline(canvas, style.outline_color)
+    return canvas.width, canvas.height, canvas.pixels
+
+
+def render_character_blocky(spec, style):
+    canvas = Canvas(SPRITE_W, SPRITE_H)
+    ramps = {
+        "skin": make_ramp(spec.skin, style),
+        "hair": make_ramp(spec.hair, style),
+        "tunic": make_ramp(spec.tunic, style),
+        "pants": make_ramp(spec.pants, style),
+        "boots": make_ramp(spec.boots, style),
+    }
+    skin = ramps["skin"]["base"]
+    hair = ramps["hair"]["base"]
+    tunic = ramps["tunic"]["base"]
+    pants = ramps["pants"]["base"]
+    boots = ramps["boots"]["base"]
+
+    head_w = 6
+    head_h = 6
+    head_x = SPRITE_W // 2 - head_w // 2
+    head_y = 4
+    canvas.rect(head_x, head_y, head_w, head_h, skin)
+    canvas.rect(head_x, head_y, head_w, 2, hair)
+
+    body_w = 10
+    body_h = 10
+    body_x = SPRITE_W // 2 - body_w // 2
+    body_y = head_y + head_h + 1
+    canvas.rect(body_x, body_y, body_w, body_h, tunic)
+
+    canvas.rect(body_x - 2, body_y + 2, 2, 7, skin)
+    canvas.rect(body_x + body_w, body_y + 2, 2, 7, skin)
+
+    leg_y = body_y + body_h
+    canvas.rect(body_x + 1, leg_y, 3, 6, pants)
+    canvas.rect(body_x + body_w - 4, leg_y, 3, 6, pants)
+    canvas.rect(body_x + 1, leg_y + 5, 3, 2, boots)
+    canvas.rect(body_x + body_w - 4, leg_y + 5, 3, 2, boots)
+
+    if style.outline:
+        apply_outline(canvas, style.outline_color)
+    return canvas.width, canvas.height, canvas.pixels
+
+
+def render_character_silhouette(spec, style):
+    canvas = Canvas(SPRITE_W, SPRITE_H)
+    ramps = {
+        "tunic": make_ramp(spec.tunic, style),
+    }
+    sil = ramps["tunic"]["darker"]
+    head_r = 5
+    head_cx = SPRITE_W // 2
+    head_cy = 8
+    draw_circle(canvas, head_cx, head_cy, head_r, sil)
+    body_x = head_cx - 6
+    body_y = head_cy + head_r - 1
+    body_w = 12
+    body_h = 14
+    canvas.rect(body_x, body_y, body_w, body_h, sil)
+    canvas.rect(body_x + 2, body_y + body_h, 3, 6, sil)
+    canvas.rect(body_x + body_w - 5, body_y + body_h, 3, 6, sil)
+    return canvas.width, canvas.height, canvas.pixels
+
+
+def render_character_lineart(spec, style):
+    canvas = Canvas(SPRITE_W, SPRITE_H)
+    ink = apply_style_color(rgba(spec.accent), style)
+    head_w = 8
+    head_h = 8
+    head_x = SPRITE_W // 2 - head_w // 2
+    head_y = 4
+    draw_rect_outline(canvas, head_x, head_y, head_w, head_h, ink)
+
+    body_w = 10
+    body_h = 10
+    body_x = SPRITE_W // 2 - body_w // 2
+    body_y = head_y + head_h
+    draw_rect_outline(canvas, body_x, body_y, body_w, body_h, ink)
+
+    arm_y = body_y + 3
+    canvas.line(body_x - 2, arm_y, body_x, arm_y + 2, ink)
+    canvas.line(body_x + body_w, arm_y + 2, body_x + body_w + 2, arm_y, ink)
+
+    leg_y = body_y + body_h
+    canvas.line(body_x + 2, leg_y, body_x + 2, leg_y + 6, ink)
+    canvas.line(body_x + body_w - 3, leg_y, body_x + body_w - 3, leg_y + 6, ink)
+    return canvas.width, canvas.height, canvas.pixels
+
+
+def render_character_downed_variant(spec, style):
+    mode = getattr(style, "render_mode", "classic")
+    if mode == "ink":
+        return render_character_ink_downed(spec, style)
+    if mode == "highres":
+        return render_character_highres_downed(spec, style)
+    if mode == "profile":
+        return render_character_profile_downed(spec, style)
+    if mode == "chibi":
+        return render_character_chibi_downed(spec, style)
+    if mode == "blocky":
+        return render_character_blocky_downed(spec, style)
+    if mode == "silhouette":
+        return render_character_silhouette_downed(spec, style)
+    if mode == "lineart":
+        return render_character_lineart_downed(spec, style)
+    return render_character_blocky_downed(spec, style)
+
+
+def render_character_ink_downed(spec, style):
+    s = HIGHRES_SCALE
+    width = SPRITE_W * s
+    height = SPRITE_H * s
+    canvas = Canvas(width, height)
+    ramps = {
+        "skin": make_ramp(spec.skin, style),
+        "hair": make_ramp(spec.hair, style),
+        "tunic": make_ramp(spec.tunic, style),
+        "pants": make_ramp(spec.pants, style),
+        "boots": make_ramp(spec.boots, style),
+    }
+    skin = ramps["skin"]
+    hair = ramps["hair"]
+    tunic = ramps["tunic"]
+    pants = ramps["pants"]
+    boots = ramps["boots"]
+    accent = apply_style_color(rgba(spec.accent), style)
+    eyes = apply_style_color(rgba(spec.eyes), style)
+    hatch_step = max(4, s // 2)
+    skin_hatch = hatch_step + 3
+    cloth_hatch = hatch_step
+    pants_hatch = hatch_step + 1
+
+    base_y = height - int(5 * s)
+    head_rx = int(5.0 * s)
+    head_ry = int(6.0 * s)
+    head_cx = int(6.6 * s)
+    head_cy = base_y - head_ry
+    fill_ellipse_ink(canvas, head_cx, head_cy, head_rx, head_ry, skin, skin_hatch)
+
+    hair_cap_bottom = head_cy - int(head_ry * 0.3)
+    for y in range(head_cy - head_ry, hair_cap_bottom):
+        for x in range(head_cx - head_rx, head_cx + head_rx + 1):
+            dx = x - head_cx
+            dy = y - head_cy
+            if dx * dx * head_ry * head_ry + dy * dy * head_rx * head_rx <= head_rx * head_rx * head_ry * head_ry:
+                canvas.set_px(x, y, hair["base"])
+    canvas.rect(head_cx + head_rx - int(2.0 * s), head_cy, int(1.6 * s), int(1.2 * s), eyes)
+
+    body_x = head_cx + head_rx - int(1.0 * s)
+    body_y = base_y - int(5.8 * s)
+    body_w = int(16 * s)
+    body_h = int(5.2 * s)
+    fill_rect_ink(canvas, body_x, body_y, body_w, body_h, tunic, cloth_hatch, True, True)
+    canvas.rect(body_x + int(2 * s), body_y + int(1.6 * s), int(4 * s), int(0.8 * s), accent)
+
+    arm_x = body_x + int(3.2 * s)
+    arm_y = body_y + int(0.4 * s)
+    fill_rect_ink(canvas, arm_x, arm_y, int(3.2 * s), int(1.2 * s), skin, skin_hatch, False, False)
+
+    leg_x = body_x + body_w - int(3.2 * s)
+    fill_rect_ink(canvas, leg_x, body_y + int(1.0 * s), int(5.2 * s), int(2.6 * s), pants, pants_hatch, True, True)
+    canvas.rect(leg_x + int(3.2 * s), body_y + int(2.0 * s), int(3.0 * s), int(1.8 * s), boots["dark"])
+
+    apply_outline_thick(canvas, style.outline_color, max(2, s // 6))
+    return canvas.width, canvas.height, canvas.pixels
+
+
+def render_character_highres_downed(spec, style):
+    s = HIGHRES_SCALE
+    width = SPRITE_W * s
+    height = SPRITE_H * s
+    canvas = Canvas(width, height)
+    ramps = {
+        "skin": make_ramp(spec.skin, style),
+        "hair": make_ramp(spec.hair, style),
+        "tunic": make_ramp(spec.tunic, style),
+        "pants": make_ramp(spec.pants, style),
+        "boots": make_ramp(spec.boots, style),
+    }
+    skin = ramps["skin"]
+    hair = ramps["hair"]
+    tunic = ramps["tunic"]
+    pants = ramps["pants"]
+    boots = ramps["boots"]
+    accent = apply_style_color(rgba(spec.accent), style)
+    eyes = apply_style_color(rgba(spec.eyes), style)
+
+    base_y = height - int(5 * s)
+    head_rx = int(5.0 * s)
+    head_ry = int(6.0 * s)
+    head_cx = int(6.5 * s)
+    head_cy = base_y - head_ry
+    fill_ellipse_shaded(canvas, head_cx, head_cy, head_rx, head_ry, skin, True)
+
+    hair_cap_bottom = head_cy - int(head_ry * 0.3)
+    for y in range(head_cy - head_ry, hair_cap_bottom):
+        for x in range(head_cx - head_rx, head_cx + head_rx + 1):
+            dx = x - head_cx
+            dy = y - head_cy
+            if dx * dx * head_ry * head_ry + dy * dy * head_rx * head_rx <= head_rx * head_rx * head_ry * head_ry:
+                canvas.set_px(x, y, hair["base"])
+    canvas.rect(head_cx + head_rx - int(2.0 * s), head_cy, int(1.6 * s), int(1.2 * s), eyes)
+
+    body_x = head_cx + head_rx - int(1.0 * s)
+    body_y = base_y - int(5.8 * s)
+    body_w = int(16 * s)
+    body_h = int(5.2 * s)
+    fill_rect_shaded(canvas, body_x, body_y, body_w, body_h, tunic, True, True)
+    canvas.rect(body_x + int(2 * s), body_y + int(1.6 * s), int(4 * s), int(0.8 * s), accent)
+
+    arm_x = body_x + int(3.2 * s)
+    arm_y = body_y + int(0.4 * s)
+    fill_rect_shaded(canvas, arm_x, arm_y, int(3.2 * s), int(1.2 * s), skin, False, False)
+
+    leg_x = body_x + body_w - int(3.2 * s)
+    fill_rect_shaded(canvas, leg_x, body_y + int(1.0 * s), int(5.2 * s), int(2.6 * s), pants, True, True)
+    canvas.rect(leg_x + int(3.2 * s), body_y + int(2.0 * s), int(3.0 * s), int(1.8 * s), boots["dark"])
+
+    if style.outline:
+        apply_outline(canvas, style.outline_color)
+    return canvas.width, canvas.height, canvas.pixels
+
+def render_character_profile_downed(spec, style):
+    canvas = Canvas(SPRITE_W, SPRITE_H)
+    ramps = {
+        "skin": make_ramp(spec.skin, style),
+        "hair": make_ramp(spec.hair, style),
+        "tunic": make_ramp(spec.tunic, style),
+        "pants": make_ramp(spec.pants, style),
+        "boots": make_ramp(spec.boots, style),
+    }
+    skin = ramps["skin"]["base"]
+    hair = ramps["hair"]["base"]
+    tunic = ramps["tunic"]["base"]
+    pants = ramps["pants"]["base"]
+    boots = ramps["boots"]["base"]
+    accent = apply_style_color(rgba(spec.accent), style)
+    eyes = apply_style_color(rgba(spec.eyes), style)
+
+    base_y = SPRITE_H - 4
+    head_r = 4
+    head_cx = 6
+    head_cy = base_y - 4
+    draw_circle(canvas, head_cx, head_cy, head_r, skin)
+    for y in range(head_cy - head_r, head_cy - head_r + 2):
+        for x in range(head_cx - head_r, head_cx + head_r + 1):
+            canvas.set_px(x, y, hair)
+    canvas.set_px(head_cx + head_r - 1, head_cy, eyes)
+
+    body_x = head_cx + head_r - 1
+    body_y = base_y - 6
+    body_w = 10
+    body_h = 5
+    canvas.rect(body_x, body_y, body_w, body_h, tunic)
+    canvas.rect(body_x + 2, body_y + 2, 4, 1, accent)
+
+    leg_x = body_x + body_w - 2
+    canvas.rect(leg_x, body_y + 1, 5, 3, pants)
+    canvas.rect(leg_x + 3, body_y + 2, 3, 2, boots)
+
+    if style.outline:
+        apply_outline(canvas, style.outline_color)
+    return canvas.width, canvas.height, canvas.pixels
+
+
+def render_character_chibi_downed(spec, style):
+    canvas = Canvas(SPRITE_W, SPRITE_H)
+    ramps = {
+        "skin": make_ramp(spec.skin, style),
+        "hair": make_ramp(spec.hair, style),
+        "tunic": make_ramp(spec.tunic, style),
+        "pants": make_ramp(spec.pants, style),
+        "boots": make_ramp(spec.boots, style),
+    }
+    skin = ramps["skin"]["base"]
+    hair = ramps["hair"]["base"]
+    tunic = ramps["tunic"]["base"]
+    pants = ramps["pants"]["base"]
+    boots = ramps["boots"]["base"]
+    eyes = apply_style_color(rgba(spec.eyes), style)
+
+    base_y = SPRITE_H - 5
+    head_r = 6
+    head_cx = 7
+    head_cy = base_y - 6
+    draw_circle(canvas, head_cx, head_cy, head_r, skin)
+    for y in range(head_cy - head_r, head_cy - head_r + 3):
+        for x in range(head_cx - head_r, head_cx + head_r + 1):
+            canvas.set_px(x, y, hair)
+    canvas.set_px(head_cx - 2, head_cy, eyes)
+
+    body_x = head_cx + head_r - 1
+    body_y = base_y - 4
+    body_w = 8
+    body_h = 4
+    canvas.rect(body_x, body_y, body_w, body_h, tunic)
+    canvas.rect(body_x + 1, body_y + 2, 3, 2, pants)
+    canvas.rect(body_x + 4, body_y + 2, 3, 2, pants)
+    canvas.rect(body_x + 1, body_y + 3, 3, 2, boots)
+    canvas.rect(body_x + 4, body_y + 3, 3, 2, boots)
+    return canvas.width, canvas.height, canvas.pixels
+
+
+def render_character_blocky_downed(spec, style):
+    canvas = Canvas(SPRITE_W, SPRITE_H)
+    ramps = {
+        "skin": make_ramp(spec.skin, style),
+        "hair": make_ramp(spec.hair, style),
+        "tunic": make_ramp(spec.tunic, style),
+        "pants": make_ramp(spec.pants, style),
+        "boots": make_ramp(spec.boots, style),
+    }
+    skin = ramps["skin"]["base"]
+    hair = ramps["hair"]["base"]
+    tunic = ramps["tunic"]["base"]
+    pants = ramps["pants"]["base"]
+    boots = ramps["boots"]["base"]
+
+    base_y = SPRITE_H - 4
+    head_w = 6
+    head_h = 6
+    head_x = 3
+    head_y = base_y - head_h
+    canvas.rect(head_x, head_y, head_w, head_h, skin)
+    canvas.rect(head_x, head_y, head_w, 2, hair)
+
+    body_x = head_x + head_w - 1
+    body_y = base_y - 5
+    body_w = 12
+    body_h = 5
+    canvas.rect(body_x, body_y, body_w, body_h, tunic)
+
+    leg_x = body_x + body_w - 3
+    canvas.rect(leg_x, body_y + 1, 5, 3, pants)
+    canvas.rect(leg_x + 3, body_y + 2, 3, 2, boots)
+    return canvas.width, canvas.height, canvas.pixels
+
+
+def render_character_silhouette_downed(spec, style):
+    canvas = Canvas(SPRITE_W, SPRITE_H)
+    ramps = {"tunic": make_ramp(spec.tunic, style)}
+    sil = ramps["tunic"]["darker"]
+    base_y = SPRITE_H - 4
+    head_r = 5
+    head_cx = 6
+    head_cy = base_y - 5
+    draw_circle(canvas, head_cx, head_cy, head_r, sil)
+    body_x = head_cx + head_r - 1
+    body_y = base_y - 5
+    canvas.rect(body_x, body_y, 12, 5, sil)
+    canvas.rect(body_x + 8, body_y + 1, 5, 3, sil)
+    return canvas.width, canvas.height, canvas.pixels
+
+
+def render_character_lineart_downed(spec, style):
+    canvas = Canvas(SPRITE_W, SPRITE_H)
+    ink = apply_style_color(rgba(spec.accent), style)
+    base_y = SPRITE_H - 4
+    head_w = 8
+    head_h = 8
+    head_x = 3
+    head_y = base_y - head_h
+    draw_rect_outline(canvas, head_x, head_y, head_w, head_h, ink)
+    body_x = head_x + head_w - 1
+    body_y = base_y - 5
+    draw_rect_outline(canvas, body_x, body_y, 10, 5, ink)
+    canvas.line(body_x + 7, body_y + 1, body_x + 12, body_y + 3, ink)
+    return canvas.width, canvas.height, canvas.pixels
+
+
 def render_character(spec, style):
+    if getattr(style, "render_mode", "classic") != "classic":
+        return render_character_variant(spec, style)
     canvas = Canvas(SPRITE_W, SPRITE_H)
     ramps = {
         "skin": make_ramp(spec.skin, style),
@@ -745,6 +1889,8 @@ def render_character(spec, style):
 
 
 def render_character_downed(spec, style):
+    if getattr(style, "render_mode", "classic") != "classic":
+        return render_character_downed_variant(spec, style)
     canvas = Canvas(SPRITE_W, SPRITE_H)
     ramps = {
         "skin": make_ramp(spec.skin, style),
@@ -1279,7 +2425,205 @@ def draw_unarmed(canvas, style, colors, profile):
     return
 
 
+def weapon_variant_params(mode, width):
+    if mode == "highres":
+        return {"length": max(6, width - width // 6), "thickness": max(2, width // 14), "head": max(4, width // 10)}
+    if mode == "ink":
+        return {"length": max(6, width - width // 6), "thickness": max(2, width // 16), "head": max(4, width // 11)}
+    if mode == "profile":
+        return {"length": max(6, width - 3), "thickness": 1, "head": 2}
+    if mode == "chibi":
+        return {"length": max(6, width - 6), "thickness": 3, "head": 4}
+    if mode == "blocky":
+        return {"length": max(6, width - 4), "thickness": 4, "head": 5}
+    if mode == "silhouette":
+        return {"length": max(6, width - 3), "thickness": 3, "head": 4}
+    if mode == "lineart":
+        return {"length": max(6, width - 3), "thickness": 1, "head": 2}
+    return {"length": max(6, width - 4), "thickness": 2, "head": 3}
+
+
+def weapon_variant_colors(mode, colors):
+    if mode == "highres":
+        return colors["wood"], colors["metal_light"], colors["metal_high"], colors["string"]
+    if mode == "ink":
+        return colors["wood"], colors["metal_light"], colors["metal_high"], colors["string"]
+    if mode == "silhouette":
+        return colors["metal_dark"], colors["metal_dark"], colors["metal_dark"], colors["metal_dark"]
+    if mode == "lineart":
+        return colors["metal_high"], colors["metal_high"], colors["metal_high"], colors["metal_high"]
+    return colors["wood"], colors["metal_light"], colors["metal_high"], colors["string"]
+
+
+def draw_weapon_variant(canvas, key, mode, colors):
+    if key == "unarmed":
+        return
+    w, h = canvas.width, canvas.height
+    mid = h // 2
+    params = weapon_variant_params(mode, w)
+    length = params["length"]
+    thickness = params["thickness"]
+    head = params["head"]
+    shaft_color, metal_color, accent_color, string_color = weapon_variant_colors(mode, colors)
+    outline_only = mode == "lineart"
+    ink_mode = mode == "ink"
+
+    def draw_handle(x0, y0, size, color):
+        if outline_only:
+            draw_rect_outline(canvas, x0, y0, size, size, color)
+        else:
+            canvas.rect(x0, y0, size, size, color)
+
+    if key in ("basic", "small_swords", "large_swords"):
+        long_bonus = 2 if key == "large_swords" else 0
+        handle_len = max(2, length // 4)
+        blade_len = length - handle_len + long_bonus
+        if outline_only:
+            canvas.line(0, mid, blade_len, mid, metal_color)
+            canvas.line(handle_len, mid - 1, handle_len, mid + 1, metal_color)
+            canvas.set_px(blade_len + 1, mid, accent_color)
+        else:
+            guard_w = max(2, thickness + thickness // 2)
+            guard_h = max(2, thickness // 2)
+            canvas.rect(0, mid - thickness // 2, handle_len, thickness, shaft_color)
+            if mode in ("highres", "ink"):
+                for x in range(0, handle_len, max(2, thickness // 2)):
+                    canvas.set_px(x, mid - thickness // 2, accent_color)
+                canvas.rect(handle_len - guard_w // 2, mid - guard_h // 2, guard_w, guard_h, metal_color)
+                canvas.rect(0, mid - thickness // 2, max(2, thickness // 2), thickness, accent_color)
+            canvas.rect(handle_len, mid - thickness // 2, blade_len, thickness, metal_color)
+            if mode in ("highres", "ink"):
+                canvas.rect(handle_len, mid - thickness // 2, blade_len, 1, accent_color)
+                canvas.rect(handle_len, mid + thickness // 2 - 1, blade_len, 1, colors["metal_dark"])
+            canvas.set_px(handle_len + blade_len, mid, accent_color)
+    elif key == "double":
+        handle_len = max(4, length - head * 2)
+        if outline_only:
+            canvas.line(0, mid, length, mid, metal_color)
+            canvas.set_px(0, mid - 1, accent_color)
+            canvas.set_px(length, mid + 1, accent_color)
+        else:
+            canvas.rect(head, mid - thickness // 2, handle_len, thickness, shaft_color)
+            draw_handle(0, mid - head // 2, head, metal_color)
+            draw_handle(head + handle_len, mid - head // 2, head, metal_color)
+            if mode in ("highres", "ink"):
+                for x in range(head, head + handle_len, max(2, thickness // 2)):
+                    canvas.set_px(x, mid - thickness // 2, accent_color)
+    elif key == "axes":
+        handle_len = max(4, length - head)
+        if outline_only:
+            canvas.line(0, mid, handle_len, mid, shaft_color)
+            draw_rect_outline(canvas, handle_len, mid - head // 2, head, head, metal_color)
+        else:
+            canvas.rect(0, mid - thickness // 2, handle_len, thickness, shaft_color)
+            canvas.rect(handle_len, mid - head // 2, head, head, metal_color)
+            if mode in ("highres", "ink"):
+                canvas.rect(handle_len + 1, mid - head // 2 + 1, head - 2, 1, accent_color)
+                canvas.set_px(handle_len + head - 1, mid - head // 2, accent_color)
+                canvas.set_px(handle_len + head - 1, mid + head // 2, accent_color)
+            canvas.set_px(handle_len + head - 1, mid, accent_color)
+    elif key == "blunt":
+        handle_len = max(4, length - head)
+        if outline_only:
+            canvas.line(0, mid, handle_len, mid, shaft_color)
+            draw_circle_outline(canvas, handle_len + head // 2, mid, head // 2, metal_color)
+        else:
+            canvas.rect(0, mid - thickness // 2, handle_len, thickness, shaft_color)
+            draw_circle(canvas, handle_len + head // 2, mid, head // 2, metal_color)
+            if mode in ("highres", "ink"):
+                canvas.set_px(handle_len + head // 2, mid - head // 2 + 1, accent_color)
+                canvas.set_px(handle_len + head // 2 - 1, mid, colors["metal_dark"])
+            canvas.set_px(handle_len + head // 2, mid - 1, accent_color)
+    elif key in ("polearms", "spears"):
+        handle_len = max(6, length)
+        if outline_only:
+            canvas.line(0, mid, handle_len, mid, shaft_color)
+            canvas.line(handle_len - 1, mid, handle_len + 2, mid - 1, metal_color)
+            canvas.line(handle_len - 1, mid, handle_len + 2, mid + 1, metal_color)
+        else:
+            canvas.rect(0, mid - thickness // 2, handle_len, thickness, shaft_color)
+            canvas.set_px(handle_len + 1, mid, metal_color)
+            canvas.set_px(handle_len, mid - 1, metal_color)
+            canvas.set_px(handle_len, mid + 1, metal_color)
+            if key == "polearms":
+                canvas.set_px(handle_len - 2, mid - 2, metal_color)
+                canvas.set_px(handle_len - 2, mid + 2, metal_color)
+            if mode in ("highres", "ink"):
+                canvas.rect(handle_len - 3, mid - thickness // 2, 2, thickness, colors["metal_dark"])
+                for x in range(int(2 * thickness), handle_len, int(3 * thickness)):
+                    canvas.rect(x, mid - thickness // 2, 1, thickness, accent_color)
+    elif key == "bows":
+        if outline_only:
+            canvas.line(1, 1, w - 2, mid, metal_color)
+            canvas.line(1, h - 2, w - 2, mid, metal_color)
+            canvas.line(1, 1, 1, h - 2, string_color)
+        else:
+            canvas.line(1, 1, w - 2, mid, metal_color)
+            canvas.line(1, h - 2, w - 2, mid, metal_color)
+            canvas.line(1, 1, 1, h - 2, string_color)
+            if mode in ("highres", "ink"):
+                canvas.line(2, 1, 2, h - 2, accent_color)
+                canvas.rect(w // 2 - 1, mid - thickness // 2, 3, thickness, shaft_color)
+            canvas.set_px(w - 2, mid, accent_color)
+    elif key == "crossbows":
+        if outline_only:
+            canvas.line(1, mid, w - 2, mid, metal_color)
+            canvas.line(w // 2, mid - 2, w // 2, mid + 2, metal_color)
+        else:
+            canvas.rect(1, mid - thickness // 2, w - 3, thickness, metal_color)
+            canvas.rect(w // 2 - 1, mid - 2, 3, 4, shaft_color)
+            if mode in ("highres", "ink"):
+                canvas.rect(w // 2 - 2, mid - 1, 5, 1, accent_color)
+                canvas.rect(w // 2 - 1, mid + 2, 3, 2, colors["metal_dark"])
+            canvas.set_px(w - 2, mid - 1, accent_color)
+    elif key == "ensnaring":
+        for x in range(1, w - 1, 2):
+            canvas.line(x, 1, x, h - 2, string_color)
+        for y in range(1, h - 1, 2):
+            canvas.line(1, y, w - 2, y, string_color)
+        if not outline_only:
+            canvas.rect(0, mid - 1, 2, 2, shaft_color)
+    elif key == "lashes":
+        for x in range(1, w - 1):
+            y = mid + ((x // 2) % 2) - 1
+            canvas.set_px(x, y, string_color)
+        if not outline_only:
+            canvas.rect(0, mid - 1, 2, 2, shaft_color)
+    elif key == "shields":
+        if outline_only:
+            draw_rect_outline(canvas, 2, 2, w - 4, h - 4, metal_color)
+        else:
+            canvas.rect(2, 2, w - 4, h - 4, metal_color)
+            canvas.set_px(w // 2, h // 2, accent_color)
+            if mode in ("highres", "ink"):
+                canvas.rect(2, 2, w - 4, 1, colors["metal_dark"])
+                canvas.rect(2, h - 3, w - 4, 1, colors["metal_dark"])
+                canvas.rect(2, 2, 1, h - 4, colors["metal_dark"])
+                canvas.rect(w - 3, 2, 1, h - 4, colors["metal_dark"])
+    else:
+        if outline_only:
+            canvas.line(0, mid, w - 1, mid, metal_color)
+        else:
+            canvas.rect(0, mid - thickness // 2, length, thickness, metal_color)
+
+
+def render_weapon_variant(spec, style, colors):
+    if style.weapon_mode in ("highres", "ink"):
+        canvas = Canvas(spec.width * HIGHRES_SCALE, spec.height * HIGHRES_SCALE)
+    else:
+        canvas = Canvas(spec.width, spec.height)
+    draw_weapon_variant(canvas, spec.key, style.weapon_mode, colors)
+    if style.weapon_mode == "ink":
+        apply_hatching(canvas, max(5, HIGHRES_SCALE), style.outline_color, 0.5)
+        apply_outline_thick(canvas, style.outline_color, max(2, HIGHRES_SCALE // 6))
+    elif style.outline and style.weapon_mode not in ("lineart", "silhouette"):
+        apply_outline(canvas, style.outline_color)
+    return canvas.width, canvas.height, canvas.pixels
+
+
 def render_weapon(spec, style, colors):
+    if getattr(style, "weapon_mode", "classic") != "classic":
+        return render_weapon_variant(spec, style, colors)
     canvas = Canvas(spec.width, spec.height)
     profile = weapon_profile_for_style(style.key)
     spec.draw_fn(canvas, style, colors, profile)
@@ -1950,6 +3294,192 @@ def build_style_presets():
             edge_soften_strength=0.45,
             gradient_top=1.06,
             gradient_bottom=0.92,
+        ),
+        Style(
+            key="style12_profile",
+            detail=2,
+            outline=False,
+            shading=False,
+            outline_color=rgba((20, 20, 28)),
+            light_factor=1.0,
+            dark_factor=1.0,
+            darker_factor=1.0,
+            highlight_factor=1.0,
+            tint=None,
+            tint_strength=0.0,
+            saturation=1.0,
+            brightness=1.0,
+            contrast=1.0,
+            posterize_levels=0,
+            dither=False,
+            dither_strength=0,
+            noise=False,
+            noise_strength=0,
+            blur_radius=0,
+            smooth_scale=False,
+            sprite_scale=2,
+            weapon_scale=2,
+            edge_soften=False,
+            edge_soften_strength=0.0,
+            gradient_top=1.0,
+            gradient_bottom=1.0,
+            render_mode="profile",
+            weapon_mode="profile",
+        ),
+        Style(
+            key="style13_chibi",
+            detail=3,
+            outline=True,
+            shading=True,
+            outline_color=rgba((24, 22, 28)),
+            light_factor=1.1,
+            dark_factor=0.85,
+            darker_factor=0.7,
+            highlight_factor=1.15,
+            tint=None,
+            tint_strength=0.0,
+            saturation=1.05,
+            brightness=1.05,
+            contrast=1.0,
+            posterize_levels=0,
+            dither=False,
+            dither_strength=0,
+            noise=False,
+            noise_strength=0,
+            blur_radius=0,
+            smooth_scale=False,
+            sprite_scale=3,
+            weapon_scale=3,
+            edge_soften=False,
+            edge_soften_strength=0.0,
+            gradient_top=1.0,
+            gradient_bottom=1.0,
+            render_mode="chibi",
+            weapon_mode="chibi",
+        ),
+        Style(
+            key="style14_blocky",
+            detail=2,
+            outline=True,
+            shading=False,
+            outline_color=rgba((18, 18, 20)),
+            light_factor=1.0,
+            dark_factor=1.0,
+            darker_factor=1.0,
+            highlight_factor=1.0,
+            tint=None,
+            tint_strength=0.0,
+            saturation=1.0,
+            brightness=1.0,
+            contrast=1.0,
+            posterize_levels=3,
+            dither=False,
+            dither_strength=0,
+            noise=False,
+            noise_strength=0,
+            blur_radius=0,
+            smooth_scale=False,
+            sprite_scale=2,
+            weapon_scale=2,
+            edge_soften=False,
+            edge_soften_strength=0.0,
+            gradient_top=1.0,
+            gradient_bottom=1.0,
+            render_mode="blocky",
+            weapon_mode="blocky",
+        ),
+        Style(
+            key="style15_silhouette",
+            detail=1,
+            outline=False,
+            shading=False,
+            outline_color=rgba((0, 0, 0)),
+            light_factor=1.0,
+            dark_factor=1.0,
+            darker_factor=1.0,
+            highlight_factor=1.0,
+            tint=None,
+            tint_strength=0.0,
+            saturation=0.9,
+            brightness=0.9,
+            contrast=1.2,
+            posterize_levels=0,
+            dither=False,
+            dither_strength=0,
+            noise=False,
+            noise_strength=0,
+            blur_radius=0,
+            smooth_scale=False,
+            sprite_scale=2,
+            weapon_scale=2,
+            edge_soften=False,
+            edge_soften_strength=0.0,
+            gradient_top=1.0,
+            gradient_bottom=1.0,
+            render_mode="silhouette",
+            weapon_mode="silhouette",
+        ),
+        Style(
+            key="style16_lineart",
+            detail=2,
+            outline=False,
+            shading=False,
+            outline_color=rgba((230, 230, 230)),
+            light_factor=1.0,
+            dark_factor=1.0,
+            darker_factor=1.0,
+            highlight_factor=1.0,
+            tint=None,
+            tint_strength=0.0,
+            saturation=0.8,
+            brightness=1.0,
+            contrast=1.0,
+            posterize_levels=0,
+            dither=False,
+            dither_strength=0,
+            noise=False,
+            noise_strength=0,
+            blur_radius=0,
+            smooth_scale=False,
+            sprite_scale=2,
+            weapon_scale=2,
+            edge_soften=False,
+            edge_soften_strength=0.0,
+            gradient_top=1.0,
+            gradient_bottom=1.0,
+            render_mode="lineart",
+            weapon_mode="lineart",
+        ),
+        Style(
+            key="style17_highres",
+            detail=4,
+            outline=True,
+            shading=True,
+            outline_color=rgba((18, 16, 14)),
+            light_factor=1.1,
+            dark_factor=0.7,
+            darker_factor=0.5,
+            highlight_factor=1.25,
+            tint=None,
+            tint_strength=0.0,
+            saturation=0.35,
+            brightness=1.08,
+            contrast=1.2,
+            posterize_levels=0,
+            dither=False,
+            dither_strength=0,
+            noise=False,
+            noise_strength=0,
+            blur_radius=0,
+            smooth_scale=False,
+            sprite_scale=1,
+            weapon_scale=1,
+            edge_soften=False,
+            edge_soften_strength=0.0,
+            gradient_top=1.0,
+            gradient_bottom=1.0,
+            render_mode="ink",
+            weapon_mode="ink",
         ),
     ]
 
