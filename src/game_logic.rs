@@ -1575,6 +1575,7 @@ pub fn build_combatant(
     let mut attack_bonus =
         attack_bonus_base + material_attack_bonus + modifiers.attack_bonus_for_weapon(player.weapon_id);
     let mut defense_mod = derived.base_dv + defense_mastery + defense_bonus + defense_bonus_weapon;
+    let mut dex_defense_bonus = character.ability_mods.dexterity.defense;
     let mut natural_dr = (modifiers.armor_dr_bonus + misc_modifiers.armor_dr_bonus).max(0);
     let mut armor_dr = (derived.armor_dr + natural_dr).max(0);
     let mut strength_damage_base = character.ability_mods.strength.damage;
@@ -1645,6 +1646,7 @@ pub fn build_combatant(
         shield_cover_value = None;
         shield_breakage = None;
         ranged_defense_mod = 0;
+        dex_defense_bonus = 0;
         trauma_die_sides = 20;
         trauma_die_penetrating = false;
         defensive_dualwielding = false;
@@ -1836,6 +1838,7 @@ pub fn build_combatant(
         defense: DefenseProfile {
             defense_mod,
             ranged_defense_mod,
+            dex_defense_bonus,
             armor_dr,
             natural_dr,
             knockback_step,
@@ -1882,20 +1885,28 @@ pub fn stop_distance_for_players(
     weapon_catalog: &WeaponCatalog,
     talent_catalog: &TalentCatalog,
 ) -> f32 {
+    let melee_reach_from_label = |label: &str| {
+        if !label.contains('/') {
+            return None;
+        }
+        let reach_token = label.split('/').next().unwrap_or("").trim();
+        reach_token
+            .split_whitespace()
+            .next()
+            .and_then(|token| token.parse::<f32>().ok())
+    };
     let reach_for_player = |player: &PlayerConfig| {
         weapon_catalog
             .get(player.weapon_id)
             .map(|weapon| {
-                weapon
-                    .range_bands_feet
-                    .map(sim::max_range_for_bands)
-                    .or_else(|| sim::max_range_for_weapon_name(&weapon.name))
-                    .unwrap_or_else(|| {
-                        let modifiers =
-                            resolve_talent_modifiers(player, talent_catalog, weapon_catalog);
-                        let reach_bonus = modifiers.reach_bonus_for_group(weapon.group) as f32;
-                        (weapon.reach_ft + reach_bonus).max(1.0)
-                    })
+                let modifiers = resolve_talent_modifiers(player, talent_catalog, weapon_catalog);
+                let reach_bonus = modifiers.reach_bonus_for_group(weapon.group) as f32;
+                let base_reach = if is_ranged_weapon(weapon) {
+                    melee_reach_from_label(&weapon.reach_label).unwrap_or(1.0)
+                } else {
+                    weapon.reach_ft
+                };
+                (base_reach + reach_bonus).max(1.0)
             })
             .unwrap_or(1.0)
     };
@@ -3374,6 +3385,58 @@ mod tests {
         baseline.talents.clear();
         let baseline_summary = player_summary(&baseline, &weapons, &armor, &shields, &talents);
         assert_eq!(summary.roll.attack_bonus - baseline_summary.roll.attack_bonus, 2);
+    }
+
+    #[test]
+    fn environment_bonuses_apply_to_combatant_sheet() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npc_presets = sample_npc_presets();
+        let base_weapon_id = one_handed_weapon_id(&weapons);
+        let base = base_player(base_weapon_id);
+
+        let (swift_id, swift_weapon) = find_weapon_for_speed_bonus(
+            &weapons,
+            &armor,
+            &shields,
+            &talents,
+            &base,
+            |_weapon| true,
+        );
+        let mut natural_player = base.clone();
+        natural_player.weapon_id = swift_id;
+        natural_player.race_id = Some("armeroci".to_string());
+        add_talent(&mut natural_player, "natural_attunement", None);
+        let mut natural_env = natural_player.clone();
+        natural_env.environment.natural_surroundings = true;
+        let natural_combatant =
+            build_combatant(&natural_env, &weapons, &armor, &shields, &npc_presets, &talents);
+        let mut baseline_env = natural_player.clone();
+        baseline_env.environment.natural_surroundings = false;
+        let baseline_combatant =
+            build_combatant(&baseline_env, &weapons, &armor, &shields, &npc_presets, &talents);
+        assert_eq!(
+            baseline_combatant.sheet.offense.weapon.speed
+                - natural_combatant.sheet.offense.weapon.speed,
+            1.0,
+            "natural_attunement should reduce speed for {}",
+            swift_weapon.name
+        );
+
+        let mut cold_player = base.clone();
+        cold_player.race_id = Some("vorova_female".to_string());
+        cold_player.environment.temperature_c = -5;
+        let cold_combatant =
+            build_combatant(&cold_player, &weapons, &armor, &shields, &npc_presets, &talents);
+        let mut baseline_temp = cold_player.clone();
+        baseline_temp.environment.temperature_c = 20;
+        let baseline_temp_combatant =
+            build_combatant(&baseline_temp, &weapons, &armor, &shields, &npc_presets, &talents);
+        assert_eq!(
+            cold_combatant.sheet.offense.attack_bonus
+                - baseline_temp_combatant.sheet.offense.attack_bonus,
+            1
+        );
     }
 
     #[test]

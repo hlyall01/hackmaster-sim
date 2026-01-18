@@ -9,6 +9,8 @@ use super::types::{
 };
 use std::collections::{HashMap, HashSet};
 
+const CHARGE_MIN_DISTANCE_FT: f32 = 20.0;
+
 #[derive(Clone, Debug)]
 pub struct SimState {
     pub config: SimConfig,
@@ -276,11 +278,11 @@ impl SimState {
                 } else if distance > min_reach {
                     if reach_a < reach_b {
                         if !self.hold_at_bay.blocks_advance(a_idx) {
-                            self.move_toward(a_idx, b_idx, step_a, max_reach);
+                            self.move_toward(a_idx, b_idx, step_a, reach_a);
                         }
                     } else if reach_b < reach_a {
                         if !self.hold_at_bay.blocks_advance(b_idx) {
-                            self.move_toward(b_idx, a_idx, step_b, max_reach);
+                            self.move_toward(b_idx, a_idx, step_b, reach_b);
                         }
                     }
                 }
@@ -315,6 +317,7 @@ impl SimState {
                 self.enforce_min_distance(a_idx, b_idx, distance_before_combat);
             }
         }
+        self.update_charge_progress(active_pair, &old_positions);
         for (idx, combatant) in self.combatants.iter_mut().enumerate() {
             let moved = self
                 .actors
@@ -414,6 +417,72 @@ impl SimState {
                 break;
             }
             self.actors[mover_idx].position = next;
+        }
+    }
+
+    fn update_charge_progress(
+        &mut self,
+        active_pair: Option<(usize, usize)>,
+        old_positions: &[GridPos],
+    ) {
+        let tile_size_ft = self.config.tile_size_ft.max(0.01);
+        let (pair_a, pair_b) = active_pair.unwrap_or((usize::MAX, usize::MAX));
+        for idx in 0..self.combatants.len() {
+            let target_idx = if idx == pair_a {
+                Some(pair_b)
+            } else if idx == pair_b {
+                Some(pair_a)
+            } else {
+                None
+            };
+            let (charge_enabled, reach, current_target) = {
+                let combatant = &self.combatants[idx];
+                (
+                    combatant.sheet.maneuvers.charge,
+                    combatant
+                        .apply_f32(StatIdF32::WeaponReach, combatant.sheet.offense.weapon.reach_ft)
+                        .max(1.0),
+                    combatant.state.charge_target_idx,
+                )
+            };
+            if !charge_enabled || target_idx.is_none() {
+                let state = &mut self.combatants[idx].state;
+                state.charge_distance_ft = 0.0;
+                state.charge_target_idx = None;
+                continue;
+            }
+            let target_idx = target_idx.expect("target index missing");
+            if current_target != Some(target_idx) {
+                let state = &mut self.combatants[idx].state;
+                state.charge_distance_ft = 0.0;
+                state.charge_target_idx = Some(target_idx);
+            }
+            let (Some(old_pos), Some(old_target_pos), Some(new_pos)) = (
+                old_positions.get(idx).copied(),
+                old_positions.get(target_idx).copied(),
+                self.actors.get(idx).map(|actor| actor.position),
+            ) else {
+                continue;
+            };
+            let distance_before =
+                old_pos.manhattan_distance(old_target_pos) as f32 * tile_size_ft;
+            let distance_after =
+                new_pos.manhattan_distance(old_target_pos) as f32 * tile_size_ft;
+            let moved_tiles = old_pos.manhattan_distance(new_pos);
+            let state = &mut self.combatants[idx].state;
+            if moved_tiles == 0 {
+                if distance_before > reach {
+                    state.charge_distance_ft = 0.0;
+                }
+                continue;
+            }
+            if distance_after >= distance_before {
+                state.charge_distance_ft = 0.0;
+                continue;
+            }
+            if distance_before > reach {
+                state.charge_distance_ft += moved_tiles as f32 * tile_size_ft;
+            }
         }
     }
 
@@ -690,6 +759,15 @@ impl SimState {
             } else if self.hold_at_bay.active && self.hold_at_bay.holder_idx == attacker_idx {
                 attack_mode = AttackMode::HoldAtBay;
                 use_ranged = false;
+            }
+            if attack_mode == AttackMode::Normal
+                && self.combatants[attacker_idx].sheet.maneuvers.charge
+                && !use_ranged
+                && self.combatants[attacker_idx].state.charge_target_idx == Some(defender_idx)
+                && self.combatants[attacker_idx].state.charge_distance_ft
+                    >= CHARGE_MIN_DISTANCE_FT
+            {
+                attack_mode = AttackMode::Charge;
             }
             let ranged_mod = if use_ranged {
                 let range_scale = self.combatants[attacker_idx].apply_f32(
@@ -1118,6 +1196,16 @@ impl SimState {
             return;
         };
         if !self.combatants[holder_idx].sheet.maneuvers.hold_at_bay {
+            return;
+        }
+        let holder_weapon = self.combatants[holder_idx].sheet.offense.weapon.clone();
+        let holder_ranged = max_range_cached(
+            &mut self.combatants[holder_idx].state,
+            WeaponSlot::Primary,
+            holder_weapon.as_ref(),
+        )
+        .is_some();
+        if holder_ranged {
             return;
         }
         if distance_before > holder_reach && distance_after <= holder_reach {

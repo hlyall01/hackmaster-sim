@@ -1437,9 +1437,7 @@ fn render_player_editor(
             ui.add_enabled_ui(false, |ui| {
                 ui.checkbox(&mut player.aggressive_attack, "Aggressive attack (NYI)");
             });
-            ui.add_enabled_ui(false, |ui| {
-                ui.checkbox(&mut player.charge, "Charge (NYI)");
-            });
+            ui.checkbox(&mut player.charge, "Charge");
             ui.add_enabled_ui(false, |ui| {
                 ui.checkbox(&mut player.ready_against_charge, "Ready against charge (NYI)");
             });

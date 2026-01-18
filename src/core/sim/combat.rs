@@ -7,14 +7,19 @@ use super::types::{
     DamageBreakdown, DamageDie, KnockAsideRollBreakdown, ShieldBreakageStep, ShieldDamageBreakdown,
     WeaponCache, WeaponSlot,
 };
-use super::modifiers::{StatIdF32, StatIdI32};
+use super::modifiers::{ModifierOpI32, StatIdF32, StatIdI32, TemporaryEffect};
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AttackMode {
     Normal,
     HoldAtBay,
+    Charge,
 }
+
+const CHARGE_ATTACK_BONUS: i32 = 4;
+const CHARGE_DEFENSE_PENALTY_SECONDS: i32 = 5;
+const CHARGE_DEFENSE_EFFECT_ID: &str = "charge_defense_penalty";
 
 struct AttackProfile {
     weapon: Arc<super::types::WeaponProfile>,
@@ -827,7 +832,10 @@ pub(crate) fn resolve_attack(
         let attacker = &combatants[attacker_idx];
         attack_profile_for_slot(attacker, weapon_slot).expect("weapon slot missing for attack")
     };
-    let attack_bonus = attack_profile.attack_bonus;
+    let mut attack_bonus = attack_profile.attack_bonus;
+    if attack_mode == AttackMode::Charge {
+        attack_bonus += CHARGE_ATTACK_BONUS;
+    }
     let strength_damage = attack_profile.strength_damage;
     let armor_penetration = attack_profile.armor_penetration;
     let use_jab = attack_profile.use_jab;
@@ -1068,7 +1076,12 @@ pub(crate) fn resolve_attack(
             }
             damage = (raw - effective_dr).max(0);
             combatants[defender_idx].state.hp -= damage;
-            knockback_ft = knockback_distance_ft(raw, defender_knockback_step);
+            let knockback_raw = if attack_mode == AttackMode::Charge {
+                raw.saturating_mul(2)
+            } else {
+                raw
+            };
+            knockback_ft = knockback_distance_ft(knockback_raw, defender_knockback_step);
 
             if let Some(effect) = crit_effect {
                 if effect.instant_kill {
@@ -1186,6 +1199,10 @@ pub(crate) fn resolve_attack(
         }
     }
 
+    if attack_mode == AttackMode::Charge {
+        apply_charge_defense_penalty(combatants, attacker_idx);
+    }
+
     if !hit
         && combatants[attacker_idx].state.hp > 0
         && combatants[defender_idx].state.hp > 0
@@ -1267,6 +1284,10 @@ pub(crate) fn resolve_attack(
             .set_next_attack_time(WeaponSlot::Secondary, Some(reset_time));
     }
 
+    if !is_ranged {
+        combatants[attacker_idx].state.charge_distance_ft = 0.0;
+    }
+
     let defender_hp_after = combatants[defender_idx].state.hp;
     let trauma_applied = trauma_seconds.is_some();
     AttackOutcome {
@@ -1289,6 +1310,22 @@ pub(crate) fn resolve_attack(
         critical,
         counter_attack,
     }
+}
+
+fn apply_charge_defense_penalty(combatants: &mut [Combatant], attacker_idx: usize) {
+    let dex_bonus = combatants[attacker_idx].sheet.defense.dex_defense_bonus.max(0);
+    let state = &mut combatants[attacker_idx].state;
+    state
+        .active_effects
+        .retain(|effect| effect.id != CHARGE_DEFENSE_EFFECT_ID);
+    if dex_bonus == 0 {
+        return;
+    }
+    let mut effect = TemporaryEffect::new(CHARGE_DEFENSE_EFFECT_ID, CHARGE_DEFENSE_PENALTY_SECONDS);
+    effect
+        .modifiers
+        .add_i32(StatIdI32::DefenseMod, ModifierOpI32::Add(-dex_bonus));
+    state.add_effect(effect);
 }
 
 pub(crate) fn resolve_knock_aside(

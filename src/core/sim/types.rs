@@ -147,6 +147,7 @@ pub struct OffhandProfile {
 pub struct DefenseProfile {
     pub defense_mod: i32,
     pub ranged_defense_mod: i32,
+    pub dex_defense_bonus: i32,
     pub armor_dr: i32,
     pub natural_dr: i32,
     pub knockback_step: i32,
@@ -190,6 +191,8 @@ pub struct CombatantState {
     pub next_attack_time_secondary: Option<f32>,
     pub defense_plus_four_ready: bool,
     pub moved_last_tick: bool,
+    pub charge_distance_ft: f32,
+    pub charge_target_idx: Option<usize>,
     pub trauma_remaining_seconds: i32,
     pub knockback_immobile_seconds: i32,
     pub knockback_applied_this_tick: bool,
@@ -358,6 +361,7 @@ impl Default for DefenseProfile {
         Self {
             defense_mod: 0,
             ranged_defense_mod: 0,
+            dex_defense_bonus: 0,
             armor_dr: 0,
             natural_dr: 0,
             knockback_step: 15,
@@ -411,6 +415,8 @@ impl CombatantState {
             next_attack_time_secondary: None,
             defense_plus_four_ready: false,
             moved_last_tick: false,
+            charge_distance_ft: 0.0,
+            charge_target_idx: None,
             trauma_remaining_seconds: 0,
             knockback_immobile_seconds: 0,
             knockback_applied_this_tick: false,

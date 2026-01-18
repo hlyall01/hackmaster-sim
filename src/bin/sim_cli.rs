@@ -79,6 +79,7 @@ fn main() {
         .build();
 
     let derived = character.derived();
+    let dex_defense_bonus = character.ability_mods.dexterity.defense;
 
     println!("Character: {}", character.name);
     println!("Level: {} ({:?})", character.level, character.progression);
@@ -195,6 +196,7 @@ fn main() {
         defense: DefenseProfile {
             defense_mod: derived.base_dv,
             ranged_defense_mod: 0,
+            dex_defense_bonus,
             armor_dr: derived.armor_dr,
             natural_dr: 0,
             knockback_step: game_logic::DEFAULT_KNOCKBACK_STEP,

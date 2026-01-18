@@ -9,6 +9,9 @@
         roll_damage_expr_with_detail, DamageExprCache,
     };
     use crate::core::sim::DamageDie;
+    use crate::character::{Progression, ProgressionTier};
+    use crate::core::types::RaceSpec;
+    use crate::{data, game_logic};
     use rand::SeedableRng;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
@@ -86,6 +89,7 @@
         defense: DefenseProfile {
             defense_mod,
             ranged_defense_mod: 0,
+            dex_defense_bonus: 0,
             armor_dr,
             natural_dr: 0,
             knockback_step: 15,
@@ -118,6 +122,163 @@
         defender.team_id = 1;
         state.reset_with_combatants(vec![attacker, defender]);
         state
+    }
+
+    fn find_fighter_preset<'a>(
+        catalog: &'a game_logic::FighterPresetCatalog,
+        name: &str,
+    ) -> Option<&'a game_logic::FighterPreset> {
+        catalog
+            .entries()
+            .iter()
+            .find(|preset| preset.name.eq_ignore_ascii_case(name))
+    }
+
+    fn player_config_from_preset(
+        preset: &game_logic::FighterPreset,
+        weapon_catalog: &game_logic::WeaponCatalog,
+        armor_catalog: &game_logic::ArmorCatalog,
+        shield_catalog: &game_logic::ShieldCatalog,
+        race_catalog: &[RaceSpec],
+    ) -> game_logic::PlayerConfig {
+        let attack = tier_from_label(&preset.progression.attack).unwrap_or(ProgressionTier::I);
+        let speed = tier_from_label(&preset.progression.speed).unwrap_or(ProgressionTier::I);
+        let initiative =
+            tier_from_label(&preset.progression.initiative).unwrap_or(ProgressionTier::I);
+        let health = tier_from_label(&preset.progression.health).unwrap_or(ProgressionTier::I);
+
+        let mut player = game_logic::PlayerConfig::new(
+            &preset.name,
+            weapon_catalog
+                .first_id()
+                .unwrap_or_else(|| game_logic::WeaponId::new(0)),
+        );
+        player.level = preset.level;
+        player.progression = Progression::new(attack, speed, initiative, health);
+        player.mastery_attack = game_logic::clamp_mastery(preset.masteries.attack);
+        player.mastery_defense = game_logic::clamp_mastery(preset.masteries.defense);
+        player.mastery_damage = game_logic::clamp_mastery(preset.masteries.damage);
+        player.mastery_speed = game_logic::clamp_mastery(preset.masteries.speed);
+        player.shield_mastery_defense = game_logic::clamp_mastery(preset.masteries.shield_defense);
+        player.shield_mastery_speed = game_logic::clamp_mastery(preset.masteries.shield_speed);
+        player.base_hp = preset.base_hp;
+        player.move_speed = preset.move_speed;
+        player.strength_base = preset.strength_base;
+        player.strength_pct = game_logic::normalize_percentile(preset.strength_pct);
+        player.dex_base = preset.dex_base;
+        player.dex_pct = game_logic::normalize_percentile(preset.dex_pct);
+        player.intelligence = preset.intelligence;
+        player.wisdom = preset.wisdom;
+        player.constitution = preset.constitution;
+        player.looks = preset.looks;
+        player.charisma = preset.charisma;
+        player.weapon_material_tier = preset.weapon_material_tier;
+        player.offhand_weapon_material_tier = preset.offhand_weapon_material_tier;
+        player.armor_material_tier = preset.armor_material_tier;
+        player.projectile_material_tier = preset.projectile_material_tier;
+        player.offhand_projectile_material_tier = preset.offhand_projectile_material_tier;
+        player.shield_material_tier = preset.shield_material_tier;
+        player.two_hand_grip = preset.two_hand_grip;
+        let maneuvers = preset.maneuvers;
+        player.use_jab = maneuvers.use_jab;
+        player.hold_at_bay = maneuvers.hold_at_bay;
+        player.aggressive_attack = maneuvers.aggressive_attack;
+        player.charge = maneuvers.charge;
+        player.ready_against_charge = maneuvers.ready_against_charge;
+        player.tactical_move = maneuvers.tactical_move;
+        player.fight_defensively = maneuvers.fight_defensively;
+        player.full_parry = maneuvers.full_parry;
+        player.give_ground = maneuvers.give_ground;
+        player.scamper_back = maneuvers.scamper_back;
+        player.fighting_withdrawal = maneuvers.fighting_withdrawal;
+        player.flee = maneuvers.flee;
+        player.defensive_dualwielding = preset.defensive_dualwielding;
+        player.offensive_dualwielding = preset.offensive_dualwielding;
+        player.talents = preset.talents.clone();
+        player.race_id = preset.race_id.clone();
+        player.race_applied = false;
+        player.knockback_step =
+            game_logic::knockback_step_for_race_id(player.race_id.as_deref(), race_catalog);
+        player.weapon_id = find_weapon_id_by_name(weapon_catalog, &preset.weapon)
+            .or_else(|| weapon_catalog.first_id())
+            .unwrap_or_else(|| game_logic::WeaponId::new(0));
+        player.offhand_weapon_id = preset
+            .offhand_weapon
+            .as_deref()
+            .and_then(|name| find_weapon_id_by_name(weapon_catalog, name));
+        player.armor_id = find_armor_id_by_name(armor_catalog, &preset.armor)
+            .or_else(|| armor_catalog.first_id())
+            .unwrap_or_else(|| game_logic::ArmorId::new(0));
+        player.shield_id = find_shield_id_by_name(shield_catalog, &preset.shield)
+            .or_else(|| shield_catalog.first_id())
+            .unwrap_or_else(|| game_logic::ShieldId::new(0));
+        if let Some(weapon) = weapon_catalog.get(player.weapon_id) {
+            game_logic::sanitize_projectile_tier(&mut player, weapon);
+        }
+        player
+    }
+
+    fn tier_from_label(label: &str) -> Option<ProgressionTier> {
+        match label.trim() {
+            "I" | "1" => Some(ProgressionTier::I),
+            "II" | "2" => Some(ProgressionTier::II),
+            "III" | "3" => Some(ProgressionTier::III),
+            "IV" | "4" => Some(ProgressionTier::IV),
+            "V" | "5" => Some(ProgressionTier::V),
+            "VI" | "6" => Some(ProgressionTier::VI),
+            _ => None,
+        }
+    }
+
+    fn find_weapon_id_by_name(
+        catalog: &game_logic::WeaponCatalog,
+        name: &str,
+    ) -> Option<game_logic::WeaponId> {
+        catalog
+            .entries()
+            .iter()
+            .position(|weapon| weapon.name.eq_ignore_ascii_case(name))
+            .and_then(|idx| catalog.id_from_index(idx))
+    }
+
+    fn find_armor_id_by_name(
+        catalog: &game_logic::ArmorCatalog,
+        name: &str,
+    ) -> Option<game_logic::ArmorId> {
+        if name.eq_ignore_ascii_case("None") {
+            return catalog.first_id();
+        }
+        catalog
+            .entries()
+            .iter()
+            .position(|entry| {
+                entry
+                    .armor
+                    .as_ref()
+                    .map(|armor| armor.name.eq_ignore_ascii_case(name))
+                    .unwrap_or(false)
+            })
+            .and_then(|idx| catalog.id_from_index(idx))
+    }
+
+    fn find_shield_id_by_name(
+        catalog: &game_logic::ShieldCatalog,
+        name: &str,
+    ) -> Option<game_logic::ShieldId> {
+        if name.eq_ignore_ascii_case("None") {
+            return catalog.first_id();
+        }
+        catalog
+            .entries()
+            .iter()
+            .position(|entry| {
+                entry
+                    .shield
+                    .as_ref()
+                    .map(|shield| shield.name.eq_ignore_ascii_case(name))
+                    .unwrap_or(false)
+            })
+            .and_then(|idx| catalog.id_from_index(idx))
     }
 
     #[test]
@@ -321,60 +482,54 @@
     }
 
     #[test]
-    fn bulk_sim_100k_under_one_second() {
+    fn bulk_sim_arthur_vs_zorya_100k_under_point_eight_seconds() {
         if cfg!(debug_assertions) {
             return;
         }
-        let attacker = combatant_basic(
-            "Attacker".to_string(),
-            "Antler".to_string(),
-            6,
-            5,
-            1,
-            false,
-            0,
-            "2d6p".to_string(),
-            2,
-            10.0,
-            3.0,
-            20.0,
-            false,
-            false,
-            None,
-            true,
-            false,
-            18,
+        let (weapon_catalog, armor_catalog, shield_catalog) =
+            data::load_catalogs().expect("failed to load catalogs");
+        let npc_presets =
+            data::load_npc_presets("data/npc_presets.json").expect("failed to load npc presets");
+        let fighter_presets = data::load_fighter_presets("data/fighter_presets.json")
+            .expect("failed to load fighter presets");
+        let talent_catalog =
+            data::load_talents("data/talents.json").expect("failed to load talents");
+        let race_catalog = data::load_races("data/races.json").expect("failed to load races");
+
+        let arthur_preset = find_fighter_preset(&fighter_presets, "Arthur Du Randt")
+            .expect("missing Arthur Du Randt preset");
+        let zorya_preset =
+            find_fighter_preset(&fighter_presets, "Zorya").expect("missing Zorya preset");
+
+        let arthur = player_config_from_preset(
+            arthur_preset,
+            &weapon_catalog,
+            &armor_catalog,
+            &shield_catalog,
+            &race_catalog,
         );
-        let defender = combatant_basic(
-            "Defender".to_string(),
-            "Claw".to_string(),
-            5,
-            6,
-            1,
-            false,
-            0,
-            "1d8p".to_string(),
-            2,
-            9.0,
-            1.0,
-            20.0,
-            false,
-            false,
-            None,
-            true,
-            false,
-            18,
+        let zorya = player_config_from_preset(
+            zorya_preset,
+            &weapon_catalog,
+            &armor_catalog,
+            &shield_catalog,
+            &race_catalog,
         );
-        let config = SimConfig::new(200.0, 3.0);
+        let players = [arthur, zorya];
+        let combatants = game_logic::build_combatants(
+            &players,
+            &weapon_catalog,
+            &armor_catalog,
+            &shield_catalog,
+            &npc_presets,
+            &talent_catalog,
+        );
+        let config = SimConfig::new(200.0, 1.0);
         let start = Instant::now();
-        let mut attacker = attacker;
-        let mut defender = defender;
-        attacker.team_id = 0;
-        defender.team_id = 1;
-        let _ = bulk_simulate(config, vec![attacker, defender], 100_000, 60);
+        let _ = bulk_simulate(config, combatants, 100_000, u32::MAX);
         let elapsed = start.elapsed();
         assert!(
-            elapsed <= Duration::from_secs(1),
+            elapsed <= Duration::from_millis(800),
             "bulk sim 100k took {:?}",
             elapsed
         );
@@ -573,6 +728,152 @@
     }
 
     #[test]
+    fn ranged_weapons_cannot_hold_at_bay() {
+        let ranged_weapon = Arc::new(WeaponProfile {
+            name: "Test Thrower".to_string(),
+            damage_expr: "1d1".to_string(),
+            damage_expr_cache: DamageExprCache::new("1d1"),
+            shield_damage_expr: None,
+            shield_damage_expr_cache: None,
+            armor_penetration: 0,
+            speed: 10.0,
+            reach_ft: 6.0,
+            range_bands_feet: Some([20.0, 30.0, 40.0, 60.0]),
+            range_distance_multiplier: 1.0,
+            two_hand_grip: false,
+            use_jab: false,
+            jab_special_expr: None,
+            jab_special_expr_cache: None,
+            has_weapon: true,
+            defense_bonus_always: false,
+            uses_projectiles: false,
+            is_small_weapon: false,
+            is_unarmed: false,
+            crit_min_roll: 20,
+            crit_min_roll_ranged: None,
+            crit_severity_bonus: 0,
+        });
+        let melee_weapon = Arc::new(WeaponProfile {
+            name: "Test Blade".to_string(),
+            damage_expr: "1d1".to_string(),
+            damage_expr_cache: DamageExprCache::new("1d1"),
+            shield_damage_expr: None,
+            shield_damage_expr_cache: None,
+            armor_penetration: 0,
+            speed: 10.0,
+            reach_ft: 1.0,
+            range_bands_feet: None,
+            range_distance_multiplier: 1.0,
+            two_hand_grip: false,
+            use_jab: false,
+            jab_special_expr: None,
+            jab_special_expr_cache: None,
+            has_weapon: true,
+            defense_bonus_always: false,
+            uses_projectiles: false,
+            is_small_weapon: false,
+            is_unarmed: false,
+            crit_min_roll: 20,
+            crit_min_roll_ranged: None,
+            crit_severity_bonus: 0,
+        });
+        let mut maneuvers = ManeuverProfile::default();
+        maneuvers.hold_at_bay = true;
+        let attacker = Combatant::new(CombatantSheet {
+            name: "Thrower".to_string(),
+            offense: OffenseProfile {
+                attack_bonus: 0,
+                attack_bonus_base: 0,
+                strength_damage: 0,
+                strength_damage_base: 0,
+                unarmed_damage_bonus: 0,
+                weapon: ranged_weapon,
+                offhand: None,
+            },
+            defense: DefenseProfile {
+                ranged_defense_mod: 0,
+                defense_mod: 0,
+                dex_defense_bonus: 0,
+                armor_dr: 0,
+                natural_dr: 0,
+                knockback_step: 15,
+                armor_is_heavy: false,
+                shield_name: None,
+                shield_defense_bonus: 0,
+                shield_dr: 0,
+                shield_cover_value: None,
+                shield_breakage: None,
+            },
+            mobility: MobilityProfile { move_speed: 5.0 },
+            vitals: Vitals {
+                trauma_die_sides: 20,
+                trauma_die_penetrating: false,
+                max_hp: 100,
+                constitution: 10,
+                threshold_of_pain: 0,
+            },
+            maneuvers,
+            modifiers: ModifierStack::default(),
+        });
+        let defender = Combatant::new(CombatantSheet {
+            name: "Defender".to_string(),
+            offense: OffenseProfile {
+                attack_bonus: 0,
+                attack_bonus_base: 0,
+                strength_damage: 0,
+                strength_damage_base: 0,
+                unarmed_damage_bonus: 0,
+                weapon: melee_weapon,
+                offhand: None,
+            },
+            defense: DefenseProfile {
+                ranged_defense_mod: 0,
+                defense_mod: 0,
+                dex_defense_bonus: 0,
+                armor_dr: 0,
+                natural_dr: 0,
+                knockback_step: 15,
+                armor_is_heavy: false,
+                shield_name: None,
+                shield_defense_bonus: 0,
+                shield_dr: 0,
+                shield_cover_value: None,
+                shield_breakage: None,
+            },
+            mobility: MobilityProfile { move_speed: 5.0 },
+            vitals: Vitals {
+                trauma_die_sides: 20,
+                trauma_die_penetrating: false,
+                max_hp: 100,
+                constitution: 10,
+                threshold_of_pain: 0,
+            },
+            maneuvers: ManeuverProfile::default(),
+            modifiers: ModifierStack::default(),
+        });
+        let mut sim = SimState::new(SimConfig::new(12.0, 1.0));
+        let mut attacker = attacker;
+        let mut defender = defender;
+        attacker.team_id = 0;
+        defender.team_id = 1;
+        sim.reset_with_combatants(vec![attacker, defender]);
+        sim.set_rng(SimRng::from_seed(1));
+        for _ in 0..5 {
+            sim.tick();
+        }
+
+        let saw_attack = sim
+            .combat_events
+            .iter()
+            .any(|event| matches!(event.kind, CombatEventKind::Attack(_)));
+        assert!(saw_attack);
+        let saw_hold_at_bay = sim.combat_events.iter().any(|event| {
+            matches!(&event.kind, CombatEventKind::Attack(attack) if attack.hold_at_bay)
+        });
+        assert!(!saw_hold_at_bay);
+    }
+
+    #[test]
     fn equal_reach_allows_double_ko() {
         let attacker = combatant_basic(
             "Attacker".to_string(),
@@ -666,6 +967,7 @@
             defense: DefenseProfile {
                 ranged_defense_mod: 0,
                 defense_mod: 0,
+                dex_defense_bonus: 0,
                 armor_dr: 0,
                 natural_dr: 0,
                 knockback_step: 15,
@@ -804,6 +1106,7 @@
             defense: DefenseProfile {
                 ranged_defense_mod: 0,
                 defense_mod: 0,
+                dex_defense_bonus: 0,
                 armor_dr: 0,
                 natural_dr: 0,
                 knockback_step: 15,
@@ -1120,6 +1423,81 @@
         );
         combatant.state.tick_effects();
         assert_eq!(combatant.apply_i32(StatIdI32::AttackBonus, base), base);
+    }
+
+    #[test]
+    fn charge_attack_applies_bonus_knockback_and_defense_penalty() {
+        let attacker = combatant_basic(
+            "Charger".to_string(),
+            "Test Blade".to_string(),
+            0,
+            10,
+            0,
+            false,
+            0,
+            "1d1".to_string(),
+            0,
+            10.0,
+            1.0,
+            5.0,
+            false,
+            false,
+            None,
+            true,
+            false,
+            20,
+        );
+        let defender = combatant_basic(
+            "Defender".to_string(),
+            "Test Blade".to_string(),
+            0,
+            0,
+            0,
+            false,
+            0,
+            "1d1".to_string(),
+            0,
+            10.0,
+            1.0,
+            5.0,
+            false,
+            false,
+            None,
+            true,
+            false,
+            20,
+        );
+        let mut state = make_state(attacker, defender);
+        state.combatants[0].sheet.defense.dex_defense_bonus = 3;
+        state.combatants[1].sheet.defense.knockback_step = 1;
+        state.combatants[0].state.charge_distance_ft = 25.0;
+        let mut rng = FixedRng(0);
+        let event = resolve_attack(
+            &mut state.combatants,
+            0,
+            1,
+            0,
+            false,
+            1.0,
+            AttackMode::Charge,
+            WeaponSlot::Primary,
+            0.0,
+            None,
+            &mut rng,
+        );
+        assert_eq!(event.roll.attack_bonus, 4);
+        assert_eq!(event.knockback_ft, 10.0);
+        let base_defense = state.combatants[0].sheet.defense.defense_mod;
+        assert_eq!(
+            state.combatants[0].apply_i32(StatIdI32::DefenseMod, base_defense),
+            base_defense - 3
+        );
+        assert_eq!(state.combatants[0].state.charge_distance_ft, 0.0);
+        assert!(state.combatants[0]
+            .state
+            .active_effects
+            .iter()
+            .any(|effect| effect.id == "charge_defense_penalty"));
     }
 
     #[test]
@@ -1850,6 +2228,7 @@
             defense: DefenseProfile {
                 ranged_defense_mod: 0,
                 defense_mod: 0,
+                dex_defense_bonus: 0,
                 armor_dr: 0,
                 natural_dr: 0,
                 knockback_step: 15,
@@ -1885,6 +2264,7 @@
             defense: DefenseProfile {
                 ranged_defense_mod: 0,
                 defense_mod: 0,
+                dex_defense_bonus: 0,
                 armor_dr: 0,
                 natural_dr: 0,
                 knockback_step: 15,
@@ -2013,6 +2393,7 @@
             defense: DefenseProfile {
                 ranged_defense_mod: 0,
                 defense_mod: 0,
+                dex_defense_bonus: 0,
                 armor_dr: 0,
                 natural_dr: 0,
                 knockback_step: 15,
@@ -2048,6 +2429,7 @@
             defense: DefenseProfile {
                 ranged_defense_mod: 0,
                 defense_mod: 0,
+                dex_defense_bonus: 0,
                 armor_dr: 0,
                 natural_dr: 0,
                 knockback_step: 15,
@@ -2105,6 +2487,55 @@
 
         assert_eq!(first_ranged_time, Some(0));
         assert_eq!(first_melee_time, Some(1));
+    }
+
+    #[test]
+    fn throwing_axe_should_allow_melee_to_close_in_gui_config() {
+        let (weapon_catalog, armor_catalog, shield_catalog) =
+            data::load_catalogs().expect("failed to load catalogs");
+        let npc_presets =
+            data::load_npc_presets("data/npc_presets.json").expect("failed to load npc presets");
+        let talent_catalog =
+            data::load_talents("data/talents.json").expect("failed to load talents");
+
+        let weapon_id_by_name = |name: &str| {
+            weapon_catalog
+                .entries()
+                .iter()
+                .position(|weapon| weapon.name == name)
+                .and_then(|idx| weapon_catalog.id_from_index(idx))
+                .unwrap_or_else(|| panic!("missing weapon preset {}", name))
+        };
+
+        let throwing_axe_id = weapon_id_by_name("Throwing axe");
+        let club_id = weapon_id_by_name("Club");
+
+        let mut thrower = game_logic::PlayerConfig::new("Thrower", throwing_axe_id);
+        let mut chaser = game_logic::PlayerConfig::new("Chaser", club_id);
+        thrower.base_hp = 1000;
+        chaser.base_hp = 1000;
+        let players = [thrower, chaser];
+        let stop_distance =
+            game_logic::stop_distance_for_players(&players, &weapon_catalog, &talent_catalog);
+
+        let mut sim = SimState::new(SimConfig::new(200.0, stop_distance));
+        sim.reset_with_combatants(game_logic::build_combatants(
+            &players,
+            &weapon_catalog,
+            &armor_catalog,
+            &shield_catalog,
+            &npc_presets,
+            &talent_catalog,
+        ));
+        for _ in 0..30 {
+            sim.tick();
+        }
+
+        let distance = sim.distance();
+        assert!(
+            distance <= 5.0,
+            "expected melee to close within 5ft, got {distance}"
+        );
     }
 
     #[test]
@@ -2223,4 +2654,69 @@
             &mut rng,
         );
         assert_eq!(state.combatants[1].state.hp, 20);
+    }
+
+    #[test]
+    fn zorya_vs_arthur_battle_progresses() {
+        let (weapon_catalog, armor_catalog, shield_catalog) =
+            data::load_catalogs().expect("failed to load catalogs");
+        let npc_presets =
+            data::load_npc_presets("data/npc_presets.json").expect("failed to load npc presets");
+        let fighter_presets = data::load_fighter_presets("data/fighter_presets.json")
+            .expect("failed to load fighter presets");
+        let talent_catalog =
+            data::load_talents("data/talents.json").expect("failed to load talents");
+        let race_catalog = data::load_races("data/races.json").expect("failed to load races");
+
+        let arthur_preset = find_fighter_preset(&fighter_presets, "Arthur Du Randt")
+            .expect("missing Arthur Du Randt preset");
+        let zorya_preset =
+            find_fighter_preset(&fighter_presets, "Zorya").expect("missing Zorya preset");
+
+        let arthur = player_config_from_preset(
+            arthur_preset,
+            &weapon_catalog,
+            &armor_catalog,
+            &shield_catalog,
+            &race_catalog,
+        );
+        let zorya = player_config_from_preset(
+            zorya_preset,
+            &weapon_catalog,
+            &armor_catalog,
+            &shield_catalog,
+            &race_catalog,
+        );
+        let players = [arthur, zorya];
+        let stop_distance =
+            game_logic::stop_distance_for_players(&players, &weapon_catalog, &talent_catalog);
+
+        let mut sim = SimState::new(SimConfig::new(stop_distance, stop_distance));
+        sim.set_rng(SimRng::from_seed(42));
+        sim.reset_with_combatants(game_logic::build_combatants(
+            &players,
+            &weapon_catalog,
+            &armor_catalog,
+            &shield_catalog,
+            &npc_presets,
+            &talent_catalog,
+        ));
+
+        let max_seconds = 300;
+        while !sim.done && sim.elapsed_seconds < max_seconds {
+            sim.update(1.0);
+        }
+
+        assert!(
+            sim.done,
+            "battle did not finish within {max_seconds}s"
+        );
+        let arthur_attacked = sim.combat_events.iter().any(|event| {
+            event.attacker_idx == 0 && matches!(event.kind, CombatEventKind::Attack(_))
+        });
+        let zorya_attacked = sim.combat_events.iter().any(|event| {
+            event.attacker_idx == 1 && matches!(event.kind, CombatEventKind::Attack(_))
+        });
+        assert!(arthur_attacked, "Arthur never attacked");
+        assert!(zorya_attacked, "Zorya never attacked");
     }
