@@ -10,7 +10,8 @@
       "initiative_modifier": -1,
       "speed_modifier": 0,
       "type": "None",
-      "weight_lbs": null
+      "weight_lbs": null,
+      "price_gp": 0
     },
     {
       "name": "Robe",
@@ -20,7 +21,8 @@
       "initiative_modifier": 0,
       "speed_modifier": 0,
       "type": "None",
-      "weight_lbs": 5.0
+      "weight_lbs": 5.0,
+      "price_gp": 30
     },
     {
       "name": "Doublet",
@@ -30,7 +32,8 @@
       "initiative_modifier": 1,
       "speed_modifier": 0,
       "type": "Light",
-      "weight_lbs": 15.0
+      "weight_lbs": 15.0,
+      "price_gp": 64
     },
     {
       "name": "Gambeson",
@@ -40,7 +43,8 @@
       "initiative_modifier": 0,
       "speed_modifier": 0,
       "type": "Light",
-      "weight_lbs": 15.0
+      "weight_lbs": 15.0,
+      "price_gp": 62
     },
     {
       "name": "Chainshirt",
@@ -50,7 +54,8 @@
       "initiative_modifier": 1,
       "speed_modifier": 0,
       "type": "Medium",
-      "weight_lbs": 20.0
+      "weight_lbs": 20.0,
+      "price_gp": 84
     },
     {
       "name": "Ringmail",
@@ -60,7 +65,8 @@
       "initiative_modifier": 1,
       "speed_modifier": 1,
       "type": "Medium",
-      "weight_lbs": 30.0
+      "weight_lbs": 30.0,
+      "price_gp": 116
     },
     {
       "name": "Breastplate",
@@ -70,7 +76,8 @@
       "initiative_modifier": 1,
       "speed_modifier": 2,
       "type": "Medium",
-      "weight_lbs": 35.0
+      "weight_lbs": 35.0,
+      "price_gp": 138
     },
     {
       "name": "Scalemail",
@@ -80,7 +87,8 @@
       "initiative_modifier": 3,
       "speed_modifier": 2,
       "type": "Heavy",
-      "weight_lbs": 60.0
+      "weight_lbs": 60.0,
+      "price_gp": 190
     },
     {
       "name": "Chainmail",
@@ -90,7 +98,8 @@
       "initiative_modifier": 2,
       "speed_modifier": 2,
       "type": "Heavy",
-      "weight_lbs": 45.0
+      "weight_lbs": 45.0,
+      "price_gp": 158
     },
     {
       "name": "Splintmail",
@@ -100,7 +109,8 @@
       "initiative_modifier": 2,
       "speed_modifier": 2,
       "type": "Heavy",
-      "weight_lbs": 55.0
+      "weight_lbs": 55.0,
+      "price_gp": 188
     },
     {
       "name": "Brigandine",
@@ -110,7 +120,8 @@
       "initiative_modifier": 2,
       "speed_modifier": 1,
       "type": "Heavy",
-      "weight_lbs": 50.0
+      "weight_lbs": 50.0,
+      "price_gp": 176
     },
     {
       "name": "Halfplate",
@@ -120,7 +131,8 @@
       "initiative_modifier": 2,
       "speed_modifier": 2,
       "type": "Heavy",
-      "weight_lbs": 40.0
+      "weight_lbs": 40.0,
+      "price_gp": 168
     },
     {
       "name": "Platemail",
@@ -130,7 +142,8 @@
       "initiative_modifier": 3,
       "speed_modifier": 2,
       "type": "Heavy",
-      "weight_lbs": 55.0
+      "weight_lbs": 55.0,
+      "price_gp": 208
     },
     {
       "name": "None",
@@ -140,7 +153,8 @@
       "initiative_modifier": -1,
       "speed_modifier": 0,
       "type": "None",
-      "weight_lbs": null
+      "weight_lbs": null,
+      "price_gp": 0
     },
     {
       "name": "Kaftan",
@@ -150,7 +164,8 @@
       "initiative_modifier": 2,
       "speed_modifier": 0,
       "type": "None",
-      "weight_lbs": 8.0
+      "weight_lbs": 8.0,
+      "price_gp": 34
     },
     {
       "name": "Quilted",
@@ -160,7 +175,8 @@
       "initiative_modifier": 0,
       "speed_modifier": 0,
       "type": "Light",
-      "weight_lbs": 10.0
+      "weight_lbs": 10.0,
+      "price_gp": 38
     },
     {
       "name": "Boiled",
@@ -170,7 +186,8 @@
       "initiative_modifier": 1,
       "speed_modifier": 0,
       "type": "Light",
-      "weight_lbs": 20.0
+      "weight_lbs": 20.0,
+      "price_gp": 72
     },
     {
       "name": "Rawhide",
@@ -180,7 +197,8 @@
       "initiative_modifier": 1,
       "speed_modifier": 1,
       "type": "Light",
-      "weight_lbs": 20.0
+      "weight_lbs": 20.0,
+      "price_gp": 70
     },
     {
       "name": "Studded",
@@ -190,7 +208,8 @@
       "initiative_modifier": 0,
       "speed_modifier": 1,
       "type": "Medium",
-      "weight_lbs": 25.0
+      "weight_lbs": 25.0,
+      "price_gp": 80
     },
     {
       "name": "Jazerant",
@@ -200,7 +219,8 @@
       "initiative_modifier": 0,
       "speed_modifier": 2,
       "type": "Medium",
-      "weight_lbs": 25.0
+      "weight_lbs": 25.0,
+      "price_gp": 92
     },
     {
       "name": "Kazhagand",
@@ -210,7 +230,8 @@
       "initiative_modifier": 2,
       "speed_modifier": 2,
       "type": "Medium",
-      "weight_lbs": 30.0
+      "weight_lbs": 30.0,
+      "price_gp": 114
     },
     {
       "name": "Hoopmail",
@@ -220,7 +241,8 @@
       "initiative_modifier": 2,
       "speed_modifier": 2,
       "type": "Medium",
-      "weight_lbs": 35.0
+      "weight_lbs": 35.0,
+      "price_gp": 138
     },
     {
       "name": "Lamellar",
@@ -230,7 +252,8 @@
       "initiative_modifier": 1,
       "speed_modifier": 2,
       "type": "Heavy",
-      "weight_lbs": 40.0
+      "weight_lbs": 40.0,
+      "price_gp": 156
     },
     {
       "name": "Mirror",
@@ -240,7 +263,8 @@
       "initiative_modifier": 3,
       "speed_modifier": 1,
       "type": "Heavy",
-      "weight_lbs": 45.0
+      "weight_lbs": 45.0,
+      "price_gp": 178
     }
   ]
 }

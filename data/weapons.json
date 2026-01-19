@@ -16,7 +16,8 @@
       "weight_lbs": null,
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 0
     },
     {
       "name": "Antler",
@@ -32,7 +33,8 @@
       "weight_lbs": null,
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 0
     },
     {
       "name": "Claw",
@@ -48,7 +50,8 @@
       "weight_lbs": null,
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 0
     },
     {
       "name": "Fang",
@@ -64,7 +67,8 @@
       "weight_lbs": null,
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 0
     },
     {
       "name": "Cestus",
@@ -80,7 +84,8 @@
       "weight_lbs": 1.0,
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 17
     },
     {
       "name": "Gauntlet",
@@ -96,7 +101,8 @@
       "weight_lbs": 1.0,
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 17
     },
     {
       "name": "Spiked gauntlet",
@@ -112,7 +118,8 @@
       "weight_lbs": 1.0,
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 17
     },
     {
       "name": "Battle axe",
@@ -128,7 +135,8 @@
       "weight_lbs": 3.5,
       "armor_penetration": 2,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 44
     },
     {
       "name": "Executioner's axe",
@@ -144,7 +152,8 @@
       "weight_lbs": 10.0,
       "armor_penetration": 2,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 88
     },
     {
       "name": "Greataxe",
@@ -160,7 +169,8 @@
       "weight_lbs": 7.0,
       "armor_penetration": 2,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 67
     },
     {
       "name": "Hand axe",
@@ -176,7 +186,8 @@
       "weight_lbs": 2.0,
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 30
     },
     {
       "name": "Khopesh",
@@ -192,7 +203,8 @@
       "weight_lbs": 2.0,
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 32
     },
     {
       "name": "Military pick",
@@ -208,7 +220,8 @@
       "weight_lbs": 4.0,
       "armor_penetration": 2,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 46
     },
     {
       "name": "Horseman's pick",
@@ -224,7 +237,8 @@
       "weight_lbs": 2.0,
       "armor_penetration": 1,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 41
     },
     {
       "name": "Scythe",
@@ -240,7 +254,8 @@
       "weight_lbs": 5.0,
       "armor_penetration": 0,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 62
     },
     {
       "name": "Sickle",
@@ -256,7 +271,8 @@
       "weight_lbs": 1.0,
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 22
     },
     {
       "name": "Throwing axe",
@@ -268,12 +284,18 @@
       "speed": "7",
       "size": "S",
       "reach_or_range": "1/60 feet",
-      "range_bands_feet": [20, 30, 40, 60],
+      "range_bands_feet": [
+        20,
+        30,
+        40,
+        60
+      ],
       "type": "H",
       "weight_lbs": 2.0,
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 39
     },
     {
       "name": "Club",
@@ -289,7 +311,8 @@
       "weight_lbs": 2.0,
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 23
     },
     {
       "name": "Dart",
@@ -301,12 +324,18 @@
       "speed": "5",
       "size": "S",
       "reach_or_range": "0.5/40 feet",
-      "range_bands_feet": [10, 20, 30, 40],
+      "range_bands_feet": [
+        10,
+        20,
+        30,
+        40
+      ],
       "type": "P",
       "weight_lbs": 0.1,
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 23
     },
     {
       "name": "Sling",
@@ -322,7 +351,8 @@
       "weight_lbs": 0.5,
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 27
     },
     {
       "name": "Staff",
@@ -338,7 +368,8 @@
       "weight_lbs": 4.0,
       "armor_penetration": 0,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 45
     },
     {
       "name": "Greatclub",
@@ -354,7 +385,8 @@
       "weight_lbs": 8.0,
       "armor_penetration": 1,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 73
     },
     {
       "name": "Greathammer",
@@ -370,7 +402,8 @@
       "weight_lbs": 15.0,
       "armor_penetration": 2,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 103
     },
     {
       "name": "Hammer",
@@ -386,7 +419,8 @@
       "weight_lbs": 2.5,
       "armor_penetration": 1,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 38
     },
     {
       "name": "Warhammer",
@@ -402,7 +436,8 @@
       "weight_lbs": 5.0,
       "armor_penetration": 1,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 54
     },
     {
       "name": "Mace",
@@ -418,7 +453,8 @@
       "weight_lbs": 3.0,
       "armor_penetration": 2,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 42
     },
     {
       "name": "Horseman's mace",
@@ -434,7 +470,8 @@
       "weight_lbs": 2.0,
       "armor_penetration": 1,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 41
     },
     {
       "name": "Maul",
@@ -450,7 +487,8 @@
       "weight_lbs": 12.0,
       "armor_penetration": 2,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 89
     },
     {
       "name": "Morningstar",
@@ -466,7 +504,8 @@
       "weight_lbs": 3.0,
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 40
     },
     {
       "name": "Longbow",
@@ -483,7 +522,8 @@
       "ammunition": "Heavy arrow",
       "armor_penetration": 0,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 60
     },
     {
       "name": "Recurve bow",
@@ -500,7 +540,8 @@
       "ammunition": "Light arrow",
       "armor_penetration": 0,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 60
     },
     {
       "name": "Shortbow",
@@ -517,7 +558,8 @@
       "ammunition": "Light arrow",
       "armor_penetration": 0,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 40
     },
     {
       "name": "Warbow",
@@ -534,7 +576,8 @@
       "ammunition": "Heavy arrow",
       "armor_penetration": 1,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 68
     },
     {
       "name": "Arbalest",
@@ -551,7 +594,8 @@
       "ammunition": "Heavy quarrel",
       "armor_penetration": 1,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 71
     },
     {
       "name": "Light crossbow",
@@ -568,7 +612,8 @@
       "ammunition": "Light quarrel",
       "armor_penetration": 0,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 39
     },
     {
       "name": "Hand crossbow",
@@ -585,7 +630,8 @@
       "ammunition": "Light quarrel",
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 26
     },
     {
       "name": "Heavy crossbow",
@@ -602,7 +648,8 @@
       "ammunition": "Heavy quarrel",
       "armor_penetration": 0,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 55
     },
     {
       "name": "Double axe",
@@ -618,7 +665,8 @@
       "weight_lbs": 9.0,
       "armor_penetration": 2,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 88
     },
     {
       "name": "Double scimitar",
@@ -634,7 +682,8 @@
       "weight_lbs": 10.0,
       "armor_penetration": 0,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 88
     },
     {
       "name": "Dual scythe",
@@ -650,7 +699,8 @@
       "weight_lbs": 12.0,
       "armor_penetration": 0,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 102
     },
     {
       "name": "Hooked hammer",
@@ -666,7 +716,8 @@
       "weight_lbs": 9.0,
       "armor_penetration": 2,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 90
     },
     {
       "name": "Monk's Spade",
@@ -682,7 +733,8 @@
       "weight_lbs": 5.0,
       "armor_penetration": 0,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 66
     },
     {
       "name": "Spear-axe",
@@ -700,7 +752,8 @@
       "weight_lbs": 9.5,
       "armor_penetration": 2,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 88
     },
     {
       "name": "Two-bladed sword",
@@ -718,7 +771,8 @@
       "weight_lbs": 8.0,
       "armor_penetration": 0,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 82
     },
     {
       "name": "Bola",
@@ -730,12 +784,18 @@
       "speed": "10",
       "size": "M",
       "reach_or_range": "50 feet",
-      "range_bands_feet": [10, 20, 30, 50],
+      "range_bands_feet": [
+        10,
+        20,
+        30,
+        50
+      ],
       "type": "C/E",
       "weight_lbs": 2.0,
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 43
     },
     {
       "name": "Lasso",
@@ -747,12 +807,18 @@
       "speed": "15",
       "size": "L",
       "reach_or_range": "50 feet",
-      "range_bands_feet": [10, 20, 30, 50],
+      "range_bands_feet": [
+        10,
+        20,
+        30,
+        50
+      ],
       "type": "E",
       "weight_lbs": 3.0,
       "armor_penetration": 0,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 56
     },
     {
       "name": "Net",
@@ -764,12 +830,18 @@
       "speed": "20",
       "size": "L",
       "reach_or_range": "15 feet",
-      "range_bands_feet": [10, 15, 0, 0],
+      "range_bands_feet": [
+        10,
+        15,
+        0,
+        0
+      ],
       "type": "E",
       "weight_lbs": 6.0,
       "armor_penetration": 0,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 68
     },
     {
       "name": "Flail",
@@ -785,7 +857,8 @@
       "weight_lbs": 4.5,
       "armor_penetration": 1,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 46
     },
     {
       "name": "Horseman's flail",
@@ -801,7 +874,8 @@
       "weight_lbs": 3.0,
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 43
     },
     {
       "name": "Scourge",
@@ -817,7 +891,8 @@
       "weight_lbs": 2.0,
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 26
     },
     {
       "name": "Spiked chain",
@@ -833,7 +908,8 @@
       "weight_lbs": 10.0,
       "armor_penetration": 0,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 76
     },
     {
       "name": "Whip",
@@ -849,7 +925,8 @@
       "weight_lbs": 1.5,
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 22
     },
     {
       "name": "Broadsword",
@@ -865,7 +942,8 @@
       "weight_lbs": 3.5,
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 51
     },
     {
       "name": "Bastard sword",
@@ -883,7 +961,8 @@
       "weight_lbs": 3.5,
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 51
     },
     {
       "name": "Claymore",
@@ -901,7 +980,8 @@
       "weight_lbs": 3.5,
       "armor_penetration": 1,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 58
     },
     {
       "name": "Flamberge",
@@ -919,7 +999,8 @@
       "weight_lbs": 5.0,
       "armor_penetration": 2,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 66
     },
     {
       "name": "Greatsword",
@@ -937,7 +1018,8 @@
       "weight_lbs": 4.0,
       "armor_penetration": 2,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 60
     },
     {
       "name": "Longsword",
@@ -955,7 +1037,8 @@
       "weight_lbs": 3.0,
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 45
     },
     {
       "name": "Greatknife",
@@ -971,7 +1054,8 @@
       "weight_lbs": 4.0,
       "armor_penetration": 1,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 58
     },
     {
       "name": "Sabre",
@@ -987,7 +1071,8 @@
       "weight_lbs": 2.5,
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 41
     },
     {
       "name": "Scimitar",
@@ -1003,7 +1088,8 @@
       "weight_lbs": 4.0,
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 49
     },
     {
       "name": "Spatha",
@@ -1021,7 +1107,8 @@
       "weight_lbs": 2.0,
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 41
     },
     {
       "name": "Thrusting sword",
@@ -1037,7 +1124,8 @@
       "weight_lbs": 2.0,
       "armor_penetration": 0,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 50
     },
     {
       "name": "Two-handed sword",
@@ -1055,7 +1143,8 @@
       "weight_lbs": 5.0,
       "armor_penetration": 2,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 66
     },
     {
       "name": "Dagger",
@@ -1073,7 +1162,8 @@
       "weight_lbs": 1.0,
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 22
     },
     {
       "name": "Dueling sword",
@@ -1089,7 +1179,8 @@
       "weight_lbs": 3.0,
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 41
     },
     {
       "name": "Falx",
@@ -1105,7 +1196,8 @@
       "weight_lbs": 3.0,
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 43
     },
     {
       "name": "Knife",
@@ -1121,7 +1213,8 @@
       "weight_lbs": 0.5,
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 18
     },
     {
       "name": "Gladius",
@@ -1139,7 +1232,8 @@
       "weight_lbs": 2.0,
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 30
     },
     {
       "name": "Long knife",
@@ -1155,7 +1249,8 @@
       "weight_lbs": 1.5,
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 33
     },
     {
       "name": "Short sword",
@@ -1173,7 +1268,8 @@
       "weight_lbs": 2.0,
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 30
     },
     {
       "name": "Throwing knife",
@@ -1185,12 +1281,18 @@
       "speed": "6",
       "size": "S",
       "reach_or_range": "1/50 feet",
-      "range_bands_feet": [20, 30, 40, 50],
+      "range_bands_feet": [
+        20,
+        30,
+        40,
+        50
+      ],
       "type": "P",
       "weight_lbs": 0.5,
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 27
     },
     {
       "name": "Bardiche",
@@ -1211,7 +1313,8 @@
       "phalanx_rank": null,
       "armor_penetration": 0,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 65
     },
     {
       "name": "Fauchard",
@@ -1233,7 +1336,8 @@
       "phalanx_rank": "2nd",
       "armor_penetration": 0,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 53
     },
     {
       "name": "Glaive",
@@ -1255,7 +1359,8 @@
       "phalanx_rank": "2nd",
       "armor_penetration": 0,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 53
     },
     {
       "name": "Guisarme",
@@ -1277,7 +1382,8 @@
       "phalanx_rank": null,
       "armor_penetration": 0,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 49
     },
     {
       "name": "Halberd",
@@ -1299,7 +1405,8 @@
       "phalanx_rank": null,
       "armor_penetration": 2,
       "handedness": "2h",
-      "defense_bonus_always": true
+      "defense_bonus_always": true,
+      "price_gp": 70
     },
     {
       "name": "Mancatcher",
@@ -1320,7 +1427,8 @@
       "phalanx_rank": null,
       "armor_penetration": 0,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 82
     },
     {
       "name": "Poleaxe",
@@ -1342,7 +1450,8 @@
       "phalanx_rank": null,
       "armor_penetration": 2,
       "handedness": "2h",
-      "defense_bonus_always": true
+      "defense_bonus_always": true,
+      "price_gp": 66
     },
     {
       "name": "Polehammer",
@@ -1364,7 +1473,8 @@
       "phalanx_rank": null,
       "armor_penetration": 2,
       "handedness": "2h",
-      "defense_bonus_always": true
+      "defense_bonus_always": true,
+      "price_gp": 80
     },
     {
       "name": "Raven's Beak",
@@ -1386,7 +1496,8 @@
       "phalanx_rank": null,
       "armor_penetration": 2,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 72
     },
     {
       "name": "Swordstaff",
@@ -1408,7 +1519,8 @@
       "phalanx_rank": null,
       "armor_penetration": 0,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 58
     },
     {
       "name": "Voulge",
@@ -1430,7 +1542,8 @@
       "phalanx_rank": "2nd",
       "armor_penetration": 0,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 57
     },
     {
       "name": "Hasta",
@@ -1452,7 +1565,8 @@
       "phalanx_rank": "2nd",
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 44
     },
     {
       "name": "Javelin",
@@ -1464,7 +1578,12 @@
       "speed": "7",
       "size": "M",
       "reach_or_range": "5/100 feet",
-      "range_bands_feet": [30, 50, 70, 100],
+      "range_bands_feet": [
+        30,
+        50,
+        70,
+        100
+      ],
       "type": "P",
       "weight_lbs": 2.0,
       "dismount": false,
@@ -1474,7 +1593,8 @@
       "phalanx_rank": null,
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 30
     },
     {
       "name": "Lance",
@@ -1495,7 +1615,8 @@
       "phalanx_rank": null,
       "armor_penetration": 2,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 63
     },
     {
       "name": "Partisan",
@@ -1517,7 +1638,8 @@
       "phalanx_rank": null,
       "armor_penetration": 0,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 53
     },
     {
       "name": "Pike",
@@ -1539,7 +1661,8 @@
       "phalanx_rank": "3rd",
       "armor_penetration": 0,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 75
     },
     {
       "name": "Pilum",
@@ -1551,7 +1674,12 @@
       "speed": "8",
       "size": "M",
       "reach_or_range": "5/80 feet",
-      "range_bands_feet": [30, 40, 60, 80],
+      "range_bands_feet": [
+        30,
+        40,
+        60,
+        80
+      ],
       "type": "P",
       "weight_lbs": 3.0,
       "dismount": false,
@@ -1561,7 +1689,8 @@
       "phalanx_rank": null,
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 38
     },
     {
       "name": "Ranseur",
@@ -1583,7 +1712,8 @@
       "phalanx_rank": "2nd",
       "armor_penetration": -1,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 60
     },
     {
       "name": "Short Spear",
@@ -1605,7 +1735,8 @@
       "phalanx_rank": null,
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 32
     },
     {
       "name": "Spear",
@@ -1627,7 +1758,8 @@
       "phalanx_rank": "3rd",
       "armor_penetration": 0,
       "handedness": "1h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 44
     },
     {
       "name": "Spetum",
@@ -1649,7 +1781,8 @@
       "phalanx_rank": "2nd",
       "armor_penetration": 0,
       "handedness": "2h",
-      "defense_bonus_always": true
+      "defense_bonus_always": true,
+      "price_gp": 53
     },
     {
       "name": "Trident",
@@ -1671,7 +1804,8 @@
       "phalanx_rank": null,
       "armor_penetration": 0,
       "handedness": "2h",
-      "defense_bonus_always": false
+      "defense_bonus_always": false,
+      "price_gp": 64
     }
   ],
   "shields": [
@@ -1681,8 +1815,14 @@
       "damage_reduction": "6",
       "arc_of_defense": "one frontal attacker",
       "cover_value": "20",
-      "breakage_thresholds": [10, 15, 20, 25],
-      "weight_lbs": 2.0
+      "breakage_thresholds": [
+        10,
+        15,
+        20,
+        25
+      ],
+      "weight_lbs": 2.0,
+      "price_gp": 29
     },
     {
       "name": "Small wooden shield",
@@ -1690,8 +1830,14 @@
       "damage_reduction": "4",
       "arc_of_defense": "two frontal attackers",
       "cover_value": "19",
-      "breakage_thresholds": [6, 9, 12, 15],
-      "weight_lbs": 3.0
+      "breakage_thresholds": [
+        6,
+        9,
+        12,
+        15
+      ],
+      "weight_lbs": 3.0,
+      "price_gp": 26
     },
     {
       "name": "Small metallic shield",
@@ -1699,8 +1845,14 @@
       "damage_reduction": "6",
       "arc_of_defense": "two frontal attackers",
       "cover_value": "19",
-      "breakage_thresholds": [10, 15, 20, 25],
-      "weight_lbs": 7.0
+      "breakage_thresholds": [
+        10,
+        15,
+        20,
+        25
+      ],
+      "weight_lbs": 7.0,
+      "price_gp": 44
     },
     {
       "name": "Medium wooden shield",
@@ -1708,8 +1860,14 @@
       "damage_reduction": "4",
       "arc_of_defense": "all frontal and flank attackers",
       "cover_value": "16C",
-      "breakage_thresholds": [8, 12, 16, 20],
-      "weight_lbs": 6.0
+      "breakage_thresholds": [
+        8,
+        12,
+        16,
+        20
+      ],
+      "weight_lbs": 6.0,
+      "price_gp": 35
     },
     {
       "name": "Medium metallic shield",
@@ -1717,8 +1875,14 @@
       "damage_reduction": "6",
       "arc_of_defense": "all frontal and flank attackers",
       "cover_value": "16C",
-      "breakage_thresholds": [12, 18, 24, 30],
-      "weight_lbs": 14.0
+      "breakage_thresholds": [
+        12,
+        18,
+        24,
+        30
+      ],
+      "weight_lbs": 14.0,
+      "price_gp": 65
     },
     {
       "name": "Large wooden shield",
@@ -1726,8 +1890,14 @@
       "damage_reduction": "4",
       "arc_of_defense": "all frontal and flank attackers",
       "cover_value": "11C",
-      "breakage_thresholds": [8, 12, 16, 20],
-      "weight_lbs": 10.0
+      "breakage_thresholds": [
+        8,
+        12,
+        16,
+        20
+      ],
+      "weight_lbs": 10.0,
+      "price_gp": 47
     },
     {
       "name": "Large metallic shield",
@@ -1735,8 +1905,14 @@
       "damage_reduction": "6",
       "arc_of_defense": "all frontal and flank attackers",
       "cover_value": "11C",
-      "breakage_thresholds": [12, 18, 24, 30],
-      "weight_lbs": 24.0
+      "breakage_thresholds": [
+        12,
+        18,
+        24,
+        30
+      ],
+      "weight_lbs": 24.0,
+      "price_gp": 95
     },
     {
       "name": "Tower shield",
@@ -1744,8 +1920,14 @@
       "damage_reduction": "6",
       "arc_of_defense": "all frontal and flank attackers",
       "cover_value": "6C",
-      "breakage_thresholds": [12, 18, 24, 30],
-      "weight_lbs": 35.0
+      "breakage_thresholds": [
+        12,
+        18,
+        24,
+        30
+      ],
+      "weight_lbs": 35.0,
+      "price_gp": 128
     }
   ]
 }

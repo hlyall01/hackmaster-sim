@@ -29,6 +29,7 @@ pub type TalentCatalog = Catalog<TalentTag, TalentSpec>;
 #[derive(Clone)]
 pub struct WeaponPreset {
     pub name: String,
+    pub price_gp: u32,
     pub group: WeaponGroup,
     pub speed: f32,
     pub speed_label: String,
@@ -108,6 +109,7 @@ pub struct ArmorEntry {
 #[derive(Clone)]
 pub struct ShieldPreset {
     pub name: String,
+    pub price_gp: u32,
     pub defense_bonus: i32,
     pub dr: i32,
     pub cover_value: i32,
@@ -2529,6 +2531,7 @@ mod tests {
     fn armor_material_increases_dr_and_reduces_penalty() {
         let armor = Armor {
             name: "Test".to_string(),
+            price_gp: 0,
             region: character::ArmorRegion::Northern,
             damage_reduction: 4,
             defense_adj: -2,
@@ -2546,6 +2549,7 @@ mod tests {
     fn shield_material_increases_breakage_thresholds() {
         let shield = ShieldPreset {
             name: "Test".to_string(),
+            price_gp: 0,
             defense_bonus: 4,
             dr: 4,
             cover_value: 16,

@@ -11,15 +11,15 @@ use crate::autobattler::constants::{
 };
 use crate::autobattler::logic::{
     apply_percentile, bp_increment, format_percentile, format_score, max_affordable_rank,
-    race_adjustment_summary, stat_at_cap, subtract_percentile, talent_cost_for_rank,
-    talent_display_label,
+    race_adjustment_summary, starting_honor, stat_at_cap, subtract_percentile,
+    talent_cost_for_rank, talent_display_label,
 };
 use crate::autobattler::screenshot::ScreenshotState;
-use crate::autobattler::state::{
-    AppScreen, DamageFloat, LiveFight, PointPool, RunAction, RunViewState,
-};
+use crate::autobattler::state::{AppScreen, DamageFloat, LiveFight, PointPool, RunAction, RunViewState};
 use crate::autobattler::state::{AutobattlerState, CreationStep};
+use crate::character::InitiativeDieQuality;
 use crate::core::types::{RaceSpec, TalentSelection, TalentSpec};
+use crate::core::rules::roll_damage_expr;
 use crate::character::WeaponGroup;
 use crate::game_logic::{self, PlayerConfig, TalentCatalog, WeaponCatalog};
 use crate::sim;
@@ -134,7 +134,8 @@ impl AutobattlerApp {
                         ui.heading("Autobattler Character Creation");
                         ui.separator();
                         let step_number = self.creation_step.index() + 1;
-                        ui.label(format!("Step {step_number} of 5"));
+                        let step_total = CreationStep::count();
+                        ui.label(format!("Step {step_number} of {step_total}"));
                         ui.separator();
                         ui.label(self.creation_step.title());
                         if self.creation_done {
@@ -166,8 +167,38 @@ impl AutobattlerApp {
                                 }
                             });
                             ui.separator();
+                            ui.horizontal(|ui| {
+                                ui.label("Run seed");
+                                let mut seed_value =
+                                    self.run_seed.min(i64::MAX as u64) as i64;
+                                let response =
+                                    ui.add(egui::DragValue::new(&mut seed_value).speed(1.0));
+                                if response.changed() {
+                                    self.run_seed = seed_value.max(0) as u64;
+                                    self.seed_dirty = true;
+                                }
+                                if ui
+                                    .add_enabled(self.seed_dirty, egui::Button::new("Apply seed"))
+                                    .clicked()
+                                {
+                                    self.creation.reseed(self.run_seed);
+                                    self.seed_dirty = false;
+                                }
+                            });
+                            if self.seed_dirty {
+                                ui.label("Apply the seed to reroll ability sets.");
+                            } else {
+                                ui.label(format!("Seed in use: {}", self.creation.run_seed));
+                            }
+                            ui.separator();
+                            let spent = PointPool::new(START_BP, START_LP, START_AP, START_RP)
+                                .sub(available_points);
                             ui.label(format!(
                                 "Start: {START_BP} BP, {START_LP} LP, {START_AP} AP, {START_RP} RP"
+                            ));
+                            ui.label(format!(
+                                "Spent: {} BP, {} LP, {} AP, {} RP",
+                                spent.bp, spent.lp, spent.ap, spent.rp
                             ));
                             ui.label(format!(
                                 "Remaining: {} BP, {} LP, {} AP, {} RP",
@@ -345,33 +376,52 @@ impl AutobattlerApp {
                                 }
                             });
                         }
-                        CreationStep::SpendBp => {
-                            ui.heading("Spend BP on Stats");
+                        CreationStep::Alignment => {
+                            ui.heading("Choose Alignment");
+                            ui.separator();
+                            ui.label("Alignment");
+                            egui::ComboBox::from_id_source("alignment_select")
+                                .selected_text(self.creation.alignment.as_str())
+                                .show_ui(ui, |ui| {
+                                    for option in ["Unaligned", "Lawful", "Neutral", "Chaotic"] {
+                                        ui.selectable_value(
+                                            &mut self.creation.alignment,
+                                            option.to_string(),
+                                            option,
+                                        );
+                                    }
+                                });
+                            ui.separator();
+                            ui.label("Alignment effects are not implemented yet.");
+                        }
+                        CreationStep::FinalizeStats => {
+                            ui.heading("Finalize Ability Scores");
                             ui.separator();
                             ui.label(format!("Remaining: {} BP", available_points.bp));
                             ui.label(format!(
                                 "Current CHA after Looks: {} (Looks {:+})",
                                 effective_cha, looks_delta
                             ));
+                            ui.label("BP increments: +10 below 10/01, +5 up to 16/01, +3 at 16/01+.");
                             ui.separator();
                             ui.add_enabled_ui(self.creation.race_applied, |ui| {
                                 for stat_idx in 0..STAT_COUNT {
                                     let label = STAT_LABELS[stat_idx];
-                                    let score = &mut self.creation.stats[stat_idx];
-                                    let history = &mut self.creation.bp_history[stat_idx];
-                                    let increment = bp_increment(score);
+                                    let score = self.creation.stats[stat_idx];
+                                    let increment = bp_increment(&score);
                                     let can_add =
-                                        available_points.bp > 0 && !stat_at_cap(score);
-                                    let can_remove = !history.is_empty();
+                                        available_points.bp > 0 && !stat_at_cap(&score);
+                                    let can_remove =
+                                        !self.creation.bp_history[stat_idx].is_empty();
+                                    let mut remove_clicked = false;
+                                    let mut add_clicked = false;
                                     ui.horizontal(|ui| {
-                                        ui.label(format!("{label}: {}", format_score(*score)));
+                                        ui.label(format!("{label}: {}", format_score(score)));
                                         if ui
                                             .add_enabled(can_remove, egui::Button::new("-1 BP"))
                                             .clicked()
                                         {
-                                            if let Some(delta) = history.pop() {
-                                                subtract_percentile(score, delta);
-                                            }
+                                            remove_clicked = true;
                                         }
                                         if ui
                                             .add_enabled(
@@ -383,20 +433,121 @@ impl AutobattlerApp {
                                             )
                                             .clicked()
                                         {
-                                            apply_percentile(score, increment);
-                                            history.push(increment);
+                                            add_clicked = true;
                                         }
                                     });
+                                    if remove_clicked {
+                                        if let Some(delta) =
+                                            self.creation.bp_history[stat_idx].pop()
+                                        {
+                                            subtract_percentile(
+                                                &mut self.creation.stats[stat_idx],
+                                                delta,
+                                            );
+                                            self.creation.sync_player_from_stats();
+                                        }
+                                    }
+                                    if add_clicked {
+                                        apply_percentile(
+                                            &mut self.creation.stats[stat_idx],
+                                            increment,
+                                        );
+                                        self.creation.bp_history[stat_idx].push(increment);
+                                        self.creation.sync_player_from_stats();
+                                    }
                                 }
                             });
                             if !self.creation.race_applied {
                                 ui.label("Confirm race before spending BP.");
                             }
                         }
-                        CreationStep::Talents => {
-                            ui.heading("Purchase Talents");
+                        CreationStep::Honor => {
+                            ui.heading("Calculate Starting Honor");
                             ui.separator();
-                            let max_height = available_height - 80.0;
+                            let breakdown = starting_honor(&self.creation.stats, effective_cha);
+                            self.creation.honor = breakdown.total;
+                            ui.label(format!("Effective CHA: {}", effective_cha));
+                            ui.label(format!("Base honor: {}", breakdown.base));
+                            ui.label(format!("Looks mod: {:+}", breakdown.looks_mod));
+                            ui.label(format!("CHA mod: {:+}", breakdown.cha_mod));
+                            ui.separator();
+                            ui.label(format!("Starting honor: {}", breakdown.total));
+                            ui.label("Honor effects are not implemented yet.");
+                        }
+                        CreationStep::Priors => {
+                            ui.heading("Priors and Particulars");
+                            ui.separator();
+                            ui.horizontal(|ui| {
+                                ui.label("Background");
+                                ui.text_edit_singleline(&mut self.creation.background);
+                            });
+                            ui.label("Background data is not implemented yet.");
+                            ui.separator();
+                            ui.horizontal(|ui| {
+                                ui.label("Height");
+                                ui.text_edit_singleline(&mut self.creation.height);
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Weight");
+                                ui.text_edit_singleline(&mut self.creation.weight);
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Age");
+                                ui.text_edit_singleline(&mut self.creation.age);
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Handedness");
+                                ui.text_edit_singleline(&mut self.creation.handedness);
+                            });
+                        }
+                        CreationStep::QuirksFlaws => {
+                            ui.heading("Quirks and Flaws");
+                            ui.separator();
+                            render_string_list(
+                                ui,
+                                "Quirks (placeholder)",
+                                "Quirk",
+                                &mut self.creation.quirk_input,
+                                &mut self.creation.quirks,
+                            );
+                            ui.separator();
+                            render_string_list(
+                                ui,
+                                "Flaws (placeholder)",
+                                "Flaw",
+                                &mut self.creation.flaw_input,
+                                &mut self.creation.flaws,
+                            );
+                            ui.separator();
+                            ui.label("Quirk and flaw effects are not implemented yet.");
+                        }
+                        CreationStep::AdvancementTalents => {
+                            ui.heading("Record Advancement Talents");
+                            ui.separator();
+                            ui.label("Advancement talent data is not implemented yet.");
+                            ui.label("No talents auto-granted.");
+                        }
+                        CreationStep::SkillsTalents => {
+                            ui.heading("Skills, Talents, Proficiencies");
+                            ui.separator();
+                            render_string_list(
+                                ui,
+                                "Skills (placeholder)",
+                                "Skill",
+                                &mut self.creation.skill_input,
+                                &mut self.creation.skills,
+                            );
+                            ui.separator();
+                            render_string_list(
+                                ui,
+                                "Proficiencies (placeholder)",
+                                "Proficiency",
+                                &mut self.creation.proficiency_input,
+                                &mut self.creation.proficiencies,
+                            );
+                            ui.separator();
+                            ui.label("Talents");
+                            let max_height = (available_height - 220.0).max(160.0);
                             render_talent_selector(
                                 ui,
                                 "talent_picker",
@@ -408,6 +559,298 @@ impl AutobattlerApp {
                                 available_points,
                                 max_height,
                             );
+                        }
+                        CreationStep::HitPoints => {
+                            ui.heading("Determine Hit Points");
+                            ui.separator();
+                            let summary = game_logic::player_summary(
+                                &self.creation.player,
+                                &self.weapon_catalog,
+                                &self.armor_catalog,
+                                &self.shield_catalog,
+                                &self.talent_catalog,
+                            );
+                            if !self.creation.race_applied {
+                                ui.label("Select a race to finalize base HP.");
+                            }
+                            ui.label(format!("Base HP (race): {}", self.creation.player.base_hp));
+                            ui.label(format!("CON: {}", self.creation.stats[4].base));
+                            ui.label(format!(
+                                "Health multiplier: {:.2}",
+                                summary.derived.health_mult
+                            ));
+                            ui.label(format!("Total HP: {}", summary.derived.hit_points));
+                        }
+                        CreationStep::DerivedStats => {
+                            ui.heading("Record Derived Statistics");
+                            ui.separator();
+                            let summary = game_logic::player_summary(
+                                &self.creation.player,
+                                &self.weapon_catalog,
+                                &self.armor_catalog,
+                                &self.shield_catalog,
+                                &self.talent_catalog,
+                            );
+                            let sprint_duration = (self.creation.stats[4].base / 2) as u32;
+                            ui.label(format!("Attack bonus: {}", summary.roll.attack_bonus));
+                            ui.label(format!("Base damage: {}", summary.roll.strength_damage));
+                            ui.label(format!("Defense (DV): {}", summary.derived.base_dv));
+                            ui.label(format!(
+                                "Initiative mod: {}",
+                                summary.derived.initiative_mod
+                            ));
+                            ui.label(format!(
+                                "Initiative die: {}",
+                                initiative_die_label(summary.derived.initiative_die)
+                            ));
+                            ui.label(format!("Speed mod: {}", summary.derived.speed_mod));
+                            ui.label(format!("Armor DR: {}", summary.derived.armor_dr));
+                            ui.label(format!("Sprint duration: {} sec", sprint_duration));
+                        }
+                        CreationStep::MoneyGear => {
+                            ui.heading("Money and Gear");
+                            ui.separator();
+                            ui.label("Starting money roll: 75 + 4d12p");
+                            let mut roll_now = false;
+                            if !self.creation.money_rolled {
+                                if ui.button("Roll starting money").clicked() {
+                                    roll_now = true;
+                                }
+                            } else {
+                                ui.label(format!(
+                                    "Starting money: {}",
+                                    self.creation.starting_money
+                                ));
+                                if ui.button("Reroll").clicked() {
+                                    roll_now = true;
+                                }
+                            }
+                            if roll_now {
+                                let roll = roll_damage_expr("4d12p", &mut self.creation.rng, false);
+                                let total = 75i32.saturating_add(roll).max(0) as u32;
+                                self.creation.starting_money = total;
+                                self.creation.money_rolled = true;
+                            }
+                            let budget = if self.creation.money_rolled {
+                                self.creation.starting_money
+                            } else {
+                                0
+                            };
+                            let total_cost = self.starter_gear_cost();
+                            if self.creation.money_rolled {
+                                ui.separator();
+                                ui.label(format!("Starting money: {budget} gp"));
+                                ui.label(format!("Gear total: {total_cost} gp"));
+                                let remaining = budget as i32 - total_cost as i32;
+                                if remaining >= 0 {
+                                    ui.label(format!("Remaining: {remaining} gp"));
+                                } else {
+                                    ui.colored_label(
+                                        Color32::from_rgb(190, 80, 80),
+                                        format!("Over budget by {} gp", -remaining),
+                                    );
+                                }
+                            } else {
+                                ui.separator();
+                                ui.label("Roll starting money to unlock gear selection.");
+                            }
+
+                            ui.separator();
+                            ui.add_enabled_ui(self.creation.money_rolled, |ui| {
+                                let mut weapon_cost = self
+                                    .weapon_catalog
+                                    .get(self.creation.player.weapon_id)
+                                    .map(|weapon| weapon.price_gp)
+                                    .unwrap_or(0);
+                                let mut armor_cost = self
+                                    .armor_catalog
+                                    .get(self.creation.player.armor_id)
+                                    .and_then(|entry| entry.armor.as_ref())
+                                    .map(|armor| armor.price_gp)
+                                    .unwrap_or(0);
+                                let mut shield_cost = self
+                                    .shield_catalog
+                                    .get(self.creation.player.shield_id)
+                                    .and_then(|entry| entry.shield.as_ref())
+                                    .map(|shield| shield.price_gp)
+                                    .unwrap_or(0);
+
+                                ui.label("Weapon");
+                                let mut weapon_index =
+                                    self.weapon_catalog.index_of(self.creation.player.weapon_id);
+                                let weapon_label = self
+                                    .weapon_catalog
+                                    .get(self.creation.player.weapon_id)
+                                    .map(|weapon| gear_price_label(&weapon.name, weapon.price_gp))
+                                    .unwrap_or_else(|| "Unknown".to_string());
+                                egui::ComboBox::from_id_source("starter_weapon")
+                                    .selected_text(weapon_label)
+                                    .show_ui(ui, |ui| {
+                                        for (idx, weapon) in
+                                            self.weapon_catalog.entries().iter().enumerate()
+                                        {
+                                            let effective_shield_cost = if weapon.handedness
+                                                == crate::game_logic::WeaponHandedness::TwoHanded
+                                            {
+                                                0
+                                            } else {
+                                                shield_cost
+                                            };
+                                            let new_total =
+                                                weapon.price_gp + armor_cost + effective_shield_cost;
+                                            let affordable =
+                                                new_total <= budget || idx == weapon_index;
+                                            ui.add_enabled_ui(affordable, |ui| {
+                                                ui.selectable_value(
+                                                    &mut weapon_index,
+                                                    idx,
+                                                    gear_price_label(
+                                                        &weapon.name,
+                                                        weapon.price_gp,
+                                                    ),
+                                                );
+                                            });
+                                        }
+                                    });
+                                if let Some(id) = self.weapon_catalog.id_from_index(weapon_index) {
+                                    self.creation.player.weapon_id = id;
+                                    if let Some(weapon) = self.weapon_catalog.get(id) {
+                                        if weapon.handedness
+                                            == crate::game_logic::WeaponHandedness::TwoHanded
+                                        {
+                                            self.creation.player.shield_id =
+                                                crate::game_logic::ShieldId::new(0);
+                                        }
+                                    }
+                                }
+                                weapon_cost = self
+                                    .weapon_catalog
+                                    .get(self.creation.player.weapon_id)
+                                    .map(|weapon| weapon.price_gp)
+                                    .unwrap_or(0);
+                                shield_cost = self
+                                    .shield_catalog
+                                    .get(self.creation.player.shield_id)
+                                    .and_then(|entry| entry.shield.as_ref())
+                                    .map(|shield| shield.price_gp)
+                                    .unwrap_or(0);
+
+                                ui.separator();
+                                ui.label("Armor");
+                                let mut armor_index =
+                                    self.armor_catalog.index_of(self.creation.player.armor_id);
+                                let armor_label = self
+                                    .armor_catalog
+                                    .get(self.creation.player.armor_id)
+                                    .map(|entry| {
+                                        let price = entry
+                                            .armor
+                                            .as_ref()
+                                            .map(|armor| armor.price_gp)
+                                            .unwrap_or(0);
+                                        gear_price_label(&entry.label, price)
+                                    })
+                                    .unwrap_or_else(|| "Unknown".to_string());
+                                egui::ComboBox::from_id_source("starter_armor")
+                                    .selected_text(armor_label)
+                                    .show_ui(ui, |ui| {
+                                        for (idx, entry) in
+                                            self.armor_catalog.entries().iter().enumerate()
+                                        {
+                                            let price = entry
+                                                .armor
+                                                .as_ref()
+                                                .map(|armor| armor.price_gp)
+                                                .unwrap_or(0);
+                                            let new_total =
+                                                weapon_cost + price + shield_cost;
+                                            let affordable =
+                                                new_total <= budget || idx == armor_index;
+                                            ui.add_enabled_ui(affordable, |ui| {
+                                                ui.selectable_value(
+                                                    &mut armor_index,
+                                                    idx,
+                                                    gear_price_label(&entry.label, price),
+                                                );
+                                            });
+                                        }
+                                    });
+                                if let Some(id) = self.armor_catalog.id_from_index(armor_index) {
+                                    self.creation.player.armor_id = id;
+                                }
+                                armor_cost = self
+                                    .armor_catalog
+                                    .get(self.creation.player.armor_id)
+                                    .and_then(|entry| entry.armor.as_ref())
+                                    .map(|armor| armor.price_gp)
+                                    .unwrap_or(0);
+
+                                ui.separator();
+                                let shield_allowed = self
+                                    .weapon_catalog
+                                    .get(self.creation.player.weapon_id)
+                                    .map(|weapon| {
+                                        weapon.handedness
+                                            == crate::game_logic::WeaponHandedness::OneHanded
+                                    })
+                                    .unwrap_or(true);
+                                if !shield_allowed {
+                                    self.creation.player.shield_id =
+                                        crate::game_logic::ShieldId::new(0);
+                                }
+                                ui.label("Shield");
+                                ui.add_enabled_ui(shield_allowed, |ui| {
+                                    let mut shield_index = self
+                                        .shield_catalog
+                                        .index_of(self.creation.player.shield_id);
+                                    let shield_label = self
+                                        .shield_catalog
+                                        .get(self.creation.player.shield_id)
+                                        .map(|entry| {
+                                            let price = entry
+                                                .shield
+                                                .as_ref()
+                                                .map(|shield| shield.price_gp)
+                                                .unwrap_or(0);
+                                            gear_price_label(&entry.label, price)
+                                        })
+                                        .unwrap_or_else(|| "Unknown".to_string());
+                                    egui::ComboBox::from_id_source("starter_shield")
+                                        .selected_text(shield_label)
+                                        .show_ui(ui, |ui| {
+                                            for (idx, entry) in
+                                                self.shield_catalog.entries().iter().enumerate()
+                                            {
+                                                let price = entry
+                                                    .shield
+                                                    .as_ref()
+                                                    .map(|shield| shield.price_gp)
+                                                    .unwrap_or(0);
+                                                let new_total =
+                                                    weapon_cost + armor_cost + price;
+                                                let affordable =
+                                                    new_total <= budget || idx == shield_index;
+                                                ui.add_enabled_ui(affordable, |ui| {
+                                                    ui.selectable_value(
+                                                        &mut shield_index,
+                                                        idx,
+                                                        gear_price_label(&entry.label, price),
+                                                    );
+                                                });
+                                            }
+                                        });
+                                    if let Some(id) =
+                                        self.shield_catalog.id_from_index(shield_index)
+                                    {
+                                        self.creation.player.shield_id = id;
+                                    }
+                                });
+                                if !shield_allowed {
+                                    ui.label("Two-handed weapons cannot use shields.");
+                                }
+                            });
+                            ui.separator();
+                            ui.label("Gear prices are placeholders loaded from data.");
                         }
                     }
                 });
@@ -657,6 +1100,25 @@ fn render_character_summary(
             ui.label(format!("AP: {}", available_points.ap));
             ui.label(format!("RP: {}", available_points.rp));
             ui.separator();
+            ui.label("Details");
+            ui.label(format!("Seed: {}", creation.run_seed));
+            ui.label(format!("Alignment: {}", creation.alignment));
+            ui.label(format!("Honor: {}", creation.honor));
+            if creation.background.trim().is_empty() {
+                ui.label("Background: (none)");
+            } else {
+                ui.label(format!("Background: {}", creation.background));
+            }
+            ui.label(format!("Quirks: {}", creation.quirks.len()));
+            ui.label(format!("Flaws: {}", creation.flaws.len()));
+            ui.label(format!("Skills: {}", creation.skills.len()));
+            ui.label(format!("Proficiencies: {}", creation.proficiencies.len()));
+            if creation.money_rolled {
+                ui.label(format!("Starting money: {}", creation.starting_money));
+            } else {
+                ui.label("Starting money: not rolled");
+            }
+            ui.separator();
             ui.label("Talents");
             if creation.player.talents.is_empty() {
                 ui.label("None");
@@ -687,6 +1149,60 @@ fn render_character_summary(
                 }
             }
         });
+}
+
+fn render_string_list(
+    ui: &mut egui::Ui,
+    title: &str,
+    input_label: &str,
+    input: &mut String,
+    entries: &mut Vec<String>,
+) {
+    ui.label(title);
+    ui.horizontal(|ui| {
+        ui.label(input_label);
+        ui.text_edit_singleline(input);
+        if ui.button(format!("Add##{input_label}")).clicked() {
+            let trimmed = input.trim();
+            if !trimmed.is_empty() {
+                entries.push(trimmed.to_string());
+                input.clear();
+            }
+        }
+    });
+    if entries.is_empty() {
+        ui.label("None yet.");
+        return;
+    }
+    let mut remove_idx = None;
+    for (idx, entry) in entries.iter().enumerate() {
+        ui.horizontal(|ui| {
+            ui.label(entry);
+            if ui
+                .button(format!("Remove##{input_label}_{idx}"))
+                .clicked()
+            {
+                remove_idx = Some(idx);
+            }
+        });
+    }
+    if let Some(idx) = remove_idx {
+        entries.remove(idx);
+    }
+}
+
+fn gear_price_label(name: &str, price_gp: u32) -> String {
+    format!("{name} - {price_gp} gp")
+}
+
+fn initiative_die_label(die: InitiativeDieQuality) -> &'static str {
+    match die {
+        InitiativeDieQuality::Standard => "Standard",
+        InitiativeDieQuality::OneBetter => "One better",
+        InitiativeDieQuality::TwoBetter => "Two better",
+        InitiativeDieQuality::ThreeBetter => "Three better",
+        InitiativeDieQuality::FourBetter => "Four better",
+    }
 }
 
 #[allow(dead_code)]

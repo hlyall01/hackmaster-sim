@@ -565,6 +565,7 @@ mod tests {
     ) -> WeaponPreset {
         WeaponPreset {
             name: name.to_string(),
+            price_gp: 0,
             group,
             speed: speed as f32,
             speed_label: speed.to_string(),

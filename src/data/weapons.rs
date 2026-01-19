@@ -19,6 +19,8 @@ struct WeaponsFile {
 #[derive(Deserialize)]
 struct WeaponJson {
     name: String,
+    #[serde(default)]
+    price_gp: Option<u32>,
     group: String,
     speed: String,
     jab_speed: Option<String>,
@@ -38,6 +40,8 @@ struct WeaponJson {
 #[derive(Deserialize)]
 struct ShieldJson {
     name: String,
+    #[serde(default)]
+    price_gp: Option<u32>,
     defense: String,
     damage_reduction: String,
     #[allow(dead_code)]
@@ -83,6 +87,7 @@ pub fn load_weapon_catalog(path: &str) -> Result<WeaponCatalog, String> {
             .and_then(parse_range_bands_feet);
         catalog.push(WeaponPreset {
             name: entry.name,
+            price_gp: entry.price_gp.unwrap_or(0),
             group,
             speed: speed_value,
             speed_label,
@@ -125,6 +130,7 @@ pub fn load_shield_catalog(path: &str) -> Result<ShieldCatalog, String> {
             .map_err(|err| format!("shield {}: {err}", entry.name))?;
         let shield = ShieldPreset {
             name: entry.name.clone(),
+            price_gp: entry.price_gp.unwrap_or(0),
             defense_bonus,
             dr,
             cover_value,

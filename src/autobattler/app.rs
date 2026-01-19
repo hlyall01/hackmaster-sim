@@ -4,7 +4,6 @@ use bevy::render::render_resource::TextureFormat;
 use bevy::utils::Duration;
 use bevy::winit::WinitPlugin;
 use bevy_egui::EguiPlugin;
-use rand::RngCore;
 
 use crate::autobattler::args::AutobattlerArgs;
 use crate::autobattler::constants::{
@@ -33,18 +32,18 @@ use crate::autobattler::ui::ui_system;
 use crate::autobattler::logic;
 
 use crate::{character, data, game_logic};
-use crate::character::{AbilityScore, AbilitySet};
+use crate::character::{AbilityScore, AbilitySet, AbilitySetFull};
 use crate::core::catalog::Catalog;
 use crate::core::gameplay::{
     apply_fight_result, AutobattlerConfig, CombatantBuilder, EnemySpawnEntry, EnemySpawner,
     FightResult, LootTable, RunState,
 };
-use crate::core::rng::SimRng;
+use crate::core::rng::{derive_seed, SimRng};
 use crate::core::sim::SimConfig;
-use crate::core::types::{EnemyProfile, Inventory, PlayerProfile, RaceSpec};
+use crate::core::types::{EnemyProfile, Inventory, PlayerProfile, PointPools, RaceSpec};
 use crate::game_logic::{
-    ArmorCatalog, NpcPresetCatalog, PlayerConfig, ShieldCatalog, TalentCatalog, WeaponCatalog,
-    WeaponId,
+    ArmorCatalog, ArmorId, NpcPresetCatalog, PlayerConfig, ShieldCatalog, ShieldId,
+    TalentCatalog, WeaponCatalog, WeaponId,
 };
 
 pub struct AutobattlerApp {
@@ -63,7 +62,8 @@ pub struct AutobattlerApp {
     pub needs_save_refresh: bool,
     pub run_state: Option<RunViewState>,
     pub autobattler_config: AutobattlerConfig,
-    pub run_rng: SimRng,
+    pub run_seed: u64,
+    pub seed_dirty: bool,
     pub weapon_catalog: WeaponCatalog,
     pub armor_catalog: ArmorCatalog,
     pub shield_catalog: ShieldCatalog,
@@ -100,8 +100,9 @@ impl AutobattlerApp {
                 Catalog::new(Vec::new())
             }
         };
+        let run_seed = autobattler_config.seed;
         let weapon_id = weapon_catalog.first_id().unwrap_or_else(|| WeaponId::new(0));
-        let creation = CreationState::new(weapon_id);
+        let creation = CreationState::new(weapon_id, run_seed);
         let enemy_weapon_id = find_weapon_id_by_name(&weapon_catalog, &autobattler_config.enemy_weapon)
             .or_else(|| weapon_catalog.first_id())
             .unwrap_or_else(|| WeaponId::new(0));
@@ -125,7 +126,8 @@ impl AutobattlerApp {
             needs_save_refresh: true,
             run_state: None,
             autobattler_config,
-            run_rng: SimRng::default(),
+            run_seed,
+            seed_dirty: false,
             weapon_catalog,
             armor_catalog,
             shield_catalog,
@@ -159,6 +161,38 @@ impl AutobattlerApp {
         (base, delta)
     }
 
+    pub fn starter_gear_cost(&self) -> u32 {
+        let weapon = self.weapon_catalog.get(self.creation.player.weapon_id);
+        let weapon_cost = weapon.map(|weapon| weapon.price_gp).unwrap_or(0);
+        let weapon_two_handed = weapon
+            .map(|weapon| weapon.handedness == crate::game_logic::WeaponHandedness::TwoHanded)
+            .unwrap_or(false);
+        let armor_cost = self
+            .armor_catalog
+            .get(self.creation.player.armor_id)
+            .and_then(|entry| entry.armor.as_ref())
+            .map(|armor| armor.price_gp)
+            .unwrap_or(0);
+        let shield_cost = if weapon_two_handed {
+            0
+        } else {
+            self.shield_catalog
+                .get(self.creation.player.shield_id)
+                .and_then(|entry| entry.shield.as_ref())
+                .map(|shield| shield.price_gp)
+                .unwrap_or(0)
+        };
+        weapon_cost + armor_cost + shield_cost
+    }
+
+    pub fn starter_gear_remaining(&self) -> i32 {
+        if !self.creation.money_rolled {
+            return -1;
+        }
+        let cost = self.starter_gear_cost() as i32;
+        self.creation.starting_money as i32 - cost
+    }
+
     pub fn apply_race_adjustments(&mut self, race: &RaceSpec) {
         let adjustments = &race.ability_adjustments;
         apply_stat_adjustment(&mut self.creation.stats[0], adjustments.strength);
@@ -178,7 +212,7 @@ impl AutobattlerApp {
 
     pub fn reset_creation(&mut self) {
         let weapon_id = self.creation.player.weapon_id;
-        self.creation = CreationState::new(weapon_id);
+        self.creation = CreationState::new(weapon_id, self.run_seed);
         self.creation_step = CreationStep::Points;
         self.creation_done = false;
         self.save_name.clear();
@@ -186,6 +220,7 @@ impl AutobattlerApp {
         self.run_save_name.clear();
         self.run_save_status = None;
         self.run_state = None;
+        self.seed_dirty = false;
     }
 
     pub fn can_advance(&self) -> bool {
@@ -193,13 +228,23 @@ impl AutobattlerApp {
             CreationStep::Points => true,
             CreationStep::RollStats => self.creation.stats_locked || self.all_rolls_assigned(),
             CreationStep::ChooseRace => self.creation.race_applied,
-            CreationStep::SpendBp => self.creation.race_applied,
-            CreationStep::Talents => false,
+            CreationStep::Alignment => self.creation.race_applied,
+            CreationStep::FinalizeStats => self.creation.race_applied,
+            CreationStep::Honor => true,
+            CreationStep::Priors => true,
+            CreationStep::QuirksFlaws => true,
+            CreationStep::AdvancementTalents => true,
+            CreationStep::SkillsTalents => true,
+            CreationStep::HitPoints => true,
+            CreationStep::DerivedStats => true,
+            CreationStep::MoneyGear => false,
         }
     }
 
     pub fn can_finish(&self) -> bool {
-        self.creation_step == CreationStep::Talents
+        self.creation_step == CreationStep::MoneyGear
+            && self.creation.money_rolled
+            && self.starter_gear_remaining() >= 0
     }
 
     pub fn all_rolls_assigned(&self) -> bool {
@@ -243,6 +288,21 @@ impl AutobattlerApp {
             CHARACTER_SAVE_EXTENSION
         );
         let path = save_path_for(&file_name);
+        let weapon_name = self
+            .weapon_catalog
+            .get(self.creation.player.weapon_id)
+            .map(|weapon| weapon.name.clone())
+            .unwrap_or_default();
+        let armor_label = self
+            .armor_catalog
+            .get(self.creation.player.armor_id)
+            .map(|entry| entry.label.clone())
+            .unwrap_or_default();
+        let shield_name = self
+            .shield_catalog
+            .get(self.creation.player.shield_id)
+            .map(|entry| entry.label.clone())
+            .unwrap_or_default();
         let save = CharacterSave {
             version: SAVE_VERSION,
             name: self.creation.name.clone(),
@@ -255,6 +315,22 @@ impl AutobattlerApp {
             race_id: self.creation.player.race_id.clone(),
             talents: self.creation.player.talents.clone(),
             bp_history: self.creation.bp_history.iter().cloned().collect(),
+            weapon_name,
+            armor_label,
+            shield_name,
+            alignment: self.creation.alignment.clone(),
+            honor: self.creation.honor,
+            background: self.creation.background.clone(),
+            height: self.creation.height.clone(),
+            weight: self.creation.weight.clone(),
+            age: self.creation.age.clone(),
+            handedness: self.creation.handedness.clone(),
+            quirks: self.creation.quirks.clone(),
+            flaws: self.creation.flaws.clone(),
+            skills: self.creation.skills.clone(),
+            proficiencies: self.creation.proficiencies.clone(),
+            starting_money: self.creation.starting_money,
+            money_rolled: self.creation.money_rolled,
         };
         match write_character_save(&path, &save) {
             Ok(()) => {
@@ -294,6 +370,21 @@ impl AutobattlerApp {
 
         let file_name = format!("{}.{}", sanitize_filename(name), RUN_SAVE_EXTENSION);
         let path = run_save_path_for(&file_name);
+        let weapon_name = self
+            .weapon_catalog
+            .get(self.creation.player.weapon_id)
+            .map(|weapon| weapon.name.clone())
+            .unwrap_or_default();
+        let armor_label = self
+            .armor_catalog
+            .get(self.creation.player.armor_id)
+            .map(|entry| entry.label.clone())
+            .unwrap_or_default();
+        let shield_name = self
+            .shield_catalog
+            .get(self.creation.player.shield_id)
+            .map(|entry| entry.label.clone())
+            .unwrap_or_default();
         let character = CharacterSave {
             version: SAVE_VERSION,
             name: self.creation.name.clone(),
@@ -306,6 +397,22 @@ impl AutobattlerApp {
             race_id: self.creation.player.race_id.clone(),
             talents: self.creation.player.talents.clone(),
             bp_history: self.creation.bp_history.iter().cloned().collect(),
+            weapon_name,
+            armor_label,
+            shield_name,
+            alignment: self.creation.alignment.clone(),
+            honor: self.creation.honor,
+            background: self.creation.background.clone(),
+            height: self.creation.height.clone(),
+            weight: self.creation.weight.clone(),
+            age: self.creation.age.clone(),
+            handedness: self.creation.handedness.clone(),
+            quirks: self.creation.quirks.clone(),
+            flaws: self.creation.flaws.clone(),
+            skills: self.creation.skills.clone(),
+            proficiencies: self.creation.proficiencies.clone(),
+            starting_money: self.creation.starting_money,
+            money_rolled: self.creation.money_rolled,
         };
         let run_save = RunSave {
             version: RUN_SAVE_VERSION,
@@ -342,7 +449,8 @@ impl AutobattlerApp {
         let path = save_path_for(&entry.file_name);
         match read_character_save(&path) {
             Ok(save) => {
-                self.creation = CreationState::new(self.creation.player.weapon_id);
+                self.creation = CreationState::new(self.creation.player.weapon_id, self.run_seed);
+                self.seed_dirty = false;
                 self.creation.name = save.name;
                 if save.stats.len() >= STAT_COUNT {
                     for (idx, score) in save.stats.iter().take(STAT_COUNT).enumerate() {
@@ -356,14 +464,52 @@ impl AutobattlerApp {
                 });
                 self.creation.player.race_id = save.race_id.clone();
                 self.creation.player.talents = save.talents.clone();
+                if !save.weapon_name.trim().is_empty() {
+                    if let Some(id) =
+                        find_weapon_id_by_name(&self.weapon_catalog, &save.weapon_name)
+                    {
+                        self.creation.player.weapon_id = id;
+                    }
+                }
+                if !save.armor_label.trim().is_empty() {
+                    if let Some(id) =
+                        find_armor_id_by_label(&self.armor_catalog, &save.armor_label)
+                    {
+                        self.creation.player.armor_id = id;
+                    }
+                }
+                if !save.shield_name.trim().is_empty() {
+                    if let Some(id) =
+                        find_shield_id_by_name(&self.shield_catalog, &save.shield_name)
+                    {
+                        self.creation.player.shield_id = id;
+                    }
+                }
                 self.creation.bp_history = std::array::from_fn(|idx| {
                     save.bp_history.get(idx).cloned().unwrap_or_default()
                 });
+                self.creation.alignment = if save.alignment.trim().is_empty() {
+                    "Unaligned".to_string()
+                } else {
+                    save.alignment.clone()
+                };
+                self.creation.honor = save.honor;
+                self.creation.background = save.background.clone();
+                self.creation.height = save.height.clone();
+                self.creation.weight = save.weight.clone();
+                self.creation.age = save.age.clone();
+                self.creation.handedness = save.handedness.clone();
+                self.creation.quirks = save.quirks.clone();
+                self.creation.flaws = save.flaws.clone();
+                self.creation.skills = save.skills.clone();
+                self.creation.proficiencies = save.proficiencies.clone();
+                self.creation.starting_money = save.starting_money;
+                self.creation.money_rolled = save.money_rolled;
                 self.creation.stats_locked = true;
                 self.creation.race_applied = save.race_id.is_some();
                 self.creation.player.race_applied = save.race_id.is_some();
                 self.creation.sync_player_from_stats();
-                self.creation_step = CreationStep::Talents;
+                self.creation_step = CreationStep::MoneyGear;
                 self.creation_done = true;
                 self.screen = AppScreen::Creation;
                 self.save_status = Some("Loaded save.".to_string());
@@ -386,7 +532,9 @@ impl AutobattlerApp {
         match read_run_save(&path) {
             Ok(save) => {
                 let run_state = save.run_state.to_state();
-                self.creation = CreationState::new(self.creation.player.weapon_id);
+                self.run_seed = run_state.run_seed;
+                self.creation = CreationState::new(self.creation.player.weapon_id, self.run_seed);
+                self.seed_dirty = false;
                 self.creation.name = save.character.name.clone();
                 if save.character.stats.len() >= STAT_COUNT {
                     for (idx, score) in save.character.stats.iter().take(STAT_COUNT).enumerate() {
@@ -400,14 +548,55 @@ impl AutobattlerApp {
                 });
                 self.creation.player.race_id = save.character.race_id.clone();
                 self.creation.player.talents = save.character.talents.clone();
+                if !save.character.weapon_name.trim().is_empty() {
+                    if let Some(id) = find_weapon_id_by_name(
+                        &self.weapon_catalog,
+                        &save.character.weapon_name,
+                    ) {
+                        self.creation.player.weapon_id = id;
+                    }
+                }
+                if !save.character.armor_label.trim().is_empty() {
+                    if let Some(id) = find_armor_id_by_label(
+                        &self.armor_catalog,
+                        &save.character.armor_label,
+                    ) {
+                        self.creation.player.armor_id = id;
+                    }
+                }
+                if !save.character.shield_name.trim().is_empty() {
+                    if let Some(id) = find_shield_id_by_name(
+                        &self.shield_catalog,
+                        &save.character.shield_name,
+                    ) {
+                        self.creation.player.shield_id = id;
+                    }
+                }
                 self.creation.bp_history = std::array::from_fn(|idx| {
                     save.character.bp_history.get(idx).cloned().unwrap_or_default()
                 });
+                self.creation.alignment = if save.character.alignment.trim().is_empty() {
+                    "Unaligned".to_string()
+                } else {
+                    save.character.alignment.clone()
+                };
+                self.creation.honor = save.character.honor;
+                self.creation.background = save.character.background.clone();
+                self.creation.height = save.character.height.clone();
+                self.creation.weight = save.character.weight.clone();
+                self.creation.age = save.character.age.clone();
+                self.creation.handedness = save.character.handedness.clone();
+                self.creation.quirks = save.character.quirks.clone();
+                self.creation.flaws = save.character.flaws.clone();
+                self.creation.skills = save.character.skills.clone();
+                self.creation.proficiencies = save.character.proficiencies.clone();
+                self.creation.starting_money = save.character.starting_money;
+                self.creation.money_rolled = save.character.money_rolled;
                 self.creation.stats_locked = true;
                 self.creation.race_applied = save.character.race_id.is_some();
                 self.creation.player.race_applied = save.character.race_id.is_some();
                 self.creation.sync_player_from_stats();
-                self.creation_step = CreationStep::Talents;
+                self.creation_step = CreationStep::MoneyGear;
                 self.creation_done = true;
                 self.run_state = Some(RunViewState {
                     run_state,
@@ -429,14 +618,68 @@ impl AutobattlerApp {
     }
 
     pub fn start_run_from_creation(&mut self) {
-        let player_profile = player_profile_from_config(&self.creation.player);
+        let available_points = self.available_points();
+        let points = PointPools::new(
+            available_points.bp,
+            available_points.lp,
+            available_points.ap,
+            available_points.rp,
+        );
+        let ability_scores_full = AbilitySetFull {
+            strength: self.creation.stats[0],
+            intelligence: self.creation.stats[1],
+            wisdom: self.creation.stats[2],
+            dexterity: self.creation.stats[3],
+            constitution: self.creation.stats[4],
+            looks: self.creation.stats[5],
+            charisma: AbilityScore::new(
+                self.creation.player.charisma,
+                self.creation.stats[6].percentile,
+            ),
+        };
+        let alignment = if self.creation.alignment.trim().is_empty() {
+            None
+        } else {
+            Some(self.creation.alignment.clone())
+        };
+        let background = if self.creation.background.trim().is_empty() {
+            None
+        } else {
+            Some(self.creation.background.clone())
+        };
+        let player_profile = player_profile_from_config(
+            &self.creation.player,
+            ability_scores_full,
+            points,
+            self.creation.honor,
+            alignment,
+            background,
+            self.creation.quirks.clone(),
+            self.creation.flaws.clone(),
+            self.creation.skills.clone(),
+            self.creation.proficiencies.clone(),
+        );
+        let starting_budget = if self.creation.money_rolled {
+            self.creation.starting_money
+        } else {
+            self.autobattler_config.loot.gold_min
+        };
+        let gear_cost = if self.creation.money_rolled {
+            self.starter_gear_cost()
+        } else {
+            0
+        };
+        let starting_gold = starting_budget.saturating_sub(gear_cost);
+        let run_seed = self.creation.run_seed;
         let run_state = RunState {
             player: player_profile,
             inventory: Inventory {
-                gold: self.autobattler_config.loot.gold_min,
+                gold: starting_gold,
                 items: Vec::new(),
             },
             run_depth: 1,
+            run_seed,
+            encounter_index: 0,
             wounds: Vec::new(),
         };
         self.run_state = Some(RunViewState::new(run_state));
@@ -457,9 +700,15 @@ impl AutobattlerApp {
         }
         let player_level = run_view.run_state.player.level;
         let effective_level = scaled_enemy_level(player_level, run_view.run_state.run_depth);
-        let Some(enemy_profile) = self
-            .enemy_spawner
-            .spawn_for_level(effective_level, &mut self.run_rng)
+        let encounter_index = run_view.run_state.encounter_index as u64;
+        let mut spawn_rng = SimRng::from_seed(derive_seed(
+            run_view.run_state.run_seed,
+            "spawn",
+            encounter_index,
+        ));
+        let Some(enemy_profile) =
+            self.enemy_spawner
+                .spawn_for_level(effective_level, &mut spawn_rng)
         else {
             return;
         };
@@ -477,7 +726,8 @@ impl AutobattlerApp {
         let mut enemy_combatant = builder.build_enemy(&enemy_profile);
         player_combatant.team_id = 0;
         enemy_combatant.team_id = 1;
-        let fight_seed = self.run_rng.next_u64();
+        let fight_seed =
+            derive_seed(run_view.run_state.run_seed, "combat", encounter_index);
         let mut sim = crate::core::sim::SimState::with_rng(
             self.sim_config,
             SimRng::from_seed(fight_seed),
@@ -539,7 +789,6 @@ impl AutobattlerApp {
             None,
             live.rest_days,
             live.resting,
-            &mut self.run_rng,
         );
 
         run_view.run_state = outcome.state.clone();
@@ -575,6 +824,7 @@ impl CombatantBuilder for AutobattlerBuilder<'_> {
         let mut player = self.player_base.clone();
         player.name = state.player.name.clone();
         player.level = state.player.level;
+        player.progression = state.player.progression;
         player.strength_base = state.player.base_stats.strength.base;
         player.strength_pct = state.player.base_stats.strength.percentile;
         player.dex_base = state.player.base_stats.dexterity.base;
@@ -584,6 +834,8 @@ impl CombatantBuilder for AutobattlerBuilder<'_> {
         player.constitution = state.player.base_stats.constitution;
         player.looks = state.player.base_stats.looks;
         player.charisma = state.player.base_stats.charisma;
+        player.race_id = state.player.race_id.clone();
+        player.race_applied = player.race_id.is_some();
         player.talents = state.player.talents.clone();
         let mut combatant = game_logic::build_combatant(
             &player,
@@ -617,20 +869,35 @@ impl CombatantBuilder for AutobattlerBuilder<'_> {
     }
 }
 
-fn player_profile_from_config(config: &PlayerConfig) -> PlayerProfile {
+fn player_profile_from_config(
+    config: &PlayerConfig,
+    ability_scores_full: AbilitySetFull,
+    points: PointPools,
+    honor: i32,
+    alignment: Option<String>,
+    background: Option<String>,
+    quirks: Vec<String>,
+    flaws: Vec<String>,
+    skills: Vec<String>,
+    proficiencies: Vec<String>,
+) -> PlayerProfile {
     PlayerProfile {
         name: config.name.clone(),
         level: config.level,
         xp: 0,
-        base_stats: AbilitySet {
-            strength: AbilityScore::new(config.strength_base, config.strength_pct),
-            intelligence: config.intelligence,
-            wisdom: config.wisdom,
-            dexterity: AbilityScore::new(config.dex_base, config.dex_pct),
-            constitution: config.constitution,
-            looks: config.looks,
-            charisma: config.charisma,
-        },
+        base_stats: AbilitySet::from(ability_scores_full),
+        ability_scores_full,
+        progression: config.progression,
+        points,
+        banked_points: PointPools::default(),
+        honor,
+        alignment,
+        race_id: config.race_id.clone(),
+        background,
+        quirks,
+        flaws,
+        skills,
+        proficiencies,
         talents: config.talents.clone(),
     }
 }
@@ -655,6 +922,22 @@ fn find_weapon_id_by_name(catalog: &WeaponCatalog, name: &str) -> Option<WeaponI
         .entries()
         .iter()
         .position(|weapon| weapon.name.eq_ignore_ascii_case(name))
+        .and_then(|idx| catalog.id_from_index(idx))
+}
+
+fn find_armor_id_by_label(catalog: &ArmorCatalog, label: &str) -> Option<ArmorId> {
+    catalog
+        .entries()
+        .iter()
+        .position(|entry| entry.label.eq_ignore_ascii_case(label))
+        .and_then(|idx| catalog.id_from_index(idx))
+}
+
+fn find_shield_id_by_name(catalog: &ShieldCatalog, name: &str) -> Option<ShieldId> {
+    catalog
+        .entries()
+        .iter()
+        .position(|entry| entry.label.eq_ignore_ascii_case(name))
         .and_then(|idx| catalog.id_from_index(idx))
 }
 

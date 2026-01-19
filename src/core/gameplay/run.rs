@@ -1,7 +1,6 @@
-use crate::core::rng::SimRng;
+use crate::core::rng::{derive_seed, SimRng};
 use crate::core::sim::{CombatEvent, CombatEventKind, Combatant, SimConfig, SimState};
 use crate::core::types::{EnemyProfile, Inventory, PlayerProfile};
-use rand::RngCore;
 
 use super::loot::LootTable;
 use super::progression::{apply_xp, XpCurve};
@@ -12,15 +11,19 @@ pub struct RunState {
     pub player: PlayerProfile,
     pub inventory: Inventory,
     pub run_depth: u32,
+    pub run_seed: u64,
+    pub encounter_index: u32,
     pub wounds: Vec<Wound>,
 }
 
 impl RunState {
-    pub fn new(player: PlayerProfile, inventory: Inventory) -> Self {
+    pub fn new(player: PlayerProfile, inventory: Inventory, run_seed: u64) -> Self {
         Self {
             player,
             inventory,
             run_depth: 0,
+            run_seed,
+            encounter_index: 0,
             wounds: Vec::new(),
         }
     }
@@ -93,10 +96,11 @@ pub fn run_next_fight<B: CombatantBuilder>(
     rest_days: u32,
     resting: bool,
     builder: &B,
-    rng: &mut SimRng,
 ) -> RunOutcome {
     let effective_level = scaled_enemy_level(state.player.level, state.run_depth);
-    let enemy = spawner.spawn_for_level(effective_level, rng);
+    let encounter_index = state.encounter_index as u64;
+    let mut spawn_rng = SimRng::from_seed(derive_seed(state.run_seed, "spawn", encounter_index));
+    let enemy = spawner.spawn_for_level(effective_level, &mut spawn_rng);
     let Some(enemy_profile) = enemy else {
         return RunOutcome {
             state,
@@ -115,7 +119,7 @@ pub fn run_next_fight<B: CombatantBuilder>(
     let mut enemy_combatant = builder.build_enemy(&enemy_profile);
     player_combatant.team_id = 0;
     enemy_combatant.team_id = 1;
-    let fight_seed = rng.next_u64();
+    let fight_seed = derive_seed(state.run_seed, "combat", encounter_index);
     let mut sim = SimState::with_rng(sim_config, SimRng::from_seed(fight_seed));
     sim.reset_with_combatants(vec![player_combatant, enemy_combatant]);
     while !sim.done && sim.elapsed_seconds < max_seconds {
@@ -140,7 +144,6 @@ pub fn run_next_fight<B: CombatantBuilder>(
         xp_curve,
         rest_days,
         resting,
-        rng,
     )
 }
 
@@ -152,7 +155,6 @@ pub fn apply_fight_result(
     xp_curve: Option<&XpCurve>,
     rest_days: u32,
     resting: bool,
-    rng: &mut SimRng,
 ) -> RunOutcome {
     let Some(enemy_profile) = enemy else {
         return RunOutcome {
@@ -171,7 +173,13 @@ pub fn apply_fight_result(
     heal_wounds(&mut state.wounds, rest_days, fast_healer, resting);
 
     let reward = if fight.won {
-        let loot = loot_table.roll(enemy_profile.level, rng);
+        let encounter_index = state.encounter_index as u64;
+        let mut loot_rng = SimRng::from_seed(derive_seed(
+            state.run_seed,
+            "loot",
+            encounter_index,
+        ));
+        let loot = loot_table.roll(enemy_profile.level, &mut loot_rng);
         Some(Reward {
             gold: loot.gold,
             xp: loot.xp,
@@ -196,6 +204,7 @@ pub fn apply_fight_result(
     if fight.won {
         state.run_depth = state.run_depth.saturating_add(1);
     }
+    state.encounter_index = state.encounter_index.saturating_add(1);
 
     RunOutcome {
         state,

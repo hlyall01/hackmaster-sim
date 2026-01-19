@@ -1,8 +1,9 @@
 #![allow(dead_code)]
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub enum ProgressionTier {
     I,
     II,
@@ -37,7 +38,7 @@ impl ProgressionTier {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Progression {
     pub attack: ProgressionTier,
     pub speed: ProgressionTier,
@@ -142,6 +143,45 @@ pub struct AbilitySet {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
+pub struct AbilitySetFull {
+    pub strength: AbilityScore,
+    pub intelligence: AbilityScore,
+    pub wisdom: AbilityScore,
+    pub dexterity: AbilityScore,
+    pub constitution: AbilityScore,
+    pub looks: AbilityScore,
+    pub charisma: AbilityScore,
+}
+
+impl From<AbilitySet> for AbilitySetFull {
+    fn from(set: AbilitySet) -> Self {
+        Self {
+            strength: set.strength,
+            intelligence: AbilityScore::new(set.intelligence, 1),
+            wisdom: AbilityScore::new(set.wisdom, 1),
+            dexterity: set.dexterity,
+            constitution: AbilityScore::new(set.constitution, 1),
+            looks: AbilityScore::new(set.looks, 1),
+            charisma: AbilityScore::new(set.charisma, 1),
+        }
+    }
+}
+
+impl From<AbilitySetFull> for AbilitySet {
+    fn from(set: AbilitySetFull) -> Self {
+        Self {
+            strength: set.strength,
+            intelligence: set.intelligence.base,
+            wisdom: set.wisdom.base,
+            dexterity: set.dexterity,
+            constitution: set.constitution.base,
+            looks: set.looks.base,
+            charisma: set.charisma.base,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
 pub struct StrengthMods {
     pub damage: i32,
     pub feat: i32,
@@ -228,6 +268,7 @@ pub enum ArmorType {
 #[derive(Clone, Debug)]
 pub struct Armor {
     pub name: String,
+    pub price_gp: u32,
     pub region: ArmorRegion,
     pub damage_reduction: i32,
     pub defense_adj: i32,
@@ -886,12 +927,20 @@ pub fn looks_charisma_adjustment(score: u8) -> i32 {
     lookup_looks(score).charisma
 }
 
+pub fn looks_honor_adjustment(score: u8) -> i32 {
+    lookup_looks(score).honor
+}
+
 fn lookup_cha(score: u8) -> ChaMods {
     CHA_TABLE
         .iter()
         .find(|row| row.score == score)
         .map(|row| row.mods)
         .unwrap_or_default()
+}
+
+pub fn charisma_honor_adjustment(score: u8) -> i32 {
+    lookup_cha(score).honor
 }
 
 // --- Advancement tables (data from references) ---
@@ -1140,6 +1189,7 @@ mod tests {
         };
         let armor = Armor {
             name: "Test Armor".to_string(),
+            price_gp: 0,
             region: ArmorRegion::Northern,
             damage_reduction: 5,
             defense_adj: -5,

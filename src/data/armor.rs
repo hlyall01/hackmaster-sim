@@ -15,6 +15,8 @@ struct ArmorFile {
 #[derive(Deserialize)]
 struct ArmorJson {
     name: String,
+    #[serde(default)]
+    price_gp: Option<u32>,
     region: String,
     damage_reduction: i32,
     defense_adjustment: i32,
@@ -49,6 +51,7 @@ pub fn load_armor_catalog(path: &str) -> Result<ArmorCatalog, String> {
         let label = format!("{} ({})", entry.name.as_str(), entry.region);
         let armor = Armor {
             name: entry.name,
+            price_gp: entry.price_gp.unwrap_or(0),
             region,
             damage_reduction: entry.damage_reduction,
             defense_adj: entry.defense_adjustment,

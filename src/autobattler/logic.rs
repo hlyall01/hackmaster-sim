@@ -1,6 +1,6 @@
 use crate::autobattler::constants::{STAT_COUNT};
 use crate::autobattler::state::PointPool;
-use crate::character::AbilityScore;
+use crate::character::{charisma_honor_adjustment, looks_honor_adjustment, AbilityScore};
 use crate::core::types::{RaceSpec, TalentSelection, TalentSpec};
 use crate::game_logic::TalentCatalog;
 
@@ -15,48 +15,90 @@ pub fn apply_stat_adjustment(score: &mut AbilityScore, delta: i32) {
 
 pub fn apply_percentile(score: &mut AbilityScore, delta: u8) {
     let total = score_total(score).saturating_add(delta as i32);
-    let capped = total.clamp(1, 25 * 100);
+    let capped = total.clamp(0, max_stat_total());
     *score = score_from_total(capped);
 }
 
 pub fn subtract_percentile(score: &mut AbilityScore, delta: u8) {
     let total = score_total(score).saturating_sub(delta as i32);
-    let capped = total.max(1);
+    let capped = total.max(0);
     *score = score_from_total(capped);
 }
 
 pub fn stat_at_cap(score: &AbilityScore) -> bool {
-    score_total(score) >= 25 * 100
+    score_total(score) >= max_stat_total()
 }
 
 pub fn bp_increment(score: &AbilityScore) -> u8 {
-    if score.base < 10 {
+    let total = score_total(score);
+    if total < stat_total_for(10, 1) {
         10
-    } else if score.base >= 16 {
-        3
-    } else {
+    } else if total < stat_total_for(16, 1) {
         5
+    } else {
+        3
     }
 }
 
 pub fn score_total(score: &AbilityScore) -> i32 {
     let base = score.base.max(1) as i32;
-    let percentile = if score.percentile == 0 { 100 } else { score.percentile } as i32;
+    let percentile = (score.percentile % 100) as i32;
     (base - 1) * 100 + percentile
 }
 
 pub fn score_from_total(total: i32) -> AbilityScore {
-    let total = total.max(1);
-    let base = ((total - 1) / 100 + 1).min(25) as u8;
-    let percentile = ((total - 1) % 100 + 1) as u8;
+    let total = total.clamp(0, max_stat_total());
+    let base = (total / 100 + 1).min(25) as u8;
+    let percentile = (total % 100) as u8;
     AbilityScore::new(base, percentile)
 }
 
 pub fn format_percentile(value: u8) -> String {
-    if value == 0 || value >= 100 {
+    let value = value % 100;
+    if value == 0 {
         "00".to_string()
     } else {
         format!("{:02}", value)
+    }
+}
+
+fn max_stat_total() -> i32 {
+    (25 - 1) * 100 + 99
+}
+
+fn stat_total_for(base: u8, percentile: u8) -> i32 {
+    let base = base.max(1);
+    let percentile = percentile % 100;
+    (base as i32 - 1) * 100 + percentile as i32
+}
+
+pub struct HonorBreakdown {
+    pub base: i32,
+    pub looks_mod: i32,
+    pub cha_mod: i32,
+    pub total: i32,
+}
+
+pub fn starting_honor(stats: &[AbilityScore; STAT_COUNT], effective_charisma: u8) -> HonorBreakdown {
+    let mut total = 0.0;
+    for (idx, score) in stats.iter().enumerate() {
+        let base = if idx == 6 {
+            effective_charisma as f32
+        } else {
+            score.base as f32
+        };
+        let percentile = (score.percentile % 100) as f32 / 100.0;
+        total += base + percentile;
+    }
+    let base = (total / STAT_COUNT as f32).floor() as i32;
+    let looks_mod = looks_honor_adjustment(stats[5].base);
+    let cha_mod = charisma_honor_adjustment(effective_charisma);
+    let total = base + looks_mod + cha_mod;
+    HonorBreakdown {
+        base,
+        looks_mod,
+        cha_mod,
+        total,
     }
 }
 

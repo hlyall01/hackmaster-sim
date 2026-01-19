@@ -1,12 +1,13 @@
-use hackmaster_sim::character::{AbilityScore, AbilitySet, Progression, ProgressionTier};
+use hackmaster_sim::character::{
+    AbilityScore, AbilitySet, AbilitySetFull, Progression, ProgressionTier,
+};
 use hackmaster_sim::core::gameplay::{
     run_next_fight, AutobattlerConfig, CombatantBuilder, EnemySpawnEntry, EnemySpawner, RunState,
     Wound,
 };
 use hackmaster_sim::core::ids::NpcPresetId;
-use hackmaster_sim::core::rng::SimRng;
 use hackmaster_sim::core::sim::{CombatEvent, CombatEventKind, SimConfig};
-use hackmaster_sim::core::types::{EnemyProfile, Inventory, PlayerProfile, RaceSpec};
+use hackmaster_sim::core::types::{EnemyProfile, Inventory, PlayerProfile, PointPools, RaceSpec};
 use hackmaster_sim::data;
 use hackmaster_sim::game_logic::{
     self, ArmorCatalog, ArmorId, FighterPreset, FighterPresetCatalog, NpcPresetCatalog,
@@ -34,6 +35,7 @@ impl CombatantBuilder for AutobattlerBuilder<'_> {
         let mut player = self.player_base.clone();
         player.name = state.player.name.clone();
         player.level = state.player.level;
+        player.progression = state.player.progression;
         player.strength_base = state.player.base_stats.strength.base;
         player.strength_pct = state.player.base_stats.strength.percentile;
         player.dex_base = state.player.base_stats.dexterity.base;
@@ -43,6 +45,9 @@ impl CombatantBuilder for AutobattlerBuilder<'_> {
         player.constitution = state.player.base_stats.constitution;
         player.looks = state.player.base_stats.looks;
         player.charisma = state.player.base_stats.charisma;
+        player.race_id = state.player.race_id.clone();
+        player.race_applied = player.race_id.is_some();
+        player.talents = state.player.talents.clone();
         let mut combatant = game_logic::build_combatant(
             &player,
             self.weapon_catalog,
@@ -105,12 +110,11 @@ fn main() {
         &race_catalog,
     );
     let player_profile = player_profile_from_config(&player_config);
-    let mut run_state = RunState::new(player_profile, Inventory::default());
+    let mut run_state = RunState::new(player_profile, Inventory::default(), config.seed);
 
     let spawner = hobgoblin_spawner(&npc_presets);
     let loot_table = config.to_loot_table();
     let sim_config = SimConfig::new(config.start_distance, config.stop_distance);
-    let mut rng = SimRng::from_seed(config.seed);
 
     let enemy_weapon_id = find_weapon_id_by_name(&weapon_catalog, &config.enemy_weapon)
         .or_else(|| weapon_catalog.first_id())
@@ -137,7 +141,6 @@ fn main() {
             config.rest_days_between_encounters,
             true,
             &builder,
-            &mut rng,
         );
         let enemy_name = outcome
             .enemy
@@ -445,19 +448,32 @@ fn player_config_from_preset(
 }
 
 fn player_profile_from_config(config: &PlayerConfig) -> PlayerProfile {
+    let ability_scores_full = AbilitySetFull {
+        strength: AbilityScore::new(config.strength_base, config.strength_pct),
+        intelligence: AbilityScore::new(config.intelligence, 1),
+        wisdom: AbilityScore::new(config.wisdom, 1),
+        dexterity: AbilityScore::new(config.dex_base, config.dex_pct),
+        constitution: AbilityScore::new(config.constitution, 1),
+        looks: AbilityScore::new(config.looks, 1),
+        charisma: AbilityScore::new(config.charisma, 1),
+    };
     PlayerProfile {
         name: config.name.clone(),
         level: config.level,
         xp: 0,
-        base_stats: AbilitySet {
-            strength: AbilityScore::new(config.strength_base, config.strength_pct),
-            intelligence: config.intelligence,
-            wisdom: config.wisdom,
-            dexterity: AbilityScore::new(config.dex_base, config.dex_pct),
-            constitution: config.constitution,
-            looks: config.looks,
-            charisma: config.charisma,
-        },
+        base_stats: AbilitySet::from(ability_scores_full),
+        ability_scores_full,
+        progression: config.progression,
+        points: PointPools::default(),
+        banked_points: PointPools::default(),
+        honor: 0,
+        alignment: None,
+        race_id: config.race_id.clone(),
+        background: None,
+        quirks: Vec::new(),
+        flaws: Vec::new(),
+        skills: Vec::new(),
+        proficiencies: Vec::new(),
         talents: config.talents.clone(),
     }
 }

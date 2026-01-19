@@ -1,6 +1,6 @@
 //! Core domain types (abilities, equipment, combatant sheet).
 
-use crate::character::AbilitySet;
+use crate::character::{AbilitySet, AbilitySetFull, Progression};
 use crate::core::ids::NpcPresetId;
 use serde::{Deserialize, Serialize};
 
@@ -10,6 +10,18 @@ pub struct PlayerProfile {
     pub level: u8,
     pub xp: u32,
     pub base_stats: AbilitySet,
+    pub ability_scores_full: AbilitySetFull,
+    pub progression: Progression,
+    pub points: PointPools,
+    pub banked_points: PointPools,
+    pub honor: i32,
+    pub alignment: Option<String>,
+    pub race_id: Option<String>,
+    pub background: Option<String>,
+    pub quirks: Vec<String>,
+    pub flaws: Vec<String>,
+    pub skills: Vec<String>,
+    pub proficiencies: Vec<String>,
     pub talents: Vec<TalentSelection>,
 }
 
@@ -20,6 +32,18 @@ impl PlayerProfile {
             level: 1,
             xp: 0,
             base_stats,
+            ability_scores_full: AbilitySetFull::from(base_stats),
+            progression: Progression::default(),
+            points: PointPools::default(),
+            banked_points: PointPools::default(),
+            honor: 0,
+            alignment: None,
+            race_id: None,
+            background: None,
+            quirks: Vec::new(),
+            flaws: Vec::new(),
+            skills: Vec::new(),
+            proficiencies: Vec::new(),
             talents: Vec::new(),
         }
     }
@@ -28,6 +52,20 @@ impl PlayerProfile {
 impl Default for PlayerProfile {
     fn default() -> Self {
         Self::new("Player", AbilitySet::default())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub struct PointPools {
+    pub bp: i32,
+    pub lp: i32,
+    pub ap: i32,
+    pub rp: i32,
+}
+
+impl PointPools {
+    pub fn new(bp: i32, lp: i32, ap: i32, rp: i32) -> Self {
+        Self { bp, lp, ap, rp }
     }
 }
 

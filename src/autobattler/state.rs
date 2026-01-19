@@ -3,11 +3,11 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 
 use crate::autobattler::constants::{STAT_COUNT, TALENT_TAB_ALL};
-use crate::character::{AbilityScore, AbilitySet};
+use crate::character::{AbilityScore, AbilitySet, AbilitySetFull, Progression};
 use crate::core::gameplay::{RunOutcome, RunState, Wound};
-use crate::core::rng::SimRng;
+use crate::core::rng::{derive_seed, SimRng};
 use crate::core::sim::SimState;
-use crate::core::types::{EnemyProfile, Inventory, PlayerProfile, TalentSelection};
+use crate::core::types::{EnemyProfile, Inventory, PlayerProfile, PointPools, TalentSelection};
 use crate::game_logic::{PlayerConfig, WeaponId};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,8 +23,16 @@ pub enum CreationStep {
     Points,
     RollStats,
     ChooseRace,
-    SpendBp,
-    Talents,
+    Alignment,
+    FinalizeStats,
+    Honor,
+    Priors,
+    QuirksFlaws,
+    AdvancementTalents,
+    SkillsTalents,
+    HitPoints,
+    DerivedStats,
+    MoneyGear,
 }
 
 impl CreationStep {
@@ -33,8 +41,16 @@ impl CreationStep {
             CreationStep::Points => "Step 1: Starting Points",
             CreationStep::RollStats => "Step 2: Roll Ability Scores",
             CreationStep::ChooseRace => "Step 3: Choose Race",
-            CreationStep::SpendBp => "Step 4: Spend BP on Stats",
-            CreationStep::Talents => "Step 5: Purchase Talents",
+            CreationStep::Alignment => "Step 4: Choose Alignment",
+            CreationStep::FinalizeStats => "Step 5: Finalize Ability Scores",
+            CreationStep::Honor => "Step 6: Calculate Starting Honor",
+            CreationStep::Priors => "Step 7: Priors and Particulars",
+            CreationStep::QuirksFlaws => "Step 8: Quirks and Flaws",
+            CreationStep::AdvancementTalents => "Step 9: Record Advancement Talents",
+            CreationStep::SkillsTalents => "Step 10: Skills, Talents, Proficiencies",
+            CreationStep::HitPoints => "Step 11: Determine Hit Points",
+            CreationStep::DerivedStats => "Step 12: Record Derived Statistics",
+            CreationStep::MoneyGear => "Step 13: Money and Gear",
         }
     }
 
@@ -43,8 +59,16 @@ impl CreationStep {
             CreationStep::Points => 0,
             CreationStep::RollStats => 1,
             CreationStep::ChooseRace => 2,
-            CreationStep::SpendBp => 3,
-            CreationStep::Talents => 4,
+            CreationStep::Alignment => 3,
+            CreationStep::FinalizeStats => 4,
+            CreationStep::Honor => 5,
+            CreationStep::Priors => 6,
+            CreationStep::QuirksFlaws => 7,
+            CreationStep::AdvancementTalents => 8,
+            CreationStep::SkillsTalents => 9,
+            CreationStep::HitPoints => 10,
+            CreationStep::DerivedStats => 11,
+            CreationStep::MoneyGear => 12,
         }
     }
 
@@ -52,9 +76,17 @@ impl CreationStep {
         match self {
             CreationStep::Points => Some(CreationStep::RollStats),
             CreationStep::RollStats => Some(CreationStep::ChooseRace),
-            CreationStep::ChooseRace => Some(CreationStep::SpendBp),
-            CreationStep::SpendBp => Some(CreationStep::Talents),
-            CreationStep::Talents => None,
+            CreationStep::ChooseRace => Some(CreationStep::Alignment),
+            CreationStep::Alignment => Some(CreationStep::FinalizeStats),
+            CreationStep::FinalizeStats => Some(CreationStep::Honor),
+            CreationStep::Honor => Some(CreationStep::Priors),
+            CreationStep::Priors => Some(CreationStep::QuirksFlaws),
+            CreationStep::QuirksFlaws => Some(CreationStep::AdvancementTalents),
+            CreationStep::AdvancementTalents => Some(CreationStep::SkillsTalents),
+            CreationStep::SkillsTalents => Some(CreationStep::HitPoints),
+            CreationStep::HitPoints => Some(CreationStep::DerivedStats),
+            CreationStep::DerivedStats => Some(CreationStep::MoneyGear),
+            CreationStep::MoneyGear => None,
         }
     }
 
@@ -63,9 +95,21 @@ impl CreationStep {
             CreationStep::Points => None,
             CreationStep::RollStats => Some(CreationStep::Points),
             CreationStep::ChooseRace => Some(CreationStep::RollStats),
-            CreationStep::SpendBp => Some(CreationStep::ChooseRace),
-            CreationStep::Talents => Some(CreationStep::SpendBp),
+            CreationStep::Alignment => Some(CreationStep::ChooseRace),
+            CreationStep::FinalizeStats => Some(CreationStep::Alignment),
+            CreationStep::Honor => Some(CreationStep::FinalizeStats),
+            CreationStep::Priors => Some(CreationStep::Honor),
+            CreationStep::QuirksFlaws => Some(CreationStep::Priors),
+            CreationStep::AdvancementTalents => Some(CreationStep::QuirksFlaws),
+            CreationStep::SkillsTalents => Some(CreationStep::AdvancementTalents),
+            CreationStep::HitPoints => Some(CreationStep::SkillsTalents),
+            CreationStep::DerivedStats => Some(CreationStep::HitPoints),
+            CreationStep::MoneyGear => Some(CreationStep::DerivedStats),
         }
+    }
+
+    pub fn count() -> usize {
+        13
     }
 }
 
@@ -165,12 +209,13 @@ impl AbilityScoreSave {
     pub fn from_score(score: AbilityScore) -> Self {
         Self {
             base: score.base,
-            percentile: score.percentile,
+            percentile: score.percentile % 100,
         }
     }
 
     pub fn to_score(&self) -> AbilityScore {
-        AbilityScore::new(self.base, self.percentile)
+        let percentile = self.percentile % 100;
+        AbilityScore::new(self.base, percentile)
     }
 }
 
@@ -182,6 +227,38 @@ pub struct CharacterSave {
     pub race_id: Option<String>,
     pub talents: Vec<TalentSelection>,
     pub bp_history: Vec<Vec<u8>>,
+    #[serde(default)]
+    pub weapon_name: String,
+    #[serde(default)]
+    pub armor_label: String,
+    #[serde(default)]
+    pub shield_name: String,
+    #[serde(default)]
+    pub alignment: String,
+    #[serde(default)]
+    pub honor: i32,
+    #[serde(default)]
+    pub background: String,
+    #[serde(default)]
+    pub height: String,
+    #[serde(default)]
+    pub weight: String,
+    #[serde(default)]
+    pub age: String,
+    #[serde(default)]
+    pub handedness: String,
+    #[serde(default)]
+    pub quirks: Vec<String>,
+    #[serde(default)]
+    pub flaws: Vec<String>,
+    #[serde(default)]
+    pub skills: Vec<String>,
+    #[serde(default)]
+    pub proficiencies: Vec<String>,
+    #[serde(default)]
+    pub starting_money: u32,
+    #[serde(default)]
+    pub money_rolled: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -222,11 +299,72 @@ impl AbilitySetSave {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AbilitySetFullSave {
+    pub strength: AbilityScoreSave,
+    pub intelligence: AbilityScoreSave,
+    pub wisdom: AbilityScoreSave,
+    pub dexterity: AbilityScoreSave,
+    pub constitution: AbilityScoreSave,
+    pub looks: AbilityScoreSave,
+    pub charisma: AbilityScoreSave,
+}
+
+impl AbilitySetFullSave {
+    pub fn from_set(set: AbilitySetFull) -> Self {
+        Self {
+            strength: AbilityScoreSave::from_score(set.strength),
+            intelligence: AbilityScoreSave::from_score(set.intelligence),
+            wisdom: AbilityScoreSave::from_score(set.wisdom),
+            dexterity: AbilityScoreSave::from_score(set.dexterity),
+            constitution: AbilityScoreSave::from_score(set.constitution),
+            looks: AbilityScoreSave::from_score(set.looks),
+            charisma: AbilityScoreSave::from_score(set.charisma),
+        }
+    }
+
+    pub fn to_set(&self) -> AbilitySetFull {
+        AbilitySetFull {
+            strength: self.strength.to_score(),
+            intelligence: self.intelligence.to_score(),
+            wisdom: self.wisdom.to_score(),
+            dexterity: self.dexterity.to_score(),
+            constitution: self.constitution.to_score(),
+            looks: self.looks.to_score(),
+            charisma: self.charisma.to_score(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PlayerProfileSave {
     pub name: String,
     pub level: u8,
     pub xp: u32,
     pub base_stats: AbilitySetSave,
+    #[serde(default)]
+    pub ability_scores_full: Option<AbilitySetFullSave>,
+    #[serde(default)]
+    pub progression: Progression,
+    #[serde(default)]
+    pub points: PointPools,
+    #[serde(default)]
+    pub banked_points: PointPools,
+    #[serde(default)]
+    pub honor: i32,
+    #[serde(default)]
+    pub alignment: Option<String>,
+    #[serde(default)]
+    pub race_id: Option<String>,
+    #[serde(default)]
+    pub background: Option<String>,
+    #[serde(default)]
+    pub quirks: Vec<String>,
+    #[serde(default)]
+    pub flaws: Vec<String>,
+    #[serde(default)]
+    pub skills: Vec<String>,
+    #[serde(default)]
+    pub proficiencies: Vec<String>,
     pub talents: Vec<TalentSelection>,
 }
 
@@ -237,16 +375,48 @@ impl PlayerProfileSave {
             level: profile.level,
             xp: profile.xp,
             base_stats: AbilitySetSave::from_set(profile.base_stats),
+            ability_scores_full: Some(AbilitySetFullSave::from_set(
+                profile.ability_scores_full,
+            )),
+            progression: profile.progression,
+            points: profile.points,
+            banked_points: profile.banked_points,
+            honor: profile.honor,
+            alignment: profile.alignment.clone(),
+            race_id: profile.race_id.clone(),
+            background: profile.background.clone(),
+            quirks: profile.quirks.clone(),
+            flaws: profile.flaws.clone(),
+            skills: profile.skills.clone(),
+            proficiencies: profile.proficiencies.clone(),
             talents: profile.talents.clone(),
         }
     }
 
     pub fn to_profile(&self) -> PlayerProfile {
+        let base_stats = self.base_stats.to_set();
+        let ability_scores_full = self
+            .ability_scores_full
+            .as_ref()
+            .map(AbilitySetFullSave::to_set)
+            .unwrap_or_else(|| AbilitySetFull::from(base_stats));
         PlayerProfile {
             name: self.name.clone(),
             level: self.level,
             xp: self.xp,
-            base_stats: self.base_stats.to_set(),
+            base_stats: AbilitySet::from(ability_scores_full),
+            ability_scores_full,
+            progression: self.progression,
+            points: self.points,
+            banked_points: self.banked_points,
+            honor: self.honor,
+            alignment: self.alignment.clone(),
+            race_id: self.race_id.clone(),
+            background: self.background.clone(),
+            quirks: self.quirks.clone(),
+            flaws: self.flaws.clone(),
+            skills: self.skills.clone(),
+            proficiencies: self.proficiencies.clone(),
             talents: self.talents.clone(),
         }
     }
@@ -301,6 +471,10 @@ pub struct RunStateSave {
     pub player: PlayerProfileSave,
     pub inventory: InventorySave,
     pub run_depth: u32,
+    #[serde(default)]
+    pub seed: u64,
+    #[serde(default)]
+    pub encounter_index: u32,
     pub wounds: Vec<WoundSave>,
 }
 
@@ -310,6 +484,8 @@ impl RunStateSave {
             player: PlayerProfileSave::from_profile(&state.player),
             inventory: InventorySave::from_inventory(&state.inventory),
             run_depth: state.run_depth,
+            seed: state.run_seed,
+            encounter_index: state.encounter_index,
             wounds: state.wounds.iter().map(WoundSave::from_wound).collect(),
         }
     }
@@ -319,6 +495,8 @@ impl RunStateSave {
             player: self.player.to_profile(),
             inventory: self.inventory.to_inventory(),
             run_depth: self.run_depth,
+            run_seed: self.seed,
+            encounter_index: self.encounter_index,
             wounds: self.wounds.iter().map(WoundSave::to_wound).collect(),
         }
     }
@@ -393,7 +571,7 @@ impl RolledSet {
         let mut rolls = [AbilityScore::new(10, 0); STAT_COUNT];
         for (idx, roll) in rolls.iter_mut().enumerate() {
             let base = counts[idx].saturating_add(3);
-            let percentile = rng.gen_range(1..=100);
+            let percentile = rng.gen_range(0..100);
             *roll = AbilityScore::new(base, percentile);
         }
         Self { rolls }
@@ -402,6 +580,7 @@ impl RolledSet {
 
 pub struct CreationState {
     pub name: String,
+    pub run_seed: u64,
     pub rng: SimRng,
     pub rolled_sets: [RolledSet; 2],
     pub selected_set: usize,
@@ -413,15 +592,33 @@ pub struct CreationState {
     pub bp_history: [Vec<u8>; STAT_COUNT],
     pub talent_category: String,
     pub player: PlayerConfig,
+    pub alignment: String,
+    pub honor: i32,
+    pub background: String,
+    pub height: String,
+    pub weight: String,
+    pub age: String,
+    pub handedness: String,
+    pub quirks: Vec<String>,
+    pub flaws: Vec<String>,
+    pub skills: Vec<String>,
+    pub proficiencies: Vec<String>,
+    pub quirk_input: String,
+    pub flaw_input: String,
+    pub skill_input: String,
+    pub proficiency_input: String,
+    pub starting_money: u32,
+    pub money_rolled: bool,
 }
 
 impl CreationState {
-    pub fn new(weapon_id: WeaponId) -> Self {
-        let mut rng = SimRng::default();
+    pub fn new(weapon_id: WeaponId, run_seed: u64) -> Self {
+        let mut rng = SimRng::from_seed(derive_seed(run_seed, "creation", 0));
         let rolled_sets = [RolledSet::roll(&mut rng), RolledSet::roll(&mut rng)];
         let player = PlayerConfig::new("Adventurer", weapon_id);
         Self {
             name: "Adventurer".to_string(),
+            run_seed,
             rng,
             rolled_sets,
             selected_set: 0,
@@ -433,7 +630,30 @@ impl CreationState {
             bp_history: std::array::from_fn(|_| Vec::new()),
             talent_category: TALENT_TAB_ALL.to_string(),
             player,
+            alignment: "Unaligned".to_string(),
+            honor: 0,
+            background: String::new(),
+            height: String::new(),
+            weight: String::new(),
+            age: String::new(),
+            handedness: String::new(),
+            quirks: Vec::new(),
+            flaws: Vec::new(),
+            skills: Vec::new(),
+            proficiencies: Vec::new(),
+            quirk_input: String::new(),
+            flaw_input: String::new(),
+            skill_input: String::new(),
+            proficiency_input: String::new(),
+            starting_money: 0,
+            money_rolled: false,
         }
+    }
+
+    pub fn reseed(&mut self, run_seed: u64) {
+        self.run_seed = run_seed;
+        self.rng = SimRng::from_seed(derive_seed(run_seed, "creation", 0));
+        self.reset_rolls();
     }
 
     pub fn reset_rolls(&mut self) {
@@ -445,6 +665,9 @@ impl CreationState {
         self.race_applied = false;
         self.bp_history = std::array::from_fn(|_| Vec::new());
         self.talent_category = TALENT_TAB_ALL.to_string();
+        self.honor = 0;
+        self.starting_money = 0;
+        self.money_rolled = false;
     }
 
     pub fn assign_roll(&mut self, stat_idx: usize, roll_idx: usize) {
