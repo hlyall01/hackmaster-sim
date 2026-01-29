@@ -29,22 +29,36 @@ pub fn format_combat_event(event: &CombatEvent, combatants: &[Combatant]) -> Str
                         )
                     }
                 } else {
+                    let verb = if attack.is_charge { "charges" } else { "hits" };
                     format!(
-                        "{attacker_name} hits {defender_name} with {weapon_name} for {} dmg",
+                        "{attacker_name} {verb} {defender_name} with {weapon_name} for {} dmg",
                         attack.damage
                     )
                 }
-            } else if attack.shield_block {
-                format!(
-                    "{defender_name} blocks {attacker_name} with shield for {} shield dmg",
-                    attack.shield_damage
-                )
+                } else if attack.shield_block {
+                if attack.is_charge {
+                    format!(
+                        "{defender_name} blocks {attacker_name}'s charge with shield for {} shield dmg",
+                        attack.shield_damage
+                    )
+                } else {
+                    format!(
+                        "{defender_name} blocks {attacker_name} with shield for {} shield dmg",
+                        attack.shield_damage
+                    )
+                }
             } else if attack.hold_at_bay {
                 format!(
                     "{attacker_name} fails to hold {defender_name} at bay with {weapon_name}"
                 )
             } else {
-                format!("{attacker_name} misses {defender_name} with {weapon_name}")
+                if attack.is_charge {
+                    format!(
+                        "{attacker_name} charges {defender_name} with {weapon_name} but misses"
+                    )
+                } else {
+                    format!("{attacker_name} misses {defender_name} with {weapon_name}")
+                }
             };
 
             let mut details = Vec::new();
@@ -58,6 +72,9 @@ pub fn format_combat_event(event: &CombatEvent, combatants: &[Combatant]) -> Str
             details.push(format!("hp {}", attack.defender_hp_after.max(0)));
             if attack.is_ranged {
                 details.push("ranged".to_string());
+            }
+            if attack.is_charge {
+                details.push("charge".to_string());
             }
             if attack.use_jab {
                 details.push("jab".to_string());

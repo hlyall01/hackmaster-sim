@@ -152,8 +152,8 @@ impl SimGuiApp {
             running: false,
             sim,
             players: [
-                PlayerConfig::new("Fighter A", weapon_a),
-                PlayerConfig::new("Fighter B", weapon_b),
+                PlayerConfig::new("Arthur Du Randt", weapon_a),
+                PlayerConfig::new("Zorya", weapon_b),
             ],
             player_colors: [
                 Color32::from_rgb(214, 93, 69),
@@ -166,7 +166,7 @@ impl SimGuiApp {
             talent_catalog,
             npc_presets,
             fighter_presets,
-            fighter_preset_names: ["Fighter A".to_string(), "Fighter B".to_string()],
+            fighter_preset_names: ["Arthur Du Randt".to_string(), "Zorya".to_string()],
             time_scale: 1.0,
             show_player_editor: [false, false],
             player_editor_tabs: [PlayerEditorTab::Core, PlayerEditorTab::Core],
@@ -179,8 +179,34 @@ impl SimGuiApp {
             bulk_result: None,
             bulk_sim_duration: None,
         };
+        app.apply_default_fighter_preset(0, "Arthur Du Randt");
+        app.apply_default_fighter_preset(1, "Zorya");
         app.reset_positions();
         app
+    }
+
+    fn apply_default_fighter_preset(&mut self, idx: usize, name: &str) {
+        let preset_id = self
+            .fighter_presets
+            .entries()
+            .iter()
+            .position(|preset| preset.name.eq_ignore_ascii_case(name))
+            .and_then(|index| self.fighter_presets.id_from_index(index));
+        if let Some(id) = preset_id {
+            if let Some(preset) = self.fighter_presets.get(id) {
+                apply_fighter_preset(
+                    &mut self.players[idx],
+                    preset,
+                    &self.weapon_catalog,
+                    &self.armor_catalog,
+                    &self.shield_catalog,
+                    &self.race_catalog,
+                );
+                self.players[idx].fighter_preset = Some(id);
+                self.players[idx].npc_preset = None;
+                self.fighter_preset_names[idx] = preset.name.clone();
+            }
+        }
     }
 
     fn reset_positions(&mut self) {
@@ -776,6 +802,22 @@ impl eframe::App for SimGuiApp {
                     if result.ties > 0 {
                         ui.label(format!("Ties/timeouts: {}", result.ties));
                     }
+                    ui.label(format!(
+                        "Fights w/ 2+ charges: {}",
+                        result.fights_with_second_charge
+                    ));
+                    ui.label(format!(
+                        "Fights w/ trauma: {}",
+                        result.fights_with_trauma
+                    ));
+                    ui.label(format!(
+                        "Fights w/ trauma on first exchange: {}",
+                        result.fights_with_trauma_first_exchange
+                    ));
+                    ui.label(format!(
+                        "Fights w/ 20ft knockback: {}",
+                        result.fights_with_knockback_20ft
+                    ));
                     ui.label(format!("Avg duration: {:.1}s", result.avg_duration));
                     if let Some(duration) = self.bulk_sim_duration {
                         ui.label(format!("Sim time: {:.2}s", duration.as_secs_f64()));

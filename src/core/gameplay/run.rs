@@ -301,6 +301,7 @@ mod tests {
                 shield_damage: 0,
                 knockback_ft: 0.0,
                 hold_at_bay: false,
+                is_charge: false,
                 use_jab: false,
                 is_ranged: false,
                 trauma_applied: false,

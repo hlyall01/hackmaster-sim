@@ -1,4 +1,5 @@
 use crate::core::rng::SimRng;
+use rand::RngCore;
 
 use super::combat::{resolve_attack, resolve_knock_aside, AttackMode};
 use super::modifiers::StatIdF32;
@@ -21,6 +22,9 @@ pub struct SimState {
     pub last_event: Option<CombatEvent>,
     pub combat_events: Vec<CombatEvent>,
     pub log_events: bool,
+    pub first_attack_time: Option<u32>,
+    pub trauma_first_exchange: bool,
+    pub charges_started_within_20ft: u32,
     rng: SimRng,
     tick_accum: f32,
     hold_at_bay: HoldAtBayState,
@@ -57,6 +61,9 @@ impl SimState {
             last_event: None,
             combat_events: Vec::new(),
             log_events,
+            first_attack_time: None,
+            trauma_first_exchange: false,
+            charges_started_within_20ft: 0,
             rng,
             tick_accum: 0.0,
             hold_at_bay: HoldAtBayState::default(),
@@ -69,6 +76,9 @@ impl SimState {
         self.done = false;
         self.last_event = None;
         self.combat_events.clear();
+        self.first_attack_time = None;
+        self.trauma_first_exchange = false;
+        self.charges_started_within_20ft = 0;
         for combatant in &mut self.combatants {
             combatant.reset_state();
         }
@@ -239,8 +249,26 @@ impl SimState {
             if distance_before_combat > max_reach && !any_ranged {
                 let step_a = self.move_tiles(a_idx);
                 let step_b = self.move_tiles(b_idx);
-                self.move_toward(a_idx, b_idx, step_a, max_reach);
-                self.move_toward(b_idx, a_idx, step_b, max_reach);
+                let tile_size_ft = self.config.tile_size_ft.max(0.01);
+                let closure_ft = (distance_before_combat - max_reach).max(0.0);
+                let closure_tiles = (closure_ft / tile_size_ft).ceil() as i32;
+                let total_steps = step_a + step_b;
+                if total_steps > 0 && closure_tiles > 0 {
+                    let alloc_a =
+                        ((step_a as f32 / total_steps as f32) * closure_tiles as f32).round()
+                            as i32;
+                    let mut steps_a = alloc_a.clamp(0, step_a).min(closure_tiles);
+                    let mut steps_b = (closure_tiles - steps_a).clamp(0, step_b);
+                    if steps_a + steps_b < closure_tiles {
+                        let remaining = closure_tiles - steps_a - steps_b;
+                        let add_a = remaining.min(step_a - steps_a);
+                        steps_a += add_a;
+                        let add_b = remaining - add_a;
+                        steps_b += add_b.min(step_b - steps_b);
+                    }
+                    self.move_toward(a_idx, b_idx, steps_a, max_reach);
+                    self.move_toward(b_idx, a_idx, steps_b, max_reach);
+                }
                 for combatant in &mut self.combatants {
                     combatant.state.clear_attack_timers();
                 }
@@ -481,7 +509,14 @@ impl SimState {
                 continue;
             }
             if distance_before > reach {
-                state.charge_distance_ft += moved_tiles as f32 * tile_size_ft;
+                let moved_ft = moved_tiles as f32 * tile_size_ft;
+                let max_closure_ft = (distance_before - reach).max(0.0);
+                let delta = moved_ft.min(max_closure_ft);
+                let before = state.charge_distance_ft;
+                state.charge_distance_ft += delta;
+                if before < 20.0 && state.charge_distance_ft >= 20.0 && distance_before < 20.0 {
+                    state.charge_threshold_started_within_20ft = true;
+                }
             }
         }
     }
@@ -625,7 +660,11 @@ impl SimState {
                 false
             }
         };
-        for (attacker_idx, defender_idx) in [(a_idx, b_idx), (b_idx, a_idx)] {
+        let mut order = [(a_idx, b_idx), (b_idx, a_idx)];
+        if self.rng.next_u32() & 1 == 1 {
+            order.swap(0, 1);
+        }
+        for (attacker_idx, defender_idx) in order {
             let snapshot_next_attack_primary = state_snapshot
                 .as_ref()
                 .and_then(|snapshot| snapshot.get(attacker_idx))
@@ -813,6 +852,18 @@ impl SimState {
             };
             if now + 0.0001 >= next_attack {
                 primary_attack_time = Some(next_attack);
+                if attack_mode == AttackMode::Charge {
+                    self.combatants[attacker_idx].state.charge_attacks =
+                        self.combatants[attacker_idx].state.charge_attacks.saturating_add(1);
+                    if self.combatants[attacker_idx]
+                        .state
+                        .charge_threshold_started_within_20ft
+                    {
+                        self.combatants[attacker_idx].state.charge_started_within_20ft = true;
+                        self.charges_started_within_20ft =
+                            self.charges_started_within_20ft.saturating_add(1);
+                    }
+                }
                 let mut event = resolve_attack(
                     &mut self.combatants,
                     attacker_idx,
@@ -839,6 +890,19 @@ impl SimState {
                     event.defender_idx,
                     event.knockback_ft,
                 );
+                if self.first_attack_time.is_none() {
+                    self.first_attack_time = Some(self.elapsed_seconds);
+                }
+                if event.trauma_applied {
+                    self.combatants[event.defender_idx].state.saw_trauma = true;
+                    if self.first_attack_time == Some(self.elapsed_seconds) {
+                        self.trauma_first_exchange = true;
+                    }
+                }
+                if event.knockback_ft > 0.0 {
+                    let state = &mut self.combatants[event.defender_idx].state;
+                    state.max_knockback_ft = state.max_knockback_ft.max(event.knockback_ft);
+                }
                 if self.log_events {
                     let event_struct = CombatEvent {
                         time: self.elapsed_seconds,
@@ -851,6 +915,7 @@ impl SimState {
                             shield_damage: event.shield_damage,
                             knockback_ft: event.knockback_ft,
                             hold_at_bay: event.hold_at_bay,
+                            is_charge: attack_mode == AttackMode::Charge,
                             use_jab: event.use_jab,
                             is_ranged: event.is_ranged,
                             trauma_applied: event.trauma_applied,
@@ -883,6 +948,7 @@ impl SimState {
                                 shield_damage: counter.shield_damage,
                                 knockback_ft: counter.knockback_ft,
                                 hold_at_bay: false,
+                                is_charge: false,
                                 use_jab: counter.use_jab,
                                 is_ranged: counter.is_ranged,
                                 trauma_applied: counter.trauma_applied,
@@ -894,6 +960,19 @@ impl SimState {
                                 critical: counter.critical,
                             }),
                         };
+                        if self.first_attack_time.is_none() {
+                            self.first_attack_time = Some(self.elapsed_seconds);
+                        }
+                        if counter.trauma_applied {
+                            self.combatants[counter.defender_idx].state.saw_trauma = true;
+                            if self.first_attack_time == Some(self.elapsed_seconds) {
+                                self.trauma_first_exchange = true;
+                            }
+                        }
+                        if counter.knockback_ft > 0.0 {
+                            let state = &mut self.combatants[counter.defender_idx].state;
+                            state.max_knockback_ft = state.max_knockback_ft.max(counter.knockback_ft);
+                        }
                         self.last_event = Some(counter_event.clone());
                         self.combat_events.push(counter_event);
                     }
@@ -999,23 +1078,37 @@ impl SimState {
                         event.defender_idx,
                         event.knockback_ft,
                     );
+                    if self.first_attack_time.is_none() {
+                        self.first_attack_time = Some(self.elapsed_seconds);
+                    }
+                    if event.trauma_applied {
+                        self.combatants[event.defender_idx].state.saw_trauma = true;
+                        if self.first_attack_time == Some(self.elapsed_seconds) {
+                            self.trauma_first_exchange = true;
+                        }
+                    }
+                    if event.knockback_ft > 0.0 {
+                        let state = &mut self.combatants[event.defender_idx].state;
+                        state.max_knockback_ft = state.max_knockback_ft.max(event.knockback_ft);
+                    }
                     if self.log_events {
                         let event_struct = CombatEvent {
                             time: self.elapsed_seconds,
                             attacker_idx: event.attacker_idx,
                             defender_idx: event.defender_idx,
-                            kind: CombatEventKind::Attack(AttackEvent {
-                                hit: event.hit,
-                                shield_block: event.shield_block,
-                                damage: event.damage,
-                                shield_damage: event.shield_damage,
-                                knockback_ft: event.knockback_ft,
-                                hold_at_bay: event.hold_at_bay,
-                                use_jab: event.use_jab,
-                                is_ranged: event.is_ranged,
-                                trauma_applied: event.trauma_applied,
-                                trauma_seconds: event.trauma_seconds,
-                                roll: event.roll,
+                        kind: CombatEventKind::Attack(AttackEvent {
+                            hit: event.hit,
+                            shield_block: event.shield_block,
+                            damage: event.damage,
+                            shield_damage: event.shield_damage,
+                            knockback_ft: event.knockback_ft,
+                            hold_at_bay: event.hold_at_bay,
+                            is_charge: false,
+                            use_jab: event.use_jab,
+                            is_ranged: event.is_ranged,
+                            trauma_applied: event.trauma_applied,
+                            trauma_seconds: event.trauma_seconds,
+                            roll: event.roll,
                                 damage_breakdown: event.damage_breakdown,
                                 shield_damage_breakdown: event.shield_damage_breakdown,
                                 defender_hp_after: event.defender_hp_after,
@@ -1043,6 +1136,7 @@ impl SimState {
                                     shield_damage: counter.shield_damage,
                                     knockback_ft: counter.knockback_ft,
                                     hold_at_bay: false,
+                                    is_charge: false,
                                     use_jab: counter.use_jab,
                                     is_ranged: counter.is_ranged,
                                     trauma_applied: counter.trauma_applied,
@@ -1054,6 +1148,20 @@ impl SimState {
                                     critical: counter.critical,
                                 }),
                             };
+                            if self.first_attack_time.is_none() {
+                                self.first_attack_time = Some(self.elapsed_seconds);
+                            }
+                            if counter.trauma_applied {
+                                self.combatants[counter.defender_idx].state.saw_trauma = true;
+                                if self.first_attack_time == Some(self.elapsed_seconds) {
+                                    self.trauma_first_exchange = true;
+                                }
+                            }
+                            if counter.knockback_ft > 0.0 {
+                                let state = &mut self.combatants[counter.defender_idx].state;
+                                state.max_knockback_ft =
+                                    state.max_knockback_ft.max(counter.knockback_ft);
+                            }
                             self.last_event = Some(counter_event.clone());
                             self.combat_events.push(counter_event);
                         }
@@ -1094,6 +1202,11 @@ pub struct BulkSimResult {
     pub wins: Vec<u32>,
     pub ties: u32,
     pub avg_duration: f32,
+    pub fights_with_second_charge: u32,
+    pub fights_with_trauma: u32,
+    pub fights_with_trauma_first_exchange: u32,
+    pub fights_with_knockback_20ft: u32,
+    pub fights_with_charge_within_20ft: u32,
 }
 
 #[allow(dead_code)]
@@ -1117,6 +1230,11 @@ pub fn bulk_simulate(
     sim.reset_with_combatants(combatants);
     let mut wins = vec![0u32; team_ids.len()];
     let mut ties = 0u32;
+    let mut fights_with_second_charge = 0u32;
+    let mut fights_with_trauma = 0u32;
+    let mut fights_with_trauma_first_exchange = 0u32;
+    let mut fights_with_knockback_20ft = 0u32;
+    let mut fights_with_charge_within_20ft = 0u32;
     let mut total_seconds = 0u64;
     for _ in 0..runs {
         sim.reset_preserve_rng();
@@ -1147,12 +1265,44 @@ pub fn bulk_simulate(
         } else {
             ties += 1;
         }
+        if sim
+            .combatants
+            .iter()
+            .any(|combatant| combatant.state.charge_attacks >= 2)
+        {
+            fights_with_second_charge += 1;
+        }
+        if sim.combatants.iter().any(|combatant| combatant.state.saw_trauma) {
+            fights_with_trauma += 1;
+        }
+        if sim.trauma_first_exchange {
+            fights_with_trauma_first_exchange += 1;
+        }
+        if sim
+            .combatants
+            .iter()
+            .any(|combatant| combatant.state.max_knockback_ft >= 20.0)
+        {
+            fights_with_knockback_20ft += 1;
+        }
+        if sim
+            .combatants
+            .iter()
+            .any(|combatant| combatant.state.charge_started_within_20ft)
+        {
+            fights_with_charge_within_20ft += 1;
+        }
     }
     let avg_duration = total_seconds as f32 / runs as f32;
     BulkSimResult {
         wins,
         ties,
         avg_duration,
+        fights_with_second_charge,
+        fights_with_trauma,
+        fights_with_trauma_first_exchange,
+        fights_with_knockback_20ft,
+        fights_with_charge_within_20ft,
     }
 }
 

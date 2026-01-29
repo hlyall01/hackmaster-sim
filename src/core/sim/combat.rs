@@ -1286,6 +1286,7 @@ pub(crate) fn resolve_attack(
 
     if !is_ranged {
         combatants[attacker_idx].state.charge_distance_ft = 0.0;
+        combatants[attacker_idx].state.charge_threshold_started_within_20ft = false;
     }
 
     let defender_hp_after = combatants[defender_idx].state.hp;

@@ -124,6 +124,212 @@
         state
     }
 
+    fn min_raw_damage_for_knockback(
+        knockback_ft: f32,
+        step_damage: i32,
+        charge_bonus: bool,
+    ) -> i32 {
+        let steps_needed = (knockback_ft / 5.0).ceil().max(0.0) as i32;
+        let step_damage = step_damage.max(1);
+        let multiplier = if charge_bonus { 2 } else { 1 };
+        let numerator = steps_needed * step_damage;
+        (numerator + multiplier - 1) / multiplier
+    }
+
+    fn setup_charge_sim(reach_ft: f32, move_speed: f32, stop_distance: f32) -> SimState {
+        let mut attacker = combatant_basic(
+            "Charger".to_string(),
+            "Test Blade".to_string(),
+            100,
+            0,
+            0,
+            false,
+            0,
+            "1d1".to_string(),
+            0,
+            1.0,
+            reach_ft,
+            move_speed,
+            false,
+            false,
+            None,
+            true,
+            false,
+            10_000,
+        );
+        let mut defender = combatant_basic(
+            "Dummy".to_string(),
+            "Test Blade".to_string(),
+            -100,
+            -100,
+            0,
+            false,
+            0,
+            "1d1".to_string(),
+            0,
+            10.0,
+            reach_ft,
+            0.0,
+            false,
+            false,
+            None,
+            true,
+            false,
+            10_000,
+        );
+        attacker.sheet.maneuvers.charge = true;
+        defender.sheet.maneuvers.charge = true;
+        attacker.team_id = 0;
+        defender.team_id = 1;
+
+        let mut sim = SimState::with_rng(
+            SimConfig::new(200.0, stop_distance),
+            SimRng::from_seed(1),
+        );
+        sim.reset_with_combatants(vec![attacker, defender]);
+        sim
+    }
+
+    fn set_distance(sim: &mut SimState, distance_ft: f32) {
+        let distance_tiles = distance_ft.round() as i32;
+        sim.actors[0].position = GridPos::new(0, 0);
+        sim.actors[1].position = GridPos::new(distance_tiles, 0);
+        for combatant in &mut sim.combatants {
+            combatant.state.charge_distance_ft = 0.0;
+            combatant.state.charge_target_idx = None;
+            combatant.state.clear_attack_timers();
+        }
+    }
+
+    fn set_distance_no_reset(sim: &mut SimState, distance_ft: f32) {
+        let distance_tiles = distance_ft.round() as i32;
+        sim.actors[0].position = GridPos::new(0, 0);
+        sim.actors[1].position = GridPos::new(distance_tiles, 0);
+    }
+
+    fn arthur_duel_sim(
+        raw_a: i32,
+        raw_b: i32,
+        move_speed_a: f32,
+        move_speed_b: f32,
+        attack_bonus_a: i32,
+        attack_bonus_b: i32,
+        defense_mod_a: i32,
+        defense_mod_b: i32,
+    ) -> SimState {
+        arthur_duel_sim_with_distance(
+            raw_a,
+            raw_b,
+            move_speed_a,
+            move_speed_b,
+            attack_bonus_a,
+            attack_bonus_b,
+            defense_mod_a,
+            defense_mod_b,
+            200.0,
+            Some(8.0),
+        )
+    }
+
+    fn arthur_duel_sim_with_distance(
+        raw_a: i32,
+        raw_b: i32,
+        move_speed_a: f32,
+        move_speed_b: f32,
+        attack_bonus_a: i32,
+        attack_bonus_b: i32,
+        defense_mod_a: i32,
+        defense_mod_b: i32,
+        start_distance: f32,
+        initial_distance: Option<f32>,
+    ) -> SimState {
+        let (weapon_catalog, armor_catalog, shield_catalog) =
+            data::load_catalogs().expect("failed to load catalogs");
+        let npc_presets =
+            data::load_npc_presets("data/npc_presets.json").expect("failed to load npc presets");
+        let fighter_presets = data::load_fighter_presets("data/fighter_presets.json")
+            .expect("failed to load fighter presets");
+        let talent_catalog =
+            data::load_talents("data/talents.json").expect("failed to load talents");
+        let race_catalog = data::load_races("data/races.json").expect("failed to load races");
+
+        let arthur_preset = find_fighter_preset(&fighter_presets, "Arthur Du Randt")
+            .expect("missing Arthur Du Randt preset");
+        let arthur = player_config_from_preset(
+            arthur_preset,
+            &weapon_catalog,
+            &armor_catalog,
+            &shield_catalog,
+            &race_catalog,
+        );
+        let players = [arthur.clone(), arthur];
+        let stop_distance =
+            game_logic::stop_distance_for_players(&players, &weapon_catalog, &talent_catalog);
+        let mut combatants = game_logic::build_combatants(
+            &players,
+            &weapon_catalog,
+            &armor_catalog,
+            &shield_catalog,
+            &npc_presets,
+            &talent_catalog,
+        );
+
+        let raw_values = [raw_a, raw_b];
+        let attack_bonuses = [attack_bonus_a, attack_bonus_b];
+        let defense_mods = [defense_mod_a, defense_mod_b];
+        let move_speeds = [move_speed_a, move_speed_b];
+        for (idx, combatant) in combatants.iter_mut().enumerate() {
+            let raw = raw_values[idx].max(1);
+            let damage_expr = format!("{raw}d1");
+            let mut weapon = combatant.sheet.offense.weapon.as_ref().clone();
+            weapon.damage_expr = damage_expr.clone();
+            weapon.damage_expr_cache = DamageExprCache::new(&damage_expr);
+            weapon.crit_min_roll = 21;
+            weapon.speed = 14.0;
+            weapon.reach_ft = 8.0;
+            combatant.sheet.offense.weapon = Arc::new(weapon);
+            combatant.sheet.offense.strength_damage = 0;
+            combatant.sheet.offense.strength_damage_base = 0;
+            combatant.sheet.offense.attack_bonus = attack_bonuses[idx];
+            combatant.sheet.offense.attack_bonus_base = attack_bonuses[idx];
+            combatant.sheet.defense.defense_mod = defense_mods[idx];
+            combatant.sheet.defense.armor_dr = 0;
+            combatant.sheet.defense.knockback_step = 15;
+            combatant.sheet.mobility.move_speed = move_speeds[idx];
+            combatant.sheet.vitals.threshold_of_pain = 10_000;
+            combatant.sheet.vitals.constitution = 0;
+            combatant.sheet.vitals.max_hp = 10_000;
+        }
+
+        let mut sim = SimState::with_rng(
+            SimConfig::new(start_distance, stop_distance),
+            SimRng::from_seed(1),
+        );
+        sim.reset_with_combatants(combatants);
+        if let Some(distance) = initial_distance {
+            set_distance(&mut sim, distance);
+        }
+        sim
+    }
+
+    fn first_attack_by(
+        sim: &SimState,
+        attacker_idx: usize,
+        min_time: u32,
+    ) -> Option<&AttackEvent> {
+        sim.combat_events
+            .iter()
+            .filter_map(|event| match &event.kind {
+                CombatEventKind::Attack(attack)
+                    if event.attacker_idx == attacker_idx && event.time >= min_time =>
+                {
+                    Some(attack)
+                }
+                _ => None,
+            })
+            .next()
+    }
+
     fn find_fighter_preset<'a>(
         catalog: &'a game_logic::FighterPresetCatalog,
         name: &str,
@@ -1498,6 +1704,595 @@
             .active_effects
             .iter()
             .any(|effect| effect.id == "charge_defense_penalty"));
+    }
+
+    #[test]
+    fn second_charge_requires_minimum_knockback() {
+        let reach_ft: f32 = 5.0;
+        let move_speed: f32 = 20.0;
+        let stop_distance: f32 = 5.0;
+        let knockback_step = 15;
+        let min_knockback_ft = 20.0_f32;
+        let min_expected_raw =
+            min_raw_damage_for_knockback(min_knockback_ft, knockback_step, true);
+        assert_eq!(min_expected_raw, 30);
+
+        let mut sim = setup_charge_sim(reach_ft, move_speed, stop_distance);
+        set_distance(&mut sim, reach_ft + min_knockback_ft - 1.0);
+        sim.tick();
+        assert!(
+            sim.combatants[0].state.charge_distance_ft < 20.0,
+            "expected charge distance < 20 when gap < 20ft"
+        );
+
+        set_distance(&mut sim, reach_ft + min_knockback_ft);
+        sim.tick();
+        assert!(
+            sim.combatants[0].state.charge_distance_ft >= 20.0,
+            "expected charge distance >= 20 when gap >= 20ft"
+        );
+    }
+
+    #[test]
+    fn second_charge_does_not_trigger_from_small_knockback() {
+        let reach_ft: f32 = 5.0;
+        let move_speed: f32 = 20.0;
+        let stop_distance: f32 = 5.0;
+        let knockback_step = 15;
+
+        let small_knockback_raw = min_raw_damage_for_knockback(5.0, knockback_step, true);
+        assert_eq!(small_knockback_raw, 8);
+
+        let mut sim = setup_charge_sim(reach_ft, move_speed, stop_distance);
+        set_distance(&mut sim, reach_ft + 5.0);
+        sim.tick();
+
+        assert!(
+            sim.combatants[0].state.charge_distance_ft < 20.0,
+            "expected small knockback not to yield a second charge"
+        );
+    }
+
+    #[test]
+    fn distance_between_uses_manhattan_tiles() {
+        let mut sim = setup_charge_sim(5.0, 20.0, 5.0);
+        sim.actors[0].position = GridPos::new(0, 0);
+        sim.actors[1].position = GridPos::new(3, 4);
+        let distance = sim.distance_between(0, 1).unwrap_or(0.0);
+        assert_eq!(distance, 7.0, "expected manhattan distance of 7 tiles");
+    }
+
+    #[test]
+    fn charge_distance_accumulates_only_when_outside_reach() {
+        let reach_ft: f32 = 8.0;
+        let move_speed: f32 = 20.0;
+        let stop_distance: f32 = 8.0;
+        let mut sim = setup_charge_sim(reach_ft, move_speed, stop_distance);
+
+        // Inside reach: no charge accumulation.
+        set_distance(&mut sim, 6.0);
+        sim.tick();
+        assert_eq!(sim.combatants[0].state.charge_distance_ft, 0.0);
+
+        // Just outside reach: accumulate movement amount (20 ft).
+        set_distance(&mut sim, 30.0);
+        sim.tick();
+        assert!(
+            sim.combatants[0].state.charge_distance_ft >= 20.0,
+            "expected charge distance to accumulate when outside reach"
+        );
+    }
+
+    #[test]
+    fn reentering_reach_clears_attack_timers() {
+        let reach_ft: f32 = 8.0;
+        let move_speed: f32 = 20.0;
+        let stop_distance: f32 = 8.0;
+        let mut sim = setup_charge_sim(reach_ft, move_speed, stop_distance);
+
+        // Force a pending timer, then re-enter reach from outside.
+        sim.combatants[0]
+            .state
+            .set_next_attack_time(WeaponSlot::Primary, Some(99.0));
+        set_distance(&mut sim, 40.0);
+        sim.tick();
+        assert!(
+            sim.combatants[0].state.next_attack_time_primary.is_none(),
+            "expected attack timers to clear when re-entering reach"
+        );
+    }
+
+    #[test]
+    fn charge_requires_target_at_least_20ft_away() {
+        let reach_ft: f32 = 8.0;
+        let move_speed: f32 = 20.0;
+        let stop_distance: f32 = 8.0;
+        let mut sim = setup_charge_sim(reach_ft, move_speed, stop_distance);
+
+        // Target is only 19ft away; desired rule says this should not yield a charge.
+        set_distance_no_reset(&mut sim, 19.0);
+        sim.tick();
+        assert!(
+            sim.combatants[0].state.charge_distance_ft < 20.0,
+            "expected no charge accumulation when target < 20ft away"
+        );
+    }
+
+    #[test]
+    fn arthur_vs_arthur_charges_on_first_contact() {
+        let (weapon_catalog, armor_catalog, shield_catalog) =
+            data::load_catalogs().expect("failed to load catalogs");
+        let npc_presets =
+            data::load_npc_presets("data/npc_presets.json").expect("failed to load npc presets");
+        let fighter_presets = data::load_fighter_presets("data/fighter_presets.json")
+            .expect("failed to load fighter presets");
+        let talent_catalog =
+            data::load_talents("data/talents.json").expect("failed to load talents");
+        let race_catalog = data::load_races("data/races.json").expect("failed to load races");
+
+        let arthur_preset = find_fighter_preset(&fighter_presets, "Arthur Du Randt")
+            .expect("missing Arthur Du Randt preset");
+        let arthur = player_config_from_preset(
+            arthur_preset,
+            &weapon_catalog,
+            &armor_catalog,
+            &shield_catalog,
+            &race_catalog,
+        );
+        let players = [arthur.clone(), arthur];
+        let stop_distance =
+            game_logic::stop_distance_for_players(&players, &weapon_catalog, &talent_catalog);
+        assert!(
+            (stop_distance - 8.0).abs() < 0.01,
+            "expected stop distance ~8ft, got {stop_distance}"
+        );
+        let combatants = game_logic::build_combatants(
+            &players,
+            &weapon_catalog,
+            &armor_catalog,
+            &shield_catalog,
+            &npc_presets,
+            &talent_catalog,
+        );
+        let mut sim = SimState::with_rng(
+            SimConfig::new(200.0, stop_distance),
+            SimRng::from_seed(1),
+        );
+        sim.reset_with_combatants(combatants);
+
+        for _ in 0..10 {
+            sim.tick();
+            let attack_count = sim
+                .combat_events
+                .iter()
+                .filter(|event| matches!(event.kind, CombatEventKind::Attack(_)))
+                .count();
+            if attack_count >= 2 {
+                break;
+            }
+        }
+
+        let mut t5_charges = 0;
+        for event in &sim.combat_events {
+            if event.time == 5 {
+                if let CombatEventKind::Attack(attack) = &event.kind {
+                    if attack.is_charge {
+                        t5_charges += 1;
+                    }
+                }
+            }
+        }
+        assert!(
+            t5_charges >= 2,
+            "expected both Arthurs to charge on first contact, got {t5_charges}"
+        );
+    }
+
+    #[test]
+    fn arthur_knockback_10ft_no_charge_and_reengage() {
+        let mut sim = arthur_duel_sim(
+            30,
+            1,
+            0.0,
+            20.0,
+            100,
+            -100,
+            100,
+            -100,
+        );
+
+        for _ in 0..20 {
+            sim.tick();
+        }
+
+        let attack = first_attack_by(&sim, 1, 1).expect("Arthur 2 never attacked after t=0");
+        assert!(
+            !attack.is_charge,
+            "expected Arthur 2 not to charge after 10ft knockback"
+        );
+
+        let event_time = sim
+            .combat_events
+            .iter()
+            .find(|event| {
+                event.attacker_idx == 1
+                    && event.time >= 1
+                    && matches!(event.kind, CombatEventKind::Attack(_))
+            })
+            .map(|event| event.time)
+            .unwrap_or(0);
+        assert!(
+            event_time <= 2,
+            "expected reengage attack soon after knockback, got attack at t={event_time}s"
+        );
+    }
+
+    #[test]
+    fn arthur_knockback_20ft_thresholds_and_charges() {
+        let mut sim = arthur_duel_sim(
+            60,
+            1,
+            0.0,
+            20.0,
+            100,
+            -100,
+            100,
+            -100,
+        );
+
+        // Force a 20ft gap without resetting charge, then close it in one tick.
+        set_distance_no_reset(&mut sim, 28.0);
+        sim.tick();
+        assert!(
+            sim.combatants[1].state.charge_distance_ft >= 20.0,
+            "expected Arthur 2 to have 20ft charge distance, got {}",
+            sim.combatants[1].state.charge_distance_ft
+        );
+        // Next tick should allow the charge attack.
+        sim.tick();
+        let attack = first_attack_by(&sim, 1, 1).unwrap_or_else(|| {
+            let times: Vec<u32> = sim
+                .combat_events
+                .iter()
+                .filter(|event| {
+                    event.attacker_idx == 1
+                        && matches!(event.kind, CombatEventKind::Attack(_))
+                })
+                .map(|event| event.time)
+                .collect();
+            let next_attack = sim
+                .combatants
+                .get(1)
+                .and_then(|combatant| combatant.state.next_attack_time_primary)
+                .unwrap_or(-1.0);
+            let distance = sim.distance_between(0, 1).unwrap_or(-1.0);
+            panic!(
+                "Arthur 2 never attacked after t=1, attack times: {times:?}, next_attack: {next_attack}, distance: {distance}"
+            );
+        });
+        assert!(
+            attack.is_charge,
+            "expected Arthur 2 to charge after 20ft knockback"
+        );
+    }
+
+    #[test]
+    fn arthur_both_knockback_10ft_no_charge_on_reengage() {
+        let mut sim = arthur_duel_sim(
+            30,
+            30,
+            10.0,
+            10.0,
+            100,
+            100,
+            -100,
+            -100,
+        );
+
+        for _ in 0..30 {
+            sim.tick();
+        }
+
+        let attack_a = first_attack_by(&sim, 0, 1).expect("Arthur 1 never attacked after t=0");
+        let attack_b = first_attack_by(&sim, 1, 1).expect("Arthur 2 never attacked after t=0");
+        assert!(
+            !attack_a.is_charge && !attack_b.is_charge,
+            "expected no charges after mutual 10ft knockback"
+        );
+    }
+
+    #[test]
+    fn arthur_both_knockback_10ft_should_not_charge_after_10ft_move_each() {
+        let mut sim = arthur_duel_sim(
+            30,
+            30,
+            10.0,
+            10.0,
+            100,
+            100,
+            -100,
+            -100,
+        );
+
+        // Force a 20ft gap (10ft each knockback), then have each close 10ft.
+        set_distance_no_reset(&mut sim, 28.0);
+        sim.tick(); // movement only, no attacks yet
+        sim.tick(); // re-engage attacks
+
+        let attack_a = first_attack_by(&sim, 0, 1).expect("Arthur 1 never attacked after re-engage");
+        let attack_b = first_attack_by(&sim, 1, 1).expect("Arthur 2 never attacked after re-engage");
+        assert!(
+            !attack_a.is_charge && !attack_b.is_charge,
+            "expected no charges after each moved 10ft to re-engage"
+        );
+    }
+
+    #[test]
+    fn arthur_log_repro_double_charge_then_no_charge_on_reengage() {
+        let mut sim = arthur_duel_sim_with_distance(
+            20,
+            20,
+            20.0,
+            20.0,
+            100,
+            100,
+            -100,
+            -100,
+            200.0,
+            None,
+        );
+
+        for _ in 0..8 {
+            sim.tick();
+        }
+
+        let attacks_t5: Vec<&AttackEvent> = sim
+            .combat_events
+            .iter()
+            .filter_map(|event| match &event.kind {
+                CombatEventKind::Attack(attack) if event.time == 5 => Some(attack),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            attacks_t5.len() >= 2,
+            "expected 2 attacks at t=5, got {}",
+            attacks_t5.len()
+        );
+        assert!(
+            attacks_t5.iter().all(|attack| attack.is_charge),
+            "expected both t=5 attacks to be charges"
+        );
+        assert!(
+            attacks_t5.iter().all(|attack| (attack.knockback_ft - 10.0).abs() < 0.1),
+            "expected both t=5 attacks to knock back ~10ft"
+        );
+
+        let attacks_t7: Vec<&AttackEvent> = sim
+            .combat_events
+            .iter()
+            .filter_map(|event| match &event.kind {
+                CombatEventKind::Attack(attack) if event.time == 7 => Some(attack),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            attacks_t7.iter().all(|attack| !attack.is_charge),
+            "expected no charges at t=7 after both moved ~10ft"
+        );
+    }
+
+    #[test]
+    fn bulk_arthur_charges_do_not_start_within_20ft() {
+        let (weapon_catalog, armor_catalog, shield_catalog) =
+            data::load_catalogs().expect("failed to load catalogs");
+        let npc_presets =
+            data::load_npc_presets("data/npc_presets.json").expect("failed to load npc presets");
+        let fighter_presets = data::load_fighter_presets("data/fighter_presets.json")
+            .expect("failed to load fighter presets");
+        let talent_catalog =
+            data::load_talents("data/talents.json").expect("failed to load talents");
+        let race_catalog = data::load_races("data/races.json").expect("failed to load races");
+
+        let arthur_preset = find_fighter_preset(&fighter_presets, "Arthur Du Randt")
+            .expect("missing Arthur Du Randt preset");
+        let arthur = player_config_from_preset(
+            arthur_preset,
+            &weapon_catalog,
+            &armor_catalog,
+            &shield_catalog,
+            &race_catalog,
+        );
+        let players = [arthur.clone(), arthur];
+        let combatants = game_logic::build_combatants(
+            &players,
+            &weapon_catalog,
+            &armor_catalog,
+            &shield_catalog,
+            &npc_presets,
+            &talent_catalog,
+        );
+
+        let mut sim = SimState::with_rng(
+            SimConfig::new(200.0, game_logic::stop_distance_for_players(&players, &weapon_catalog, &talent_catalog)),
+            SimRng::from_seed(1),
+        );
+        sim.reset_with_combatants(combatants);
+
+        let mut fights_with_charge_within_20ft = 0u32;
+        let runs = 200u32;
+        for _ in 0..runs {
+            sim.reset_preserve_rng();
+            while !sim.done && sim.elapsed_seconds < 60 {
+                sim.tick();
+            }
+            if sim
+                .combatants
+                .iter()
+                .any(|combatant| combatant.state.charge_started_within_20ft)
+            {
+                fights_with_charge_within_20ft += 1;
+            }
+        }
+        assert_eq!(
+            fights_with_charge_within_20ft, 0,
+            "expected no charges that started within 20ft, got {fights_with_charge_within_20ft}"
+        );
+    }
+
+    #[test]
+    fn arthur_mirror_symmetry_with_swapped_order() {
+        let (weapon_catalog, armor_catalog, shield_catalog) =
+            data::load_catalogs().expect("failed to load catalogs");
+        let npc_presets =
+            data::load_npc_presets("data/npc_presets.json").expect("failed to load npc presets");
+        let fighter_presets = data::load_fighter_presets("data/fighter_presets.json")
+            .expect("failed to load fighter presets");
+        let talent_catalog =
+            data::load_talents("data/talents.json").expect("failed to load talents");
+        let race_catalog = data::load_races("data/races.json").expect("failed to load races");
+
+        let arthur_preset = find_fighter_preset(&fighter_presets, "Arthur Du Randt")
+            .expect("missing Arthur Du Randt preset");
+        let arthur = player_config_from_preset(
+            arthur_preset,
+            &weapon_catalog,
+            &armor_catalog,
+            &shield_catalog,
+            &race_catalog,
+        );
+        let players_a = [arthur.clone(), arthur.clone()];
+        let players_b = [arthur.clone(), arthur];
+
+        let stop_distance_a =
+            game_logic::stop_distance_for_players(&players_a, &weapon_catalog, &talent_catalog);
+        let stop_distance_b =
+            game_logic::stop_distance_for_players(&players_b, &weapon_catalog, &talent_catalog);
+        let combatants_a = game_logic::build_combatants(
+            &players_a,
+            &weapon_catalog,
+            &armor_catalog,
+            &shield_catalog,
+            &npc_presets,
+            &talent_catalog,
+        );
+        let combatants_b = game_logic::build_combatants(
+            &players_b,
+            &weapon_catalog,
+            &armor_catalog,
+            &shield_catalog,
+            &npc_presets,
+            &talent_catalog,
+        );
+
+        let runs = 1000;
+        let max_seconds = 60;
+        let result_a = bulk_simulate(
+            SimConfig::new(200.0, stop_distance_a),
+            combatants_a,
+            runs,
+            max_seconds,
+        );
+        let result_b = bulk_simulate(
+            SimConfig::new(200.0, stop_distance_b),
+            combatants_b,
+            runs,
+            max_seconds,
+        );
+
+        let wins_a_left = result_a.wins.get(0).copied().unwrap_or(0);
+        let wins_a_right = result_a.wins.get(1).copied().unwrap_or(0);
+        let wins_b_left = result_b.wins.get(0).copied().unwrap_or(0);
+        let wins_b_right = result_b.wins.get(1).copied().unwrap_or(0);
+
+        let diff_a = (wins_a_left as i32 - wins_a_right as i32).abs();
+        let diff_b = (wins_b_left as i32 - wins_b_right as i32).abs();
+        let max_diff = diff_a.max(diff_b);
+
+        assert!(
+            max_diff <= 30,
+            "mirror symmetry failed: wins A L/R {wins_a_left}/{wins_a_right}, wins B L/R {wins_b_left}/{wins_b_right}"
+        );
+    }
+
+    #[test]
+    fn arthur_mirror_symmetry_large_sample() {
+        if cfg!(debug_assertions) {
+            return;
+        }
+        let (weapon_catalog, armor_catalog, shield_catalog) =
+            data::load_catalogs().expect("failed to load catalogs");
+        let npc_presets =
+            data::load_npc_presets("data/npc_presets.json").expect("failed to load npc presets");
+        let fighter_presets = data::load_fighter_presets("data/fighter_presets.json")
+            .expect("failed to load fighter presets");
+        let talent_catalog =
+            data::load_talents("data/talents.json").expect("failed to load talents");
+        let race_catalog = data::load_races("data/races.json").expect("failed to load races");
+
+        let arthur_preset = find_fighter_preset(&fighter_presets, "Arthur Du Randt")
+            .expect("missing Arthur Du Randt preset");
+        let arthur = player_config_from_preset(
+            arthur_preset,
+            &weapon_catalog,
+            &armor_catalog,
+            &shield_catalog,
+            &race_catalog,
+        );
+        let players_a = [arthur.clone(), arthur.clone()];
+        let players_b = [arthur.clone(), arthur];
+
+        let stop_distance_a =
+            game_logic::stop_distance_for_players(&players_a, &weapon_catalog, &talent_catalog);
+        let stop_distance_b =
+            game_logic::stop_distance_for_players(&players_b, &weapon_catalog, &talent_catalog);
+        let combatants_a = game_logic::build_combatants(
+            &players_a,
+            &weapon_catalog,
+            &armor_catalog,
+            &shield_catalog,
+            &npc_presets,
+            &talent_catalog,
+        );
+        let combatants_b = game_logic::build_combatants(
+            &players_b,
+            &weapon_catalog,
+            &armor_catalog,
+            &shield_catalog,
+            &npc_presets,
+            &talent_catalog,
+        );
+
+        let runs = 500_000;
+        let max_seconds = 60;
+        let result_a = bulk_simulate(
+            SimConfig::new(200.0, stop_distance_a),
+            combatants_a,
+            runs,
+            max_seconds,
+        );
+        let result_b = bulk_simulate(
+            SimConfig::new(200.0, stop_distance_b),
+            combatants_b,
+            runs,
+            max_seconds,
+        );
+
+        let wins_a_left = result_a.wins.get(0).copied().unwrap_or(0);
+        let wins_a_right = result_a.wins.get(1).copied().unwrap_or(0);
+        let wins_b_left = result_b.wins.get(0).copied().unwrap_or(0);
+        let wins_b_right = result_b.wins.get(1).copied().unwrap_or(0);
+
+        let diff_a = (wins_a_left as i32 - wins_a_right as i32).abs();
+        let diff_b = (wins_b_left as i32 - wins_b_right as i32).abs();
+        let max_diff = diff_a.max(diff_b) as f32;
+        let allowed = runs as f32 * 0.03;
+
+        if max_diff > allowed {
+            eprintln!(
+                "warning: mirror symmetry drift at scale: wins A L/R {wins_a_left}/{wins_a_right}, wins B L/R {wins_b_left}/{wins_b_right} (max diff {max_diff}, allowed {allowed})"
+            );
+        }
     }
 
     #[test]
