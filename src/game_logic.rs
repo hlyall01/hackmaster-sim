@@ -244,6 +244,7 @@ pub struct FighterPreset {
 pub struct EnvironmentConfig {
     pub temperature_c: i32,
     pub natural_surroundings: bool,
+    pub bright_light: bool,
 }
 
 impl Default for EnvironmentConfig {
@@ -251,6 +252,7 @@ impl Default for EnvironmentConfig {
         Self {
             temperature_c: 21,
             natural_surroundings: false,
+            bright_light: false,
         }
     }
 }
@@ -1061,6 +1063,12 @@ fn resolve_misc_modifiers(player: &PlayerConfig) -> MiscRollModifiers {
                 }
                 modifiers.all_roll_bonus += cold_bonus + hot_penalty;
             }
+            "cirodes" => {
+                if player.environment.bright_light && !player_has_talent(player, "light_adaptation")
+                {
+                    modifiers.attack_bonus -= 2;
+                }
+            }
             _ => {}
         }
     }
@@ -1522,11 +1530,23 @@ pub fn build_combatant(
     let two_hand_speed_penalty = two_hand_speed_penalty(weapon_preset, player.two_hand_grip);
     let use_jab = player.use_jab && weapon_preset.jab_speed.is_some();
     let min_speed = weapon_preset.size.min_speed();
+    let has_shield = character.equipment.shield.is_some();
+    let has_offhand = player.offhand_weapon_id.is_some();
+    let free_hand_speed_bonus = if weapon_preset.handedness == WeaponHandedness::OneHanded
+        && !effective_two_hand
+        && !has_offhand
+        && !has_shield
+    {
+        -1.0
+    } else {
+        0.0
+    };
     let speed_mastery = effective_speed_mastery(player, weapon_preset) as f32;
     let jab_speed =
         (weapon_preset.jab_speed.unwrap_or(weapon_speed)
             + speed_mod
             - speed_mastery
+            + free_hand_speed_bonus
             + modifiers.weapon_speed_bonus_for_weapon(player.weapon_id) as f32)
             .max(min_speed);
     let jab_special_expr = if use_jab {
@@ -1662,6 +1682,7 @@ pub fn build_combatant(
             + two_hand_speed_penalty
             + speed_mod
             - speed_mastery
+            + free_hand_speed_bonus
             + modifiers.weapon_speed_bonus_for_weapon(player.weapon_id) as f32)
             .max(min_speed)
     };

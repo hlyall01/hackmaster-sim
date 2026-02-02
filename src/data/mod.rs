@@ -33,16 +33,16 @@ pub fn resolve_data_path(path: &str) -> PathBuf {
     if let Ok(data_dir) = env::var("HACKMASTER_SIM_DATA_DIR") {
         candidates.push(PathBuf::from(data_dir).join(stripped));
     }
-    if let Ok(exe_path) = env::current_exe() {
-        if let Some(exe_dir) = exe_path.parent() {
-            candidates.push(exe_dir.join("data").join(stripped));
-        }
-    }
     if let Ok(cwd) = env::current_dir() {
         candidates.push(cwd.join("data").join(stripped));
         candidates.push(cwd.join(raw));
     } else {
         candidates.push(raw.to_path_buf());
+    }
+    if let Ok(exe_path) = env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            candidates.push(exe_dir.join("data").join(stripped));
+        }
     }
     for candidate in candidates {
         if candidate.exists() {

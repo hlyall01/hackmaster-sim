@@ -29,6 +29,17 @@ const ICONS: [BinIcon; 4] = [
 ];
 
 fn main() {
+    println!("cargo:rerun-if-changed=data");
+    if let Ok(entries) = fs::read_dir("data") {
+        for entry in entries.flatten() {
+            println!("cargo:rerun-if-changed={}", entry.path().display());
+        }
+    }
+
+    if let Err(err) = sync_data_dir() {
+        eprintln!("Failed to sync data directory: {err}");
+    }
+
     for icon in ICONS.iter() {
         println!("cargo:rerun-if-changed={}", icon.ico);
     }
@@ -103,6 +114,41 @@ fn main() {
             obj = obj_path.display()
         );
     }
+}
+
+fn sync_data_dir() -> io::Result<()> {
+    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    let source = manifest_dir.join("data");
+    if !source.exists() {
+        return Ok(());
+    }
+
+    let profile_dir = out_dir
+        .ancestors()
+        .nth(3)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "OUT_DIR missing parents"))?;
+    let target_data_dir = profile_dir.join("data");
+    copy_dir_recursive(&source, &target_data_dir)?;
+    Ok(())
+}
+
+fn copy_dir_recursive(source: &Path, target: &Path) -> io::Result<()> {
+    if !target.exists() {
+        fs::create_dir_all(target)?;
+    }
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        let target_path = target.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_recursive(&path, &target_path)?;
+        } else if file_type.is_file() {
+            fs::copy(&path, &target_path)?;
+        }
+    }
+    Ok(())
 }
 
 fn write_rc(rc_path: &Path, icon_path: &Path) -> io::Result<()> {

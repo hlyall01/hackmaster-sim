@@ -1583,6 +1583,7 @@ fn render_player_editor(
                         &mut player.environment.natural_surroundings,
                         "Natural surroundings",
                     );
+                    ui.checkbox(&mut player.environment.bright_light, "Bright light");
                     ui.label("Temp C");
                     ui.add(egui::DragValue::new(&mut player.environment.temperature_c).speed(1));
                 });
@@ -1783,6 +1784,10 @@ fn render_player_editor(
             ));
             ui.label(format!("Attack bonus: {}", derived.attack_bonus));
             ui.label(format!("Speed mod: {}", derived.speed_mod));
+            ui.label(format!(
+                "Weapon speed: {:.1}",
+                combatant.sheet.offense.weapon.speed
+            ));
             ui.label(format!("Initiative mod: {}", derived.initiative_mod));
             ui.label(format!("Base DV: {}", derived.base_dv));
             if let Some(shield_bonus) = shield_bonus {

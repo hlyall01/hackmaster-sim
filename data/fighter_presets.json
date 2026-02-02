@@ -2,12 +2,12 @@
   "presets": [
     {
       "name": "Arthur Du Randt",
-      "level": 3,
+      "level": 4,
       "progression": {
-        "attack": "I",
+        "attack": "II",
         "speed": "II",
         "initiative": "I",
-        "health": "III"
+        "health": "IV"
       },
       "masteries": {
         "attack": 2,
@@ -20,16 +20,16 @@
       "base_hp": 10,
       "move_speed": 20.0,
       "strength_base": 16,
-      "strength_pct": 75,
-      "dex_base": 14,
-      "dex_pct": 99,
+      "strength_pct": 89,
+      "dex_base": 15,
+      "dex_pct": 11,
       "intelligence": 10,
-      "wisdom": 11,
-      "constitution": 12,
+      "wisdom": 12,
+      "constitution": 13,
       "looks": 8,
       "charisma": 9,
       "weapon": "Glaive",
-      "armor": "Mirror",
+      "armor": "Jazerant",
       "shield": "None",
       "weapon_material_tier": 0,
       "armor_material_tier": 2,
@@ -69,6 +69,11 @@
         },
         {
           "id": "solid",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "tough_hide",
           "rank": 1,
           "weapon": null
         }
@@ -159,8 +164,65 @@
       ]
     },
     {
+      "name": "Riley",
+      "level": 4,
+      "progression": {
+        "attack": "III",
+        "speed": "II",
+        "initiative": "II",
+        "health": "III"
+      },
+      "masteries": {
+        "attack": 0,
+        "defense": 0,
+        "damage": 0,
+        "speed": 0,
+        "shield_defense": 0,
+        "shield_speed": 0
+      },
+      "base_hp": 10,
+      "move_speed": 20.0,
+      "strength_base": 21,
+      "strength_pct": 36,
+      "dex_base": 12,
+      "dex_pct": 89,
+      "intelligence": 7,
+      "wisdom": 14,
+      "constitution": 14,
+      "looks": 8,
+      "charisma": 5,
+      "weapon": "Claw",
+      "armor": "Chainshirt",
+      "shield": "None",
+      "weapon_material_tier": 0,
+      "armor_material_tier": 0,
+      "projectile_material_tier": 0,
+      "shield_material_tier": 0,
+      "two_hand_grip": false,
+      "maneuvers": {},
+      "defensive_dualwielding": false,
+      "race_id": "cirodes",
+      "talents": [
+        {
+          "id": "hearty",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "natural_strength",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "hardened",
+          "rank": 1,
+          "weapon": null
+        }
+      ]
+    },
+    {
       "name": "Luana Rexhep",
-      "level": 2,
+      "level": 3,
       "progression": {
         "attack": "I",
         "speed": "II",

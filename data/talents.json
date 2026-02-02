@@ -2993,6 +2993,229 @@
       "effects": []
     },
     {
+      "id": "stargazer",
+      "name": "Stargazer",
+      "description": "Requires Average Astrology. You may consult the stars to guide your actions into the next day when you can observe a clear night sky. After doing so, roll 1d6. On a 1, you receive a 5% penalty to Intelligence-related skills. On a 2, nothing happens. On a 3, 4, or 5, you receive a 5% bonus to Intelligence-related skills. On a 6, the bonus is 10%. This modifier lasts until the next night. Qaraz only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "qaraz"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "astrologue",
+      "name": "Astrologue",
+      "description": "Requires Stargazer and Advanced Astrology. A 5% bonus is granted to each of Stargazer's d6 results (removing the penalty from a result of 1, and improving all other results). In addition, once per week, you can spend an hour to attempt to read the heavens for advice about a particular event or goal that will occur within 1 week. A secret Astrology check is rolled; on a success you uncover a clue or advice that could help, but on a failure the clue or advice will be misleading. Qaraz only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "qaraz"
+      ],
+      "requirements": [
+        {
+          "type": "requires_talent",
+          "id": "stargazer"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "medicant",
+      "name": "Medicant",
+      "description": "Requires Average First Aid. You can perform critical care at twice the speed, and it restores 1d3p points of damage from the wound instead of 1. Each individual wound may still only be treated once. In addition, while you are performing caregiver duties, you reduce the number of rest days required by an additional one per category. Qaraz only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "qaraz"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "blinding_strike",
+      "name": "Blinding Strike",
+      "description": "Requires 13+ Dexterity. Upon engaging in melee, you may choose to perform a contested attack roll against your opponent. The loser treats their attack roll as if it were a defense roll, and the winner lands a strike as normal. Neither of you receive another attack on the following second, regardless of weapon reach. This maneuver may not be performed if you cannot reach your opponent with your remaining movement when you engage (e.g. against spears or polearms). Qaraz only.",
+      "cost_rp": 10,
+      "category": "Racials",
+      "race_ids": [
+        "qaraz"
+      ],
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 13
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "poisonous_bite",
+      "name": "Poisonous Bite",
+      "description": "Your fangs are now poisonous, but you may still perform dry bites if you wish. The virulence factor of your poison is 9, and it can cause weakness, dizziness, headaches, breathing difficulty, nausea and death (effect 3). Qaraz only.",
+      "cost_rp": 10,
+      "category": "Racials",
+      "race_ids": [
+        "qaraz"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "revelator",
+      "name": "Revelator",
+      "description": "As long as you have evidence on your person that proves at least one of your conspiracy theories to be irrefutably true, you will no longer suffer migraines. If you help stop the perpetrators of your theory, you no longer need to carry around proof, can remove the Migraines flaw permanently, and gain a permanent +1 to your Charisma. Qaraz only.",
+      "cost_rp": 10,
+      "category": "Racials",
+      "race_ids": [
+        "qaraz"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "winged",
+      "name": "Winged",
+      "description": "Must be chosen within character creation and is mutually exclusive with Wingless. You may use your large bat-like wings to glide. You may glide 1 foot down for every 2 feet of forward movement in one second, or dive 1 foot for every 1 foot traveled forward. You may also turn while aerial and diving in the same manner as horses, with the same facing restrictions and turning diameters (no ride check necessary). Glide: Flutter (walk) 2 1/2 across, 1 1/4 down; Drift (jog) 5 across, 2 1/2 down; Fly (run) 7 1/2 across, 3 3/4 down; Soar (sprint) 10 across, 5 down. Dive: Flutter 2 1/2 across, 2 1/2 down; Drift 5 across, 5 down; Fly 7 1/2 across, 7 1/2 down; Soar 10 across, 10 down. Cirodes only.",
+      "cost_rp": 0,
+      "category": "Racials",
+      "race_ids": [
+        "cirodes"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "strengthened_wings",
+      "name": "Strengthened Wings",
+      "description": "Requires Winged. In addition to using your wings to glide and dive, you may now fly forward and climb. You can also fly in place, but you cannot gain or lose altitude while hovering; forward momentum is required. To begin flying, you must have a running start. Climb: Flutter 7 1/2 across, 3 3/4 up; Drift 10 across, 5 up; Fly 12 1/2 across, 6 1/4 up; Soar 15 across, 7 1/2 up. Straight: Flutter 15 across; Drift 20 across; Fly 25 across; Soar 30 across. Glide: Flutter 7 1/2 across, 3 3/4 down; Drift 10 across, 5 down; Fly 12 1/2 across, 6 1/4 down; Soar 15 across, 7 1/2 down. Dive: Flutter 7 1/2 across, 7 1/2 down; Drift 10 across, 10 down; Fly 12 1/2 across, 12 1/2 down; Soar 15 across, 15 down. Cirodes only.",
+      "cost_rp": 10,
+      "category": "Racials",
+      "race_ids": [
+        "cirodes"
+      ],
+      "requirements": [
+        {
+          "type": "requires_talent",
+          "id": "winged"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "aerial_mobility",
+      "name": "Aerial Mobility",
+      "description": "Requires Strengthened Wings. You double the degrees you can turn while flying. In addition, you may climb straight up while hovering at half speed. Lastly, you can now dive down at full speed without needing forward momentum, although you will still take fall damage if you dive straight into the ground. Cirodes only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "cirodes"
+      ],
+      "requirements": [
+        {
+          "type": "requires_talent",
+          "id": "strengthened_wings"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "wingless",
+      "name": "Wingless",
+      "description": "Must be chosen within character creation and is mutually exclusive with Winged. Unfettered by wings, your Dexterity is improved by 2. Cirodes only.",
+      "cost_rp": 0,
+      "category": "Racials",
+      "race_ids": [
+        "cirodes"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "terrifying",
+      "name": "Terrifying",
+      "description": "You gain a +3 on mastery die rolls for Intimidate, in addition to a free Intimidate purchase at each level (retroactive). Cirodes only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "cirodes"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "echolocation",
+      "name": "Echolocation",
+      "description": "You may detect objects in your environment by sensing echoes from those objects by actively creating sounds. You can accurately determine the location and size of objects within 30 feet by interpreting the sound waves reflected off of them. This will not allow you to accurately locate things around corners or behind walls. Cirodes only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "cirodes"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "nightstalker",
+      "name": "Nightstalker",
+      "description": "Requires Echolocation. You gain a +50 bonus to hiding and sneaking while within complete darkness. Cirodes only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "cirodes"
+      ],
+      "requirements": [
+        {
+          "type": "requires_talent",
+          "id": "echolocation"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "light_adaptation",
+      "name": "Light Adaptation",
+      "description": "Your eyes have adapted to sunlight and other bright lights. You no longer receive a penalty to attack in bright light. Cirodes only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "cirodes"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "wild_athleticism",
+      "name": "Wild Athleticism",
+      "description": "Your natural muscularity improves your speed by one step. Cirodes only.",
+      "cost_rp": 10,
+      "category": "Racials",
+      "race_ids": [
+        "cirodes"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "leaper",
+      "name": "Leaper",
+      "description": "Your jump and leap distances are tripled. Cirodes only.",
+      "cost_rp": 10,
+      "category": "Racials",
+      "race_ids": [
+        "cirodes"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
       "id": "bloodline",
       "name": "Bloodline",
       "description": "Must be chosen within character creation. Gain a benefit based on your line: Virovoi: 1 free Survival skill purchase. Seskovoi: 1 free Persuasion skill purchase. Krastovoi: 1 free Intimidation skill purchase. Askotoi: 1 free Sneaking skill purchase. Linelost: 1 free First Aid skill purchase. Vorova only.",
