@@ -24,6 +24,25 @@ use crate::character::WeaponGroup;
 use crate::game_logic::{self, PlayerConfig, TalentCatalog, WeaponCatalog};
 use crate::sim;
 
+#[derive(Clone, Copy)]
+enum WeaponIcon {
+    Sword,
+    Dagger,
+    Axe,
+    Spear,
+    Polearm,
+    Bow,
+    Crossbow,
+    Blunt,
+    Lash,
+    Basic,
+    Double,
+    Ensnaring,
+    Shield,
+    Unarmed,
+    Other,
+}
+
 pub fn ui_system(
     mut contexts: EguiContexts,
     time: Res<Time>,
@@ -55,6 +74,36 @@ impl AutobattlerApp {
                             self.start_new_character();
                         }
                     });
+                    ui.separator();
+                    ui.label("Quick starts");
+                    if self.quick_start_presets.is_empty() {
+                        ui.label("No quick-start presets found.");
+                    } else {
+                        egui::ScrollArea::vertical()
+                            .max_height(160.0)
+                            .show(ui, |ui| {
+                                for (idx, preset) in self.quick_start_presets.entries().iter().enumerate() {
+                                    let selected = self.selected_quick_start == Some(idx);
+                                    let label = format!(
+                                        "{} (Lvl {}, {}, {})",
+                                        preset.name, preset.level, preset.weapon, preset.armor
+                                    );
+                                    if ui.selectable_label(selected, label).clicked() {
+                                        self.selected_quick_start = Some(idx);
+                                    }
+                                }
+                            });
+                    }
+                    let can_start_quick = self.selected_quick_start.is_some();
+                    if ui
+                        .add_enabled(can_start_quick, egui::Button::new("Start quick run"))
+                        .clicked()
+                    {
+                        self.start_run_from_selected_quick_start();
+                    }
+                    if let Some(status) = self.quick_start_status.as_ref() {
+                        ui.label(status);
+                    }
 
                     ui.separator();
                     ui.label("Saved characters");
@@ -657,11 +706,7 @@ impl AutobattlerApp {
 
                             ui.separator();
                             ui.add_enabled_ui(self.creation.money_rolled, |ui| {
-                                let mut weapon_cost = self
-                                    .weapon_catalog
-                                    .get(self.creation.player.weapon_id)
-                                    .map(|weapon| weapon.price_gp)
-                                    .unwrap_or(0);
+                                let weapon_cost: u32;
                                 let mut armor_cost = self
                                     .armor_catalog
                                     .get(self.creation.player.armor_id)
@@ -965,12 +1010,8 @@ impl AutobattlerApp {
                                     .logarithmic(true),
                             );
                             if live.running {
-                                let mut step_dt = dt * live.time_scale;
-                                while step_dt > 0.0 {
-                                    let slice = step_dt.min(0.06);
-                                    live.sim.update(slice);
-                                    step_dt -= slice;
-                                }
+                                let frame_dt = (dt * live.time_scale).min(0.05);
+                                live.sim.update(frame_dt);
                             }
                             if live.pending_step {
                                 live.sim.update(0.2);
@@ -995,15 +1036,57 @@ impl AutobattlerApp {
                                 });
                         }
                     });
-                egui::CentralPanel::default()
-                    .frame(egui::Frame::none().fill(Color32::TRANSPARENT))
-                    .show(ctx, |_| {});
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let Some(run_view) = self.run_state.as_ref() else {
+                        ui.label("No active run.");
+                        return;
+                    };
+                    let Some(live) = run_view.live_fight.as_ref() else {
+                        ui.centered_and_justified(|ui| {
+                            ui.label("Choose an action to start the next encounter.");
+                        });
+                        return;
+                    };
+                    let (rect, _) =
+                        ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
+                    let player_name = live
+                        .sim
+                        .combatants
+                        .first()
+                        .map(|c| c.sheet.name.as_str())
+                        .unwrap_or("Player");
+                    let enemy_name = live
+                        .sim
+                        .combatants
+                        .get(1)
+                        .map(|c| c.sheet.name.as_str())
+                        .unwrap_or("Enemy");
+                    draw_live_arena(
+                        ui,
+                        rect,
+                        &live.sim,
+                        &self.weapon_catalog,
+                        player_name,
+                        enemy_name,
+                        &live.floaters,
+                        live.ui_elapsed,
+                    );
+                });
 
                 if finish_fight {
                     self.complete_live_fight();
                 }
                 if let Some(action) = next_action {
                     self.run_action(action);
+                }
+                if self
+                    .run_state
+                    .as_ref()
+                    .and_then(|run_view| run_view.live_fight.as_ref())
+                    .map(|live| live.running)
+                    .unwrap_or(false)
+                {
+                    ctx.request_repaint();
                 }
 
                 egui::TopBottomPanel::bottom("run_footer").show(ctx, |ui| {
@@ -1210,6 +1293,7 @@ fn draw_live_arena(
     ui: &mut egui::Ui,
     rect: EguiRect,
     sim: &crate::core::sim::SimState,
+    weapon_catalog: &WeaponCatalog,
     player_name: &str,
     enemy_name: &str,
     floaters: &[DamageFloat],
@@ -1266,8 +1350,44 @@ fn draw_live_arena(
 
     let player_color = Color32::from_rgb(214, 93, 69);
     let enemy_color = Color32::from_rgb(70, 140, 210);
-    painter.circle_filled(Pos2::new(x0, ground_y - 12.0), 7.0, player_color);
-    painter.circle_filled(Pos2::new(x1, ground_y - 12.0), 7.0, enemy_color);
+    let gap = (x1 - x0).abs();
+    let min_gap = 28.0;
+    if gap < min_gap {
+        let dir = if x1 >= x0 { 1.0 } else { -1.0 };
+        if sim.combatants[0].sheet.offense.weapon.reach_ft >= sim.combatants[1].sheet.offense.weapon.reach_ft
+        {
+            x1 = x0 + dir * min_gap;
+        } else {
+            x0 = x1 - dir * min_gap;
+        }
+    }
+
+    let fighter_positions = [(0usize, x0, 1.0_f32), (1usize, x1, -1.0_f32)];
+    for (idx, x, facing) in fighter_positions {
+        let combatant = &sim.combatants[idx];
+        let player_color = if idx == 0 { player_color } else { enemy_color };
+        let knocked_back = combatant.state.knockback_immobile_seconds > 0;
+        let downed = combatant.state.hp <= 0 || combatant.state.trauma_remaining_seconds > 0;
+        let weapon_icon = weapon_icon_for_combatant(combatant, weapon_catalog);
+        draw_person(
+            painter,
+            Pos2::new(x, ground_y),
+            facing,
+            player_color,
+            downed,
+            knocked_back,
+            weapon_icon,
+        );
+        if knocked_back && !downed {
+            painter.text(
+                Pos2::new(x, ground_y - 56.0),
+                egui::Align2::CENTER_CENTER,
+                "knocked",
+                egui::TextStyle::Small.resolve(ui.style()),
+                Color32::from_rgb(230, 160, 90),
+            );
+        }
+    }
 
     for idx in 0..2 {
         let hp = sim.combatants[idx].state.hp.max(0) as f32;
@@ -1304,6 +1424,280 @@ fn draw_live_arena(
     }
 
     draw_damage_floaters(ui, floaters, ui_time, x0, x1, ground_y - 26.0);
+}
+
+fn draw_person(
+    painter: &egui::Painter,
+    base: Pos2,
+    facing: f32,
+    color: Color32,
+    downed: bool,
+    knocked_back: bool,
+    weapon_icon: WeaponIcon,
+) {
+    let head_color = color;
+    let body_color = Color32::from_gray(230);
+    let stroke = (2.0, body_color);
+
+    if downed {
+        let torso_start = Pos2::new(base.x - facing * 2.0, base.y - 4.0);
+        let torso_end = Pos2::new(base.x + facing * 16.0, base.y - 4.0);
+        let head = Pos2::new(base.x + facing * 22.0, base.y - 6.0);
+        painter.line_segment([torso_start, torso_end], stroke);
+        painter.line_segment(
+            [torso_start, Pos2::new(base.x - facing * 6.0, base.y - 1.0)],
+            stroke,
+        );
+        painter.line_segment(
+            [torso_start, Pos2::new(base.x + facing * 4.0, base.y - 10.0)],
+            stroke,
+        );
+        painter.circle_filled(head, 6.0, head_color);
+        painter.line_segment(
+            [torso_end, Pos2::new(base.x + facing * 10.0, base.y - 12.0)],
+            stroke,
+        );
+        draw_weapon_icon(
+            painter,
+            Pos2::new(base.x + facing * 6.0, base.y - 10.0),
+            facing,
+            weapon_icon,
+        );
+        return;
+    }
+
+    if knocked_back {
+        let torso_start = Pos2::new(base.x, base.y - 8.0);
+        let torso_end = Pos2::new(base.x + facing * 16.0, base.y - 20.0);
+        let head = Pos2::new(base.x + facing * 20.0, base.y - 24.0);
+        painter.line_segment([torso_start, torso_end], stroke);
+        painter.line_segment(
+            [torso_start, Pos2::new(base.x - facing * 6.0, base.y - 2.0)],
+            stroke,
+        );
+        painter.line_segment(
+            [torso_start, Pos2::new(base.x + facing * 6.0, base.y - 2.0)],
+            stroke,
+        );
+        painter.circle_filled(head, 6.0, head_color);
+        painter.line_segment(
+            [torso_end, Pos2::new(base.x + facing * 26.0, base.y - 14.0)],
+            stroke,
+        );
+        draw_weapon_icon(
+            painter,
+            Pos2::new(base.x + facing * 26.0, base.y - 14.0),
+            facing,
+            weapon_icon,
+        );
+        return;
+    }
+
+    let head = Pos2::new(base.x, base.y - 34.0);
+    let neck = Pos2::new(base.x, base.y - 26.0);
+    let torso = Pos2::new(base.x, base.y - 14.0);
+    painter.circle_filled(head, 6.5, head_color);
+    painter.line_segment([neck, torso], stroke);
+    painter.line_segment([torso, Pos2::new(base.x - 6.0, base.y - 2.0)], stroke);
+    painter.line_segment([torso, Pos2::new(base.x + 6.0, base.y - 2.0)], stroke);
+    let arm_start = Pos2::new(base.x, base.y - 22.0);
+    let arm_end = Pos2::new(base.x + facing * 12.0, base.y - 18.0);
+    painter.line_segment([arm_start, arm_end], stroke);
+    draw_weapon_icon(painter, arm_end, facing, weapon_icon);
+}
+
+fn weapon_icon_for_combatant(
+    combatant: &crate::core::sim::Combatant,
+    weapon_catalog: &WeaponCatalog,
+) -> WeaponIcon {
+    let weapon_name = combatant.sheet.offense.weapon.name.as_str();
+    let group = weapon_catalog
+        .entries()
+        .iter()
+        .find(|weapon| weapon.name.eq_ignore_ascii_case(weapon_name))
+        .map(|weapon| weapon.group);
+    group.map(weapon_icon_kind).unwrap_or(WeaponIcon::Other)
+}
+
+fn weapon_icon_kind(group: WeaponGroup) -> WeaponIcon {
+    match group {
+        WeaponGroup::Unarmed => WeaponIcon::Unarmed,
+        WeaponGroup::Axes => WeaponIcon::Axe,
+        WeaponGroup::Basic => WeaponIcon::Basic,
+        WeaponGroup::Blunt => WeaponIcon::Blunt,
+        WeaponGroup::Bows => WeaponIcon::Bow,
+        WeaponGroup::Crossbows => WeaponIcon::Crossbow,
+        WeaponGroup::Double => WeaponIcon::Double,
+        WeaponGroup::Ensnaring => WeaponIcon::Ensnaring,
+        WeaponGroup::Lashes => WeaponIcon::Lash,
+        WeaponGroup::LargeSwords => WeaponIcon::Sword,
+        WeaponGroup::SmallSwords => WeaponIcon::Dagger,
+        WeaponGroup::Polearms => WeaponIcon::Polearm,
+        WeaponGroup::Spears => WeaponIcon::Spear,
+        WeaponGroup::Shields => WeaponIcon::Shield,
+    }
+}
+
+fn draw_weapon_icon(painter: &egui::Painter, pos: Pos2, facing: f32, icon: WeaponIcon) {
+    let stroke = (2.0, Color32::from_gray(220));
+    let accent = Color32::from_gray(170);
+    match icon {
+        WeaponIcon::Sword => {
+            let tip = Pos2::new(pos.x + facing * 12.0, pos.y - 10.0);
+            let guard = Pos2::new(pos.x + facing * 3.0, pos.y - 2.0);
+            painter.line_segment([pos, tip], stroke);
+            painter.line_segment(
+                [
+                    Pos2::new(guard.x - facing * 3.0, guard.y + 2.0),
+                    Pos2::new(guard.x + facing * 3.0, guard.y - 2.0),
+                ],
+                stroke,
+            );
+            painter.circle_filled(
+                Pos2::new(pos.x - facing * 1.0, pos.y + 1.0),
+                1.5,
+                accent,
+            );
+        }
+        WeaponIcon::Dagger => {
+            let tip = Pos2::new(pos.x + facing * 8.0, pos.y - 6.0);
+            let guard = Pos2::new(pos.x + facing * 2.0, pos.y - 1.0);
+            painter.line_segment([pos, tip], stroke);
+            painter.line_segment(
+                [
+                    Pos2::new(guard.x - facing * 2.0, guard.y + 1.5),
+                    Pos2::new(guard.x + facing * 2.0, guard.y - 1.5),
+                ],
+                stroke,
+            );
+        }
+        WeaponIcon::Axe => {
+            let handle_end = Pos2::new(pos.x + facing * 8.0, pos.y - 6.0);
+            painter.line_segment([pos, handle_end], stroke);
+            let blade_top = Pos2::new(handle_end.x + facing * 3.0, handle_end.y - 3.0);
+            let blade_bottom = Pos2::new(handle_end.x + facing * 3.0, handle_end.y + 3.0);
+            painter.line_segment([handle_end, blade_top], stroke);
+            painter.line_segment([handle_end, blade_bottom], stroke);
+        }
+        WeaponIcon::Spear => {
+            let tip = Pos2::new(pos.x + facing * 16.0, pos.y - 10.0);
+            let base = Pos2::new(pos.x + facing * 11.0, pos.y - 7.0);
+            painter.line_segment([pos, tip], stroke);
+            painter.line_segment([tip, Pos2::new(base.x, base.y + 3.0)], stroke);
+            painter.line_segment([tip, Pos2::new(base.x, base.y - 3.0)], stroke);
+        }
+        WeaponIcon::Polearm => {
+            let tip = Pos2::new(pos.x + facing * 18.0, pos.y - 12.0);
+            let blade_back = Pos2::new(tip.x - facing * 4.0, tip.y + 2.0);
+            let blade_low = Pos2::new(tip.x - facing * 2.0, tip.y + 7.0);
+            painter.line_segment([pos, tip], stroke);
+            painter.line_segment([tip, blade_back], stroke);
+            painter.line_segment([blade_back, blade_low], stroke);
+            painter.line_segment([blade_low, tip], stroke);
+            painter.line_segment(
+                [blade_back, Pos2::new(blade_back.x - facing * 3.0, blade_back.y - 2.0)],
+                stroke,
+            );
+        }
+        WeaponIcon::Bow => {
+            let grip = Pos2::new(pos.x + facing * 2.0, pos.y - 4.0);
+            let top = Pos2::new(grip.x, grip.y - 8.0);
+            let mid = Pos2::new(grip.x + facing * 4.0, grip.y);
+            let bottom = Pos2::new(grip.x, grip.y + 8.0);
+            painter.line_segment([pos, grip], stroke);
+            painter.line_segment([top, mid], stroke);
+            painter.line_segment([mid, bottom], stroke);
+            painter.line_segment([top, bottom], (1.0, accent));
+        }
+        WeaponIcon::Crossbow => {
+            let stock_end = Pos2::new(pos.x + facing * 10.0, pos.y - 2.0);
+            let limb_center = Pos2::new(pos.x + facing * 6.0, pos.y - 4.0);
+            painter.line_segment([pos, stock_end], stroke);
+            painter.line_segment(
+                [
+                    Pos2::new(limb_center.x, limb_center.y - 4.0),
+                    Pos2::new(limb_center.x, limb_center.y + 4.0),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(limb_center.x - facing * 3.0, limb_center.y - 4.0),
+                    Pos2::new(limb_center.x - facing * 3.0, limb_center.y + 4.0),
+                ],
+                (1.0, accent),
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(pos.x + facing * 5.0, pos.y - 4.0),
+                    Pos2::new(pos.x + facing * 9.0, pos.y - 4.0),
+                ],
+                (1.0, accent),
+            );
+        }
+        WeaponIcon::Blunt => {
+            let end = Pos2::new(pos.x + facing * 8.0, pos.y - 6.0);
+            painter.line_segment([pos, end], stroke);
+            let head = EguiRect::from_center_size(end, egui::vec2(5.0, 5.0));
+            painter.rect_filled(head, 1.0, accent);
+        }
+        WeaponIcon::Lash => {
+            let p1 = Pos2::new(pos.x + facing * 4.0, pos.y - 6.0);
+            let p2 = Pos2::new(pos.x + facing * 8.0, pos.y - 2.0);
+            let p3 = Pos2::new(pos.x + facing * 12.0, pos.y - 8.0);
+            painter.line_segment([pos, p1], stroke);
+            painter.line_segment([p1, p2], stroke);
+            painter.line_segment([p2, p3], stroke);
+            painter.circle_filled(p3, 2.0, accent);
+        }
+        WeaponIcon::Basic => {
+            let end = Pos2::new(pos.x + facing * 9.0, pos.y - 7.0);
+            painter.line_segment([pos, end], stroke);
+            painter.circle_filled(Pos2::new(end.x - facing * 1.0, end.y), 1.5, accent);
+        }
+        WeaponIcon::Double => {
+            let end = Pos2::new(pos.x + facing * 14.0, pos.y - 10.0);
+            painter.line_segment([pos, end], stroke);
+            painter.line_segment(
+                [pos, Pos2::new(pos.x + facing * 2.5, pos.y - 4.0)],
+                stroke,
+            );
+            painter.line_segment(
+                [end, Pos2::new(end.x - facing * 2.5, end.y + 4.0)],
+                stroke,
+            );
+        }
+        WeaponIcon::Ensnaring => {
+            let end = Pos2::new(pos.x + facing * 10.0, pos.y - 6.0);
+            painter.line_segment([pos, end], stroke);
+            let ring = EguiRect::from_center_size(end, egui::vec2(6.0, 6.0));
+            painter.rect_stroke(ring, 3.0, (1.0, accent));
+            painter.line_segment(
+                [
+                    Pos2::new(ring.left(), ring.center().y),
+                    Pos2::new(ring.right(), ring.center().y),
+                ],
+                (1.0, accent),
+            );
+        }
+        WeaponIcon::Shield => {
+            let rect = EguiRect::from_center_size(
+                Pos2::new(pos.x + facing * 6.0, pos.y - 6.0),
+                egui::vec2(8.0, 12.0),
+            );
+            painter.rect_filled(rect, 2.0, Color32::from_gray(180));
+            painter.line_segment(
+                [
+                    Pos2::new(rect.center().x, rect.top() + 2.0),
+                    Pos2::new(rect.center().x, rect.bottom() - 2.0),
+                ],
+                (1.0, Color32::from_gray(120)),
+            );
+        }
+        WeaponIcon::Unarmed | WeaponIcon::Other => {
+            painter.circle_filled(pos, 2.5, Color32::from_gray(200));
+        }
+    }
 }
 
 fn draw_swing_timeline(

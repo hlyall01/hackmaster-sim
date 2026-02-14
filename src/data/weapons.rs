@@ -8,7 +8,7 @@ use serde::Deserialize;
 use std::fs;
 
 const EMBEDDED_WEAPONS_JSON: &str =
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/weapons.json"));
+    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/sim/weapons.json"));
 
 #[derive(Deserialize)]
 struct WeaponsFile {

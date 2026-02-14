@@ -4,7 +4,14 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 
 const EMBEDDED_FIGHTER_PRESETS_JSON: &str =
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/fighter_presets.json"));
+    include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/data/sim/fighter_presets.json"
+    ));
+const EMBEDDED_QUICK_STARTS_JSON: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/data/autobattler/autobattler_quick_starts.json"
+));
 
 #[derive(Deserialize, Serialize)]
 struct FighterPresetsFile {
@@ -12,8 +19,13 @@ struct FighterPresetsFile {
 }
 
 pub fn load_fighter_presets(path: &str) -> Result<FighterPresetCatalog, String> {
-    let data = fs::read_to_string(resolve_data_path(path))
-        .unwrap_or_else(|_| EMBEDDED_FIGHTER_PRESETS_JSON.to_string());
+    let data = fs::read_to_string(resolve_data_path(path)).unwrap_or_else(|_| {
+        if path.ends_with("autobattler_quick_starts.json") {
+            EMBEDDED_QUICK_STARTS_JSON.to_string()
+        } else {
+            EMBEDDED_FIGHTER_PRESETS_JSON.to_string()
+        }
+    });
     let parsed: FighterPresetsFile = serde_json::from_str(&data).map_err(|err| err.to_string())?;
     Ok(FighterPresetCatalog::new(parsed.presets))
 }

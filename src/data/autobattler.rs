@@ -3,7 +3,10 @@ use crate::data::resolve_data_path;
 use std::fs;
 
 const EMBEDDED_AUTOBATTLER_CONFIG_JSON: &str =
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/autobattler_config.json"));
+    include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/data/autobattler/autobattler_config.json"
+    ));
 
 pub fn load_autobattler_config(path: &str) -> Result<AutobattlerConfig, String> {
     let data = fs::read_to_string(resolve_data_path(path))

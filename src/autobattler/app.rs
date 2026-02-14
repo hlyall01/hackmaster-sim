@@ -8,7 +8,8 @@ use bevy_egui::EguiPlugin;
 use crate::autobattler::args::AutobattlerArgs;
 use crate::autobattler::constants::{
     AUTOBATTLER_CONFIG_PATH, CHARACTER_SAVE_EXTENSION, NPC_PRESETS_PATH, RUN_SAVE_EXTENSION,
-    RUN_SAVE_VERSION, SAVE_VERSION, START_AP, START_BP, START_LP, START_RP, STAT_COUNT,
+    QUICK_STARTS_PATH, RUN_SAVE_VERSION, SAVE_VERSION, START_AP, START_BP, START_LP, START_RP,
+    STAT_COUNT,
     WINDOW_HEIGHT, WINDOW_WIDTH,
 };
 use crate::autobattler::logic::{
@@ -42,9 +43,10 @@ use crate::core::rng::{derive_seed, SimRng};
 use crate::core::sim::SimConfig;
 use crate::core::types::{EnemyProfile, Inventory, PlayerProfile, PointPools, RaceSpec};
 use crate::game_logic::{
-    ArmorCatalog, ArmorId, NpcPresetCatalog, PlayerConfig, ShieldCatalog, ShieldId,
-    TalentCatalog, WeaponCatalog, WeaponId,
+    ArmorCatalog, ArmorId, FighterPreset, FighterPresetCatalog, NpcPresetCatalog, PlayerConfig,
+    ShieldCatalog, ShieldId, TalentCatalog, WeaponCatalog, WeaponId,
 };
+use crate::character::{Progression, ProgressionTier};
 
 pub struct AutobattlerApp {
     pub screen: AppScreen,
@@ -55,6 +57,9 @@ pub struct AutobattlerApp {
     pub selected_save: Option<usize>,
     pub run_save_entries: Vec<SaveEntry>,
     pub selected_run_save: Option<usize>,
+    pub quick_start_presets: FighterPresetCatalog,
+    pub selected_quick_start: Option<usize>,
+    pub quick_start_status: Option<String>,
     pub save_name: String,
     pub save_status: Option<String>,
     pub run_save_name: String,
@@ -89,11 +94,15 @@ impl AutobattlerApp {
             eprintln!("Failed to load NPC presets: {err}");
             Catalog::new(Vec::new())
         });
-        let race_catalog = data::load_races("data/races.json").unwrap_or_else(|err| {
+        let race_catalog = data::load_races("data/sim/races.json").unwrap_or_else(|err| {
             eprintln!("Failed to load races: {err}");
             Vec::new()
         });
-        let talent_catalog = match data::load_talents("data/talents.json") {
+        let quick_start_presets = data::load_fighter_presets(QUICK_STARTS_PATH).unwrap_or_else(|err| {
+            eprintln!("Failed to load quick starts: {err}");
+            Catalog::new(Vec::new())
+        });
+        let talent_catalog = match data::load_talents("data/sim/talents.json") {
             Ok(talents) => talents,
             Err(err) => {
                 eprintln!("Failed to load talents: {err}");
@@ -119,6 +128,9 @@ impl AutobattlerApp {
             selected_save: None,
             run_save_entries: Vec::new(),
             selected_run_save: None,
+            quick_start_presets,
+            selected_quick_start: None,
+            quick_start_status: None,
             save_name: String::new(),
             save_status: None,
             run_save_name: String::new(),
@@ -807,6 +819,143 @@ impl AutobattlerApp {
         self.creation_done = false;
         self.screen = AppScreen::Creation;
     }
+
+    pub fn start_run_from_selected_quick_start(&mut self) {
+        let Some(index) = self.selected_quick_start else {
+            self.quick_start_status = Some("Select a quick start preset first.".to_string());
+            return;
+        };
+        let Some(preset_id) = self.quick_start_presets.id_from_index(index) else {
+            self.quick_start_status = Some("Quick start selection is out of date.".to_string());
+            return;
+        };
+        let Some(preset) = self.quick_start_presets.get(preset_id).cloned() else {
+            self.quick_start_status = Some("Quick start preset no longer exists.".to_string());
+            return;
+        };
+
+        self.apply_quick_start_preset(&preset);
+        self.quick_start_status = Some(format!("Starting run with {}.", preset.name));
+        self.start_run_from_creation();
+    }
+
+    fn apply_quick_start_preset(&mut self, preset: &FighterPreset) {
+        let mut creation = CreationState::new(self.creation.player.weapon_id, self.run_seed);
+        creation.name = preset.name.clone();
+        creation.player.name = preset.name.clone();
+        creation.player.level = preset.level.max(1);
+        creation.player.progression = Progression::new(
+            tier_from_label(&preset.progression.attack),
+            tier_from_label(&preset.progression.speed),
+            tier_from_label(&preset.progression.initiative),
+            tier_from_label(&preset.progression.health),
+        );
+        creation.player.mastery_attack = game_logic::clamp_mastery(preset.masteries.attack);
+        creation.player.mastery_defense = game_logic::clamp_mastery(preset.masteries.defense);
+        creation.player.mastery_damage = game_logic::clamp_mastery(preset.masteries.damage);
+        creation.player.mastery_speed = game_logic::clamp_mastery(preset.masteries.speed);
+        creation.player.shield_mastery_defense =
+            game_logic::clamp_mastery(preset.masteries.shield_defense);
+        creation.player.shield_mastery_speed =
+            game_logic::clamp_mastery(preset.masteries.shield_speed);
+        creation.player.base_hp = preset.base_hp.max(1);
+        creation.player.move_speed = preset.move_speed;
+        creation.player.strength_base = preset.strength_base;
+        creation.player.strength_pct = game_logic::normalize_percentile(preset.strength_pct);
+        creation.player.dex_base = preset.dex_base;
+        creation.player.dex_pct = game_logic::normalize_percentile(preset.dex_pct);
+        creation.player.intelligence = preset.intelligence;
+        creation.player.wisdom = preset.wisdom;
+        creation.player.constitution = preset.constitution;
+        creation.player.looks = preset.looks;
+        creation.player.charisma = preset.charisma;
+        creation.player.weapon_material_tier = preset.weapon_material_tier;
+        creation.player.offhand_weapon_material_tier = preset.offhand_weapon_material_tier;
+        creation.player.armor_material_tier = preset.armor_material_tier;
+        creation.player.projectile_material_tier = preset.projectile_material_tier;
+        creation.player.offhand_projectile_material_tier = preset.offhand_projectile_material_tier;
+        creation.player.shield_material_tier = preset.shield_material_tier;
+        creation.player.two_hand_grip = preset.two_hand_grip;
+        creation.player.talents = preset.talents.clone();
+        creation.player.race_id = preset.race_id.clone();
+        creation.player.race_applied = preset.race_id.is_some();
+        creation.player.knockback_step = game_logic::knockback_step_for_race_id(
+            preset.race_id.as_deref(),
+            &self.race_catalog,
+        );
+        creation.player.use_jab = preset.maneuvers.use_jab;
+        creation.player.hold_at_bay = preset.maneuvers.hold_at_bay;
+        creation.player.aggressive_attack = preset.maneuvers.aggressive_attack;
+        creation.player.charge = preset.maneuvers.charge;
+        creation.player.ready_against_charge = preset.maneuvers.ready_against_charge;
+        creation.player.tactical_move = preset.maneuvers.tactical_move;
+        creation.player.fight_defensively = preset.maneuvers.fight_defensively;
+        creation.player.full_parry = preset.maneuvers.full_parry;
+        creation.player.give_ground = preset.maneuvers.give_ground;
+        creation.player.scamper_back = preset.maneuvers.scamper_back;
+        creation.player.fighting_withdrawal = preset.maneuvers.fighting_withdrawal;
+        creation.player.flee = preset.maneuvers.flee;
+        creation.player.defensive_dualwielding = preset.defensive_dualwielding;
+        creation.player.offensive_dualwielding = preset.offensive_dualwielding;
+        creation.player.environment = game_logic::EnvironmentConfig::default();
+        creation.player.misc_modifiers = game_logic::MiscRollModifiers::default();
+
+        if let Some(id) = find_weapon_id_by_name(&self.weapon_catalog, &preset.weapon) {
+            creation.player.weapon_id = id;
+        } else if let Some(id) = self.weapon_catalog.first_id() {
+            creation.player.weapon_id = id;
+        }
+        if let Some(id) = find_armor_id_by_label(&self.armor_catalog, &preset.armor) {
+            creation.player.armor_id = id;
+        } else if let Some(id) = self.armor_catalog.first_id() {
+            creation.player.armor_id = id;
+        }
+        if let Some(id) = find_shield_id_by_name(&self.shield_catalog, &preset.shield) {
+            creation.player.shield_id = id;
+        } else if let Some(id) = self.shield_catalog.first_id() {
+            creation.player.shield_id = id;
+        }
+        creation.race_index = preset.race_id.as_ref().and_then(|id| {
+            self.race_catalog
+                .iter()
+                .position(|race| race.id == *id)
+        });
+        creation.race_applied = creation.player.race_applied;
+
+        creation.stats[0] = AbilityScore::new(
+            preset.strength_base,
+            game_logic::normalize_percentile(preset.strength_pct),
+        );
+        creation.stats[1] = AbilityScore::new(preset.intelligence.max(1), 1);
+        creation.stats[2] = AbilityScore::new(preset.wisdom.max(1), 1);
+        creation.stats[3] = AbilityScore::new(
+            preset.dex_base,
+            game_logic::normalize_percentile(preset.dex_pct),
+        );
+        creation.stats[4] = AbilityScore::new(preset.constitution.max(1), 1);
+        creation.stats[5] = AbilityScore::new(preset.looks.max(1), 1);
+        creation.stats[6] = AbilityScore::new(preset.charisma.max(1), 1);
+        creation.stats_locked = true;
+        creation.money_rolled = false;
+        creation.starting_money = 0;
+        creation.sync_player_from_stats();
+        creation.player.charisma = preset.charisma;
+        creation.player.level = preset.level.max(1);
+        creation.player.progression = Progression::new(
+            tier_from_label(&preset.progression.attack),
+            tier_from_label(&preset.progression.speed),
+            tier_from_label(&preset.progression.initiative),
+            tier_from_label(&preset.progression.health),
+        );
+        creation.player.base_hp = preset.base_hp.max(1);
+        creation.player.talents = preset.talents.clone();
+        creation.player.race_id = preset.race_id.clone();
+        creation.player.race_applied = preset.race_id.is_some();
+
+        self.creation = creation;
+        self.creation_step = CreationStep::MoneyGear;
+        self.creation_done = true;
+    }
 }
 
 struct AutobattlerBuilder<'a> {
@@ -837,6 +986,7 @@ impl CombatantBuilder for AutobattlerBuilder<'_> {
         player.race_id = state.player.race_id.clone();
         player.race_applied = player.race_id.is_some();
         player.talents = state.player.talents.clone();
+        player.charge = true;
         let mut combatant = game_logic::build_combatant(
             &player,
             self.weapon_catalog,
@@ -858,6 +1008,7 @@ impl CombatantBuilder for AutobattlerBuilder<'_> {
         let mut npc = PlayerConfig::new("Hobgoblin", self.enemy_weapon_id);
         npc.level = enemy.level;
         npc.npc_preset = Some(enemy.preset_id);
+        npc.charge = true;
         game_logic::build_combatant(
             &npc,
             self.weapon_catalog,
@@ -929,7 +1080,14 @@ fn find_armor_id_by_label(catalog: &ArmorCatalog, label: &str) -> Option<ArmorId
     catalog
         .entries()
         .iter()
-        .position(|entry| entry.label.eq_ignore_ascii_case(label))
+        .position(|entry| {
+            entry.label.eq_ignore_ascii_case(label)
+                || entry
+                    .armor
+                    .as_ref()
+                    .map(|armor| armor.name.eq_ignore_ascii_case(label))
+                    .unwrap_or(false)
+        })
         .and_then(|idx| catalog.id_from_index(idx))
 }
 
@@ -937,8 +1095,27 @@ fn find_shield_id_by_name(catalog: &ShieldCatalog, name: &str) -> Option<ShieldI
     catalog
         .entries()
         .iter()
-        .position(|entry| entry.label.eq_ignore_ascii_case(name))
+        .position(|entry| {
+            entry.label.eq_ignore_ascii_case(name)
+                || entry
+                    .shield
+                    .as_ref()
+                    .map(|shield| shield.name.eq_ignore_ascii_case(name))
+                    .unwrap_or(false)
+        })
         .and_then(|idx| catalog.id_from_index(idx))
+}
+
+fn tier_from_label(label: &str) -> ProgressionTier {
+    match label.trim().to_ascii_uppercase().as_str() {
+        "I" => ProgressionTier::I,
+        "II" => ProgressionTier::II,
+        "III" => ProgressionTier::III,
+        "IV" => ProgressionTier::IV,
+        "V" => ProgressionTier::V,
+        "VI" => ProgressionTier::VI,
+        _ => ProgressionTier::I,
+    }
 }
 
 pub fn run_app() {

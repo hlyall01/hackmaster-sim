@@ -5,7 +5,10 @@ use serde::Deserialize;
 use std::fs;
 
 const EMBEDDED_NPC_PRESETS_JSON: &str =
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/npc_presets.json"));
+    include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/data/sim/npc_presets.json"
+    ));
 
 #[derive(Deserialize)]
 struct NpcPresetsFile {

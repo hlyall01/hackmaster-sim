@@ -526,7 +526,7 @@ fn show_weapon_plot(
         .allow_scroll(false)
         .allow_boxed_zoom(false)
         .x_grid_spacer(integer_grid_marks)
-        .x_axis_formatter(|mark, _| format!("{:.0}", mark.value));
+        .x_axis_formatter(|mark, _, _| format!("{:.0}", mark.value));
 
     let response = plot.show(ui, |plot_space| {
         let pointer = plot_space.pointer_coordinate();
@@ -609,7 +609,7 @@ fn show_distribution_plot(
         .allow_scroll(false)
         .allow_boxed_zoom(false)
         .x_grid_spacer(integer_grid_marks)
-        .x_axis_formatter(|mark, _| format!("{:.0}", mark.value));
+        .x_axis_formatter(|mark, _, _| format!("{:.0}", mark.value));
 
     let response = plot.show(ui, |plot_space| {
         let pointer = plot_space.pointer_coordinate();
@@ -1149,14 +1149,14 @@ fn main() -> eframe::Result<()> {
         "Hackmaster Blunt Weapon Damage per Speed",
         native_options,
         Box::new(move |_| {
-            Ok(Box::new(WeaponPlotApp::with_datasets(
+            Box::new(WeaponPlotApp::with_datasets(
                 weapon_catalog_for_app,
                 datasets_for_app.clone(),
                 distribution_sets.clone(),
                 ui_adjustments,
                 sim_duration,
                 distribution_armor,
-            )))
+            ))
         }),
     ) {
         Ok(()) => Ok(()),

@@ -64,7 +64,7 @@ const PLAYER_EDITOR_TABS: [PlayerEditorTab; 6] = [
     PlayerEditorTab::Derived,
 ];
 
-const FIGHTER_PRESETS_PATH: &str = "data/fighter_presets.json";
+const FIGHTER_PRESETS_PATH: &str = "data/sim/fighter_presets.json";
 const BULK_SIM_MAX_SECONDS: u32 = u32::MAX;
 const TALENT_TAB_ALL: &str = "All";
 const TALENT_TAB_RACIALS: &str = "Racials";
@@ -780,7 +780,7 @@ impl eframe::App for SimGuiApp {
                     ui.label("Runs");
                     ui.add(
                         egui::DragValue::new(&mut self.bulk_runs)
-                            .range(1..=u32::MAX)
+                            .clamp_range(1..=u32::MAX)
                             .speed(100.0),
                     );
                 });
@@ -2716,6 +2716,6 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "HackMaster Simulator",
         options,
-        Box::new(|_cc| Ok(Box::new(SimGuiApp::new()))),
+        Box::new(|_cc| Box::new(SimGuiApp::new())),
     )
 }

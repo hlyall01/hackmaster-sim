@@ -4,7 +4,7 @@ use serde::Deserialize;
 use std::fs;
 
 const EMBEDDED_TALENTS_JSON: &str =
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/talents.json"));
+    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/sim/talents.json"));
 
 #[derive(Deserialize)]
 struct TalentsFile {

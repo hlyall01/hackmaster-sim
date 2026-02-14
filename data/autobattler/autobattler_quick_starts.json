@@ -1,0 +1,199 @@
+{
+  "meta": {
+    "description": "Quick-start fighter presets for autobattler.",
+    "notes": [
+      "Arthur comes from the first historical level-1 preset.",
+      "Zorya, Luana, and Volfango were first committed at level 2; these are level-1 quick-start conversions of those earliest presets."
+    ],
+    "source_commits": {
+      "arthur": "2344630a8cab89207bd5f1a4bd6894aba12c1363",
+      "zorya": "c41e0a9",
+      "luana": "02f6603",
+      "volfango": "c41e0a9"
+    }
+  },
+  "presets": [
+    {
+      "name": "Arthur Du Randt",
+      "level": 1,
+      "progression": {
+        "attack": "I",
+        "speed": "II",
+        "initiative": "I",
+        "health": "III"
+      },
+      "masteries": {
+        "attack": 0,
+        "defense": 0,
+        "damage": 0,
+        "speed": 0,
+        "shield_defense": 0,
+        "shield_speed": 0
+      },
+      "base_hp": 10,
+      "move_speed": 20.0,
+      "strength_base": 16,
+      "strength_pct": 1,
+      "dex_base": 14,
+      "dex_pct": 51,
+      "intelligence": 10,
+      "wisdom": 10,
+      "constitution": 12,
+      "looks": 10,
+      "charisma": 10,
+      "weapon": "Glaive",
+      "armor": "Chainshirt",
+      "shield": "None",
+      "weapon_material_tier": 0,
+      "armor_material_tier": 1,
+      "projectile_material_tier": 0,
+      "shield_material_tier": 0,
+      "two_hand_grip": true,
+      "maneuvers": {},
+      "talents": [
+        {
+          "id": "solid",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "armor_focus",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "armor_specialization",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "armor_master",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "weapon_focus",
+          "rank": 1,
+          "weapon": "Polearms"
+        }
+      ]
+    },
+    {
+      "name": "Zorya",
+      "level": 1,
+      "progression": {
+        "attack": "I",
+        "speed": "II",
+        "initiative": "III",
+        "health": "II"
+      },
+      "masteries": {
+        "attack": 0,
+        "defense": 0,
+        "damage": 0,
+        "speed": 0,
+        "shield_defense": 0,
+        "shield_speed": 0
+      },
+      "base_hp": 10,
+      "move_speed": 20.0,
+      "strength_base": 10,
+      "strength_pct": 73,
+      "dex_base": 16,
+      "dex_pct": 26,
+      "intelligence": 11,
+      "wisdom": 15,
+      "constitution": 12,
+      "looks": 7,
+      "charisma": 8,
+      "weapon": "Battle Axe",
+      "armor": "Quilted",
+      "shield": "Small metallic shield",
+      "weapon_material_tier": 0,
+      "armor_material_tier": 1,
+      "projectile_material_tier": 0,
+      "shield_material_tier": 0,
+      "two_hand_grip": false,
+      "maneuvers": {}
+    },
+    {
+      "name": "Volfango Drakos",
+      "level": 1,
+      "progression": {
+        "attack": "I",
+        "speed": "II",
+        "initiative": "III",
+        "health": "III"
+      },
+      "masteries": {
+        "attack": 0,
+        "defense": 0,
+        "damage": 0,
+        "speed": 0,
+        "shield_defense": 0,
+        "shield_speed": 0
+      },
+      "base_hp": 10,
+      "move_speed": 20.0,
+      "strength_base": 10,
+      "strength_pct": 21,
+      "dex_base": 19,
+      "dex_pct": 75,
+      "intelligence": 14,
+      "wisdom": 12,
+      "constitution": 10,
+      "looks": 8,
+      "charisma": 5,
+      "weapon": "Short sword",
+      "armor": "Gambeson",
+      "shield": "None",
+      "weapon_material_tier": 1,
+      "armor_material_tier": 0,
+      "projectile_material_tier": 0,
+      "shield_material_tier": 0,
+      "two_hand_grip": false,
+      "maneuvers": {}
+    },
+    {
+      "name": "Luana Rexhep",
+      "level": 1,
+      "progression": {
+        "attack": "I",
+        "speed": "II",
+        "initiative": "III",
+        "health": "III"
+      },
+      "masteries": {
+        "attack": 0,
+        "defense": 0,
+        "damage": 0,
+        "speed": 0,
+        "shield_defense": 0,
+        "shield_speed": 0
+      },
+      "base_hp": 10,
+      "move_speed": 20.0,
+      "strength_base": 9,
+      "strength_pct": 1,
+      "dex_base": 13,
+      "dex_pct": 1,
+      "intelligence": 9,
+      "wisdom": 11,
+      "constitution": 9,
+      "looks": 17,
+      "charisma": 17,
+      "weapon": "Spetum",
+      "armor": "Gambeson",
+      "shield": "None",
+      "weapon_material_tier": 1,
+      "armor_material_tier": 0,
+      "projectile_material_tier": 0,
+      "shield_material_tier": 0,
+      "two_hand_grip": false,
+      "maneuvers": {
+        "use_jab": true,
+        "hold_at_bay": true
+      }
+    }
+  ]
+}

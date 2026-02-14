@@ -15,10 +15,10 @@ use hackmaster_sim::game_logic::{
 };
 use std::{env, process};
 
-const AUTOBATTLER_CONFIG_PATH: &str = "data/autobattler_config.json";
-const FIGHTER_PRESETS_PATH: &str = "data/fighter_presets.json";
-const NPC_PRESETS_PATH: &str = "data/npc_presets.json";
-const TALENTS_PATH: &str = "data/talents.json";
+const AUTOBATTLER_CONFIG_PATH: &str = "data/autobattler/autobattler_config.json";
+const FIGHTER_PRESETS_PATH: &str = "data/sim/fighter_presets.json";
+const NPC_PRESETS_PATH: &str = "data/sim/npc_presets.json";
+const TALENTS_PATH: &str = "data/sim/talents.json";
 
 struct AutobattlerBuilder<'a> {
     player_base: PlayerConfig,

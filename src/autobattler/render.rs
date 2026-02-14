@@ -64,8 +64,9 @@ pub struct RenderConfig {
 impl Default for RenderConfig {
     fn default() -> Self {
         Self {
-            body_art: BodyArt::Pixel,
-            weapon_art: WeaponArt::Pixel,
+            // Match sim_gui's low-fi readability-first visuals for now.
+            body_art: BodyArt::StickFigure,
+            weapon_art: WeaponArt::Block,
             person_size: Vec2::new(40.0, 60.0),
             person_z: 2.0,
             weapon_z: 3.0,
