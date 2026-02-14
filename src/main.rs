@@ -8,7 +8,6 @@ use hackmaster_sim::core::rules::{effective_armor_value, expected_damage_expr, D
 use hackmaster_sim::data;
 use hackmaster_sim::game_logic::{self, WeaponCatalog, WeaponPreset};
 use rand::rngs::StdRng;
-use rand::Rng;
 use rand::SeedableRng;
 use std::collections::HashMap;
 use std::fs::{self, File};

@@ -536,7 +536,7 @@ fn armor_talent_adjustments(
         armor_dr += modifiers.medium_armor_dr_bonus;
     }
     let armor_dr = armor_dr.max(0);
-    if modifiers.ignore_armor_speed_penalty && armor.speed_mod < 0 {
+    if modifiers.ignore_armor_speed_penalty && armor.speed_mod != 0 {
         adjustments.speed_mod_bonus -= armor.speed_mod;
     }
     if modifiers.ignore_armor_initiative_penalty && armor.initiative_mod < 0 {
@@ -1278,6 +1278,7 @@ pub fn player_summary(
     let misc_modifiers = resolve_misc_modifiers(player);
     let armor_adjustments = armor_talent_adjustments(character.equipment.armor.as_ref(), &modifiers);
     let defensive_dualwielding = defensive_dualwielding_active(player, weapon);
+    let offensive_dualwielding = offensive_dualwielding_active(player, weapon);
     let defense_bonus_weapon =
         modifiers.defense_bonus_for_weapon(player.weapon_id)
             * if defensive_dualwielding { 2 } else { 1 };
@@ -1300,6 +1301,9 @@ pub fn player_summary(
         + modifiers.armor_dr_bonus
         + misc_modifiers.armor_dr_bonus)
         .max(0);
+    if offensive_dualwielding {
+        derived.base_dv = 0;
+    }
     derived.base_dv += modifiers.defense_bonus
         + defense_bonus_weapon
         + misc_modifiers.defense_bonus
@@ -1532,10 +1536,16 @@ pub fn build_combatant(
     let min_speed = weapon_preset.size.min_speed();
     let has_shield = character.equipment.shield.is_some();
     let has_offhand = player.offhand_weapon_id.is_some();
+    let mut defensive_dualwielding = defensive_dualwielding_active(player, weapon_preset);
+    let mut offensive_dualwielding = offensive_dualwielding_active(player, weapon_preset);
+    if offensive_dualwielding {
+        defensive_dualwielding = false;
+    }
     let free_hand_speed_bonus = if weapon_preset.handedness == WeaponHandedness::OneHanded
         && !effective_two_hand
         && !has_offhand
         && !has_shield
+        && !defensive_dualwielding
     {
         -1.0
     } else {
@@ -1581,10 +1591,8 @@ pub fn build_combatant(
     );
     let attack_mastery = effective_attack_mastery(player);
     let mut attack_bonus_base = derived.attack_bonus + attack_mastery;
-    let mut defensive_dualwielding = defensive_dualwielding_active(player, weapon_preset);
-    let mut offensive_dualwielding = offensive_dualwielding_active(player, weapon_preset);
     if offensive_dualwielding {
-        defensive_dualwielding = false;
+        derived.base_dv = 0;
     }
     let defense_mastery = effective_defense_mastery(player, weapon_preset)
         * if defensive_dualwielding { 2 } else { 1 };
@@ -2725,6 +2733,18 @@ mod tests {
     }
 
     #[test]
+    fn offensive_dualwielding_sets_base_dv_to_zero() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = Catalog::new(Vec::new());
+        let weapon_id = one_handed_weapon_id(&weapons);
+        let mut player = PlayerConfig::new("Test", weapon_id);
+        player.offensive_dualwielding = true;
+        player.offhand_weapon_id = Some(weapon_id);
+        let summary = player_summary(&player, &weapons, &armor, &shields, &talents);
+        assert_eq!(summary.derived.base_dv, 0);
+    }
+
+    #[test]
     fn mastery_speed_reduces_weapon_speed() {
         let (weapons, armor, shields) = sample_catalogs();
         let talents = Catalog::new(Vec::new());
@@ -2748,6 +2768,34 @@ mod tests {
         assert_eq!(
             baseline_combatant.sheet.offense.weapon.speed - combatant.sheet.offense.weapon.speed,
             3.0
+        );
+    }
+
+    #[test]
+    fn defensive_dualwielding_disables_free_hand_speed_bonus() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = Catalog::new(Vec::new());
+        let base_player = PlayerConfig::new("Test", WeaponId::new(0));
+        let (weapon_id, _weapon) = find_weapon_for_speed_bonus(
+            &weapons,
+            &armor,
+            &shields,
+            &talents,
+            &base_player,
+            |weapon| weapon.handedness == WeaponHandedness::OneHanded,
+        );
+        let npc_presets = Catalog::new(Vec::new());
+        let mut baseline = base_player.clone();
+        baseline.weapon_id = weapon_id;
+        let baseline_combatant =
+            build_combatant(&baseline, &weapons, &armor, &shields, &npc_presets, &talents);
+        let mut dual = baseline.clone();
+        dual.defensive_dualwielding = true;
+        let dual_combatant =
+            build_combatant(&dual, &weapons, &armor, &shields, &npc_presets, &talents);
+        assert_eq!(
+            dual_combatant.sheet.offense.weapon.speed,
+            baseline_combatant.sheet.offense.weapon.speed + 1.0
         );
     }
 
@@ -2980,7 +3028,7 @@ mod tests {
         let (weapons, armor, shields) = sample_catalogs();
         let talents = sample_talents();
         let weapon_id = one_handed_weapon_id(&weapons);
-        let Some((armor_id, armor_entry)) = find_armor_opt(&armor, |a| a.speed_mod < 0) else {
+        let Some((armor_id, armor_entry)) = find_armor_opt(&armor, |a| a.speed_mod != 0) else {
             return;
         };
         let mut player = base_player(weapon_id);

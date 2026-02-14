@@ -1783,6 +1783,14 @@ fn render_player_editor(
                 combatant.sheet.vitals.threshold_of_pain
             ));
             ui.label(format!("Attack bonus: {}", derived.attack_bonus));
+            ui.label(format!(
+                "Attack bonus (effective): {}",
+                roll.attack_bonus
+            ));
+            ui.label(format!(
+                "Damage bonus (effective): {}",
+                roll.strength_damage
+            ));
             ui.label(format!("Speed mod: {}", derived.speed_mod));
             ui.label(format!(
                 "Weapon speed: {:.1}",
@@ -1839,6 +1847,8 @@ fn render_player_editor(
                 } else {
                     "d20p"
                 };
+                let after_attack_bonus =
+                    (defensive_dualwielding || player.two_hand_grip) && !weapon.defense_bonus_always;
                 if let Some(shield_bonus) = shield_bonus {
                     ui.label(format!(
                         "Defense roll (melee): {} + {} + {}{}",
@@ -1848,7 +1858,7 @@ fn render_player_editor(
                         weapon_def
                     ));
                 } else {
-                    let dual_note = if defensive_dualwielding || player.two_hand_grip {
+                    let dual_note = if after_attack_bonus {
                         " (+4 after you attack)"
                     } else {
                         ""
