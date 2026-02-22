@@ -588,6 +588,149 @@
       ]
     },
     {
+      "id": "armeroci_pole",
+      "name": "Armeroci Pole",
+      "description": "Increase reach by 1 foot and gain an extra damage die on your opening engagement strike while increasing weapon speed by 2. You also threaten engagement strikes when foes enter your reach if your reach is at least theirs.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "armeroci_pole_style"
+        }
+      ]
+    },
+    {
+      "id": "fymblwnger",
+      "name": "Fymblwnger",
+      "description": "Opponents do not gain defense bonuses from Give Ground or Scamper Back against your attacks.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "fymblwnger_style"
+        }
+      ]
+    },
+    {
+      "id": "hammerer",
+      "name": "Hammerer",
+      "description": "Any knockback you inflict resets your opponent's weapon count.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "hammerer_style"
+        }
+      ]
+    },
+    {
+      "id": "hobbler",
+      "name": "Hobbler",
+      "description": "Suffer -4 attack, but every landed strike applies critical strike effects by severity without extra critical damage dice.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "hobbler_style"
+        }
+      ]
+    },
+    {
+      "id": "ithican_prince",
+      "name": "Ithican Prince",
+      "description": "While using a buckler and small sword, add half your Intelligence attack bonus to both damage and defense.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "ithican_prince_style"
+        }
+      ]
+    },
+    {
+      "id": "regenstat",
+      "name": "Regenstat",
+      "description": "While in its stance, gain +1 attack and defense (max +8) after each successful attack or defense; reset on a miss or when hit.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "regenstat_style"
+        }
+      ]
+    },
+    {
+      "id": "returner",
+      "name": "Returner",
+      "description": "Take -4 defense and gain retaliatory attacks as enemies strike you, limited to one return attack between your own attack rolls.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "returner_style"
+        }
+      ]
+    },
+    {
+      "id": "six_paths",
+      "name": "Six Paths",
+      "description": "With a medium large sword and medium or small shield, shield blocks only on misses within 5 and landed strikes grant a quick shield-bash follow-up timing window.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "six_paths_style"
+        }
+      ]
+    },
+    {
+      "id": "three_mountains",
+      "name": "Three Mountains",
+      "description": "After three consecutive hits on the same foe, force their next trauma save to resolve as a 20 result.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "three_mountains_style"
+        }
+      ]
+    },
+    {
+      "id": "unbreakable_wall",
+      "name": "Unbreakable Wall",
+      "description": "Large and tower shields gain +2 DR and apply shield DR when checking shield breakage damage.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "unbreakable_wall_style"
+        }
+      ]
+    },
+    {
+      "id": "twelve_paths",
+      "name": "Twelve Paths",
+      "description": "Requires proficiency in at least one type of size L large sword and shields. At the cost of a -3 penalty to damage, you are able to wield both a size L large sword and either a small shield or buckler in conjunction, combining your defense modifiers from both your weapon and shield against all attackers in your arc of defense. In addition, your next attack comes two seconds sooner each time an opponent strikes your shield (immediately attacking if this reduces your weapon count to the current second).",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "large_sword_shield_style"
+        }
+      ]
+    },
+    {
       "id": "two_weapon_fighting",
       "name": "Two-Weapon Fighting",
       "description": "When using two one-handed weapons offensively, you no longer suffer a -2 penalty to damage with the secondary weapon.",
@@ -3322,6 +3465,173 @@
       ],
       "max_rank": 1,
       "effects": []
+    },
+    {
+      "id": "event_iron_heart",
+      "name": "Iron Heart",
+      "description": "A hard-won veteran instinct from campaign events. Gain +2 max HP.",
+      "cost_bp": 0,
+      "category": "Event Boons",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "hit_point_bonus",
+          "amount": 2
+        }
+      ]
+    },
+    {
+      "id": "event_ashen_stride",
+      "name": "Ashen Stride",
+      "description": "You learn to drive through smoke and chaos. Gain +1 weapon speed bonus with a chosen weapon.",
+      "cost_bp": 0,
+      "category": "Event Boons",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "weapon_speed_bonus",
+          "amount": 1
+        }
+      ]
+    },
+    {
+      "id": "event_quickened_sight",
+      "name": "Quickened Sight",
+      "description": "Reflexive threat reading from hard encounters. Gain +1 initiative modifier.",
+      "cost_bp": 0,
+      "category": "Event Boons",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "initiative_mod_bonus",
+          "amount": 1
+        }
+      ]
+    },
+    {
+      "id": "event_stoneguard",
+      "name": "Stoneguard",
+      "description": "Your stance hardens after surviving a brutal ordeal. Gain +1 DR.",
+      "cost_bp": 0,
+      "category": "Event Boons",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "armor_dr_bonus",
+          "amount": 1
+        }
+      ]
+    },
+    {
+      "id": "event_river_footing",
+      "name": "River Footing",
+      "description": "Learned balance under pressure grants +1 defense with a chosen weapon.",
+      "cost_bp": 0,
+      "category": "Event Boons",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "defense_bonus_weapon",
+          "amount": 1
+        }
+      ]
+    },
+    {
+      "id": "event_blooded_edge",
+      "name": "Blooded Edge",
+      "description": "A sharper killing line from decisive encounters. Gain +1 damage with a chosen weapon.",
+      "cost_bp": 0,
+      "category": "Event Boons",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "damage_bonus_weapon",
+          "amount": 1
+        }
+      ]
+    },
+    {
+      "id": "event_storm_arm",
+      "name": "Storm Arm",
+      "description": "Your attacks become cleaner and faster under duress. Gain +1 weapon attack bonus.",
+      "cost_bp": 0,
+      "category": "Event Boons",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "attack_bonus_weapon",
+          "amount": 1
+        }
+      ]
+    },
+    {
+      "id": "event_far_mark",
+      "name": "Far Mark",
+      "description": "Calibrated aim from repeated long-distance engagements.",
+      "cost_bp": 0,
+      "category": "Event Boons",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "range_distance_multiplier",
+          "multiplier": 0.8
+        }
+      ]
+    },
+    {
+      "id": "event_steady_guard",
+      "name": "Steady Guard",
+      "description": "Disciplined shield use grants +1 shield defense.",
+      "cost_bp": 0,
+      "category": "Event Boons",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "shield_defense_bonus",
+          "amount": 1
+        }
+      ]
+    },
+    {
+      "id": "event_fast_healing",
+      "name": "Fast Healing (Event)",
+      "description": "Your recovery improves after a significant campaign milestone.",
+      "cost_bp": 0,
+      "category": "Event Boons",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "fast_healer"
+        }
+      ]
+    },
+    {
+      "id": "event_braced_reach",
+      "name": "Braced Reach",
+      "description": "You learn to command distance. Gain +1 reach with melee weapons.",
+      "cost_bp": 0,
+      "category": "Event Boons",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "weapon_reach_bonus",
+          "amount": 1
+        }
+      ]
+    },
+    {
+      "id": "event_hardened_plate",
+      "name": "Hardened Plate",
+      "description": "You adapt your armor work in the field. Gain +1 DR while armored.",
+      "cost_bp": 0,
+      "category": "Event Boons",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "armor_dr_bonus_armored",
+          "amount": 1
+        }
+      ]
     }
   ]
 }

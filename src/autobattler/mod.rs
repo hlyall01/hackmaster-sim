@@ -8,11 +8,12 @@ pub mod screenshot;
 pub mod sprite_review;
 pub mod state;
 pub mod ui;
+pub mod weapon_mastery;
 
 pub use app::AutobattlerApp;
 pub use args::AutobattlerArgs;
 pub use constants::*;
-pub use render::{setup_render_system, sync_render_system, RenderAssets, RenderConfig};
+pub use render::{RenderAssets, RenderConfig, setup_render_system, sync_render_system};
 pub use screenshot::{
     HeadlessConfig, HeadlessRenderTarget, HeadlessScreenshotPlugin, ScreenshotState,
 };

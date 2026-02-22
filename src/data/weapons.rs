@@ -7,8 +7,10 @@ use crate::game_logic::{
 use serde::Deserialize;
 use std::fs;
 
-const EMBEDDED_WEAPONS_JSON: &str =
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/sim/weapons.json"));
+const EMBEDDED_WEAPONS_JSON: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/data/sim/weapons.json"
+));
 
 #[derive(Deserialize)]
 struct WeaponsFile {
@@ -149,7 +151,10 @@ fn split_speed_label(speed: &str, jab_speed: Option<&str>) -> (String, Option<St
     let trimmed = speed.trim();
     if let Some(jab_speed) = jab_speed {
         let jab_speed = jab_speed.trim();
-        let speed = trimmed.split_once(',').map(|pair| pair.0).unwrap_or(trimmed);
+        let speed = trimmed
+            .split_once(',')
+            .map(|pair| pair.0)
+            .unwrap_or(trimmed);
         (speed.trim().to_string(), Some(jab_speed.to_string()))
     } else {
         let mut jab = None;

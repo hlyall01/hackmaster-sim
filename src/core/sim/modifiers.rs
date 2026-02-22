@@ -19,6 +19,17 @@ pub enum StatIdI32 {
     FlagDefiant,
     FlagSuperiorDefense,
     FlagEdgeCounter,
+    FlagLargeSwordShieldStyle,
+    FlagArmerociPoleStyle,
+    FlagFymblwngerStyle,
+    FlagHammererStyle,
+    FlagHobblerStyle,
+    FlagIthicanPrinceStyle,
+    FlagRegenstatStyle,
+    FlagReturnerStyle,
+    FlagSixPathsStyle,
+    FlagThreeMountainsStyle,
+    FlagUnbreakableWallStyle,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

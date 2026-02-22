@@ -1,9 +1,9 @@
-use hackmaster_sim::{character, data, game_logic, sim};
-use hackmaster_sim::core::rules::DamageExprCache;
 use character::{
     AbilityScore, AbilitySet, ArmorRegion, Character, Equipment, MaterialKind, Progression,
     ProgressionTier, Weapon, WeaponGroup, WeaponMastery,
 };
+use hackmaster_sim::core::rules::DamageExprCache;
+use hackmaster_sim::{character, data, game_logic, sim};
 use sim::{
     Combatant, CombatantSheet, DefenseProfile, MobilityProfile, OffenseProfile, SimConfig,
     SimState, Vitals, WeaponProfile,
@@ -38,8 +38,8 @@ fn main() {
         base_threshold: 100.0,
     };
 
-    let armor_catalog = data::load_armor_catalog("data/armor.json")
-        .expect("Failed to load armor catalog");
+    let armor_catalog =
+        data::load_armor_catalog("data/armor.json").expect("Failed to load armor catalog");
     let armor = armor_catalog.entries().iter().find_map(|entry| {
         entry
             .armor
@@ -47,8 +47,7 @@ fn main() {
             .filter(|armor| armor.name == "Chainmail" && armor.region == ArmorRegion::Northern)
             .cloned()
     });
-    let materials = data::load_materials("data/materials.json")
-        .expect("Failed to load materials");
+    let materials = data::load_materials("data/materials.json").expect("Failed to load materials");
 
     let equipment = Equipment {
         weapon: Some(weapon.clone()),
@@ -99,8 +98,8 @@ fn main() {
     );
     println!("Load category: {}", derived.load_category);
 
-    let weapon_catalog = data::load_weapon_catalog("data/weapons.json")
-        .expect("Failed to load weapon catalog");
+    let weapon_catalog =
+        data::load_weapon_catalog("data/weapons.json").expect("Failed to load weapon catalog");
     let weapon_preset = weapon_catalog
         .entries()
         .iter()
@@ -252,10 +251,7 @@ fn main() {
         );
         if printed_events < sim.combat_events.len() {
             for event in &sim.combat_events[printed_events..] {
-                println!(
-                    "{}",
-                    sim::format_combat_event_line(event, &sim.combatants)
-                );
+                println!("{}", sim::format_combat_event_line(event, &sim.combatants));
             }
             printed_events = sim.combat_events.len();
         }

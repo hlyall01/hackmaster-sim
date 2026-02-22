@@ -2,18 +2,19 @@ use bevy::app::ScheduleRunnerPlugin;
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use bevy::utils::Duration;
+use bevy::window::WindowResizeConstraints;
 use bevy::winit::WinitPlugin;
 use bevy_egui::EguiPlugin;
 
 use crate::autobattler::args::AutobattlerArgs;
 use crate::autobattler::constants::{
-    AUTOBATTLER_CONFIG_PATH, CHARACTER_SAVE_EXTENSION, NPC_PRESETS_PATH, RUN_SAVE_EXTENSION,
-    QUICK_STARTS_PATH, RUN_SAVE_VERSION, SAVE_VERSION, START_AP, START_BP, START_LP, START_RP,
-    STAT_COUNT,
-    WINDOW_HEIGHT, WINDOW_WIDTH,
+    AUTOBATTLER_CONFIG_PATH, CHARACTER_SAVE_EXTENSION, NPC_PRESETS_PATH, QUICK_STARTS_PATH,
+    RUN_AUTOSAVE_FILE, RUN_SAVE_EXTENSION, RUN_SAVE_VERSION, SAVE_VERSION, START_AP, START_BP,
+    START_LP, START_RP, STAT_COUNT, WINDOW_HEIGHT, WINDOW_WIDTH,
 };
 use crate::autobattler::logic::{
-    apply_stat_adjustment, clamp_stat_adjustment, scaled_enemy_level, total_talent_costs,
+    apply_percentile, apply_stat_adjustment, clamp_stat_adjustment, scaled_enemy_level,
+    subtract_percentile, total_talent_costs,
 };
 use crate::autobattler::persistence::{
     read_character_save, read_run_save, run_save_path_for, sanitize_filename, save_path_for,
@@ -21,32 +22,39 @@ use crate::autobattler::persistence::{
 };
 use crate::autobattler::render::{setup_render_system, sync_render_system};
 use crate::autobattler::screenshot::{
-    screenshot_system, HeadlessConfig, HeadlessScreenshotPlugin, ScreenshotState,
+    HeadlessConfig, HeadlessScreenshotPlugin, ScreenshotState, screenshot_system,
 };
 use crate::autobattler::sprite_review::sprite_review_system;
 use crate::autobattler::state::{
-    AppScreen, AutobattlerState, CharacterSave, CreationState, CreationStep, PointPool, RunAction,
-    RunSave, RunStateSave, RunViewState, SaveEntry, SpriteReviewState,
+    AppScreen, AutobattlerState, CharacterSave, CreationState, CreationStep, DowntimeActivity,
+    DowntimeFeedback, EncounterPreview, EventPreview, PointPool, RunAction, RunSave, RunStateSave,
+    RunViewState, SaveEntry, SeedContext, SpriteReviewState,
 };
 use crate::autobattler::ui::ui_system;
+use crate::autobattler::weapon_mastery;
 
 use crate::autobattler::logic;
 
-use crate::{character, data, game_logic};
 use crate::character::{AbilityScore, AbilitySet, AbilitySetFull};
+use crate::character::{Progression, ProgressionTier};
 use crate::core::catalog::Catalog;
 use crate::core::gameplay::{
-    apply_fight_result, AutobattlerConfig, CombatantBuilder, EnemySpawnEntry, EnemySpawner,
-    FightResult, LootTable, RunState,
+    AutobattlerConfig, CombatantBuilder, DepthBand, EnemySpawnEntry, EnemySpawner, EventCatalog,
+    FightResult, LootTable, RunState, XpCurve, apply_downtime, apply_fight_result, choose_event,
+    depth_band_for_depth, encounter_tier_for_depth, resolve_event_choice, should_spawn_event,
 };
-use crate::core::rng::{derive_seed, SimRng};
+use crate::core::rng::{SimRng, derive_seed};
+use crate::core::rules::roll_damage_expr;
 use crate::core::sim::SimConfig;
-use crate::core::types::{EnemyProfile, Inventory, PlayerProfile, PointPools, RaceSpec};
+use crate::core::skills::{self, SkillCheckResult, SkillDifficulty};
+use crate::core::types::{
+    EnemyProfile, Inventory, PlayerProfile, PointPools, RaceSpec, SkillProgress,
+};
 use crate::game_logic::{
     ArmorCatalog, ArmorId, FighterPreset, FighterPresetCatalog, NpcPresetCatalog, PlayerConfig,
     ShieldCatalog, ShieldId, TalentCatalog, WeaponCatalog, WeaponId,
 };
-use crate::character::{Progression, ProgressionTier};
+use crate::{character, data, game_logic, sim};
 
 pub struct AutobattlerApp {
     pub screen: AppScreen,
@@ -69,12 +77,15 @@ pub struct AutobattlerApp {
     pub autobattler_config: AutobattlerConfig,
     pub run_seed: u64,
     pub seed_dirty: bool,
+    pub startup_data_issues: Vec<String>,
     pub weapon_catalog: WeaponCatalog,
     pub armor_catalog: ArmorCatalog,
     pub shield_catalog: ShieldCatalog,
     pub npc_presets: NpcPresetCatalog,
     pub enemy_spawner: EnemySpawner,
     pub loot_table: LootTable,
+    pub event_catalog: EventCatalog,
+    pub xp_curve: XpCurve,
     pub sim_config: SimConfig,
     pub enemy_weapon_id: WeaponId,
     pub race_catalog: Vec<RaceSpec>,
@@ -82,7 +93,120 @@ pub struct AutobattlerApp {
 }
 
 impl AutobattlerApp {
+    fn build_character_save(&self) -> CharacterSave {
+        let weapon_name = self
+            .weapon_catalog
+            .get(self.creation.player.weapon_id)
+            .map(|weapon| weapon.name.clone())
+            .unwrap_or_default();
+        let armor_label = self
+            .armor_catalog
+            .get(self.creation.player.armor_id)
+            .map(|entry| entry.label.clone())
+            .unwrap_or_default();
+        let shield_name = self
+            .shield_catalog
+            .get(self.creation.player.shield_id)
+            .map(|entry| entry.label.clone())
+            .unwrap_or_default();
+        CharacterSave {
+            version: SAVE_VERSION,
+            name: self.creation.name.clone(),
+            stats: self
+                .creation
+                .stats
+                .iter()
+                .map(|score| crate::autobattler::state::AbilityScoreSave::from_score(*score))
+                .collect(),
+            race_id: self.creation.player.race_id.clone(),
+            talents: self.creation.player.talents.clone(),
+            bp_history: self.creation.bp_history.iter().cloned().collect(),
+            weapon_name,
+            armor_label,
+            shield_name,
+            alignment: self.creation.alignment.clone(),
+            honor: self.creation.honor,
+            background: self.creation.background.clone(),
+            height: self.creation.height.clone(),
+            weight: self.creation.weight.clone(),
+            age: self.creation.age.clone(),
+            handedness: self.creation.handedness.clone(),
+            quirks: self.creation.quirks.clone(),
+            flaws: self.creation.flaws.clone(),
+            skills: skills::legacy_skill_names(&self.creation.skill_levels),
+            skill_levels: self
+                .creation
+                .skill_levels
+                .iter()
+                .map(crate::autobattler::state::SkillProgressSave::from_skill_progress)
+                .collect(),
+            proficiencies: self.creation.proficiencies.clone(),
+            starting_money: self.creation.starting_money,
+            money_rolled: self.creation.money_rolled,
+        }
+    }
+
+    fn build_run_save(&self, name: String, run_view: &RunViewState) -> RunSave {
+        RunSave {
+            version: RUN_SAVE_VERSION,
+            name,
+            character: self.build_character_save(),
+            run_state: RunStateSave::from_state(&run_view.run_state),
+            days_elapsed: run_view.days_elapsed,
+            training_days: run_view.training_days,
+            run_over: run_view.run_over,
+            awaiting_downtime_choice: run_view.awaiting_downtime_choice,
+            pending_levelup: run_view.pending_levelup.clone(),
+            last_action: run_view.last_action,
+            selected_activity: run_view.selected_activity,
+            last_log: run_view.last_log.clone(),
+        }
+    }
+
+    fn autosave_run_checkpoint(&mut self, checkpoint: &str) -> bool {
+        let Some(run_view) = self.run_state.as_ref() else {
+            return false;
+        };
+        if run_view.live_fight.is_some() {
+            return false;
+        }
+        let path = run_save_path_for(RUN_AUTOSAVE_FILE);
+        let run_save = self.build_run_save(format!("Autosave ({checkpoint})"), run_view);
+        match write_run_save(&path, &run_save) {
+            Ok(()) => {
+                self.needs_save_refresh = true;
+                true
+            }
+            Err(err) => {
+                self.run_save_status = Some(format!("Autosave failed: {err}"));
+                false
+            }
+        }
+    }
+
     pub fn new() -> Self {
+        let required_files = [
+            "data/autobattler/autobattler_config.json",
+            "data/autobattler/autobattler_quick_starts.json",
+            "data/autobattler/events_v1.json",
+            "data/autobattler/events_v1_handcrafted.json",
+            "data/sim/weapons.json",
+            "data/sim/armor.json",
+            "data/sim/materials.json",
+            "data/sim/npc_presets.json",
+            "data/sim/races.json",
+            data::TALENTS_PATH,
+        ];
+        let startup_data_issues = match data::validate_required_data_files(&required_files) {
+            Ok(()) => Vec::new(),
+            Err(missing) => {
+                eprintln!("Required data files missing:");
+                for path in &missing {
+                    eprintln!("  - {path}");
+                }
+                missing
+            }
+        };
         let autobattler_config = data::load_autobattler_config(AUTOBATTLER_CONFIG_PATH)
             .unwrap_or_else(|err| {
                 eprintln!("Failed to load autobattler config: {err}");
@@ -98,27 +222,45 @@ impl AutobattlerApp {
             eprintln!("Failed to load races: {err}");
             Vec::new()
         });
-        let quick_start_presets = data::load_fighter_presets(QUICK_STARTS_PATH).unwrap_or_else(|err| {
-            eprintln!("Failed to load quick starts: {err}");
-            Catalog::new(Vec::new())
-        });
-        let talent_catalog = match data::load_talents("data/sim/talents.json") {
+        let quick_start_presets =
+            data::load_fighter_presets(QUICK_STARTS_PATH).unwrap_or_else(|err| {
+                eprintln!("Failed to load quick starts: {err}");
+                Catalog::new(Vec::new())
+            });
+        let talent_catalog = match data::load_talents(data::TALENTS_PATH) {
             Ok(talents) => talents,
             Err(err) => {
+                if cfg!(debug_assertions) {
+                    panic!("Failed to load talents: {err}");
+                }
                 eprintln!("Failed to load talents: {err}");
                 Catalog::new(Vec::new())
             }
         };
         let run_seed = autobattler_config.seed;
-        let weapon_id = weapon_catalog.first_id().unwrap_or_else(|| WeaponId::new(0));
-        let creation = CreationState::new(weapon_id, run_seed);
-        let enemy_weapon_id = find_weapon_id_by_name(&weapon_catalog, &autobattler_config.enemy_weapon)
-            .or_else(|| weapon_catalog.first_id())
+        let weapon_id = weapon_catalog
+            .first_id()
             .unwrap_or_else(|| WeaponId::new(0));
+        let creation = CreationState::new(weapon_id, run_seed);
+        let enemy_weapon_id =
+            find_weapon_id_by_name(&weapon_catalog, &autobattler_config.enemy_weapon)
+                .or_else(|| weapon_catalog.first_id())
+                .unwrap_or_else(|| WeaponId::new(0));
         let enemy_spawner = hobgoblin_spawner(&npc_presets);
         let loot_table = autobattler_config.to_loot_table();
-        let sim_config =
-            SimConfig::new(autobattler_config.start_distance, autobattler_config.stop_distance);
+        let event_catalog = data::load_autobattler_events("data/autobattler/events_v1.json")
+            .unwrap_or_else(|err| {
+                eprintln!("Failed to load autobattler events: {err}");
+                EventCatalog::default()
+            });
+        let xp_curve = XpCurve {
+            base: 50,
+            per_level: 50,
+        };
+        let sim_config = SimConfig::new(
+            autobattler_config.start_distance,
+            autobattler_config.stop_distance,
+        );
         Self {
             screen: AppScreen::Start,
             creation,
@@ -140,12 +282,15 @@ impl AutobattlerApp {
             autobattler_config,
             run_seed,
             seed_dirty: false,
+            startup_data_issues,
             weapon_catalog,
             armor_catalog,
             shield_catalog,
             npc_presets,
             enemy_spawner,
             loot_table,
+            event_catalog,
+            xp_curve,
             sim_config,
             enemy_weapon_id,
             race_catalog,
@@ -161,9 +306,11 @@ impl AutobattlerApp {
             .map(|history| history.len() as i32)
             .sum::<i32>();
         let spent_talents = total_talent_costs(&self.creation.player.talents, &self.talent_catalog);
+        let spent_skills_lp = skills::total_lp_cost(&self.creation.skill_levels);
         PointPool::new(START_BP, START_LP, START_AP, START_RP)
             .sub(PointPool::new(spent_stats, 0, 0, 0))
             .sub(spent_talents)
+            .sub(PointPool::new(0, spent_skills_lp, 0, 0))
     }
 
     pub fn effective_charisma(&self) -> (u8, i32) {
@@ -294,56 +441,9 @@ impl AutobattlerApp {
             self.save_status = Some("Enter a save name.".to_string());
             return false;
         }
-        let file_name = format!(
-            "{}.{}",
-            sanitize_filename(name),
-            CHARACTER_SAVE_EXTENSION
-        );
+        let file_name = format!("{}.{}", sanitize_filename(name), CHARACTER_SAVE_EXTENSION);
         let path = save_path_for(&file_name);
-        let weapon_name = self
-            .weapon_catalog
-            .get(self.creation.player.weapon_id)
-            .map(|weapon| weapon.name.clone())
-            .unwrap_or_default();
-        let armor_label = self
-            .armor_catalog
-            .get(self.creation.player.armor_id)
-            .map(|entry| entry.label.clone())
-            .unwrap_or_default();
-        let shield_name = self
-            .shield_catalog
-            .get(self.creation.player.shield_id)
-            .map(|entry| entry.label.clone())
-            .unwrap_or_default();
-        let save = CharacterSave {
-            version: SAVE_VERSION,
-            name: self.creation.name.clone(),
-            stats: self
-                .creation
-                .stats
-                .iter()
-                .map(|score| crate::autobattler::state::AbilityScoreSave::from_score(*score))
-                .collect(),
-            race_id: self.creation.player.race_id.clone(),
-            talents: self.creation.player.talents.clone(),
-            bp_history: self.creation.bp_history.iter().cloned().collect(),
-            weapon_name,
-            armor_label,
-            shield_name,
-            alignment: self.creation.alignment.clone(),
-            honor: self.creation.honor,
-            background: self.creation.background.clone(),
-            height: self.creation.height.clone(),
-            weight: self.creation.weight.clone(),
-            age: self.creation.age.clone(),
-            handedness: self.creation.handedness.clone(),
-            quirks: self.creation.quirks.clone(),
-            flaws: self.creation.flaws.clone(),
-            skills: self.creation.skills.clone(),
-            proficiencies: self.creation.proficiencies.clone(),
-            starting_money: self.creation.starting_money,
-            money_rolled: self.creation.money_rolled,
-        };
+        let save = self.build_character_save();
         match write_character_save(&path, &save) {
             Ok(()) => {
                 self.save_status = Some(format!("Saved to {}", path.display()));
@@ -382,61 +482,7 @@ impl AutobattlerApp {
 
         let file_name = format!("{}.{}", sanitize_filename(name), RUN_SAVE_EXTENSION);
         let path = run_save_path_for(&file_name);
-        let weapon_name = self
-            .weapon_catalog
-            .get(self.creation.player.weapon_id)
-            .map(|weapon| weapon.name.clone())
-            .unwrap_or_default();
-        let armor_label = self
-            .armor_catalog
-            .get(self.creation.player.armor_id)
-            .map(|entry| entry.label.clone())
-            .unwrap_or_default();
-        let shield_name = self
-            .shield_catalog
-            .get(self.creation.player.shield_id)
-            .map(|entry| entry.label.clone())
-            .unwrap_or_default();
-        let character = CharacterSave {
-            version: SAVE_VERSION,
-            name: self.creation.name.clone(),
-            stats: self
-                .creation
-                .stats
-                .iter()
-                .map(|score| crate::autobattler::state::AbilityScoreSave::from_score(*score))
-                .collect(),
-            race_id: self.creation.player.race_id.clone(),
-            talents: self.creation.player.talents.clone(),
-            bp_history: self.creation.bp_history.iter().cloned().collect(),
-            weapon_name,
-            armor_label,
-            shield_name,
-            alignment: self.creation.alignment.clone(),
-            honor: self.creation.honor,
-            background: self.creation.background.clone(),
-            height: self.creation.height.clone(),
-            weight: self.creation.weight.clone(),
-            age: self.creation.age.clone(),
-            handedness: self.creation.handedness.clone(),
-            quirks: self.creation.quirks.clone(),
-            flaws: self.creation.flaws.clone(),
-            skills: self.creation.skills.clone(),
-            proficiencies: self.creation.proficiencies.clone(),
-            starting_money: self.creation.starting_money,
-            money_rolled: self.creation.money_rolled,
-        };
-        let run_save = RunSave {
-            version: RUN_SAVE_VERSION,
-            name: name.to_string(),
-            character,
-            run_state: RunStateSave::from_state(&run_view.run_state),
-            days_elapsed: run_view.days_elapsed,
-            training_days: run_view.training_days,
-            run_over: run_view.run_over,
-            last_action: run_view.last_action,
-            last_log: run_view.last_log.clone(),
-        };
+        let run_save = self.build_run_save(name.to_string(), run_view);
         match write_run_save(&path, &run_save) {
             Ok(()) => {
                 self.run_save_status = Some(format!("Run saved to {}", path.display()));
@@ -469,11 +515,10 @@ impl AutobattlerApp {
                         self.creation.stats[idx] = score.to_score();
                     }
                 }
-                self.creation.race_index = save.race_id.as_ref().and_then(|id| {
-                    self.race_catalog
-                        .iter()
-                        .position(|race| race.id == *id)
-                });
+                self.creation.race_index = save
+                    .race_id
+                    .as_ref()
+                    .and_then(|id| self.race_catalog.iter().position(|race| race.id == *id));
                 self.creation.player.race_id = save.race_id.clone();
                 self.creation.player.talents = save.talents.clone();
                 if !save.weapon_name.trim().is_empty() {
@@ -484,8 +529,7 @@ impl AutobattlerApp {
                     }
                 }
                 if !save.armor_label.trim().is_empty() {
-                    if let Some(id) =
-                        find_armor_id_by_label(&self.armor_catalog, &save.armor_label)
+                    if let Some(id) = find_armor_id_by_label(&self.armor_catalog, &save.armor_label)
                     {
                         self.creation.player.armor_id = id;
                     }
@@ -513,7 +557,6 @@ impl AutobattlerApp {
                 self.creation.handedness = save.handedness.clone();
                 self.creation.quirks = save.quirks.clone();
                 self.creation.flaws = save.flaws.clone();
-                self.creation.skills = save.skills.clone();
                 self.creation.proficiencies = save.proficiencies.clone();
                 self.creation.starting_money = save.starting_money;
                 self.creation.money_rolled = save.money_rolled;
@@ -521,6 +564,15 @@ impl AutobattlerApp {
                 self.creation.race_applied = save.race_id.is_some();
                 self.creation.player.race_applied = save.race_id.is_some();
                 self.creation.sync_player_from_stats();
+                let ability_scores_full = ability_scores_full_from_creation(&self.creation);
+                self.creation.skill_levels = if save.skill_levels.is_empty() {
+                    skills::derive_skill_levels_from_legacy(&save.skills, &ability_scores_full)
+                } else {
+                    save.skill_levels
+                        .iter()
+                        .map(crate::autobattler::state::SkillProgressSave::to_skill_progress)
+                        .collect()
+                };
                 self.creation_step = CreationStep::MoneyGear;
                 self.creation_done = true;
                 self.screen = AppScreen::Creation;
@@ -543,7 +595,7 @@ impl AutobattlerApp {
         let path = run_save_path_for(&entry.file_name);
         match read_run_save(&path) {
             Ok(save) => {
-                let run_state = save.run_state.to_state();
+                let mut run_state = save.run_state.to_state();
                 self.run_seed = run_state.run_seed;
                 self.creation = CreationState::new(self.creation.player.weapon_id, self.run_seed);
                 self.seed_dirty = false;
@@ -553,39 +605,40 @@ impl AutobattlerApp {
                         self.creation.stats[idx] = score.to_score();
                     }
                 }
-                self.creation.race_index = save.character.race_id.as_ref().and_then(|id| {
-                    self.race_catalog
-                        .iter()
-                        .position(|race| race.id == *id)
-                });
+                self.creation.race_index = save
+                    .character
+                    .race_id
+                    .as_ref()
+                    .and_then(|id| self.race_catalog.iter().position(|race| race.id == *id));
                 self.creation.player.race_id = save.character.race_id.clone();
                 self.creation.player.talents = save.character.talents.clone();
                 if !save.character.weapon_name.trim().is_empty() {
-                    if let Some(id) = find_weapon_id_by_name(
-                        &self.weapon_catalog,
-                        &save.character.weapon_name,
-                    ) {
+                    if let Some(id) =
+                        find_weapon_id_by_name(&self.weapon_catalog, &save.character.weapon_name)
+                    {
                         self.creation.player.weapon_id = id;
                     }
                 }
                 if !save.character.armor_label.trim().is_empty() {
-                    if let Some(id) = find_armor_id_by_label(
-                        &self.armor_catalog,
-                        &save.character.armor_label,
-                    ) {
+                    if let Some(id) =
+                        find_armor_id_by_label(&self.armor_catalog, &save.character.armor_label)
+                    {
                         self.creation.player.armor_id = id;
                     }
                 }
                 if !save.character.shield_name.trim().is_empty() {
-                    if let Some(id) = find_shield_id_by_name(
-                        &self.shield_catalog,
-                        &save.character.shield_name,
-                    ) {
+                    if let Some(id) =
+                        find_shield_id_by_name(&self.shield_catalog, &save.character.shield_name)
+                    {
                         self.creation.player.shield_id = id;
                     }
                 }
                 self.creation.bp_history = std::array::from_fn(|idx| {
-                    save.character.bp_history.get(idx).cloned().unwrap_or_default()
+                    save.character
+                        .bp_history
+                        .get(idx)
+                        .cloned()
+                        .unwrap_or_default()
                 });
                 self.creation.alignment = if save.character.alignment.trim().is_empty() {
                     "Unaligned".to_string()
@@ -600,7 +653,6 @@ impl AutobattlerApp {
                 self.creation.handedness = save.character.handedness.clone();
                 self.creation.quirks = save.character.quirks.clone();
                 self.creation.flaws = save.character.flaws.clone();
-                self.creation.skills = save.character.skills.clone();
                 self.creation.proficiencies = save.character.proficiencies.clone();
                 self.creation.starting_money = save.character.starting_money;
                 self.creation.money_rolled = save.character.money_rolled;
@@ -608,18 +660,55 @@ impl AutobattlerApp {
                 self.creation.race_applied = save.character.race_id.is_some();
                 self.creation.player.race_applied = save.character.race_id.is_some();
                 self.creation.sync_player_from_stats();
+                let ability_scores_full = ability_scores_full_from_creation(&self.creation);
+                self.creation.skill_levels = if save.character.skill_levels.is_empty() {
+                    skills::derive_skill_levels_from_legacy(
+                        &save.character.skills,
+                        &ability_scores_full,
+                    )
+                } else {
+                    save.character
+                        .skill_levels
+                        .iter()
+                        .map(crate::autobattler::state::SkillProgressSave::to_skill_progress)
+                        .collect()
+                };
                 self.creation_step = CreationStep::MoneyGear;
                 self.creation_done = true;
+                if run_state.player.weapon_masteries.is_empty() {
+                    weapon_mastery::seed_profile_masteries_from_config(
+                        &mut run_state.player,
+                        &self.creation.player,
+                        &self.weapon_catalog,
+                        &self.shield_catalog,
+                    );
+                }
                 self.run_state = Some(RunViewState {
                     run_state,
+                    seed_context: SeedContext {
+                        run_seed: self.run_seed,
+                        ..SeedContext::default()
+                    },
+                    pending_encounter: None,
+                    pending_event: None,
                     last_outcome: None,
                     last_action: save.last_action,
                     last_log: save.last_log.clone(),
                     days_elapsed: save.days_elapsed,
                     training_days: save.training_days,
                     run_over: save.run_over,
+                    awaiting_downtime_choice: save.awaiting_downtime_choice,
+                    pending_levelup: save.pending_levelup.clone(),
+                    selected_activity: save.selected_activity,
+                    downtime_feedback: None,
                     live_fight: None,
                 });
+                if !save.run_over
+                    && !save.awaiting_downtime_choice
+                    && save.pending_levelup.is_none()
+                {
+                    self.prepare_next_encounter();
+                }
                 self.screen = AppScreen::Run;
                 self.run_save_status = Some("Loaded run.".to_string());
             }
@@ -637,18 +726,7 @@ impl AutobattlerApp {
             available_points.ap,
             available_points.rp,
         );
-        let ability_scores_full = AbilitySetFull {
-            strength: self.creation.stats[0],
-            intelligence: self.creation.stats[1],
-            wisdom: self.creation.stats[2],
-            dexterity: self.creation.stats[3],
-            constitution: self.creation.stats[4],
-            looks: self.creation.stats[5],
-            charisma: AbilityScore::new(
-                self.creation.player.charisma,
-                self.creation.stats[6].percentile,
-            ),
-        };
+        let ability_scores_full = ability_scores_full_from_creation(&self.creation);
         let alignment = if self.creation.alignment.trim().is_empty() {
             None
         } else {
@@ -659,7 +737,7 @@ impl AutobattlerApp {
         } else {
             Some(self.creation.background.clone())
         };
-        let player_profile = player_profile_from_config(
+        let mut player_profile = player_profile_from_config(
             &self.creation.player,
             ability_scores_full,
             points,
@@ -668,8 +746,14 @@ impl AutobattlerApp {
             background,
             self.creation.quirks.clone(),
             self.creation.flaws.clone(),
-            self.creation.skills.clone(),
+            self.creation.skill_levels.clone(),
             self.creation.proficiencies.clone(),
+        );
+        weapon_mastery::seed_profile_masteries_from_config(
+            &mut player_profile,
+            &self.creation.player,
+            &self.weapon_catalog,
+            &self.shield_catalog,
         );
         let starting_budget = if self.creation.money_rolled {
             self.creation.starting_money
@@ -692,36 +776,128 @@ impl AutobattlerApp {
             run_depth: 1,
             run_seed,
             encounter_index: 0,
+            last_encounter_tier: crate::core::gameplay::EncounterTier::Normal,
+            last_encounter_band: DepthBand::Novice,
+            event_flags: Vec::new(),
+            seen_event_ids: Vec::new(),
             wounds: Vec::new(),
         };
-        self.run_state = Some(RunViewState::new(run_state));
+        let mut run_view = RunViewState::new(run_state);
+        run_view.seed_context.run_seed = run_seed;
+        self.run_state = Some(run_view);
         self.screen = AppScreen::Run;
+        self.autosave_run_checkpoint("run-start");
+        self.prepare_next_encounter();
     }
 
-    pub fn start_live_fight(
-        &mut self,
-        rest_days: u32,
-        resting: bool,
-        action: Option<RunAction>,
-    ) {
+    pub fn prepare_next_encounter(&mut self) {
         let Some(run_view) = self.run_state.as_mut() else {
             return;
         };
-        if run_view.run_over {
+        if run_view.run_over
+            || run_view.live_fight.is_some()
+            || run_view.awaiting_downtime_choice
+            || run_view.pending_levelup.is_some()
+            || run_view.pending_encounter.is_some()
+            || run_view.pending_event.is_some()
+        {
             return;
         }
         let player_level = run_view.run_state.player.level;
-        let effective_level = scaled_enemy_level(player_level, run_view.run_state.run_depth);
+        let tier = encounter_tier_for_depth(run_view.run_state.run_depth);
+        let effective_level = scaled_enemy_level(player_level, run_view.run_state.run_depth)
+            .saturating_add(match tier {
+                crate::core::gameplay::EncounterTier::Normal => 0,
+                crate::core::gameplay::EncounterTier::Elite => 1,
+                crate::core::gameplay::EncounterTier::Boss => 2,
+            });
         let encounter_index = run_view.run_state.encounter_index as u64;
-        let mut spawn_rng = SimRng::from_seed(derive_seed(
-            run_view.run_state.run_seed,
-            "spawn",
-            encounter_index,
-        ));
-        let Some(enemy_profile) =
-            self.enemy_spawner
-                .spawn_for_level(effective_level, &mut spawn_rng)
+        let event_seed = derive_seed(run_view.run_state.run_seed, "event-spawn", encounter_index);
+        let mut event_rng = SimRng::from_seed(event_seed);
+        if should_spawn_event(&mut event_rng) {
+            let kind_seed = derive_seed(run_view.run_state.run_seed, "event-kind", encounter_index);
+            let resolve_seed = derive_seed(
+                run_view.run_state.run_seed,
+                "event-resolve",
+                encounter_index,
+            );
+            let mut kind_rng = SimRng::from_seed(kind_seed);
+            if let Some(event) = choose_event(
+                &self.event_catalog,
+                &run_view.run_state,
+                tier,
+                &mut kind_rng,
+            ) {
+                run_view.pending_event = Some(EventPreview {
+                    event,
+                    tier,
+                    resolve_seed,
+                });
+                run_view.seed_context = SeedContext {
+                    run_seed: run_view.run_state.run_seed,
+                    spawn_seed: None,
+                    combat_seed: None,
+                    loot_seed: None,
+                    event_seed: Some(event_seed),
+                };
+                return;
+            }
+        }
+        let spawn_seed = derive_seed(run_view.run_state.run_seed, "spawn", encounter_index);
+        let mut spawn_rng = SimRng::from_seed(spawn_seed);
+        let Some(enemy_profile) = self
+            .enemy_spawner
+            .spawn_for_level(effective_level, &mut spawn_rng)
         else {
+            return;
+        };
+        let default_weapon_name = self
+            .weapon_catalog
+            .get(self.enemy_weapon_id)
+            .map(|w| w.name.clone())
+            .unwrap_or_else(|| "weapon".to_string());
+        let (enemy_name, weapon_name, armor_label) = self
+            .npc_presets
+            .get(enemy_profile.preset_id)
+            .map(|preset| {
+                (
+                    preset.name.clone(),
+                    default_weapon_name.clone(),
+                    format!("armor (DR {})", preset.armor_dr),
+                )
+            })
+            .unwrap_or_else(|| {
+                (
+                    "Hobgoblin".to_string(),
+                    default_weapon_name,
+                    "armor".to_string(),
+                )
+            });
+        run_view.pending_encounter = Some(EncounterPreview {
+            enemy: enemy_profile,
+            tier,
+            enemy_name,
+            armor_label,
+            weapon_name,
+        });
+        let fight_seed = derive_seed(run_view.run_state.run_seed, "combat", encounter_index);
+        run_view.seed_context = SeedContext {
+            run_seed: run_view.run_state.run_seed,
+            spawn_seed: Some(spawn_seed),
+            combat_seed: Some(fight_seed),
+            loot_seed: None,
+            event_seed: Some(event_seed),
+        };
+    }
+
+    pub fn start_live_fight(&mut self) {
+        let Some(run_view) = self.run_state.as_mut() else {
+            return;
+        };
+        if run_view.run_over || run_view.awaiting_downtime_choice {
+            return;
+        }
+        let Some(encounter) = run_view.pending_encounter.take() else {
             return;
         };
         let builder = AutobattlerBuilder {
@@ -735,23 +911,21 @@ impl AutobattlerApp {
         };
 
         let mut player_combatant = builder.build_player(&run_view.run_state);
-        let mut enemy_combatant = builder.build_enemy(&enemy_profile);
+        let mut enemy_combatant = builder.build_enemy(&encounter.enemy);
         player_combatant.team_id = 0;
         enemy_combatant.team_id = 1;
-        let fight_seed =
-            derive_seed(run_view.run_state.run_seed, "combat", encounter_index);
-        let mut sim = crate::core::sim::SimState::with_rng(
-            self.sim_config,
-            SimRng::from_seed(fight_seed),
-        );
+        let encounter_index = run_view.run_state.encounter_index as u64;
+        let fight_seed = derive_seed(run_view.run_state.run_seed, "combat", encounter_index);
+        let mut sim =
+            crate::core::sim::SimState::with_rng(self.sim_config, SimRng::from_seed(fight_seed));
         sim.reset_with_combatants(vec![player_combatant, enemy_combatant]);
 
         run_view.live_fight = Some(crate::autobattler::state::LiveFight {
             sim,
-            enemy: enemy_profile,
-            action,
-            rest_days,
-            resting,
+            enemy: encounter.enemy,
+            tier: encounter.tier,
+            rest_days: 0,
+            resting: false,
             running: true,
             time_scale: 1.0,
             max_seconds: self.autobattler_config.max_fight_seconds,
@@ -765,13 +939,277 @@ impl AutobattlerApp {
     }
 
     pub fn run_action(&mut self, action: RunAction) {
-        let rest_days = if action == RunAction::FightOn {
-            0
-        } else {
-            action.rest_days()
+        let Some(run_view) = self.run_state.as_mut() else {
+            return;
         };
+        if run_view.run_over
+            || run_view.pending_levelup.is_some()
+            || !run_view.awaiting_downtime_choice
+        {
+            return;
+        }
+        let rest_days = 8;
         let resting = action.is_resting();
-        self.start_live_fight(rest_days, resting, Some(action));
+        apply_downtime(&mut run_view.run_state, rest_days, resting);
+        run_view.last_action = Some(action);
+        run_view.days_elapsed = run_view.days_elapsed.saturating_add(rest_days);
+        if matches!(action, RunAction::Activity) {
+            run_view.training_days = run_view.training_days.saturating_add(rest_days);
+        }
+        if matches!(action, RunAction::Activity) {
+            let activity = run_view.selected_activity;
+            let downtime_seed = derive_seed(
+                run_view.run_state.run_seed,
+                "downtime-activity",
+                run_view.run_state.encounter_index.saturating_sub(1) as u64,
+            );
+            let feedback_lines =
+                apply_downtime_activity(&mut run_view.run_state, activity, downtime_seed);
+            run_view.downtime_feedback = Some(DowntimeFeedback {
+                title: format!("Downtime: {}", activity.label()),
+                activity: Some(activity),
+                lines: feedback_lines,
+                animation_seconds: 1.4,
+            });
+        } else {
+            run_view.downtime_feedback = Some(DowntimeFeedback {
+                title: "Downtime: Rest".to_string(),
+                activity: None,
+                lines: vec!["Recovered with full rest for 8 days.".to_string()],
+                animation_seconds: 1.0,
+            });
+        }
+        run_view.awaiting_downtime_choice = false;
+        self.autosave_run_checkpoint("post-choice");
+        self.prepare_next_encounter();
+    }
+
+    pub fn confirm_level_up(&mut self) {
+        let Some(run_view) = self.run_state.as_mut() else {
+            return;
+        };
+        if run_view.run_over {
+            return;
+        }
+        let Some(checkpoint) = run_view.pending_levelup.clone() else {
+            return;
+        };
+        if checkpoint.remaining_slots() > 0 {
+            return;
+        }
+        let grants = checkpoint.grants();
+        run_view.run_state.player.points.bp = run_view
+            .run_state
+            .player
+            .points
+            .bp
+            .saturating_add(grants.bp);
+        run_view.run_state.player.points.lp = run_view
+            .run_state
+            .player
+            .points
+            .lp
+            .saturating_add(grants.lp);
+        run_view.run_state.player.points.ap = run_view
+            .run_state
+            .player
+            .points
+            .ap
+            .saturating_add(grants.ap);
+        run_view.run_state.player.points.rp = run_view
+            .run_state
+            .player
+            .points
+            .rp
+            .saturating_add(grants.rp);
+        run_view.pending_levelup = None;
+        run_view.last_log.push(format!(
+            "Level-up confirmed: +{} BP, +{} LP, +{} AP, +{} RP",
+            grants.bp, grants.lp, grants.ap, grants.rp
+        ));
+        run_view.awaiting_downtime_choice = true;
+        self.autosave_run_checkpoint("post-levelup");
+    }
+
+    pub fn skip_encounter(&mut self) {
+        let Some(run_view) = self.run_state.as_mut() else {
+            return;
+        };
+        if run_view.run_over || run_view.awaiting_downtime_choice {
+            return;
+        }
+        let Some(encounter) = run_view.pending_encounter.take() else {
+            return;
+        };
+        run_view.last_log = vec![format!(
+            "You spot {} in {}, wielding {}. You avoid the encounter.",
+            encounter.enemy_name, encounter.armor_label, encounter.weapon_name
+        )];
+        run_view.last_outcome = None;
+        run_view.run_state.encounter_index = run_view.run_state.encounter_index.saturating_add(1);
+        run_view.awaiting_downtime_choice = true;
+        run_view.last_action = None;
+        self.autosave_run_checkpoint("post-fight");
+    }
+
+    fn prepare_forced_fight_from_event(
+        &mut self,
+        tier: crate::core::gameplay::EncounterTier,
+    ) -> bool {
+        let Some(run_view) = self.run_state.as_mut() else {
+            return false;
+        };
+        if run_view.run_over
+            || run_view.live_fight.is_some()
+            || run_view.pending_encounter.is_some()
+            || run_view.pending_event.is_some()
+        {
+            return false;
+        }
+        let player_level = run_view.run_state.player.level;
+        let effective_level = scaled_enemy_level(player_level, run_view.run_state.run_depth)
+            .saturating_add(match tier {
+                crate::core::gameplay::EncounterTier::Normal => 0,
+                crate::core::gameplay::EncounterTier::Elite => 1,
+                crate::core::gameplay::EncounterTier::Boss => 2,
+            });
+        let encounter_index = run_view.run_state.encounter_index as u64;
+        let spawn_seed = derive_seed(
+            run_view.run_state.run_seed,
+            "event-forced-spawn",
+            encounter_index,
+        );
+        let mut spawn_rng = SimRng::from_seed(spawn_seed);
+        let Some(enemy_profile) = self
+            .enemy_spawner
+            .spawn_for_level(effective_level, &mut spawn_rng)
+        else {
+            return false;
+        };
+        let default_weapon_name = self
+            .weapon_catalog
+            .get(self.enemy_weapon_id)
+            .map(|w| w.name.clone())
+            .unwrap_or_else(|| "weapon".to_string());
+        let (enemy_name, weapon_name, armor_label) = self
+            .npc_presets
+            .get(enemy_profile.preset_id)
+            .map(|preset| {
+                (
+                    preset.name.clone(),
+                    default_weapon_name.clone(),
+                    format!("armor (DR {})", preset.armor_dr),
+                )
+            })
+            .unwrap_or_else(|| {
+                (
+                    "Hobgoblin".to_string(),
+                    default_weapon_name,
+                    "armor".to_string(),
+                )
+            });
+        run_view.pending_encounter = Some(EncounterPreview {
+            enemy: enemy_profile,
+            tier,
+            enemy_name,
+            armor_label,
+            weapon_name,
+        });
+        let fight_seed = derive_seed(run_view.run_state.run_seed, "combat", encounter_index);
+        run_view.seed_context.spawn_seed = Some(spawn_seed);
+        run_view.seed_context.combat_seed = Some(fight_seed);
+        true
+    }
+
+    pub fn resolve_pending_event_choice(&mut self, choice_id: &str) {
+        let mut should_start_forced_fight = false;
+        let mut forced_tier = crate::core::gameplay::EncounterTier::Normal;
+        {
+            let Some(run_view) = self.run_state.as_mut() else {
+                return;
+            };
+            if run_view.run_over || run_view.awaiting_downtime_choice {
+                return;
+            }
+            let Some(event) = run_view.pending_event.take() else {
+                return;
+            };
+            let previous_level = run_view.run_state.player.level;
+            let mut rng = SimRng::from_seed(event.resolve_seed);
+            let resolution = resolve_event_choice(
+                &mut run_view.run_state,
+                &event.event,
+                Some(choice_id),
+                &mut rng,
+            );
+            let _ =
+                crate::core::gameplay::apply_xp(&mut run_view.run_state.player, &self.xp_curve, 0);
+            let levels_gained = run_view
+                .run_state
+                .player
+                .level
+                .saturating_sub(previous_level);
+            run_view.run_state.last_encounter_tier = event.tier;
+            run_view.run_state.last_encounter_band =
+                depth_band_for_depth(run_view.run_state.run_depth);
+            run_view.last_log = resolution.lines.clone();
+            run_view.last_outcome = None;
+            run_view.last_action = None;
+            run_view.pending_levelup = if levels_gained > 0 {
+                Some(crate::autobattler::state::LevelUpCheckpoint::new(
+                    levels_gained,
+                ))
+            } else {
+                None
+            };
+            let trigger_fight = resolution.trigger_fight && run_view.pending_levelup.is_none();
+            if trigger_fight {
+                run_view.awaiting_downtime_choice = false;
+                forced_tier = event.tier;
+                should_start_forced_fight = true;
+            } else {
+                run_view.run_state.encounter_index =
+                    run_view.run_state.encounter_index.saturating_add(1);
+                run_view.awaiting_downtime_choice = run_view.pending_levelup.is_none();
+            }
+            run_view.downtime_feedback = Some(DowntimeFeedback {
+                title: format!("Event: {}", event.event.name),
+                activity: None,
+                lines: resolution.lines,
+                animation_seconds: 1.2,
+            });
+        }
+        if should_start_forced_fight {
+            let _ = self.prepare_forced_fight_from_event(forced_tier);
+        }
+        self.autosave_run_checkpoint("post-fight");
+    }
+
+    pub fn ignore_pending_event(&mut self) {
+        let Some(run_view) = self.run_state.as_mut() else {
+            return;
+        };
+        if run_view.run_over || run_view.awaiting_downtime_choice {
+            return;
+        }
+        let Some(event) = run_view.pending_event.take() else {
+            return;
+        };
+        run_view.run_state.last_encounter_tier = event.tier;
+        run_view.run_state.last_encounter_band = depth_band_for_depth(run_view.run_state.run_depth);
+        run_view.run_state.encounter_index = run_view.run_state.encounter_index.saturating_add(1);
+        run_view.last_log = vec![format!("You avoid the {} event.", event.event.name)];
+        run_view.last_outcome = None;
+        run_view.last_action = None;
+        run_view.pending_levelup = None;
+        run_view.awaiting_downtime_choice = true;
+        run_view.downtime_feedback = Some(DowntimeFeedback {
+            title: format!("Event: {}", event.event.name),
+            activity: None,
+            lines: vec!["You move on without interacting.".to_string()],
+            animation_seconds: 0.8,
+        });
+        self.autosave_run_checkpoint("post-fight");
     }
 
     pub fn complete_live_fight(&mut self) {
@@ -782,7 +1220,12 @@ impl AutobattlerApp {
             return;
         };
 
-        run_view.last_log = live.log_lines.clone();
+        run_view.last_log = live
+            .sim
+            .combat_events
+            .iter()
+            .map(|event| sim::format_combat_event_line(event, &live.sim.combatants))
+            .collect();
         let player_hp = live.sim.combatants[0].state.hp;
         let enemy_hp = live.sim.combatants[1].state.hp;
         let won = live.sim.done && player_hp > 0 && enemy_hp <= 0;
@@ -792,25 +1235,63 @@ impl AutobattlerApp {
             turns: live.sim.elapsed_seconds,
             events: live.sim.combat_events.clone(),
         };
+        let previous_level = run_view.run_state.player.level;
 
         let outcome = apply_fight_result(
             run_view.run_state.clone(),
             Some(live.enemy),
             fight,
             &self.loot_table,
-            None,
-            live.rest_days,
-            live.resting,
+            Some(&self.xp_curve),
+            0,
+            false,
+            live.tier,
         );
 
         run_view.run_state = outcome.state.clone();
         run_view.last_outcome = Some(outcome);
-        run_view.last_action = live.action;
+        run_view.downtime_feedback = None;
+        let weapon_xp_seed = derive_seed(
+            run_view.run_state.run_seed,
+            "weapon-xp",
+            run_view.run_state.encounter_index.saturating_sub(1) as u64,
+        );
+        let mut weapon_xp_rng = SimRng::from_seed(weapon_xp_seed);
+        let weapon_xp_lines = weapon_mastery::apply_weapon_experience_from_fight(
+            &mut run_view.run_state.player,
+            &self.creation.player,
+            &self.weapon_catalog,
+            &self.shield_catalog,
+            &live.sim.combat_events,
+            live.enemy.level,
+            &mut weapon_xp_rng,
+        );
+        run_view.last_log.extend(weapon_xp_lines);
+        let levels_gained = run_view
+            .run_state
+            .player
+            .level
+            .saturating_sub(previous_level);
+        run_view.pending_levelup = if levels_gained > 0 {
+            Some(crate::autobattler::state::LevelUpCheckpoint::new(
+                levels_gained,
+            ))
+        } else {
+            None
+        };
         run_view.run_over = !run_view
             .last_outcome
             .as_ref()
             .map(|outcome| outcome.fight.won)
             .unwrap_or(false);
+        run_view.awaiting_downtime_choice =
+            !run_view.run_over && run_view.pending_levelup.is_none();
+        run_view.seed_context.loot_seed = Some(derive_seed(
+            run_view.run_state.run_seed,
+            "loot",
+            run_view.run_state.encounter_index.saturating_sub(1) as u64,
+        ));
+        self.autosave_run_checkpoint("post-fight");
     }
 
     pub fn start_new_character(&mut self) {
@@ -879,10 +1360,8 @@ impl AutobattlerApp {
         creation.player.talents = preset.talents.clone();
         creation.player.race_id = preset.race_id.clone();
         creation.player.race_applied = preset.race_id.is_some();
-        creation.player.knockback_step = game_logic::knockback_step_for_race_id(
-            preset.race_id.as_deref(),
-            &self.race_catalog,
-        );
+        creation.player.knockback_step =
+            game_logic::knockback_step_for_race_id(preset.race_id.as_deref(), &self.race_catalog);
         creation.player.use_jab = preset.maneuvers.use_jab;
         creation.player.hold_at_bay = preset.maneuvers.hold_at_bay;
         creation.player.aggressive_attack = preset.maneuvers.aggressive_attack;
@@ -915,11 +1394,10 @@ impl AutobattlerApp {
         } else if let Some(id) = self.shield_catalog.first_id() {
             creation.player.shield_id = id;
         }
-        creation.race_index = preset.race_id.as_ref().and_then(|id| {
-            self.race_catalog
-                .iter()
-                .position(|race| race.id == *id)
-        });
+        creation.race_index = preset
+            .race_id
+            .as_ref()
+            .and_then(|id| self.race_catalog.iter().position(|race| race.id == *id));
         creation.race_applied = creation.player.race_applied;
 
         creation.stats[0] = AbilityScore::new(
@@ -985,7 +1463,14 @@ impl CombatantBuilder for AutobattlerBuilder<'_> {
         player.charisma = state.player.base_stats.charisma;
         player.race_id = state.player.race_id.clone();
         player.race_applied = player.race_id.is_some();
+        player.proficiencies = state.player.proficiencies.clone();
         player.talents = state.player.talents.clone();
+        weapon_mastery::apply_profile_masteries_to_config(
+            &state.player,
+            &mut player,
+            self.weapon_catalog,
+            self.shield_catalog,
+        );
         player.charge = true;
         let mut combatant = game_logic::build_combatant(
             &player,
@@ -1029,7 +1514,7 @@ fn player_profile_from_config(
     background: Option<String>,
     quirks: Vec<String>,
     flaws: Vec<String>,
-    skills: Vec<String>,
+    skill_levels: Vec<SkillProgress>,
     proficiencies: Vec<String>,
 ) -> PlayerProfile {
     PlayerProfile {
@@ -1047,9 +1532,23 @@ fn player_profile_from_config(
         background,
         quirks,
         flaws,
-        skills,
+        skills: skills::legacy_skill_names(&skill_levels),
+        skill_levels,
         proficiencies,
+        weapon_masteries: Vec::new(),
         talents: config.talents.clone(),
+    }
+}
+
+fn ability_scores_full_from_creation(creation: &CreationState) -> AbilitySetFull {
+    AbilitySetFull {
+        strength: creation.stats[0],
+        intelligence: creation.stats[1],
+        wisdom: creation.stats[2],
+        dexterity: creation.stats[3],
+        constitution: creation.stats[4],
+        looks: creation.stats[5],
+        charisma: AbilityScore::new(creation.player.charisma, creation.stats[6].percentile),
     }
 }
 
@@ -1118,6 +1617,406 @@ fn tier_from_label(label: &str) -> ProgressionTier {
     }
 }
 
+fn add_stat_percentile_gain(
+    player: &mut PlayerProfile,
+    ability: &str,
+    expr: &str,
+    rng: &mut SimRng,
+    lines: &mut Vec<String>,
+) {
+    let gain = roll_damage_expr(expr, rng, false).max(0) as u8;
+    apply_stat_percentile_delta(player, ability, i32::from(gain), lines);
+}
+
+fn apply_stat_percentile_delta(
+    player: &mut PlayerProfile,
+    ability: &str,
+    delta: i32,
+    lines: &mut Vec<String>,
+) {
+    let Some(score) = (match ability {
+        "str" => Some(&mut player.ability_scores_full.strength),
+        "dex" => Some(&mut player.ability_scores_full.dexterity),
+        "int" => Some(&mut player.ability_scores_full.intelligence),
+        "wis" => Some(&mut player.ability_scores_full.wisdom),
+        "con" => Some(&mut player.ability_scores_full.constitution),
+        "cha" => Some(&mut player.ability_scores_full.charisma),
+        _ => None,
+    }) else {
+        return;
+    };
+    match ability {
+        _ if delta >= 0 => apply_percentile(score, delta.clamp(0, u8::MAX as i32) as u8),
+        _ => subtract_percentile(score, delta.saturating_abs().clamp(0, u8::MAX as i32) as u8),
+    }
+    player.base_stats = AbilitySet::from(player.ability_scores_full);
+    if delta >= 0 {
+        lines.push(format!("{ability} +{delta}p"));
+    } else {
+        lines.push(format!("{ability} -{}p", delta.saturating_abs()));
+    }
+}
+
+fn has_skill(player: &PlayerProfile, skill: &str) -> bool {
+    skills::player_skill_level(player, skill) > 0
+}
+
+fn add_skill_if_unskilled(player: &mut PlayerProfile, skill: &str, lines: &mut Vec<String>) {
+    if has_skill(player, skill) {
+        return;
+    }
+    let abilities = player.ability_scores_full;
+    match skills::ensure_skill(
+        &mut player.skill_levels,
+        &abilities,
+        player.level.max(1),
+        skill,
+    ) {
+        Ok(progress) => {
+            let tier = skills::mastery_tier_for_level(progress.level).label();
+            let name = skills::skill_spec(skill)
+                .map(|spec| spec.name)
+                .unwrap_or(skill);
+            lines.push(format!("Gained skill: {name} {}% ({tier})", progress.level));
+            player.skills = skills::legacy_skill_names(&player.skill_levels);
+        }
+        Err(err) => {
+            lines.push(format!("Could not learn {skill}: {err}"));
+        }
+    }
+}
+
+fn resolve_skill_check(
+    player: &PlayerProfile,
+    skill: &str,
+    difficulty: SkillDifficulty,
+    require_trained: bool,
+    rng: &mut SimRng,
+    lines: &mut Vec<String>,
+) -> bool {
+    let result: SkillCheckResult =
+        skills::roll_skill_check(player, skill, difficulty, require_trained, rng);
+    lines.push(result.summary_line());
+    result.success
+}
+
+fn add_wound(state: &mut RunState, expr: &str, rng: &mut SimRng, lines: &mut Vec<String>) {
+    let damage = roll_damage_expr(expr, rng, false).max(0) as u32;
+    if damage > 0 {
+        state.wounds.push(crate::core::gameplay::Wound {
+            damage,
+            healing_progress_steps: 0,
+        });
+        lines.push(format!("Suffered wound: {damage}"));
+    }
+}
+
+fn apply_downtime_activity(
+    state: &mut RunState,
+    activity: DowntimeActivity,
+    seed: u64,
+) -> Vec<String> {
+    let mut rng = SimRng::from_seed(seed);
+    let mut lines = Vec::new();
+    match activity {
+        DowntimeActivity::Acrobatics => {
+            add_stat_percentile_gain(&mut state.player, "dex", "d12p", &mut rng, &mut lines);
+        }
+        DowntimeActivity::AnimalTraining => {
+            add_stat_percentile_gain(&mut state.player, "wis", "d6p", &mut rng, &mut lines);
+            lines.push("Animal progress +1 week".to_string());
+        }
+        DowntimeActivity::Athletics => {
+            add_stat_percentile_gain(&mut state.player, "str", "d6p", &mut rng, &mut lines);
+            add_stat_percentile_gain(&mut state.player, "con", "d6p", &mut rng, &mut lines);
+        }
+        DowntimeActivity::Begging => {
+            add_stat_percentile_gain(&mut state.player, "cha", "d6p", &mut rng, &mut lines);
+            let success = resolve_skill_check(
+                &state.player,
+                "Persuasion",
+                SkillDifficulty::Hard,
+                false,
+                &mut rng,
+                &mut lines,
+            );
+            let amount = if success {
+                roll_damage_expr("2d20p", &mut rng, false)
+            } else {
+                roll_damage_expr("d20p", &mut rng, false)
+            };
+            state.inventory.gold = state.inventory.gold.saturating_add(amount.max(0) as u32);
+            lines.push(format!("Coins +{amount}"));
+            add_skill_if_unskilled(&mut state.player, "Persuasion", &mut lines);
+        }
+        DowntimeActivity::Carousing => {
+            add_stat_percentile_gain(&mut state.player, "con", "d6p", &mut rng, &mut lines);
+            add_stat_percentile_gain(&mut state.player, "cha", "d6p", &mut rng, &mut lines);
+            let cost = roll_damage_expr("5d6p", &mut rng, false).max(0) as u32;
+            state.inventory.gold = state.inventory.gold.saturating_sub(cost);
+            lines.push(format!("Coins -{cost}"));
+        }
+        DowntimeActivity::Climbing => {
+            add_stat_percentile_gain(&mut state.player, "str", "d6p", &mut rng, &mut lines);
+            add_stat_percentile_gain(&mut state.player, "dex", "d6p", &mut rng, &mut lines);
+            add_skill_if_unskilled(&mut state.player, "Climbing", &mut lines);
+        }
+        DowntimeActivity::Crafting => {
+            add_stat_percentile_gain(&mut state.player, "int", "d6p", &mut rng, &mut lines);
+            let success = resolve_skill_check(
+                &state.player,
+                "Craft",
+                SkillDifficulty::Hard,
+                true,
+                &mut rng,
+                &mut lines,
+            );
+            if success {
+                let gain = roll_damage_expr("2d6p", &mut rng, false).max(0) as u32;
+                state.inventory.gold = state.inventory.gold.saturating_add(gain);
+                lines.push(format!("Coins +{gain}"));
+            } else {
+                let cost = roll_damage_expr("d6p", &mut rng, false).max(0) as u32;
+                state.inventory.gold = state.inventory.gold.saturating_sub(cost);
+                lines.push(format!("Coins -{cost}"));
+            }
+        }
+        DowntimeActivity::Foraging => {
+            add_stat_percentile_gain(&mut state.player, "int", "d3p", &mut rng, &mut lines);
+            add_stat_percentile_gain(&mut state.player, "wis", "d3p", &mut rng, &mut lines);
+            let success = resolve_skill_check(
+                &state.player,
+                "Survival",
+                SkillDifficulty::Hard,
+                true,
+                &mut rng,
+                &mut lines,
+            );
+            if success {
+                let gain = roll_damage_expr("2d6p", &mut rng, false).max(0) as u32;
+                state.inventory.gold = state.inventory.gold.saturating_add(gain);
+                lines.push(format!("Coins +{gain}"));
+            } else {
+                lines.push("No finds.".to_string());
+            }
+        }
+        DowntimeActivity::Gambling => {
+            let loss = roll_damage_expr("d6p", &mut rng, false);
+            apply_stat_percentile_delta(&mut state.player, "wis", -loss, &mut lines);
+            add_stat_percentile_gain(&mut state.player, "cha", "d12p", &mut rng, &mut lines);
+            let success = resolve_skill_check(
+                &state.player,
+                "Gambling",
+                SkillDifficulty::Hard,
+                true,
+                &mut rng,
+                &mut lines,
+            );
+            if success {
+                let gain = roll_damage_expr("d20p", &mut rng, false).max(0) as u32;
+                state.inventory.gold = state.inventory.gold.saturating_add(gain);
+                lines.push(format!("Coins +{gain}"));
+            } else {
+                let cost = roll_damage_expr("d20p", &mut rng, false).max(0) as u32;
+                state.inventory.gold = state.inventory.gold.saturating_sub(cost);
+                lines.push(format!("Coins -{cost}"));
+            }
+        }
+        DowntimeActivity::Healing => {
+            add_stat_percentile_gain(&mut state.player, "wis", "d6p", &mut rng, &mut lines);
+            let success = resolve_skill_check(
+                &state.player,
+                "First Aid",
+                SkillDifficulty::Hard,
+                true,
+                &mut rng,
+                &mut lines,
+            );
+            if success {
+                state.player.honor = state.player.honor.saturating_add(1);
+                lines.push("Honor +1".to_string());
+            } else {
+                state.player.honor = state.player.honor.saturating_sub(1);
+                lines.push("Honor -1".to_string());
+            }
+        }
+        DowntimeActivity::Hunting => {
+            add_stat_percentile_gain(&mut state.player, "wis", "d3p", &mut rng, &mut lines);
+            add_stat_percentile_gain(&mut state.player, "dex", "d3p", &mut rng, &mut lines);
+            let success = resolve_skill_check(
+                &state.player,
+                "Hunting",
+                SkillDifficulty::Hard,
+                true,
+                &mut rng,
+                &mut lines,
+            );
+            if success {
+                let gain = roll_damage_expr("2d6p", &mut rng, false).max(0) as u32;
+                state.inventory.gold = state.inventory.gold.saturating_add(gain);
+                lines.push(format!("Coins +{gain}"));
+            } else {
+                add_wound(state, "d4p", &mut rng, &mut lines);
+            }
+        }
+        DowntimeActivity::Jumping => {
+            add_stat_percentile_gain(&mut state.player, "str", "d12p", &mut rng, &mut lines);
+            add_skill_if_unskilled(&mut state.player, "Jumping", &mut lines);
+        }
+        DowntimeActivity::Laboring => {
+            add_stat_percentile_gain(&mut state.player, "con", "d6p", &mut rng, &mut lines);
+            state.player.honor = state.player.honor.saturating_add(1);
+            lines.push("Honor +1".to_string());
+        }
+        DowntimeActivity::Meditating => {
+            add_stat_percentile_gain(&mut state.player, "wis", "d12p", &mut rng, &mut lines);
+        }
+        DowntimeActivity::Performing => {
+            add_stat_percentile_gain(&mut state.player, "cha", "d6p", &mut rng, &mut lines);
+            let success = resolve_skill_check(
+                &state.player,
+                "Acting",
+                SkillDifficulty::Hard,
+                true,
+                &mut rng,
+                &mut lines,
+            );
+            if success {
+                let gain = roll_damage_expr("d6p", &mut rng, false).max(0) as u32;
+                state.inventory.gold = state.inventory.gold.saturating_add(gain);
+                lines.push(format!("Coins +{gain}"));
+            }
+        }
+        DowntimeActivity::Reading => {
+            add_stat_percentile_gain(&mut state.player, "int", "d12p", &mut rng, &mut lines);
+            let success = resolve_skill_check(
+                &state.player,
+                "Literacy",
+                SkillDifficulty::Hard,
+                true,
+                &mut rng,
+                &mut lines,
+            );
+            if success {
+                state.player.points.lp = state.player.points.lp.saturating_add(1);
+                lines.push("LP +1".to_string());
+            }
+        }
+        DowntimeActivity::RepairingRefitting => {
+            add_stat_percentile_gain(&mut state.player, "int", "d6p", &mut rng, &mut lines);
+            let success = resolve_skill_check(
+                &state.player,
+                "Craft",
+                SkillDifficulty::Hard,
+                true,
+                &mut rng,
+                &mut lines,
+            );
+            if success {
+                let gain = roll_damage_expr("2d6p", &mut rng, false).max(0) as u32;
+                state.inventory.gold = state.inventory.gold.saturating_add(gain);
+                lines.push(format!("Coins +{gain}"));
+            }
+        }
+        DowntimeActivity::Riding => {
+            add_stat_percentile_gain(&mut state.player, "dex", "d6p", &mut rng, &mut lines);
+            let success = resolve_skill_check(
+                &state.player,
+                "Riding",
+                SkillDifficulty::Hard,
+                false,
+                &mut rng,
+                &mut lines,
+            );
+            if success {
+                add_skill_if_unskilled(&mut state.player, "Riding", &mut lines);
+            } else {
+                add_wound(state, "d4p", &mut rng, &mut lines);
+            }
+        }
+        DowntimeActivity::Scouting => {
+            add_stat_percentile_gain(&mut state.player, "wis", "d3p", &mut rng, &mut lines);
+            add_stat_percentile_gain(&mut state.player, "con", "d3p", &mut rng, &mut lines);
+            let observation_success = resolve_skill_check(
+                &state.player,
+                "Observation",
+                SkillDifficulty::Hard,
+                false,
+                &mut rng,
+                &mut lines,
+            );
+            if observation_success {
+                lines.push("Scouting info gained.".to_string());
+            }
+            let survival_success = resolve_skill_check(
+                &state.player,
+                "Survival",
+                SkillDifficulty::Easy,
+                false,
+                &mut rng,
+                &mut lines,
+            );
+            if survival_success {
+                add_skill_if_unskilled(&mut state.player, "Survival", &mut lines);
+            } else {
+                add_wound(state, "d4p", &mut rng, &mut lines);
+            }
+        }
+        DowntimeActivity::SkillTutoring => {
+            add_stat_percentile_gain(&mut state.player, "int", "d6p", &mut rng, &mut lines);
+            state.player.points.lp = state.player.points.lp.saturating_add(2);
+            lines.push("LP +2".to_string());
+        }
+        DowntimeActivity::SkillTraining => {
+            add_stat_percentile_gain(&mut state.player, "int", "d6p", &mut rng, &mut lines);
+            state.player.points.lp = state.player.points.lp.saturating_add(1);
+            lines.push("LP +1".to_string());
+        }
+        DowntimeActivity::Sparring => {
+            add_stat_percentile_gain(&mut state.player, "str", "d3p", &mut rng, &mut lines);
+            add_stat_percentile_gain(&mut state.player, "dex", "d3p", &mut rng, &mut lines);
+            add_stat_percentile_gain(&mut state.player, "con", "d3p", &mut rng, &mut lines);
+            add_wound(state, "d4p", &mut rng, &mut lines);
+            let trauma_roll = roll_damage_expr("d20", &mut rng, false);
+            let con_half = (i32::from(state.player.base_stats.constitution)) / 2;
+            if trauma_roll <= con_half {
+                let xp = roll_damage_expr("6d6p", &mut rng, false);
+                lines.push(format!("Weapon XP +{xp} (tracked later)"));
+            } else {
+                let xp = roll_damage_expr("3d6p", &mut rng, false);
+                lines.push(format!("Weapon XP +{xp} (tracked later)"));
+            }
+            lines.push(format!("Trauma save: {trauma_roll} vs {con_half}"));
+        }
+        DowntimeActivity::Swimming => {
+            let success = resolve_skill_check(
+                &state.player,
+                "Swimming",
+                SkillDifficulty::Hard,
+                true,
+                &mut rng,
+                &mut lines,
+            );
+            if success {
+                add_stat_percentile_gain(&mut state.player, "str", "d6p", &mut rng, &mut lines);
+                add_stat_percentile_gain(&mut state.player, "con", "d6p", &mut rng, &mut lines);
+            } else {
+                add_stat_percentile_gain(&mut state.player, "con", "d12p", &mut rng, &mut lines);
+            }
+        }
+        DowntimeActivity::WeaponDrills => {
+            add_stat_percentile_gain(&mut state.player, "str", "d3p", &mut rng, &mut lines);
+            add_stat_percentile_gain(&mut state.player, "dex", "d3p", &mut rng, &mut lines);
+            let xp = roll_damage_expr("3d6p", &mut rng, false);
+            lines.push(format!("Weapon XP +{xp} (tracked later)"));
+        }
+    }
+    if lines.is_empty() {
+        lines.push("No reward.".to_string());
+    }
+    lines
+}
+
 pub fn run_app() {
     crate::console::maybe_enable_console();
     let args = AutobattlerArgs::parse();
@@ -1125,6 +2024,11 @@ pub fn run_app() {
     let window = Window {
         title: "HackMaster Autobattler".to_string(),
         resolution: (WINDOW_WIDTH, WINDOW_HEIGHT).into(),
+        resize_constraints: WindowResizeConstraints {
+            min_width: 1360.0,
+            min_height: 840.0,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut app = AutobattlerApp::new();
@@ -1145,8 +2049,7 @@ pub fn run_app() {
     }
     let mut screenshot_state = ScreenshotState::default();
     screenshot_state.headless_enabled = headless;
-    let auto_allowed =
-        headless && (args.auto_screenshots || args.auto_screenshot_count.is_some());
+    let auto_allowed = headless && (args.auto_screenshots || args.auto_screenshot_count.is_some());
     screenshot_state.auto_allowed = auto_allowed;
     if auto_allowed {
         screenshot_state.auto_enabled = true;

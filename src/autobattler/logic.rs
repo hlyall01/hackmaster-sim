@@ -1,6 +1,6 @@
-use crate::autobattler::constants::{STAT_COUNT};
+use crate::autobattler::constants::STAT_COUNT;
 use crate::autobattler::state::PointPool;
-use crate::character::{charisma_honor_adjustment, looks_honor_adjustment, AbilityScore};
+use crate::character::{AbilityScore, charisma_honor_adjustment, looks_honor_adjustment};
 use crate::core::types::{RaceSpec, TalentSelection, TalentSpec};
 use crate::game_logic::TalentCatalog;
 
@@ -79,7 +79,10 @@ pub struct HonorBreakdown {
     pub total: i32,
 }
 
-pub fn starting_honor(stats: &[AbilityScore; STAT_COUNT], effective_charisma: u8) -> HonorBreakdown {
+pub fn starting_honor(
+    stats: &[AbilityScore; STAT_COUNT],
+    effective_charisma: u8,
+) -> HonorBreakdown {
     let mut total = 0.0;
     for (idx, score) in stats.iter().enumerate() {
         let base = if idx == 6 {

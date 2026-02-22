@@ -85,11 +85,7 @@ pub fn roll_damage_expr(expr: &str, rng: &mut impl Rng, nonpenetrating: bool) ->
     }
 }
 
-fn roll_damage_expr_cached(
-    cleaned: &str,
-    is_lower_of: bool,
-    rng: &mut impl Rng,
-) -> i32 {
+fn roll_damage_expr_cached(cleaned: &str, is_lower_of: bool, rng: &mut impl Rng) -> i32 {
     if is_lower_of {
         let a_total = evaluate_expression(cleaned, rng);
         let b_total = evaluate_expression(cleaned, rng);
@@ -311,10 +307,7 @@ fn expected_term(term: &str) -> f64 {
     }
 }
 
-pub(crate) fn evaluate_expression_with_detail(
-    expr: &str,
-    rng: &mut impl Rng,
-) -> (i32, String) {
+pub(crate) fn evaluate_expression_with_detail(expr: &str, rng: &mut impl Rng) -> (i32, String) {
     let mut total = 0;
     let mut detail = String::new();
     let mut idx = 0;

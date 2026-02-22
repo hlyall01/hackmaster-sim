@@ -2,10 +2,12 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
 use crate::autobattler::render::{
-    body_visual_for_race_id, weapon_visual_for_group, RenderAssets, RenderConfig, WEAPON_GROUPS,
+    RenderAssets, RenderConfig, WEAPON_GROUPS, body_visual_for_race_id, weapon_visual_for_group,
 };
 use crate::autobattler::screenshot::ScreenshotState;
-use crate::autobattler::state::{AppScreen, AutobattlerState, SpriteReviewStage, SpriteReviewState};
+use crate::autobattler::state::{
+    AppScreen, AutobattlerState, SpriteReviewStage, SpriteReviewState,
+};
 
 #[derive(Component)]
 pub struct ReviewBody;
@@ -80,12 +82,8 @@ pub fn sprite_review_system(
                 let Some(race_id) = review.current_race() else {
                     return;
                 };
-                let (positions, cell_size) = review_grid_layout(
-                    window,
-                    WEAPON_GROUPS.len(),
-                    7,
-                    Vec2::new(60.0, 80.0),
-                );
+                let (positions, cell_size) =
+                    review_grid_layout(window, WEAPON_GROUPS.len(), 7, Vec2::new(60.0, 80.0));
                 let ground_offset = cell_size.y * 0.25;
                 let body_visual = body_visual_for_race_id(race_id, &assets, &render_config, false);
                 let base_weapon_y =
@@ -136,9 +134,9 @@ pub fn sprite_review_system(
                                     base_weapon_y + weapon_visual.offset.y,
                                     weapon_z,
                                 ))
-                                .with_rotation(Quat::from_rotation_z(
-                                    weapon_visual.rotation_deg.to_radians(),
-                                )),
+                                .with_rotation(
+                                    Quat::from_rotation_z(weapon_visual.rotation_deg.to_radians()),
+                                ),
                                 ..Default::default()
                             },
                             ReviewWeapon,

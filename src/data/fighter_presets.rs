@@ -3,11 +3,10 @@ use crate::game_logic::{FighterPreset, FighterPresetCatalog};
 use serde::{Deserialize, Serialize};
 use std::fs;
 
-const EMBEDDED_FIGHTER_PRESETS_JSON: &str =
-    include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/data/sim/fighter_presets.json"
-    ));
+const EMBEDDED_FIGHTER_PRESETS_JSON: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/data/sim/fighter_presets.json"
+));
 const EMBEDDED_QUICK_STARTS_JSON: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/data/autobattler/autobattler_quick_starts.json"

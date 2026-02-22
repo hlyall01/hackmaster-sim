@@ -15,7 +15,9 @@ use bevy::render::{Render, RenderApp, RenderSet};
 use crossbeam_channel::{Receiver, Sender};
 
 use crate::autobattler::constants::COPY_BYTES_PER_ROW_ALIGNMENT;
-use crate::autobattler::state::{AppScreen, AutobattlerState, SpriteReviewStage, SpriteReviewState};
+use crate::autobattler::state::{
+    AppScreen, AutobattlerState, SpriteReviewStage, SpriteReviewState,
+};
 
 #[derive(Resource)]
 pub struct ScreenshotState {

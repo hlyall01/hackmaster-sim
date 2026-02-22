@@ -10,7 +10,9 @@ use bevy::window::PrimaryWindow;
 
 use crate::autobattler::constants::{ARENA_PADDING, RUN_PANEL_WIDTH, SUMMARY_PANEL_WIDTH};
 use crate::autobattler::logic;
-use crate::autobattler::screenshot::{create_headless_render_target, HeadlessConfig, HeadlessRenderTarget};
+use crate::autobattler::screenshot::{
+    HeadlessConfig, HeadlessRenderTarget, create_headless_render_target,
+};
 use crate::autobattler::state::{AppScreen, AutobattlerState};
 use crate::character::WeaponGroup;
 use crate::core::types::RaceSpec;
@@ -832,9 +834,7 @@ pub(crate) fn body_visual_for_race_id(
                 (&assets.enemy_textures, &assets.enemy_pained_textures)
             };
             let texture = if downed {
-                pained_map
-                    .get(race_id)
-                    .or_else(|| normal_map.get(race_id))
+                pained_map.get(race_id).or_else(|| normal_map.get(race_id))
             } else {
                 normal_map.get(race_id)
             }
@@ -1046,8 +1046,8 @@ pub fn sync_render_system(
             let combatant = sim.combatants.get(idx);
             let visual = combatant
                 .map(|combatant| {
-                    let downed = combatant.state.hp <= 0
-                        || combatant.state.trauma_remaining_seconds > 0;
+                    let downed =
+                        combatant.state.hp <= 0 || combatant.state.trauma_remaining_seconds > 0;
                     body_visual_for(
                         combatant,
                         &assets,
@@ -1138,8 +1138,8 @@ pub fn sync_render_system(
             .combatants
             .get(sprite.idx)
             .map(|combatant| {
-                let downed = combatant.state.hp <= 0
-                    || combatant.state.trauma_remaining_seconds > 0;
+                let downed =
+                    combatant.state.hp <= 0 || combatant.state.trauma_remaining_seconds > 0;
                 body_visual_for(
                     combatant,
                     &assets,

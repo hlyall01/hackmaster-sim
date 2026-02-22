@@ -2,8 +2,8 @@ use hackmaster_sim::character::{
     AbilityScore, AbilitySet, AbilitySetFull, Progression, ProgressionTier,
 };
 use hackmaster_sim::core::gameplay::{
-    run_next_fight, AutobattlerConfig, CombatantBuilder, EnemySpawnEntry, EnemySpawner, RunState,
-    Wound,
+    AutobattlerConfig, CombatantBuilder, EnemySpawnEntry, EnemySpawner, RunState, Wound,
+    encounter_tier_for_depth, run_next_fight,
 };
 use hackmaster_sim::core::ids::NpcPresetId;
 use hackmaster_sim::core::sim::{CombatEvent, CombatEventKind, SimConfig};
@@ -18,7 +18,6 @@ use std::{env, process};
 const AUTOBATTLER_CONFIG_PATH: &str = "data/autobattler/autobattler_config.json";
 const FIGHTER_PRESETS_PATH: &str = "data/sim/fighter_presets.json";
 const NPC_PRESETS_PATH: &str = "data/sim/npc_presets.json";
-const TALENTS_PATH: &str = "data/sim/talents.json";
 
 struct AutobattlerBuilder<'a> {
     player_base: PlayerConfig,
@@ -90,14 +89,13 @@ fn main() {
         .unwrap_or_else(|err| panic!("Failed to load autobattler config: {err}"));
     cli_overrides.apply(&mut config);
 
-    let (weapon_catalog, armor_catalog, shield_catalog) = data::load_catalogs()
-        .unwrap_or_else(|err| panic!("Failed to load JSON catalogs: {err}"));
-    let npc_presets =
-        data::load_npc_presets(NPC_PRESETS_PATH).expect("Failed to load NPC presets");
+    let (weapon_catalog, armor_catalog, shield_catalog) =
+        data::load_catalogs().unwrap_or_else(|err| panic!("Failed to load JSON catalogs: {err}"));
+    let npc_presets = data::load_npc_presets(NPC_PRESETS_PATH).expect("Failed to load NPC presets");
     let fighter_presets =
         data::load_fighter_presets(FIGHTER_PRESETS_PATH).expect("Failed to load fighter presets");
     let race_catalog = data::load_races("data/races.json").expect("Failed to load races");
-    let talent_catalog = data::load_talents(TALENTS_PATH).expect("Failed to load talents");
+    let talent_catalog = data::load_talents(data::TALENTS_PATH).expect("Failed to load talents");
 
     let arthur_preset = find_fighter_preset(&fighter_presets, &config.player_preset_name)
         .or_else(|| fighter_presets.entries().first())
@@ -131,6 +129,7 @@ fn main() {
 
     println!("Autobattler run start: {}", run_state.player.name);
     for fight_index in 1..=config.fights_to_run {
+        let tier = encounter_tier_for_depth(run_state.run_depth);
         let outcome = run_next_fight(
             run_state,
             &spawner,
@@ -140,6 +139,7 @@ fn main() {
             config.max_fight_seconds,
             config.rest_days_between_encounters,
             true,
+            tier,
             &builder,
         );
         let enemy_name = outcome
@@ -173,7 +173,7 @@ fn main() {
             reward_gold,
             outcome.state.inventory.gold
         );
-        println!("  Wound tracker (6h progress/need): {wound_tracker}");
+        println!("  Wound tracker (steps progress/need): {wound_tracker}");
         println!("  Hits (hp damage): dealt=[{hits_dealt}] taken=[{hits_taken}]");
 
         run_state = outcome.state;
@@ -323,8 +323,8 @@ fn format_wound_tracker(wounds: &[Wound]) -> String {
         .map(|wound| {
             let damage = wound.damage;
             let required = damage.saturating_mul(2);
-            let progress = wound.healing_progress_quarter_days.min(required);
-            format!("{damage}({progress}/{required} 6h)")
+            let progress = wound.healing_progress_steps.min(required);
+            format!("{damage}({progress}/{required} steps)")
         })
         .collect::<Vec<_>>()
         .join(", ")
@@ -473,7 +473,9 @@ fn player_profile_from_config(config: &PlayerConfig) -> PlayerProfile {
         quirks: Vec::new(),
         flaws: Vec::new(),
         skills: Vec::new(),
+        skill_levels: Vec::new(),
         proficiencies: Vec::new(),
+        weapon_masteries: Vec::new(),
         talents: config.talents.clone(),
     }
 }

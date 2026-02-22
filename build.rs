@@ -65,7 +65,11 @@ fn main() {
     let staging_dir = if use_staging {
         let dir = env::temp_dir().join("hackmaster_sim_icons");
         if let Err(err) = fs::create_dir_all(&dir) {
-            panic!("Failed to create icon staging dir {}: {}", dir.display(), err);
+            panic!(
+                "Failed to create icon staging dir {}: {}",
+                dir.display(),
+                err
+            );
         }
         dir
     } else {
@@ -80,11 +84,7 @@ fn main() {
         let icon_for_rc = if use_staging {
             let staged_icon = staging_dir.join(format!("icon_{}.ico", icon.bin));
             if let Err(err) = fs::copy(&icon_path, &staged_icon) {
-                panic!(
-                    "Failed to stage icon {}: {}",
-                    staged_icon.display(),
-                    err
-                );
+                panic!("Failed to stage icon {}: {}", staged_icon.display(), err);
             }
             staged_icon
         } else {

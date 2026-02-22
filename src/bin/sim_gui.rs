@@ -1,17 +1,17 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use hackmaster_sim::{character, data, game_logic, sim};
 use character::{Progression, ProgressionTier, WeaponGroup};
 use eframe::egui::{self, Color32, Pos2, Rect};
-use hackmaster_sim::core::catalog::Catalog;
-use hackmaster_sim::core::types::{RaceSpec, TalentSelection, TalentSpec};
-use sim::{bulk_simulate, BulkSimResult, SimConfig, SimState};
-use std::{collections::BTreeMap, time::Instant};
 use game_logic::{
     ArmorCatalog, ArmorEntry, ArmorId, FighterMasteries, FighterPreset, FighterPresetCatalog,
-    FighterProgression, NpcPresetCatalog, PlayerConfig, ShieldCatalog, ShieldId,
-    TalentCatalog, WeaponCatalog, WeaponHandedness, WeaponId, WeaponSize,
+    FighterProgression, NpcPresetCatalog, PlayerConfig, ShieldCatalog, ShieldId, TalentCatalog,
+    WeaponCatalog, WeaponHandedness, WeaponId, WeaponSize,
 };
+use hackmaster_sim::core::catalog::Catalog;
+use hackmaster_sim::core::types::{RaceSpec, TalentSelection, TalentSpec};
+use hackmaster_sim::{character, data, game_logic, sim};
+use sim::{BulkSimResult, SimConfig, SimState, bulk_simulate};
+use std::{collections::BTreeMap, time::Instant};
 
 #[derive(Clone, Copy)]
 enum WeaponIcon {
@@ -125,9 +125,12 @@ impl SimGuiApp {
                 Catalog::new(Vec::new())
             }
         };
-        let talent_catalog = match data::load_talents("data/talents.json") {
+        let talent_catalog = match data::load_talents(data::TALENTS_PATH) {
             Ok(talents) => talents,
             Err(err) => {
+                if cfg!(debug_assertions) {
+                    panic!("Failed to load talents: {err}");
+                }
                 eprintln!("Failed to load talents: {err}");
                 Catalog::new(Vec::new())
             }
@@ -170,10 +173,7 @@ impl SimGuiApp {
             time_scale: 1.0,
             show_player_editor: [false, false],
             player_editor_tabs: [PlayerEditorTab::Core, PlayerEditorTab::Core],
-            talent_category_tabs: [
-                TALENT_TAB_ALL.to_string(),
-                TALENT_TAB_ALL.to_string(),
-            ],
+            talent_category_tabs: [TALENT_TAB_ALL.to_string(), TALENT_TAB_ALL.to_string()],
             last_screen_size: egui::vec2(0.0, 0.0),
             bulk_runs: 1000,
             bulk_result: None,
@@ -230,14 +230,12 @@ impl SimGuiApp {
             &self.npc_presets,
             &self.talent_catalog,
         );
-        let config = SimConfig::new(self.sim.config.start_distance, self.sim.config.stop_distance);
-        let start = Instant::now();
-        let result = bulk_simulate(
-            config,
-            combatants,
-            self.bulk_runs,
-            BULK_SIM_MAX_SECONDS,
+        let config = SimConfig::new(
+            self.sim.config.start_distance,
+            self.sim.config.stop_distance,
         );
+        let start = Instant::now();
+        let result = bulk_simulate(config, combatants, self.bulk_runs, BULK_SIM_MAX_SECONDS);
         self.bulk_result = Some(result);
         self.bulk_sim_duration = Some(start.elapsed());
     }
@@ -307,8 +305,7 @@ impl SimGuiApp {
             let player = &self.players[idx];
             let player_color = self.player_colors[idx];
             let knocked_back = combatant.state.knockback_immobile_seconds > 0;
-            let downed =
-                combatant.state.hp <= 0 || combatant.state.trauma_remaining_seconds > 0;
+            let downed = combatant.state.hp <= 0 || combatant.state.trauma_remaining_seconds > 0;
             let weapon_icon = self
                 .weapon_catalog
                 .get(player.weapon_id)
@@ -350,19 +347,18 @@ impl SimGuiApp {
             let hp = self.sim.combatants[idx].state.hp.max(0) as f32;
             let max_hp = self.sim.combatants[idx].sheet.vitals.max_hp.max(1) as f32;
             let hp_ratio = (hp / max_hp).clamp(0.0, 1.0);
-            let bar_x = if idx == 0 {
-                left
-            } else {
-                right - bar_width
-            };
-            let bg_rect = Rect::from_min_size(Pos2::new(bar_x, y), egui::vec2(bar_width, bar_height));
+            let bar_x = if idx == 0 { left } else { right - bar_width };
+            let bg_rect =
+                Rect::from_min_size(Pos2::new(bar_x, y), egui::vec2(bar_width, bar_height));
             painter.rect_filled(bg_rect, 3.0, Color32::from_gray(40));
             let fill_width = bar_width * hp_ratio;
-            let fill_x = if idx == 0 { bar_x } else { bar_x + (bar_width - fill_width) };
-            let fill_rect = Rect::from_min_size(
-                Pos2::new(fill_x, y),
-                egui::vec2(fill_width, bar_height),
-            );
+            let fill_x = if idx == 0 {
+                bar_x
+            } else {
+                bar_x + (bar_width - fill_width)
+            };
+            let fill_rect =
+                Rect::from_min_size(Pos2::new(fill_x, y), egui::vec2(fill_width, bar_height));
             painter.rect_filled(fill_rect, 3.0, player_color);
             let name_x = if idx == 0 { bar_x } else { bar_x + bar_width };
             let align = if idx == 0 {
@@ -499,14 +495,8 @@ impl SimGuiApp {
         let torso = Pos2::new(base.x, base.y - 14.0);
         painter.circle_filled(head, 6.5, head_color);
         painter.line_segment([neck, torso], stroke);
-        painter.line_segment(
-            [torso, Pos2::new(base.x - 6.0, base.y - 2.0)],
-            stroke,
-        );
-        painter.line_segment(
-            [torso, Pos2::new(base.x + 6.0, base.y - 2.0)],
-            stroke,
-        );
+        painter.line_segment([torso, Pos2::new(base.x - 6.0, base.y - 2.0)], stroke);
+        painter.line_segment([torso, Pos2::new(base.x + 6.0, base.y - 2.0)], stroke);
         let arm_start = Pos2::new(base.x, base.y - 22.0);
         let arm_end = Pos2::new(base.x + facing * 12.0, base.y - 18.0);
         painter.line_segment([arm_start, arm_end], stroke);
@@ -548,11 +538,7 @@ fn draw_weapon_icon(painter: &egui::Painter, pos: Pos2, facing: f32, icon: Weapo
                 ],
                 stroke,
             );
-            painter.circle_filled(
-                Pos2::new(pos.x - facing * 1.0, pos.y + 1.0),
-                1.5,
-                accent,
-            );
+            painter.circle_filled(Pos2::new(pos.x - facing * 1.0, pos.y + 1.0), 1.5, accent);
         }
         WeaponIcon::Dagger => {
             let tip = Pos2::new(pos.x + facing * 8.0, pos.y - 6.0);
@@ -590,7 +576,10 @@ fn draw_weapon_icon(painter: &egui::Painter, pos: Pos2, facing: f32, icon: Weapo
             painter.line_segment([blade_back, blade_low], stroke);
             painter.line_segment([blade_low, tip], stroke);
             painter.line_segment(
-                [blade_back, Pos2::new(blade_back.x - facing * 3.0, blade_back.y - 2.0)],
+                [
+                    blade_back,
+                    Pos2::new(blade_back.x - facing * 3.0, blade_back.y - 2.0),
+                ],
                 stroke,
             );
         }
@@ -653,14 +642,8 @@ fn draw_weapon_icon(painter: &egui::Painter, pos: Pos2, facing: f32, icon: Weapo
         WeaponIcon::Double => {
             let end = Pos2::new(pos.x + facing * 14.0, pos.y - 10.0);
             painter.line_segment([pos, end], stroke);
-            painter.line_segment(
-                [pos, Pos2::new(pos.x + facing * 2.5, pos.y - 4.0)],
-                stroke,
-            );
-            painter.line_segment(
-                [end, Pos2::new(end.x - facing * 2.5, end.y + 4.0)],
-                stroke,
-            );
+            painter.line_segment([pos, Pos2::new(pos.x + facing * 2.5, pos.y - 4.0)], stroke);
+            painter.line_segment([end, Pos2::new(end.x - facing * 2.5, end.y + 4.0)], stroke);
         }
         WeaponIcon::Ensnaring => {
             let end = Pos2::new(pos.x + facing * 10.0, pos.y - 6.0);
@@ -668,7 +651,10 @@ fn draw_weapon_icon(painter: &egui::Painter, pos: Pos2, facing: f32, icon: Weapo
             let ring = Rect::from_center_size(end, egui::vec2(6.0, 6.0));
             painter.rect_stroke(ring, 3.0, (1.0, accent));
             painter.line_segment(
-                [Pos2::new(ring.left(), ring.center().y), Pos2::new(ring.right(), ring.center().y)],
+                [
+                    Pos2::new(ring.left(), ring.center().y),
+                    Pos2::new(ring.right(), ring.center().y),
+                ],
                 (1.0, accent),
             );
         }
@@ -709,7 +695,10 @@ impl eframe::App for SimGuiApp {
 
         egui::TopBottomPanel::top("controls").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                if ui.button(if self.running { "Pause" } else { "Start" }).clicked() {
+                if ui
+                    .button(if self.running { "Pause" } else { "Start" })
+                    .clicked()
+                {
                     if !self.running && (self.sim.done || self.sim.elapsed_seconds == 0) {
                         self.reset_positions();
                     }
@@ -758,18 +747,12 @@ impl eframe::App for SimGuiApp {
                         .map(|weapon| weapon.name.as_str())
                         .unwrap_or("Unarmed");
                     ui.horizontal(|ui| {
-                        ui.label(format!(
-                            "{} ({})",
-                            self.players[idx].name, weapon_name
-                        ));
+                        ui.label(format!("{} ({})", self.players[idx].name, weapon_name));
                         if ui.button("Customize").clicked() {
                             self.show_player_editor[idx] = true;
                         }
                     });
-                    ui.label(format!(
-                        "Move: {:.0} ft/s",
-                        self.players[idx].move_speed
-                    ));
+                    ui.label(format!("Move: {:.0} ft/s", self.players[idx].move_speed));
                     if idx == 0 {
                         ui.separator();
                     }
@@ -791,14 +774,8 @@ impl eframe::App for SimGuiApp {
                 if let Some(result) = &self.bulk_result {
                     let wins_a = result.wins.get(0).copied().unwrap_or(0);
                     let wins_b = result.wins.get(1).copied().unwrap_or(0);
-                    ui.label(format!(
-                        "{} wins: {}",
-                        self.players[0].name, wins_a
-                    ));
-                    ui.label(format!(
-                        "{} wins: {}",
-                        self.players[1].name, wins_b
-                    ));
+                    ui.label(format!("{} wins: {}", self.players[0].name, wins_a));
+                    ui.label(format!("{} wins: {}", self.players[1].name, wins_b));
                     if result.ties > 0 {
                         ui.label(format!("Ties/timeouts: {}", result.ties));
                     }
@@ -806,10 +783,7 @@ impl eframe::App for SimGuiApp {
                         "Fights w/ 2+ charges: {}",
                         result.fights_with_second_charge
                     ));
-                    ui.label(format!(
-                        "Fights w/ trauma: {}",
-                        result.fights_with_trauma
-                    ));
+                    ui.label(format!("Fights w/ trauma: {}", result.fights_with_trauma));
                     ui.label(format!(
                         "Fights w/ trauma on first exchange: {}",
                         result.fights_with_trauma_first_exchange
@@ -941,11 +915,7 @@ impl eframe::App for SimGuiApp {
     }
 }
 
-fn render_player_editor_tabs(
-    ui: &mut egui::Ui,
-    id_prefix: &str,
-    active_tab: &mut PlayerEditorTab,
-) {
+fn render_player_editor_tabs(ui: &mut egui::Ui, id_prefix: &str, active_tab: &mut PlayerEditorTab) {
     ui.push_id(format!("{id_prefix}_tabs"), |ui| {
         ui.horizontal(|ui| {
             for tab in PLAYER_EDITOR_TABS {
@@ -1223,9 +1193,12 @@ fn render_player_editor(
                 if let Some(id) = weapon_catalog.id_from_index(selection) {
                     player.weapon_id = id;
                 }
-                let weapon = weapon_catalog
-                    .get(player.weapon_id)
-                    .unwrap_or_else(|| weapon_catalog.entries().first().expect("weapon catalog empty"));
+                let weapon = weapon_catalog.get(player.weapon_id).unwrap_or_else(|| {
+                    weapon_catalog
+                        .entries()
+                        .first()
+                        .expect("weapon catalog empty")
+                });
                 game_logic::sanitize_projectile_tier(player, weapon);
                 uses_projectiles = game_logic::weapon_uses_projectiles(weapon);
                 material_tier_combo(
@@ -1244,9 +1217,12 @@ fn render_player_editor(
                 }
             });
 
-            let weapon = weapon_catalog
-                .get(player.weapon_id)
-                .unwrap_or_else(|| weapon_catalog.entries().first().expect("weapon catalog empty"));
+            let weapon = weapon_catalog.get(player.weapon_id).unwrap_or_else(|| {
+                weapon_catalog
+                    .entries()
+                    .first()
+                    .expect("weapon catalog empty")
+            });
             let is_two_handed = weapon.handedness == WeaponHandedness::TwoHanded;
             let can_two_hand = weapon.handedness == WeaponHandedness::OneHanded
                 && (weapon.size == WeaponSize::Medium || weapon.size == WeaponSize::Large);
@@ -1309,7 +1285,9 @@ fn render_player_editor(
                 }
             });
             if player.defensive_dualwielding {
-                ui.label("Defensive dualwielding: double defense mastery & weapon defense talent bonus");
+                ui.label(
+                    "Defensive dualwielding: double defense mastery & weapon defense talent bonus",
+                );
             }
             if player.offensive_dualwielding {
                 ui.label("Offensive dualwielding: alternate primary/offhand attacks");
@@ -1337,10 +1315,36 @@ fn render_player_editor(
                         &mut player.armor_material_tier,
                     );
                 });
-                let shield_allowed = weapon.handedness == WeaponHandedness::OneHanded
-                    && !player.two_hand_grip
-                    && !game_logic::defensive_dualwielding_active(player, weapon)
-                    && !game_logic::offensive_dualwielding_active(player, weapon);
+                let selected_shield_allowed = shield_catalog
+                    .get(player.shield_id)
+                    .and_then(|entry| entry.shield.as_ref())
+                    .map(|shield| {
+                        game_logic::shield_option_allowed(
+                            player,
+                            weapon,
+                            Some(shield),
+                            talent_catalog,
+                        )
+                    })
+                    .unwrap_or(true);
+                if !selected_shield_allowed {
+                    player.shield_id = ShieldId::new(0);
+                    player.shield_material_tier = 0;
+                }
+                let shield_allowed = shield_catalog.entries().iter().any(|entry| {
+                    entry
+                        .shield
+                        .as_ref()
+                        .map(|shield| {
+                            game_logic::shield_option_allowed(
+                                player,
+                                weapon,
+                                Some(shield),
+                                talent_catalog,
+                            )
+                        })
+                        .unwrap_or(false)
+                });
                 ui.horizontal(|ui| {
                     ui.label("Shield");
                     let mut selection = shield_catalog.index_of(player.shield_id);
@@ -1353,7 +1357,25 @@ fn render_player_editor(
                             .selected_text(selected_name)
                             .show_ui(ui, |ui| {
                                 for (idx, shield) in shield_catalog.entries().iter().enumerate() {
-                                    ui.selectable_value(&mut selection, idx, shield.label.as_str());
+                                    let option_allowed = shield
+                                        .shield
+                                        .as_ref()
+                                        .map(|shield| {
+                                            game_logic::shield_option_allowed(
+                                                player,
+                                                weapon,
+                                                Some(shield),
+                                                talent_catalog,
+                                            )
+                                        })
+                                        .unwrap_or(true);
+                                    ui.add_enabled_ui(option_allowed, |ui| {
+                                        ui.selectable_value(
+                                            &mut selection,
+                                            idx,
+                                            shield.label.as_str(),
+                                        );
+                                    });
                                 }
                             });
                     });
@@ -1374,6 +1396,8 @@ fn render_player_editor(
                     });
                     if !shield_allowed {
                         ui.label("Unavailable");
+                    } else if !selected_shield_allowed {
+                        ui.label("Only bucklers and small shields are allowed.");
                     }
                 });
                 ui.horizontal(|ui| {
@@ -1385,8 +1409,9 @@ fn render_player_editor(
                         player.offhand_weapon_id = None;
                     }
                     ui.add_enabled_ui(can_use_offhand, |ui| {
-                        let mut selection =
-                            player.offhand_weapon_id.map(|id| weapon_catalog.index_of(id));
+                        let mut selection = player
+                            .offhand_weapon_id
+                            .map(|id| weapon_catalog.index_of(id));
                         let selected_name = selection
                             .and_then(|idx| weapon_catalog.entries().get(idx))
                             .map(|weapon| weapon.name.as_str())
@@ -1399,7 +1424,11 @@ fn render_player_editor(
                                     if weapon.handedness != WeaponHandedness::OneHanded {
                                         continue;
                                     }
-                                    ui.selectable_value(&mut selection, Some(idx), weapon.name.as_str());
+                                    ui.selectable_value(
+                                        &mut selection,
+                                        Some(idx),
+                                        weapon.name.as_str(),
+                                    );
                                 }
                             });
                         player.offhand_weapon_id =
@@ -1443,7 +1472,10 @@ fn render_player_editor(
                             .unwrap_or_default();
                         ui.label(format!(
                             "Offhand speed {}{} | Damage {} | Reach/Range {}",
-                            offhand.speed_label, jab_label, offhand.damage_expr, offhand.reach_label
+                            offhand.speed_label,
+                            jab_label,
+                            offhand.damage_expr,
+                            offhand.reach_label
                         ));
                     }
                 } else {
@@ -1453,9 +1485,12 @@ fn render_player_editor(
             });
         }
         PlayerEditorTab::CombatManeuvers => {
-            let weapon = weapon_catalog
-                .get(player.weapon_id)
-                .unwrap_or_else(|| weapon_catalog.entries().first().expect("weapon catalog empty"));
+            let weapon = weapon_catalog.get(player.weapon_id).unwrap_or_else(|| {
+                weapon_catalog
+                    .entries()
+                    .first()
+                    .expect("weapon catalog empty")
+            });
             let has_jab = weapon.jab_speed.is_some();
             ui.label("Toggle to always attempt maneuvers when eligible.");
             ui.separator();
@@ -1469,7 +1504,9 @@ fn render_player_editor(
             });
             if player.use_jab {
                 if let Some(jab_special) = weapon.jab_special_expr.as_ref() {
-                    ui.label(format!("Jab special damage: {jab_special} (non-penetrating)"));
+                    ui.label(format!(
+                        "Jab special damage: {jab_special} (non-penetrating)"
+                    ));
                 } else {
                     ui.label("Jab damage: half, non-penetrating");
                 }
@@ -1481,7 +1518,10 @@ fn render_player_editor(
             });
             ui.checkbox(&mut player.charge, "Charge");
             ui.add_enabled_ui(false, |ui| {
-                ui.checkbox(&mut player.ready_against_charge, "Ready against charge (NYI)");
+                ui.checkbox(
+                    &mut player.ready_against_charge,
+                    "Ready against charge (NYI)",
+                );
             });
             ui.add_enabled_ui(false, |ui| {
                 ui.checkbox(&mut player.tactical_move, "Tactical move (NYI)");
@@ -1538,10 +1578,7 @@ fn render_player_editor(
                     let selected_race = race_catalog.get(selection);
                     let can_apply = selected_race.is_some() && !race_locked;
                     if ui
-                        .add_enabled(
-                            can_apply,
-                            egui::Button::new("Apply race adjustments"),
-                        )
+                        .add_enabled(can_apply, egui::Button::new("Apply race adjustments"))
                         .clicked()
                     {
                         if let Some(race) = selected_race {
@@ -1549,20 +1586,20 @@ fn render_player_editor(
                         }
                     }
                 });
-                    let selected_race = if selection == usize::MAX {
-                        None
-                    } else {
-                        race_catalog.get(selection)
-                    };
-                    player.race_id = selected_race.map(|race| race.id.clone());
-                    player.knockback_step = selected_race
-                        .map(game_logic::knockback_step_for_race)
-                        .unwrap_or(game_logic::DEFAULT_KNOCKBACK_STEP);
-                    if let Some(race) = player
-                        .race_id
-                        .as_ref()
-                        .and_then(|id| race_catalog.iter().find(|race| race.id == *id))
-                    {
+                let selected_race = if selection == usize::MAX {
+                    None
+                } else {
+                    race_catalog.get(selection)
+                };
+                player.race_id = selected_race.map(|race| race.id.clone());
+                player.knockback_step = selected_race
+                    .map(game_logic::knockback_step_for_race)
+                    .unwrap_or(game_logic::DEFAULT_KNOCKBACK_STEP);
+                if let Some(race) = player
+                    .race_id
+                    .as_ref()
+                    .and_then(|id| race_catalog.iter().find(|race| race.id == *id))
+                {
                     ui.label(format!(
                         "Base HP {} | {}",
                         race.base_hp,
@@ -1630,12 +1667,18 @@ fn render_player_editor(
                 ability_slider(ui, "CHA", &mut player.charisma);
 
                 ui.separator();
-                let weapon = weapon_catalog
-                    .get(player.weapon_id)
-                    .unwrap_or_else(|| {
-                        weapon_catalog.entries().first().expect("weapon catalog empty")
-                    });
-                let shield_active = game_logic::shield_equipped(player, weapon);
+                let weapon = weapon_catalog.get(player.weapon_id).unwrap_or_else(|| {
+                    weapon_catalog
+                        .entries()
+                        .first()
+                        .expect("weapon catalog empty")
+                });
+                let shield_active = game_logic::shield_equipped_with_catalog(
+                    player,
+                    weapon,
+                    shield_catalog,
+                    talent_catalog,
+                );
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
                         ui.label("Weapon masteries");
@@ -1742,26 +1785,17 @@ fn render_player_editor(
                 ui.label("Derived stats ignored while NPC preset is active.");
                 return;
             }
-            let weapon = weapon_catalog
-                .get(player.weapon_id)
-                .unwrap_or_else(|| weapon_catalog.entries().first().expect("weapon catalog empty"));
-            let shield_bonus = if game_logic::shield_equipped(player, weapon) {
-                shield_catalog
-                    .get(player.shield_id)
-                    .and_then(|entry| entry.shield.as_ref())
-                    .map(|shield| shield.defense_bonus + player.shield_material_tier.clamp(0, 5))
-            } else {
-                None
-            };
-
-            let game_logic::PlayerSummary { derived, roll } =
-                game_logic::player_summary(
-                    player,
-                    weapon_catalog,
-                    armor_catalog,
-                    shield_catalog,
-                    talent_catalog,
-                );
+            let game_logic::PlayerSummary {
+                derived,
+                roll,
+                defense,
+            } = game_logic::player_summary(
+                player,
+                weapon_catalog,
+                armor_catalog,
+                shield_catalog,
+                talent_catalog,
+            );
             let combatant = game_logic::build_combatant(
                 player,
                 weapon_catalog,
@@ -1770,9 +1804,6 @@ fn render_player_editor(
                 npc_presets,
                 talent_catalog,
             );
-            let defensive_dualwielding = game_logic::defensive_dualwielding_active(player, weapon);
-            let defense_mastery = game_logic::effective_defense_mastery(player, weapon)
-                * if defensive_dualwielding { 2 } else { 1 };
             ui.label("Derived");
             ui.label(format!(
                 "Hit points: {} (x{:.1})",
@@ -1783,10 +1814,7 @@ fn render_player_editor(
                 combatant.sheet.vitals.threshold_of_pain
             ));
             ui.label(format!("Attack bonus: {}", derived.attack_bonus));
-            ui.label(format!(
-                "Attack bonus (effective): {}",
-                roll.attack_bonus
-            ));
+            ui.label(format!("Attack bonus (effective): {}", roll.attack_bonus));
             ui.label(format!(
                 "Damage bonus (effective): {}",
                 roll.strength_damage
@@ -1798,10 +1826,7 @@ fn render_player_editor(
             ));
             ui.label(format!("Initiative mod: {}", derived.initiative_mod));
             ui.label(format!("Base DV: {}", derived.base_dv));
-            if let Some(shield_bonus) = shield_bonus {
-                let weapon_defense = if weapon.defense_bonus_always { 4 } else { 0 };
-                let dv_with_shield =
-                    derived.base_dv + defense_mastery + weapon_defense + 4 + shield_bonus;
+            if let Some(dv_with_shield) = defense.melee_with_shield_dv {
                 ui.label(format!("DV (melee + shield): {}", dv_with_shield));
             }
             ui.label(format!("Armor DR: {}", derived.armor_dr));
@@ -1832,45 +1857,9 @@ fn render_player_editor(
             ui.separator();
             ui.label("Defense");
             if roll.is_ranged_weapon {
-                if let Some(shield_bonus) = shield_bonus {
-                    ui.label(format!(
-                        "Defense roll (ranged): d20p + {} (cover cap applies)",
-                        shield_bonus
-                    ));
-                } else {
-                    ui.label("Defense roll (ranged): d12p if stationary, else d20p");
-                }
+                ui.label(defense.ranged_roll_label.as_str());
             } else {
-                let weapon_def = if weapon.defense_bonus_always { " (+4 weapon)" } else { "" };
-                let melee_die = if player.offensive_dualwielding {
-                    "d10p"
-                } else {
-                    "d20p"
-                };
-                let after_attack_bonus =
-                    (defensive_dualwielding || player.two_hand_grip) && !weapon.defense_bonus_always;
-                if let Some(shield_bonus) = shield_bonus {
-                    ui.label(format!(
-                        "Defense roll (melee): {} + {} + {}{}",
-                        melee_die,
-                        derived.base_dv + defense_mastery + 4,
-                        shield_bonus,
-                        weapon_def
-                    ));
-                } else {
-                    let dual_note = if after_attack_bonus {
-                        " (+4 after you attack)"
-                    } else {
-                        ""
-                    };
-                    ui.label(format!(
-                        "Defense roll (melee): {} + {}{}{}",
-                        melee_die,
-                        derived.base_dv + defense_mastery,
-                        weapon_def,
-                        dual_note
-                    ));
-                }
+                ui.label(defense.melee_roll_label.as_str());
             }
             ui.separator();
             ui.label("Mainhand");
@@ -1889,7 +1878,10 @@ fn render_player_editor(
             ui.label(format!("Attack roll: d20p + {}", attack_bonus));
             ui.label(format!(
                 "Damage roll: {} + {} vs target DR {} (AP {})",
-                weapon.damage_expr, strength_damage, target_dr, weapon.armor_pen
+                combatant.sheet.offense.weapon.damage_expr,
+                strength_damage,
+                target_dr,
+                combatant.sheet.offense.weapon.armor_penetration
             ));
             if let Some(offhand) = combatant.sheet.offense.offhand.as_ref() {
                 ui.separator();
@@ -1897,10 +1889,7 @@ fn render_player_editor(
                 ui.label(format!("Weapon speed: {}", offhand.weapon.speed));
                 let offhand_shield_damage =
                     offhand.weapon.shield_damage_expr.as_deref().unwrap_or("-");
-                ui.label(format!(
-                    "Weapon shield damage: {}",
-                    offhand_shield_damage
-                ));
+                ui.label(format!("Weapon shield damage: {}", offhand_shield_damage));
                 ui.label(format!("Attack roll: d20p + {}", offhand.attack_bonus));
                 ui.label(format!(
                     "Damage roll: {} + {} - 2 vs target DR {} (AP {})",
@@ -2206,10 +2195,7 @@ fn format_talent_requirement_failure(
             stat,
             required,
             current,
-        } => format!(
-            "Requires {} {required}+ (current {current}).",
-            stat.label()
-        ),
+        } => format!("Requires {} {required}+ (current {current}).", stat.label()),
         game_logic::TalentRequirementFailure::MinStatPercentile {
             stat,
             required,
@@ -2234,9 +2220,45 @@ fn format_talent_requirement_failure(
                 .find(|talent| talent.id == *id)
                 .map(|talent| talent.name.as_str())
                 .unwrap_or(id.as_str());
-            format!(
-                "Requires {talent_name} rank {required_rank} (current {current_rank})."
-            )
+            format!("Requires {talent_name} rank {required_rank} (current {current_rank}).")
+        }
+        game_logic::TalentRequirementFailure::MissingSizeLLargeSwordProficiency => {
+            "Requires proficiency in at least one type of size L large sword.".to_string()
+        }
+        game_logic::TalentRequirementFailure::MissingShieldProficiency => {
+            "Requires shield proficiency.".to_string()
+        }
+        game_logic::TalentRequirementFailure::MissingArmerociPoleProficiency => {
+            "Requires proficiency with a large sword or polearm with at least 5 feet of reach."
+                .to_string()
+        }
+        game_logic::TalentRequirementFailure::MissingFymblwngerProficiency => {
+            "Requires battle axe, executioner's axe, or greataxe proficiency.".to_string()
+        }
+        game_logic::TalentRequirementFailure::MissingHammererProficiency => {
+            "Requires greathammer, hammer, maul, or warhammer proficiency.".to_string()
+        }
+        game_logic::TalentRequirementFailure::MissingHobblerProficiency => {
+            "Requires proficiency in at least one polearm or spear.".to_string()
+        }
+        game_logic::TalentRequirementFailure::MissingIthicanPrinceProficiency => {
+            "Requires shield proficiency and at least one small sword proficiency.".to_string()
+        }
+        game_logic::TalentRequirementFailure::MissingRegenstatProficiency => {
+            "Requires proficiency in at least one size M small or large sword.".to_string()
+        }
+        game_logic::TalentRequirementFailure::MissingReturnerProficiency => {
+            "Requires proficiency in at least one size L large sword.".to_string()
+        }
+        game_logic::TalentRequirementFailure::MissingSixPathsProficiency => {
+            "Requires shield proficiency and at least one size M large sword proficiency."
+                .to_string()
+        }
+        game_logic::TalentRequirementFailure::MissingThreeMountainsProficiency => {
+            "Requires proficiency in at least one crushing melee weapon.".to_string()
+        }
+        game_logic::TalentRequirementFailure::MissingUnbreakableWallProficiency => {
+            "Requires shield proficiency.".to_string()
         }
     }
 }
@@ -2262,7 +2284,10 @@ fn talent_display_label(selection: &TalentSelection, talent_catalog: &TalentCata
     }
 }
 
-fn race_for_player<'a>(player: &PlayerConfig, race_catalog: &'a [RaceSpec]) -> Option<&'a RaceSpec> {
+fn race_for_player<'a>(
+    player: &PlayerConfig,
+    race_catalog: &'a [RaceSpec],
+) -> Option<&'a RaceSpec> {
     player
         .race_id
         .as_ref()
@@ -2295,11 +2320,7 @@ fn racial_talent_matches(spec: &TalentSpec, race: Option<&RaceSpec>) -> bool {
     let Some(race) = race else {
         return false;
     };
-    if spec
-        .race_ids
-        .iter()
-        .any(|race_id| race_id == &race.id)
-    {
+    if spec.race_ids.iter().any(|race_id| race_id == &race.id) {
         return true;
     }
     if spec
@@ -2342,7 +2363,9 @@ fn render_talent_selector(
             .or_default()
             .push(spec);
     }
-    categories.entry(TALENT_TAB_RACIALS.to_string()).or_default();
+    categories
+        .entry(TALENT_TAB_RACIALS.to_string())
+        .or_default();
     let mut categories: Vec<(String, Vec<&TalentSpec>)> = categories.into_iter().collect();
     let total_count: usize = categories.iter().map(|(_, specs)| specs.len()).sum();
     categories.sort_by(|a, b| a.0.cmp(&b.0));
@@ -2378,10 +2401,13 @@ fn render_talent_selector(
 
     let abilities = game_logic::ability_set_from_player(player);
     let talent_snapshot = player.talents.clone();
+    let proficiency_snapshot = player.proficiencies.clone();
     let context = game_logic::TalentContext {
         level: player.level,
         stats: &abilities,
         talents: &talent_snapshot,
+        proficiencies: &proficiency_snapshot,
+        weapon_catalog: Some(weapon_catalog),
     };
     let mut add_queue: Vec<TalentSelection> = Vec::new();
     let mut remove_queue: Vec<usize> = Vec::new();
@@ -2390,14 +2416,41 @@ fn render_talent_selector(
         .map(|weapon| weapon_group_label(weapon.group))
         .unwrap_or(WEAPON_GROUP_LABELS[0]);
 
-    egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
-        if active_category.as_str() == TALENT_TAB_ALL {
-            for (category, specs) in &categories {
-                if specs.is_empty() {
-                    continue;
+    egui::ScrollArea::vertical()
+        .max_height(320.0)
+        .show(ui, |ui| {
+            if active_category.as_str() == TALENT_TAB_ALL {
+                for (category, specs) in &categories {
+                    if specs.is_empty() {
+                        continue;
+                    }
+                    ui.separator();
+                    ui.label(category.as_str());
+                    for spec in specs {
+                        render_talent_entry(
+                            ui,
+                            id_prefix,
+                            player,
+                            default_group,
+                            weapon_catalog,
+                            talent_catalog,
+                            spec,
+                            &context,
+                            &mut add_queue,
+                            &mut remove_queue,
+                        );
+                    }
                 }
-                ui.separator();
-                ui.label(category.as_str());
+            } else if let Some((name, specs)) =
+                categories.iter().find(|(name, _)| name == active_category)
+            {
+                if name == TALENT_TAB_RACIALS && specs.is_empty() {
+                    if active_race.is_some() {
+                        ui.label("No racial talents available for the selected race.");
+                    } else {
+                        ui.label("Select a race to view racial talents.");
+                    }
+                }
                 for spec in specs {
                     render_talent_entry(
                         ui,
@@ -2413,32 +2466,7 @@ fn render_talent_selector(
                     );
                 }
             }
-        } else if let Some((name, specs)) =
-            categories.iter().find(|(name, _)| name == active_category)
-        {
-            if name == TALENT_TAB_RACIALS && specs.is_empty() {
-                if active_race.is_some() {
-                    ui.label("No racial talents available for the selected race.");
-                } else {
-                    ui.label("Select a race to view racial talents.");
-                }
-            }
-            for spec in specs {
-                render_talent_entry(
-                    ui,
-                    id_prefix,
-                    player,
-                    default_group,
-                    weapon_catalog,
-                    talent_catalog,
-                    spec,
-                    &context,
-                    &mut add_queue,
-                    &mut remove_queue,
-                );
-            }
-        }
-    });
+        });
 
     if !add_queue.is_empty() {
         player.talents.extend(add_queue);
@@ -2472,9 +2500,11 @@ fn render_talent_entry(
     let locked = !requirement_failures.is_empty();
     let is_nyi = spec.effects.is_empty();
     let requires_group = game_logic::talent_requires_weapon_group(spec);
+    let style_conflict = selected_index.is_none()
+        && game_logic::has_other_weapon_style_selected(player, spec, talent_catalog);
     let muted_color = ui.visuals().weak_text_color();
     let can_adjust = !locked && (!is_nyi || requires_group);
-    let allow_add = !locked && (!is_nyi || requires_group);
+    let allow_add = !locked && (!is_nyi || requires_group) && !style_conflict;
     ui.group(|ui| {
         ui.horizontal(|ui| {
             if is_nyi {
@@ -2542,16 +2572,19 @@ fn render_talent_entry(
             ui.label(spec.description.as_str());
         }
         if locked && !is_nyi {
-            ui.colored_label(
-                Color32::from_rgb(180, 70, 70),
-                "Requirements not met:",
-            );
+            ui.colored_label(Color32::from_rgb(180, 70, 70), "Requirements not met:");
             for failure in &requirement_failures {
                 ui.label(format!(
                     "- {}",
                     format_talent_requirement_failure(failure, talent_catalog)
                 ));
             }
+        }
+        if style_conflict {
+            ui.colored_label(
+                Color32::from_rgb(180, 70, 70),
+                "Only one weapon style can be active at a time.",
+            );
         }
 
         if let Some(index) = selected_index {
@@ -2693,7 +2726,6 @@ fn material_tier_combo(ui: &mut egui::Ui, id_source: String, label: &str, select
             }
         });
 }
-
 
 fn armor_display_name(entry: Option<&ArmorEntry>) -> String {
     entry

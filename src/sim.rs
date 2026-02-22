@@ -14,7 +14,16 @@ pub fn format_combat_event(event: &CombatEvent, combatants: &[Combatant]) -> Str
         CombatEventKind::Attack(attack) => {
             let weapon_name = combatants
                 .get(event.attacker_idx)
-                .map(|combatant| combatant.sheet.offense.weapon.name.as_str())
+                .map(|combatant| match attack.weapon_slot {
+                    WeaponSlot::Primary => combatant.sheet.offense.weapon.name.as_str(),
+                    WeaponSlot::Secondary => combatant
+                        .sheet
+                        .offense
+                        .offhand
+                        .as_ref()
+                        .map(|offhand| offhand.weapon.name.as_str())
+                        .unwrap_or(combatant.sheet.offense.weapon.name.as_str()),
+                })
                 .unwrap_or("Weapon");
             let base = if attack.hit {
                 if attack.hold_at_bay {
@@ -35,7 +44,7 @@ pub fn format_combat_event(event: &CombatEvent, combatants: &[Combatant]) -> Str
                         attack.damage
                     )
                 }
-                } else if attack.shield_block {
+            } else if attack.shield_block {
                 if attack.is_charge {
                     format!(
                         "{defender_name} blocks {attacker_name}'s charge with shield for {} shield dmg",
@@ -48,14 +57,10 @@ pub fn format_combat_event(event: &CombatEvent, combatants: &[Combatant]) -> Str
                     )
                 }
             } else if attack.hold_at_bay {
-                format!(
-                    "{attacker_name} fails to hold {defender_name} at bay with {weapon_name}"
-                )
+                format!("{attacker_name} fails to hold {defender_name} at bay with {weapon_name}")
             } else {
                 if attack.is_charge {
-                    format!(
-                        "{attacker_name} charges {defender_name} with {weapon_name} but misses"
-                    )
+                    format!("{attacker_name} charges {defender_name} with {weapon_name} but misses")
                 } else {
                     format!("{attacker_name} misses {defender_name} with {weapon_name}")
                 }

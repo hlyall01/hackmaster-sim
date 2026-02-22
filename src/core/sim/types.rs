@@ -202,6 +202,13 @@ pub struct CombatantState {
     pub knockback_immobile_seconds: i32,
     pub knockback_applied_this_tick: bool,
     pub shield_intact: bool,
+    pub armeroci_opening_strike_available: bool,
+    pub regenstat_stacks: i32,
+    pub returner_counter_available: bool,
+    pub returner_skip_opening_attack: bool,
+    pub returner_double_counter_ready: bool,
+    pub three_mountains_hit_streak: i32,
+    pub force_trauma_roll_20: bool,
     pub active_effects: Vec<TemporaryEffect>,
     pub cache: CombatantCache,
 }
@@ -289,6 +296,7 @@ pub struct AttackEvent {
     pub knockback_ft: f32,
     pub hold_at_bay: bool,
     pub is_charge: bool,
+    pub weapon_slot: WeaponSlot,
     pub use_jab: bool,
     pub is_ranged: bool,
     pub trauma_applied: bool,
@@ -415,6 +423,11 @@ impl Default for CombatantSheet {
 
 impl CombatantState {
     pub(crate) fn new(sheet: &CombatantSheet) -> Self {
+        let returner_style = sheet.modifiers.apply_i32(0, StatIdI32::FlagReturnerStyle) > 0;
+        let armeroci_style = sheet
+            .modifiers
+            .apply_i32(0, StatIdI32::FlagArmerociPoleStyle)
+            > 0;
         let mut state = Self {
             hp: sheet.vitals.max_hp,
             next_attack_time_primary: None,
@@ -432,6 +445,13 @@ impl CombatantState {
             knockback_immobile_seconds: 0,
             knockback_applied_this_tick: false,
             shield_intact: sheet.defense.shield_name.is_some(),
+            armeroci_opening_strike_available: armeroci_style,
+            regenstat_stacks: 0,
+            returner_counter_available: returner_style,
+            returner_skip_opening_attack: returner_style,
+            returner_double_counter_ready: false,
+            three_mountains_hit_streak: 0,
+            force_trauma_roll_20: false,
             active_effects: Vec::new(),
             cache: CombatantCache::default(),
         };

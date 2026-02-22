@@ -4,11 +4,11 @@ use eframe::egui::epaint::Hsva;
 use eframe::egui::{self, Color32};
 use egui_plot::{GridInput, GridMark, Legend, Line, Plot, PlotPoints, Points, VLine};
 use hackmaster_sim::character::WeaponGroup;
-use hackmaster_sim::core::rules::{effective_armor_value, expected_damage_expr, DamageExprCache};
+use hackmaster_sim::core::rules::{DamageExprCache, effective_armor_value, expected_damage_expr};
 use hackmaster_sim::data;
 use hackmaster_sim::game_logic::{self, WeaponCatalog, WeaponPreset};
-use rand::rngs::StdRng;
 use rand::SeedableRng;
+use rand::rngs::StdRng;
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
@@ -368,7 +368,9 @@ impl eframe::App for WeaponPlotApp {
                     )
                     .changed();
                 changed_both |= ui.checkbox(&mut self.two_handed, "2h weapons").changed();
-                changed_both |= ui.checkbox(&mut self.use_jab, "Jab (jab-capable weapons)").changed();
+                changed_both |= ui
+                    .checkbox(&mut self.use_jab, "Jab (jab-capable weapons)")
+                    .changed();
                 if changed_both {
                     self.dps_dirty = true;
                     self.distribution_dirty = true;
@@ -381,7 +383,11 @@ impl eframe::App for WeaponPlotApp {
             ui.horizontal(|ui| {
                 ui.label("Weapon group:");
                 for group in WEAPON_GROUPS.iter() {
-                    ui.selectable_value(&mut self.current_group, *group, weapon_group_label(*group));
+                    ui.selectable_value(
+                        &mut self.current_group,
+                        *group,
+                        weapon_group_label(*group),
+                    );
                 }
             });
 
@@ -422,9 +428,7 @@ impl eframe::App for WeaponPlotApp {
                         }
                     });
 
-                    if self.distribution_dirty
-                        && ui.button("Recompute distribution").clicked()
-                    {
+                    if self.distribution_dirty && ui.button("Recompute distribution").clicked() {
                         self.distribution_seed = rand::random::<u64>();
                         self.rebuild_distribution();
                     }
@@ -451,18 +455,12 @@ impl eframe::App for WeaponPlotApp {
         egui::SidePanel::right("value_panel")
             .resizable(false)
             .min_width(260.0)
-            .show(ctx, |ui| {
-                match self.current_tab {
-                    PlotTab::Dps => {
-                        render_hover_details(ui, "Average DPS", &avg_details);
-                    }
-                    PlotTab::Distribution => {
-                        render_distribution_details(
-                            ui,
-                            "Damage Frequency",
-                            &distribution_details,
-                        );
-                    }
+            .show(ctx, |ui| match self.current_tab {
+                PlotTab::Dps => {
+                    render_hover_details(ui, "Average DPS", &avg_details);
+                }
+                PlotTab::Distribution => {
+                    render_distribution_details(ui, "Damage Frequency", &distribution_details);
                 }
             });
     }
@@ -678,23 +676,19 @@ fn render_hover_details(ui: &mut egui::Ui, label: &str, details: &HoverDetails) 
         if details.entries.is_empty() {
             ui.label("Hover over lines to view results.");
         } else {
-                for entry in &details.entries {
-                    ui.colored_label(
-                        entry.color,
-                        format!("{}: {:.3} dps", entry.name, entry.value),
-                    );
-                }
+            for entry in &details.entries {
+                ui.colored_label(
+                    entry.color,
+                    format!("{}: {:.3} dps", entry.name, entry.value),
+                );
             }
+        }
     } else {
         ui.label("Hover inside the chart to view exact values.");
     }
 }
 
-fn render_distribution_details(
-    ui: &mut egui::Ui,
-    label: &str,
-    details: &DistributionHoverDetails,
-) {
+fn render_distribution_details(ui: &mut egui::Ui, label: &str, details: &DistributionHoverDetails) {
     ui.heading(label);
     ui.separator();
 
@@ -749,8 +743,7 @@ fn compute_weapon_curve(
     for &armor in armor_values {
         let effective_armor = effective_armor_value(armor, weapon.armor_pen);
         let net = (adjusted_damage - effective_armor).max(0.0);
-        let per_second =
-            average_damage_per_second(net, adjusted_speed, sim_duration);
+        let per_second = average_damage_per_second(net, adjusted_speed, sim_duration);
         max_val = max_val.max(per_second);
         points.push([armor, per_second]);
         values.push(per_second);
@@ -922,9 +915,7 @@ fn expected_damage_expr_nonpenetrating(expr: &str) -> f64 {
     expected_damage_expr(&no_pen)
 }
 
-fn export_headless_report(
-    datasets: &HashMap<WeaponGroup, WeaponPlotData>,
-) -> std::io::Result<()> {
+fn export_headless_report(datasets: &HashMap<WeaponGroup, WeaponPlotData>) -> std::io::Result<()> {
     let out_dir = Path::new("headless_output");
     fs::create_dir_all(out_dir)?;
 
@@ -953,8 +944,7 @@ fn write_dataset_csv(path: &Path, lines: &[WeaponLine]) -> std::io::Result<()> {
 }
 
 fn load_weapon_catalog() -> WeaponCatalog {
-    data::load_weapon_catalog("data/weapons.json")
-        .expect("Failed to load weapon catalog")
+    data::load_weapon_catalog("data/weapons.json").expect("Failed to load weapon catalog")
 }
 
 #[cfg(test)]
@@ -1056,8 +1046,7 @@ mod tests {
             DEFAULT_SIM_DURATION,
         );
         let avg = expected_damage_expr(&weapon.damage_expr);
-        let net =
-            (avg - effective_armor_value(armor_values[0], weapon.armor_pen)).max(0.0);
+        let net = (avg - effective_armor_value(armor_values[0], weapon.armor_pen)).max(0.0);
         let expected = average_damage_per_second(net, weapon.speed as f64, DEFAULT_SIM_DURATION);
         assert!((values[0] - expected).abs() < EPS);
     }
@@ -1132,9 +1121,9 @@ fn main() -> eframe::Result<()> {
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size(egui::vec2(1100.0, 750.0))
         .with_min_inner_size(egui::vec2(600.0, 400.0));
-    if let Some(icon) = hackmaster_sim::assets::app_icon(
-        hackmaster_sim::assets::AppIcon::WeaponPlot,
-    ) {
+    if let Some(icon) =
+        hackmaster_sim::assets::app_icon(hackmaster_sim::assets::AppIcon::WeaponPlot)
+    {
         viewport = viewport.with_icon(icon);
     }
     let native_options = eframe::NativeOptions {

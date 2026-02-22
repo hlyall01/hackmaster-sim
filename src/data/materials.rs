@@ -3,8 +3,10 @@ use crate::data::resolve_data_path;
 use serde::Deserialize;
 use std::fs;
 
-const EMBEDDED_MATERIALS_JSON: &str =
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/sim/materials.json"));
+const EMBEDDED_MATERIALS_JSON: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/data/sim/materials.json"
+));
 
 #[derive(Deserialize)]
 struct MaterialsFile {

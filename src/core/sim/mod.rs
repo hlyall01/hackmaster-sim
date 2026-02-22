@@ -6,12 +6,12 @@ mod modifiers;
 mod movement;
 mod types;
 
-pub use engine::{bulk_simulate, BulkSimResult, SimState};
-pub use movement::{max_range_for_bands, max_range_for_weapon_name, range_bands_for_weapon_name};
+pub use engine::{BulkSimResult, SimState, bulk_simulate};
 pub use modifiers::{
-    modifiers_for_magic_item, ModifierOpF32, ModifierOpI32, ModifierStack, StatIdF32, StatIdI32,
-    TemporaryEffect,
+    ModifierOpF32, ModifierOpI32, ModifierStack, StatIdF32, StatIdI32, TemporaryEffect,
+    modifiers_for_magic_item,
 };
+pub use movement::{max_range_for_bands, max_range_for_weapon_name, range_bands_for_weapon_name};
 pub use types::{
     AttackEvent, AttackRollBreakdown, CombatEvent, CombatEventKind, Combatant, CombatantCache,
     CombatantSheet, CombatantState, CriticalHit, DamageBreakdown, DamageDie, DefenseProfile,

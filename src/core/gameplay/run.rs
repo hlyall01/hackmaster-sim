@@ -1,10 +1,86 @@
-use crate::core::rng::{derive_seed, SimRng};
+use crate::core::rng::{SimRng, derive_seed};
 use crate::core::sim::{CombatEvent, CombatEventKind, Combatant, SimConfig, SimState};
 use crate::core::types::{EnemyProfile, Inventory, PlayerProfile};
+use serde::{Deserialize, Serialize};
 
 use super::loot::LootTable;
-use super::progression::{apply_xp, XpCurve};
+use super::progression::{XpCurve, apply_xp};
 use super::spawner::EnemySpawner;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EncounterTier {
+    Normal,
+    Elite,
+    Boss,
+}
+
+impl Default for EncounterTier {
+    fn default() -> Self {
+        Self::Normal
+    }
+}
+
+impl EncounterTier {
+    fn reward_ratio(self) -> (u32, u32) {
+        match self {
+            EncounterTier::Normal => (1, 1),
+            EncounterTier::Elite => (3, 2),
+            EncounterTier::Boss => (9, 4),
+        }
+    }
+
+    fn level_bonus(self) -> u8 {
+        match self {
+            EncounterTier::Normal => 0,
+            EncounterTier::Elite => 1,
+            EncounterTier::Boss => 2,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DepthBand {
+    Novice,
+    Veteran,
+    Champion,
+    Mythic,
+}
+
+impl Default for DepthBand {
+    fn default() -> Self {
+        Self::Novice
+    }
+}
+
+impl DepthBand {
+    fn level_bonus(self) -> u8 {
+        match self {
+            DepthBand::Novice => 0,
+            DepthBand::Veteran => 1,
+            DepthBand::Champion => 2,
+            DepthBand::Mythic => 3,
+        }
+    }
+}
+
+pub fn depth_band_for_depth(depth: u32) -> DepthBand {
+    match depth {
+        0..=4 => DepthBand::Novice,
+        5..=11 => DepthBand::Veteran,
+        12..=23 => DepthBand::Champion,
+        _ => DepthBand::Mythic,
+    }
+}
+
+pub fn encounter_tier_for_depth(depth: u32) -> EncounterTier {
+    if depth > 0 && depth % 10 == 0 {
+        EncounterTier::Boss
+    } else if depth > 0 && depth % 4 == 0 {
+        EncounterTier::Elite
+    } else {
+        EncounterTier::Normal
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct RunState {
@@ -13,6 +89,10 @@ pub struct RunState {
     pub run_depth: u32,
     pub run_seed: u64,
     pub encounter_index: u32,
+    pub last_encounter_tier: EncounterTier,
+    pub last_encounter_band: DepthBand,
+    pub event_flags: Vec<String>,
+    pub seen_event_ids: Vec<String>,
     pub wounds: Vec<Wound>,
 }
 
@@ -24,6 +104,10 @@ impl RunState {
             run_depth: 0,
             run_seed,
             encounter_index: 0,
+            last_encounter_tier: EncounterTier::Normal,
+            last_encounter_band: DepthBand::Novice,
+            event_flags: Vec::new(),
+            seen_event_ids: Vec::new(),
             wounds: Vec::new(),
         }
     }
@@ -42,7 +126,7 @@ impl RunState {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Wound {
     pub damage: u32,
-    pub healing_progress_quarter_days: u32,
+    pub healing_progress_steps: u32,
 }
 
 pub trait CombatantBuilder {
@@ -81,9 +165,23 @@ pub struct RunOutcome {
 
 const RUN_DEPTH_PER_LEVEL: u32 = 2;
 
-fn scaled_enemy_level(player_level: u8, run_depth: u32) -> u8 {
+fn scaled_enemy_level(player_level: u8, run_depth: u32, tier: EncounterTier) -> u8 {
     let depth_bonus = (run_depth / RUN_DEPTH_PER_LEVEL) as u8;
-    player_level.saturating_add(depth_bonus)
+    let band_bonus = depth_band_for_depth(run_depth).level_bonus();
+    player_level
+        .saturating_add(depth_bonus)
+        .saturating_add(band_bonus)
+        .saturating_add(tier.level_bonus())
+}
+
+fn resolve_reward_for_tier(base: Reward, tier: EncounterTier) -> Reward {
+    let (num, den) = tier.reward_ratio();
+    let scale = |value: u32| value.saturating_mul(num) / den.max(1);
+    Reward {
+        gold: scale(base.gold),
+        xp: scale(base.xp),
+        items: base.items,
+    }
 }
 
 pub fn run_next_fight<B: CombatantBuilder>(
@@ -95,9 +193,10 @@ pub fn run_next_fight<B: CombatantBuilder>(
     max_seconds: u32,
     rest_days: u32,
     resting: bool,
+    tier: EncounterTier,
     builder: &B,
 ) -> RunOutcome {
-    let effective_level = scaled_enemy_level(state.player.level, state.run_depth);
+    let effective_level = scaled_enemy_level(state.player.level, state.run_depth, tier);
     let encounter_index = state.encounter_index as u64;
     let mut spawn_rng = SimRng::from_seed(derive_seed(state.run_seed, "spawn", encounter_index));
     let enemy = spawner.spawn_for_level(effective_level, &mut spawn_rng);
@@ -144,6 +243,7 @@ pub fn run_next_fight<B: CombatantBuilder>(
         xp_curve,
         rest_days,
         resting,
+        tier,
     )
 }
 
@@ -155,6 +255,7 @@ pub fn apply_fight_result(
     xp_curve: Option<&XpCurve>,
     rest_days: u32,
     resting: bool,
+    tier: EncounterTier,
 ) -> RunOutcome {
     let Some(enemy_profile) = enemy else {
         return RunOutcome {
@@ -165,6 +266,10 @@ pub fn apply_fight_result(
         };
     };
 
+    let encounter_band = depth_band_for_depth(state.run_depth);
+    state.last_encounter_tier = tier;
+    state.last_encounter_band = encounter_band;
+
     let mut new_wounds = collect_wounds(&fight.events);
     if !new_wounds.is_empty() {
         state.wounds.append(&mut new_wounds);
@@ -174,17 +279,14 @@ pub fn apply_fight_result(
 
     let reward = if fight.won {
         let encounter_index = state.encounter_index as u64;
-        let mut loot_rng = SimRng::from_seed(derive_seed(
-            state.run_seed,
-            "loot",
-            encounter_index,
-        ));
+        let mut loot_rng = SimRng::from_seed(derive_seed(state.run_seed, "loot", encounter_index));
         let loot = loot_table.roll(enemy_profile.level, &mut loot_rng);
-        Some(Reward {
+        let base = Reward {
             gold: loot.gold,
             xp: loot.xp,
             items: loot.items,
-        })
+        };
+        Some(resolve_reward_for_tier(base, tier))
     } else {
         None
     };
@@ -214,6 +316,11 @@ pub fn apply_fight_result(
     }
 }
 
+pub fn apply_downtime(state: &mut RunState, rest_days: u32, resting: bool) {
+    let fast_healer = player_has_talent(&state.player, "fast_healer");
+    heal_wounds(&mut state.wounds, rest_days, fast_healer, resting);
+}
+
 fn collect_wounds(events: &[CombatEvent]) -> Vec<Wound> {
     let mut wounds = Vec::new();
     for event in events {
@@ -224,7 +331,7 @@ fn collect_wounds(events: &[CombatEvent]) -> Vec<Wound> {
             if attack.damage > 0 {
                 wounds.push(Wound {
                     damage: attack.damage as u32,
-                    healing_progress_quarter_days: 0,
+                    healing_progress_steps: 0,
                 });
             }
         }
@@ -237,27 +344,19 @@ fn player_has_talent(player: &PlayerProfile, id: &str) -> bool {
 }
 
 fn heal_wounds(wounds: &mut Vec<Wound>, rest_days: u32, fast_healer: bool, resting: bool) {
-    let mut rest_quarter_days = rest_days.saturating_mul(4);
+    let mut rest_steps = rest_days.saturating_mul(4);
     if !resting {
-        rest_quarter_days /= 2;
+        rest_steps /= 2;
     }
     for wound in wounds.iter_mut() {
         if wound.damage == 0 {
             continue;
         }
 
-        let mut healing_progress =
-            wound.healing_progress_quarter_days.saturating_add(rest_quarter_days);
-        if !(fast_healer && wound.damage == 1) {
-            wound.damage = wound.damage.saturating_sub(1);
-            if wound.damage == 0 {
-                wound.healing_progress_quarter_days = 0;
-                continue;
-            }
-        }
+        let mut healing_progress = wound.healing_progress_steps.saturating_add(rest_steps);
 
         while wound.damage > 0 {
-            let required_quarter_days = if fast_healer {
+            let required_steps = if fast_healer {
                 if wound.damage == 1 {
                     1
                 } else {
@@ -266,17 +365,17 @@ fn heal_wounds(wounds: &mut Vec<Wound>, rest_days: u32, fast_healer: bool, resti
             } else {
                 wound.damage.saturating_mul(2)
             };
-            if healing_progress < required_quarter_days {
+            if healing_progress < required_steps {
                 break;
             }
-            healing_progress = healing_progress.saturating_sub(required_quarter_days);
+            healing_progress = healing_progress.saturating_sub(required_steps);
             wound.damage -= 1;
         }
 
         if wound.damage == 0 {
-            wound.healing_progress_quarter_days = 0;
+            wound.healing_progress_steps = 0;
         } else {
-            wound.healing_progress_quarter_days = healing_progress;
+            wound.healing_progress_steps = healing_progress;
         }
     }
     wounds.retain(|wound| wound.damage > 0);
@@ -285,8 +384,11 @@ fn heal_wounds(wounds: &mut Vec<Wound>, rest_days: u32, fast_healer: bool, resti
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::gameplay::EnemySpawnEntry;
+    use crate::core::ids::NpcPresetId;
     use crate::core::sim::{
-        AttackEvent, AttackRollBreakdown, CombatEventKind, DamageBreakdown, ShieldDamageBreakdown,
+        AttackEvent, AttackRollBreakdown, CombatEvent, CombatEventKind, Combatant, DamageBreakdown,
+        ShieldDamageBreakdown, WeaponSlot,
     };
 
     fn attack_event_with_damage(damage: i32, defender_idx: usize) -> CombatEvent {
@@ -302,6 +404,7 @@ mod tests {
                 knockback_ft: 0.0,
                 hold_at_bay: false,
                 is_charge: false,
+                weapon_slot: WeaponSlot::Primary,
                 use_jab: false,
                 is_ranged: false,
                 trauma_applied: false,
@@ -356,7 +459,7 @@ mod tests {
             wounds,
             vec![Wound {
                 damage: 7,
-                healing_progress_quarter_days: 0
+                healing_progress_steps: 0
             }]
         );
     }
@@ -365,15 +468,15 @@ mod tests {
     fn heals_wounds_with_rest_days() {
         let mut wounds = vec![Wound {
             damage: 7,
-            healing_progress_quarter_days: 0,
+            healing_progress_steps: 0,
         }];
 
         heal_wounds(&mut wounds, 1, false, true);
         assert_eq!(
             wounds,
             vec![Wound {
-                damage: 6,
-                healing_progress_quarter_days: 4
+                damage: 7,
+                healing_progress_steps: 4
             }]
         );
     }
@@ -382,15 +485,15 @@ mod tests {
     fn halves_healing_without_rest() {
         let mut wounds = vec![Wound {
             damage: 7,
-            healing_progress_quarter_days: 0,
+            healing_progress_steps: 0,
         }];
 
         heal_wounds(&mut wounds, 1, false, false);
         assert_eq!(
             wounds,
             vec![Wound {
-                damage: 6,
-                healing_progress_quarter_days: 2
+                damage: 7,
+                healing_progress_steps: 2
             }]
         );
     }
@@ -399,7 +502,7 @@ mod tests {
     fn fast_healer_recovers_wounds_faster() {
         let mut normal = vec![Wound {
             damage: 3,
-            healing_progress_quarter_days: 0,
+            healing_progress_steps: 0,
         }];
         let mut fast = normal.clone();
 
@@ -409,10 +512,214 @@ mod tests {
         assert_eq!(
             normal,
             vec![Wound {
-                damage: 1,
-                healing_progress_quarter_days: 0
+                damage: 3,
+                healing_progress_steps: 4
             }]
         );
-        assert!(fast.is_empty());
+        assert_eq!(
+            fast,
+            vec![Wound {
+                damage: 2,
+                healing_progress_steps: 0
+            }]
+        );
+    }
+
+    #[derive(Clone, Copy)]
+    struct DummyBuilder;
+
+    impl CombatantBuilder for DummyBuilder {
+        fn build_player(&self, _state: &RunState) -> Combatant {
+            let mut combatant = Combatant::default();
+            combatant.sheet.name = "Player".to_string();
+            combatant
+        }
+
+        fn build_enemy(&self, _enemy: &EnemyProfile) -> Combatant {
+            let mut combatant = Combatant::default();
+            combatant.sheet.name = "Enemy".to_string();
+            combatant
+        }
+    }
+
+    fn canonical_event_lines(events: &[CombatEvent]) -> Vec<String> {
+        events
+            .iter()
+            .map(|event| match &event.kind {
+                CombatEventKind::Attack(attack) => format!(
+                    "t={} a={} d={} hit={} sb={} dmg={} sd={} kb={:.1} charge={} ranged={} hp={}",
+                    event.time,
+                    event.attacker_idx,
+                    event.defender_idx,
+                    attack.hit,
+                    attack.shield_block,
+                    attack.damage,
+                    attack.shield_damage,
+                    attack.knockback_ft,
+                    attack.is_charge,
+                    attack.is_ranged,
+                    attack.defender_hp_after
+                ),
+                CombatEventKind::KnockAside(knock) => format!(
+                    "t={} a={} d={} knock_success={} atk={} def={}",
+                    event.time,
+                    event.attacker_idx,
+                    event.defender_idx,
+                    knock.success,
+                    knock.roll.attack_total,
+                    knock.roll.defense_total
+                ),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn run_next_fight_is_deterministic_for_same_seed() {
+        let state = RunState::new(PlayerProfile::default(), Inventory::default(), 424242);
+        let spawner = EnemySpawner::new(vec![EnemySpawnEntry {
+            preset_id: NpcPresetId::new(0),
+            min_level: 1,
+            max_level: 10,
+            weight: 1,
+        }]);
+        let loot_table = LootTable {
+            gold_range: 7..=11,
+            xp_per_level: 3,
+            item_table: Vec::new(),
+        };
+        let builder = DummyBuilder;
+        let sim_config = SimConfig::new(20.0, 1.0);
+
+        let a = run_next_fight(
+            state.clone(),
+            &spawner,
+            &loot_table,
+            None,
+            sim_config,
+            40,
+            8,
+            true,
+            EncounterTier::Normal,
+            &builder,
+        );
+        let b = run_next_fight(
+            state,
+            &spawner,
+            &loot_table,
+            None,
+            sim_config,
+            40,
+            8,
+            true,
+            EncounterTier::Normal,
+            &builder,
+        );
+
+        assert_eq!(a.enemy, b.enemy);
+        assert_eq!(a.reward, b.reward);
+        assert_eq!(a.fight.won, b.fight.won);
+        assert_eq!(a.fight.remaining_hp, b.fight.remaining_hp);
+        assert_eq!(a.fight.turns, b.fight.turns);
+        assert_eq!(
+            canonical_event_lines(&a.fight.events),
+            canonical_event_lines(&b.fight.events)
+        );
+    }
+
+    #[test]
+    fn encounter_tier_breakpoints_match_depth() {
+        assert_eq!(encounter_tier_for_depth(0), EncounterTier::Normal);
+        assert_eq!(encounter_tier_for_depth(4), EncounterTier::Elite);
+        assert_eq!(encounter_tier_for_depth(8), EncounterTier::Elite);
+        assert_eq!(encounter_tier_for_depth(10), EncounterTier::Boss);
+    }
+
+    #[test]
+    fn reward_scaling_increases_by_tier() {
+        let base = Reward {
+            gold: 20,
+            xp: 12,
+            items: vec!["Potion".to_string()],
+        };
+        let normal = resolve_reward_for_tier(base.clone(), EncounterTier::Normal);
+        let elite = resolve_reward_for_tier(base.clone(), EncounterTier::Elite);
+        let boss = resolve_reward_for_tier(base, EncounterTier::Boss);
+        assert!(normal.gold <= elite.gold && elite.gold <= boss.gold);
+        assert!(normal.xp <= elite.xp && elite.xp <= boss.xp);
+        assert_eq!(normal.items.len(), 1);
+        assert_eq!(elite.items.len(), 1);
+        assert_eq!(boss.items.len(), 1);
+    }
+
+    #[test]
+    fn depth_band_progression_is_stable() {
+        assert_eq!(depth_band_for_depth(0), DepthBand::Novice);
+        assert_eq!(depth_band_for_depth(7), DepthBand::Veteran);
+        assert_eq!(depth_band_for_depth(14), DepthBand::Champion);
+        assert_eq!(depth_band_for_depth(30), DepthBand::Mythic);
+    }
+
+    #[test]
+    fn scaled_enemy_level_increases_with_depth_band_and_tier() {
+        let normal = scaled_enemy_level(3, 2, EncounterTier::Normal);
+        let elite = scaled_enemy_level(3, 8, EncounterTier::Elite);
+        let boss = scaled_enemy_level(3, 20, EncounterTier::Boss);
+        assert!(normal < elite);
+        assert!(elite < boss);
+    }
+
+    #[test]
+    fn different_seed_changes_downstream_outcome() {
+        let state_a = RunState::new(PlayerProfile::default(), Inventory::default(), 111);
+        let state_b = RunState::new(PlayerProfile::default(), Inventory::default(), 222);
+        let spawner = EnemySpawner::new(vec![
+            EnemySpawnEntry {
+                preset_id: NpcPresetId::new(0),
+                min_level: 1,
+                max_level: 10,
+                weight: 1,
+            },
+            EnemySpawnEntry {
+                preset_id: NpcPresetId::new(1),
+                min_level: 1,
+                max_level: 10,
+                weight: 2,
+            },
+        ]);
+        let loot_table = LootTable {
+            gold_range: 4..=16,
+            xp_per_level: 3,
+            item_table: Vec::new(),
+        };
+        let builder = DummyBuilder;
+        let sim_config = SimConfig::new(20.0, 1.0);
+        let a = run_next_fight(
+            state_a,
+            &spawner,
+            &loot_table,
+            None,
+            sim_config,
+            45,
+            8,
+            true,
+            EncounterTier::Normal,
+            &builder,
+        );
+        let b = run_next_fight(
+            state_b,
+            &spawner,
+            &loot_table,
+            None,
+            sim_config,
+            45,
+            8,
+            true,
+            EncounterTier::Normal,
+            &builder,
+        );
+        let changed = a.enemy != b.enemy
+            || a.reward != b.reward
+            || canonical_event_lines(&a.fight.events) != canonical_event_lines(&b.fight.events);
+        assert!(changed, "expected at least one downstream difference");
     }
 }

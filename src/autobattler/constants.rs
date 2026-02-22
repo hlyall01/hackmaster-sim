@@ -8,6 +8,7 @@ pub const CHARACTER_SAVE_DIR: &str = "saves/autobattler";
 pub const CHARACTER_SAVE_EXTENSION: &str = "json";
 pub const RUN_SAVE_DIR: &str = "saves/autobattler_runs";
 pub const RUN_SAVE_EXTENSION: &str = "json";
+pub const RUN_AUTOSAVE_FILE: &str = "autosave_run.json";
 pub const AUTOBATTLER_CONFIG_PATH: &str = "data/autobattler/autobattler_config.json";
 pub const NPC_PRESETS_PATH: &str = "data/sim/npc_presets.json";
 pub const QUICK_STARTS_PATH: &str = "data/autobattler/autobattler_quick_starts.json";

@@ -21,8 +21,10 @@ pub struct PlayerProfile {
     pub quirks: Vec<String>,
     pub flaws: Vec<String>,
     pub skills: Vec<String>,
+    pub skill_levels: Vec<SkillProgress>,
     pub proficiencies: Vec<String>,
     pub talents: Vec<TalentSelection>,
+    pub weapon_masteries: Vec<WeaponMasteryProgress>,
 }
 
 impl PlayerProfile {
@@ -43,8 +45,10 @@ impl PlayerProfile {
             quirks: Vec::new(),
             flaws: Vec::new(),
             skills: Vec::new(),
+            skill_levels: Vec::new(),
             proficiencies: Vec::new(),
             talents: Vec::new(),
+            weapon_masteries: Vec::new(),
         }
     }
 }
@@ -53,6 +57,32 @@ impl Default for PlayerProfile {
     fn default() -> Self {
         Self::new("Player", AbilitySet::default())
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct SkillProgress {
+    pub id: String,
+    #[serde(default)]
+    pub level: u8,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub struct WeaponMasteryProgress {
+    pub group: String,
+    #[serde(default)]
+    pub experience: u32,
+    #[serde(default)]
+    pub unspent_points: u32,
+    #[serde(default)]
+    pub free_proficiency_tiers_claimed: i32,
+    #[serde(default)]
+    pub attack: i32,
+    #[serde(default)]
+    pub defense: i32,
+    #[serde(default)]
+    pub damage: i32,
+    #[serde(default)]
+    pub speed: i32,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -150,7 +180,9 @@ impl AbilityKind {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TalentRequirement {
-    MinLevel { level: u8 },
+    MinLevel {
+        level: u8,
+    },
     MinStat {
         stat: AbilityKind,
         min_base: Option<u8>,
@@ -197,15 +229,34 @@ pub struct TalentSelection {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TalentEffect {
-    HitPointBonus { amount: i32 },
-    ArmorDrBonus { amount: i32 },
-    SpeedModBonus { amount: i32 },
-    InitiativeModBonus { amount: i32 },
-    AttackBonusWeapon { amount: i32 },
-    DamageBonusWeapon { amount: i32 },
-    DamageBonusWeaponGroup { amount: i32, weapon_group: String },
-    DefenseBonusWeapon { amount: i32 },
-    InitiativeDieBonus { steps: i32 },
+    HitPointBonus {
+        amount: i32,
+    },
+    ArmorDrBonus {
+        amount: i32,
+    },
+    SpeedModBonus {
+        amount: i32,
+    },
+    InitiativeModBonus {
+        amount: i32,
+    },
+    AttackBonusWeapon {
+        amount: i32,
+    },
+    DamageBonusWeapon {
+        amount: i32,
+    },
+    DamageBonusWeaponGroup {
+        amount: i32,
+        weapon_group: String,
+    },
+    DefenseBonusWeapon {
+        amount: i32,
+    },
+    InitiativeDieBonus {
+        steps: i32,
+    },
     Dodge {
         defense_bonus: i32,
         allow_dex_ranged: bool,
@@ -214,8 +265,12 @@ pub enum TalentEffect {
         sides: i32,
         penetrating: bool,
     },
-    ThresholdOfPainMultiplier { multiplier: f32 },
-    ThresholdOfPainLevelBonus { per_level_pct: f32 },
+    ThresholdOfPainMultiplier {
+        multiplier: f32,
+    },
+    ThresholdOfPainLevelBonus {
+        per_level_pct: f32,
+    },
     FastHealer,
     WeaponSpeedBonus {
         amount: i32,
@@ -224,18 +279,49 @@ pub enum TalentEffect {
         #[serde(default)]
         weapon_group: Option<String>,
     },
-    WeaponReachBonus { amount: i32 },
-    RangeDistanceMultiplier { multiplier: f32 },
+    WeaponReachBonus {
+        amount: i32,
+    },
+    RangeDistanceMultiplier {
+        multiplier: f32,
+    },
     ArmorInitiativePenaltyNegation,
     ArmorSpeedPenaltyNegation,
-    ArmorDrBonusArmored { amount: i32 },
-    LightArmorDefenseBonusFromDr { divisor: i32 },
-    MediumArmorDrBonus { amount: i32 },
-    MediumArmorDefensePenaltyReduction { amount: i32 },
-    HeavyArmorDamageBonusFromDr { divisor: i32 },
-    HeavyArmorDamageBonus { amount: i32 },
-    ShieldDefenseBonus { amount: i32 },
-    ShieldCoverValueAdjustment { amount: i32 },
+    ArmorDrBonusArmored {
+        amount: i32,
+    },
+    LightArmorDefenseBonusFromDr {
+        divisor: i32,
+    },
+    MediumArmorDrBonus {
+        amount: i32,
+    },
+    MediumArmorDefensePenaltyReduction {
+        amount: i32,
+    },
+    HeavyArmorDamageBonusFromDr {
+        divisor: i32,
+    },
+    HeavyArmorDamageBonus {
+        amount: i32,
+    },
+    ShieldDefenseBonus {
+        amount: i32,
+    },
+    ShieldCoverValueAdjustment {
+        amount: i32,
+    },
+    LargeSwordShieldStyle,
+    ArmerociPoleStyle,
+    FymblwngerStyle,
+    HammererStyle,
+    HobblerStyle,
+    IthicanPrinceStyle,
+    RegenstatStyle,
+    ReturnerStyle,
+    SixPathsStyle,
+    ThreeMountainsStyle,
+    UnbreakableWallStyle,
 }
 
 fn default_talent_rank() -> u8 {

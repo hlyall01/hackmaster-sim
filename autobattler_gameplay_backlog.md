@@ -1,75 +1,130 @@
-# Autobattler Gameplay Backlog
+# Autobattler v1 Backlog (Top 10)
 
-## Goal
-Ship a playable autobattler run loop in Bevy with repeatable progression and clear player choices after each fight.
+## Scope
+This is the prioritized v1 execution list. Each task includes:
+- Implementation plan
+- Test plan
+- Done criteria
 
-## Plan
+## 1) Save/Load Reliability + Autosave Checkpoints
+- Implementation:
+  - Add autosave checkpoints after fight resolve, post-fight choice resolve, and level-up confirm.
+  - Version run/character save schema and add migration handlers.
+  - Harden load path to fail gracefully with actionable messages.
+- Test plan:
+  - Unit tests for save serialization/deserialization round-trip.
+  - Migration tests from previous schema versions to current.
+  - Integration test: start run -> fight -> autosave -> reload -> continue deterministically.
+- Done criteria:
+  - No state loss across reload; autosave files recover full run state.
 
-### 1. Lock The Core Loop Contract
-- Define one run cycle: `Prepare -> Fight -> Resolve Rewards -> Post-Fight Choice -> Next Encounter`.
-- Finalize post-fight actions: `Progress`, `Rest`, `Train`, plus optional `Shop` if gold sinks are needed.
-- Add run-end conditions: player death, voluntary retire, or milestone completion.
+## 2) Deterministic Run Pipeline (Seed Contract)
+- Implementation:
+  - Enforce one seed contract for encounter generation, combat rng, loot rng, event rng.
+  - Derive sub-seeds using stable keyed derivation by encounter/depth/index.
+  - Expose seed and sub-seed context in run debug panel/log.
+- Test plan:
+  - Golden tests: same seed produces same encounter sequence, outcomes, and rewards.
+  - Differential tests: changing seed changes at least one downstream output.
+- Done criteria:
+  - Two runs with same inputs are byte-equivalent in outcome logs/reward summaries.
 
-### 2. Finish Character Creation End-To-End
-- Keep current step flow, but enforce completion gates (cannot start run with invalid state).
-- Finalize talent selection validation (costs, rank caps, prerequisites).
-- Finalize starter gear purchase validation (inventory slots, two-handed/shield rules, gold limits).
-- Persist created character as canonical `PlayerProfile + Inventory + PointPools`.
+## 3) Post-Fight Action System Finalization (Fight/Rest/Train)
+- Implementation:
+  - Finalize rules for `Fight On`, `Rest`, `Train`.
+  - Ensure each action mutates run state via one resolver path.
+  - Add clear effect preview in UI before confirming action.
+- Test plan:
+  - Unit tests per action resolver path (hp, wounds, days, resources, flags).
+  - Integration test for multi-step sequence: fight -> rest -> train -> fight.
+- Done criteria:
+  - Action results are consistent and visible in UI/log.
 
-### 3. Stabilize Combat + Encounter Pipeline
-- Ensure spawn scaling is deterministic from `run_seed + encounter_index`.
-- Define enemy bands by run depth and rarity.
-- Add encounter metadata (normal, elite, boss) to drive rewards and event rates.
-- Guarantee combat result payload includes: hp state, wounds, xp, gold, items, logs.
+## 4) Reward/Economy Resolver Unification
+- Implementation:
+  - Move xp/gold/item reward math behind one reward resolver.
+  - Add encounter tier modifiers (normal/elite/boss).
+  - Add economy invariants (no negative gold, bounded reward ranges).
+- Test plan:
+  - Unit tests for reward formulas across depth/tier ranges.
+  - Property tests for invariants (gold >= 0, xp monotonic by level band).
+- Done criteria:
+  - Rewards are consistent, bounded, and scale predictably.
 
-### 4. Rewards, Economy, And Progression
-- Formalize reward tables: base xp/gold by enemy level, modifiers by encounter type.
-- Add item reward tiers and drop weights.
-- Ensure all rewards apply through one resolver to avoid drift.
-- Add gold sinks: training costs, consumables/repairs, optional event costs.
+## 5) Level-Up Checkpoint + Allocation Validation
+- Implementation:
+  - Add blocking level-up checkpoint in run flow.
+  - Validate AP/BP/LP/RP spend, talent requirements, and progression tier caps.
+  - Recompute derived stats after commit.
+- Test plan:
+  - Unit tests for points accounting and tier cap validation.
+  - Integration test: gain XP -> level-up -> allocate -> persist -> reload.
+- Done criteria:
+  - Invalid allocations are impossible; committed allocations survive reload.
 
-### 5. Post-Fight Decision System
-- `Progress`: immediate next encounter, no heal bonus.
-- `Rest`: wound recovery/heal progression, chance of ambush/event.
-- `Train`: spend time/gold for targeted growth (stat BP gain, talent progress, or combat bonuses).
-- Expose risk/reward preview in UI before confirming choice.
+## 6) Encounter Scaling + Spawn Bands
+- Implementation:
+  - Define depth bands and level scaling curve for enemy spawns.
+  - Add encounter metadata (`normal`, `elite`, `boss`) to run state.
+  - Tie band/tier into reward and event systems.
+- Test plan:
+  - Unit tests for depth->band mapping and level bounds.
+  - Simulation tests over many seeds to validate distribution targets.
+- Done criteria:
+  - Encounter difficulty ramps smoothly and predictably by depth.
 
-### 6. Random Events Framework
-- Add event engine with weighted pools by run depth and current state.
-- Event categories: boon, hazard, trader, shrine, narrative fork.
-- Each event must have deterministic roll input and explicit outcomes.
-- Include at least 15 events for content variety in v1.
+## 7) Event Framework v1 (Weighted, Deterministic)
+- Implementation:
+  - Add event engine with weighted pools by depth/state.
+  - Implement a minimal v1 set of events (boon/hazard/trader/shrine).
+  - Resolve events through explicit typed outcomes.
+- Test plan:
+  - Unit tests for weighted selection with deterministic seeds.
+  - Integration tests for each event type’s state mutation.
+- Done criteria:
+  - Events trigger/resolve deterministically and affect run outcomes.
 
-### 7. Level-Up And Advancement
-- Use XP curve to trigger level-up in post-fight resolve.
-- On level-up: apply hp progression, unlock talent opportunities, and any derived stat recompute.
-- Add level-up UI checkpoint so player confirms allocations before next fight.
-- Persist advancement decisions immediately.
+## 8) Combat UX Parity + Clarity Pass
+- Implementation:
+  - Lock fight UI parity with sim-style visuals (poses/icons/timeline/labels).
+  - Add explicit combat state indicators (paused/running/step/result).
+  - Ensure run panel + arena panel reflect same source-of-truth data.
+- Test plan:
+  - Snapshot tests for key UI combat states (normal, knocked, downed, paused).
+  - Manual test checklist for interaction flow and visual sync.
+- Done criteria:
+  - Fight UI states are legible and consistent through entire encounter lifecycle.
 
-### 8. UI/UX Pass For Full Loop
-- Run HUD: current depth, HP/wounds, xp-to-next, gold, active modifiers.
-- Post-fight panel: rewards summary + action choices + event result.
-- Level-up modal with blocking decisions.
-- Keep current low-fi visuals; prioritize clarity and speed over polish.
+## 9) Data Layout + Content Hygiene
+- Implementation:
+  - Complete migration to `data/sim` + `data/autobattler` with loader compatibility.
+  - Validate required files on startup and provide clear missing-file errors.
+  - Normalize quick-start and preset sources to one canonical path each.
+- Test plan:
+  - Loader tests for canonical paths and backward-compatible aliases.
+  - Packaging test to verify runtime data discovery in release builds.
+- Done criteria:
+  - No accidental fallback to wrong dataset; packaged builds load correct content.
 
-### 9. Save/Load + Recovery
-- Save both character state and active run state at safe checkpoints.
-- Add autosave at: end of fight, after decision resolve, after level-up confirm.
-- Version save schema and add migration fallback for old saves.
+## 10) Balance + Regression Test Harness
+- Implementation:
+  - Add seeded run harness for bulk regression checks.
+  - Track KPIs: run failure rate, fights-per-level, resource spend split, average depth.
+  - Gate merges on regression thresholds.
+- Test plan:
+  - Long-run seeded simulations in CI/nightly.
+  - Threshold assertions with tolerance windows.
+- Done criteria:
+  - Balance regressions are detected automatically before release.
 
-### 10. Balance + Validation
-- Add simulation tests for 100+ seeded runs to check economy/progression stability.
-- Add invariants: no negative gold, no invalid talent ranks, no impossible gear states.
-- Tune pacing targets: average fights-to-level, rest/train usage rate, run failure rate.
-
-## Milestones
-1. M1 (Playable): creation -> fights -> rewards -> post-fight choices -> basic level-up.
-2. M2 (Progression): training/rest balancing, random events, stronger save/load.
-3. M3 (Content): expanded enemy/event/item pools, balance pass, polish pass.
-
-## Definition Of Done (v1)
-- A new character can complete multiple encounters in one run.
-- Rewards and level-ups work deterministically by seed.
-- Post-fight choices materially change outcomes.
-- Random events trigger and resolve correctly.
-- Save/load fully restores an in-progress run without state loss.
+## Execution Order
+1. Save/Load Reliability + Autosave Checkpoints
+2. Deterministic Run Pipeline
+3. Post-Fight Action System
+4. Reward/Economy Resolver
+5. Level-Up Checkpoint
+6. Encounter Scaling
+7. Event Framework
+8. Combat UX Parity + Clarity
+9. Data Layout + Content Hygiene
+10. Balance + Regression Harness
