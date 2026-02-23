@@ -771,32 +771,110 @@ impl eframe::App for SimGuiApp {
                     self.running = false;
                     self.run_bulk_sim();
                 }
-                if let Some(result) = &self.bulk_result {
-                    let wins_a = result.wins.get(0).copied().unwrap_or(0);
-                    let wins_b = result.wins.get(1).copied().unwrap_or(0);
-                    ui.label(format!("{} wins: {}", self.players[0].name, wins_a));
-                    ui.label(format!("{} wins: {}", self.players[1].name, wins_b));
-                    if result.ties > 0 {
-                        ui.label(format!("Ties/timeouts: {}", result.ties));
-                    }
-                    ui.label(format!(
-                        "Fights w/ 2+ charges: {}",
-                        result.fights_with_second_charge
-                    ));
-                    ui.label(format!("Fights w/ trauma: {}", result.fights_with_trauma));
-                    ui.label(format!(
-                        "Fights w/ trauma on first exchange: {}",
-                        result.fights_with_trauma_first_exchange
-                    ));
-                    ui.label(format!(
-                        "Fights w/ 20ft knockback: {}",
-                        result.fights_with_knockback_20ft
-                    ));
-                    ui.label(format!("Avg duration: {:.1}s", result.avg_duration));
-                    if let Some(duration) = self.bulk_sim_duration {
-                        ui.label(format!("Sim time: {:.2}s", duration.as_secs_f64()));
-                    }
-                }
+                egui::ScrollArea::vertical()
+                    .max_height(300.0)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        if let Some(result) = &self.bulk_result {
+                            let total_runs =
+                                (result.wins.iter().copied().sum::<u32>() + result.ties).max(1)
+                                    as f32;
+                            let wins_a = result.wins.get(0).copied().unwrap_or(0);
+                            let wins_b = result.wins.get(1).copied().unwrap_or(0);
+                            ui.label(format!(
+                                "{} wins: {} ({:.1}%)",
+                                self.players[0].name,
+                                wins_a,
+                                wins_a as f32 * 100.0 / total_runs
+                            ));
+                            ui.label(format!(
+                                "{} wins: {} ({:.1}%)",
+                                self.players[1].name,
+                                wins_b,
+                                wins_b as f32 * 100.0 / total_runs
+                            ));
+                            if result.ties > 0 {
+                                ui.label(format!(
+                                    "Ties/timeouts: {} ({:.1}%)",
+                                    result.ties,
+                                    result.ties as f32 * 100.0 / total_runs
+                                ));
+                            }
+                            ui.label(format!("Avg duration: {:.1}s", result.avg_duration));
+                            egui::CollapsingHeader::new("Detailed metrics")
+                                .default_open(true)
+                                .show(ui, |ui| {
+                                    ui.label(format!("Shortest fight: {}s", result.shortest_duration));
+                                    ui.label(format!("Longest fight: {}s", result.longest_duration));
+                                    ui.label(format!("Highest HP hit: {}", result.highest_single_hit));
+                                    ui.label(format!(
+                                        "Highest shield hit: {}",
+                                        result.highest_single_shield_hit
+                                    ));
+                                    ui.label(format!(
+                                        "Max one-side knockback in a fight: {:.1} ft",
+                                        result.max_total_knockback_one_side_ft
+                                    ));
+                                    ui.separator();
+                                    ui.label(format!(
+                                        "Fights w/ 2+ charges: {}",
+                                        result.fights_with_second_charge
+                                    ));
+                                    ui.label(format!(
+                                        "Fights w/ trauma: {}",
+                                        result.fights_with_trauma
+                                    ));
+                                    ui.label(format!(
+                                        "Fights w/ trauma on first exchange: {}",
+                                        result.fights_with_trauma_first_exchange
+                                    ));
+                                    ui.label(format!(
+                                        "Fights w/ 20ft knockback: {}",
+                                        result.fights_with_knockback_20ft
+                                    ));
+                                    for idx in 0..self.players.len() {
+                                        let name = &self.players[idx].name;
+                                        let avg_dealt = result
+                                            .avg_damage_dealt_by_team
+                                            .get(idx)
+                                            .copied()
+                                            .unwrap_or(0.0);
+                                        let avg_taken = result
+                                            .avg_damage_taken_by_team
+                                            .get(idx)
+                                            .copied()
+                                            .unwrap_or(0.0);
+                                        let avg_hp = result
+                                            .avg_remaining_hp_by_team
+                                            .get(idx)
+                                            .copied()
+                                            .unwrap_or(0.0);
+                                        let top_hit = result
+                                            .highest_single_hit_by_team
+                                            .get(idx)
+                                            .copied()
+                                            .unwrap_or(0);
+                                        let top_shield_hit = result
+                                            .highest_single_shield_hit_by_team
+                                            .get(idx)
+                                            .copied()
+                                            .unwrap_or(0);
+                                        ui.separator();
+                                        ui.label(format!("{name} avg dmg dealt: {:.1}", avg_dealt));
+                                        ui.label(format!("{name} avg dmg taken: {:.1}", avg_taken));
+                                        ui.label(format!("{name} avg remaining HP: {:.1}", avg_hp));
+                                        ui.label(format!("{name} highest hit: {}", top_hit));
+                                        ui.label(format!("{name} highest shield hit: {}", top_shield_hit));
+                                    }
+                                });
+                            if let Some(duration) = self.bulk_sim_duration {
+                                ui.label(format!("Sim time: {:.2}s", duration.as_secs_f64()));
+                            }
+                        } else {
+                            ui.label("No bulk results yet.");
+                            ui.label("Click 'Run bulk' to generate metrics.");
+                        }
+                    });
             });
 
         egui::SidePanel::right("status")

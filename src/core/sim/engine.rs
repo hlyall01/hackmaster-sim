@@ -201,6 +201,42 @@ impl SimState {
         }
     }
 
+    fn record_attack_metrics(
+        &mut self,
+        attacker_idx: usize,
+        defender_idx: usize,
+        hp_damage: i32,
+        shield_damage: i32,
+        knockback_ft: f32,
+    ) {
+        let hp_damage_u32 = hp_damage.max(0) as u32;
+        let shield_damage_u32 = shield_damage.max(0) as u32;
+        let knockback = knockback_ft.max(0.0);
+
+        {
+            let attacker = &mut self.combatants[attacker_idx].state;
+            attacker.max_hit_dealt = attacker.max_hit_dealt.max(hp_damage.max(0));
+            attacker.max_shield_hit_dealt = attacker.max_shield_hit_dealt.max(shield_damage.max(0));
+            attacker.total_hp_damage_dealt = attacker
+                .total_hp_damage_dealt
+                .saturating_add(hp_damage_u32);
+            attacker.total_shield_damage_dealt = attacker
+                .total_shield_damage_dealt
+                .saturating_add(shield_damage_u32);
+            attacker.total_knockback_inflicted_ft += knockback;
+        }
+        {
+            let defender = &mut self.combatants[defender_idx].state;
+            defender.total_hp_damage_taken = defender
+                .total_hp_damage_taken
+                .saturating_add(hp_damage_u32);
+            defender.total_shield_damage_taken = defender
+                .total_shield_damage_taken
+                .saturating_add(shield_damage_u32);
+            defender.total_knockback_taken_ft += knockback;
+        }
+    }
+
     pub fn update(&mut self, dt: f32) {
         if self.done {
             return;
@@ -918,6 +954,13 @@ impl SimState {
                 if event.shield_block {
                     self.apply_shield_strike_speedup(event.defender_idx, now);
                 }
+                self.record_attack_metrics(
+                    event.attacker_idx,
+                    event.defender_idx,
+                    event.damage,
+                    event.shield_damage,
+                    event.knockback_ft,
+                );
                 self.apply_knockback(event.attacker_idx, event.defender_idx, event.knockback_ft);
                 if self.first_attack_time.is_none() {
                     self.first_attack_time = Some(self.elapsed_seconds);
@@ -967,6 +1010,13 @@ impl SimState {
                     if counter.hit && !counter.is_ranged {
                         self.apply_six_paths_followup(counter.attacker_idx, now);
                     }
+                    self.record_attack_metrics(
+                        counter.attacker_idx,
+                        counter.defender_idx,
+                        counter.damage,
+                        counter.shield_damage,
+                        counter.knockback_ft,
+                    );
                     self.apply_knockback(
                         counter.attacker_idx,
                         counter.defender_idx,
@@ -1126,6 +1176,13 @@ impl SimState {
                     if event.shield_block {
                         self.apply_shield_strike_speedup(event.defender_idx, now);
                     }
+                    self.record_attack_metrics(
+                        event.attacker_idx,
+                        event.defender_idx,
+                        event.damage,
+                        event.shield_damage,
+                        event.knockback_ft,
+                    );
                     self.apply_knockback(
                         event.attacker_idx,
                         event.defender_idx,
@@ -1179,6 +1236,13 @@ impl SimState {
                         if counter.hit && !counter.is_ranged {
                             self.apply_six_paths_followup(counter.attacker_idx, now);
                         }
+                        self.record_attack_metrics(
+                            counter.attacker_idx,
+                            counter.defender_idx,
+                            counter.damage,
+                            counter.shield_damage,
+                            counter.knockback_ft,
+                        );
                         self.apply_knockback(
                             counter.attacker_idx,
                             counter.defender_idx,
@@ -1266,11 +1330,22 @@ pub struct BulkSimResult {
     pub wins: Vec<u32>,
     pub ties: u32,
     pub avg_duration: f32,
+    pub shortest_duration: u32,
+    pub longest_duration: u32,
     pub fights_with_second_charge: u32,
     pub fights_with_trauma: u32,
     pub fights_with_trauma_first_exchange: u32,
     pub fights_with_knockback_20ft: u32,
     pub fights_with_charge_within_20ft: u32,
+    pub highest_single_hit: i32,
+    pub highest_single_shield_hit: i32,
+    pub highest_single_hit_by_team: Vec<i32>,
+    pub highest_single_shield_hit_by_team: Vec<i32>,
+    pub avg_damage_dealt_by_team: Vec<f32>,
+    pub avg_damage_taken_by_team: Vec<f32>,
+    pub avg_remaining_hp_by_team: Vec<f32>,
+    pub max_total_knockback_one_side_ft: f32,
+    pub avg_max_knockback_one_side_ft: f32,
 }
 
 #[allow(dead_code)]
@@ -1302,13 +1377,27 @@ pub fn bulk_simulate(
     let mut fights_with_trauma_first_exchange = 0u32;
     let mut fights_with_knockback_20ft = 0u32;
     let mut fights_with_charge_within_20ft = 0u32;
+    let mut shortest_duration = u32::MAX;
+    let mut longest_duration = 0u32;
+    let mut highest_single_hit = 0i32;
+    let mut highest_single_shield_hit = 0i32;
+    let mut highest_single_hit_by_team = vec![0i32; team_ids.len()];
+    let mut highest_single_shield_hit_by_team = vec![0i32; team_ids.len()];
+    let mut total_damage_dealt_by_team = vec![0u64; team_ids.len()];
+    let mut total_damage_taken_by_team = vec![0u64; team_ids.len()];
+    let mut total_remaining_hp_by_team = vec![0u64; team_ids.len()];
+    let mut max_total_knockback_one_side_ft = 0.0f32;
+    let mut total_max_knockback_one_side_ft = 0.0f32;
     let mut total_seconds = 0u64;
     for _ in 0..runs {
         sim.reset_preserve_rng();
         while !sim.done && sim.elapsed_seconds < max_seconds {
             sim.update(1.0);
         }
-        total_seconds += sim.elapsed_seconds as u64;
+        let duration = sim.elapsed_seconds;
+        total_seconds += duration as u64;
+        shortest_duration = shortest_duration.min(duration);
+        longest_duration = longest_duration.max(duration);
         if sim.done {
             let mut alive_teams = HashSet::new();
             for combatant in &sim.combatants {
@@ -1363,17 +1452,67 @@ pub fn bulk_simulate(
         {
             fights_with_charge_within_20ft += 1;
         }
+        let mut fight_max_knockback_side = 0.0f32;
+        for combatant in &sim.combatants {
+            let Some(&team_idx) = team_index.get(&combatant.team_id) else {
+                continue;
+            };
+            let state = &combatant.state;
+            highest_single_hit = highest_single_hit.max(state.max_hit_dealt);
+            highest_single_shield_hit = highest_single_shield_hit.max(state.max_shield_hit_dealt);
+            highest_single_hit_by_team[team_idx] =
+                highest_single_hit_by_team[team_idx].max(state.max_hit_dealt);
+            highest_single_shield_hit_by_team[team_idx] =
+                highest_single_shield_hit_by_team[team_idx].max(state.max_shield_hit_dealt);
+            total_damage_dealt_by_team[team_idx] = total_damage_dealt_by_team[team_idx]
+                .saturating_add(u64::from(state.total_hp_damage_dealt));
+            total_damage_taken_by_team[team_idx] = total_damage_taken_by_team[team_idx]
+                .saturating_add(u64::from(state.total_hp_damage_taken));
+            total_remaining_hp_by_team[team_idx] = total_remaining_hp_by_team[team_idx]
+                .saturating_add(state.hp.max(0) as u64);
+            fight_max_knockback_side =
+                fight_max_knockback_side.max(state.total_knockback_taken_ft);
+        }
+        max_total_knockback_one_side_ft = max_total_knockback_one_side_ft.max(fight_max_knockback_side);
+        total_max_knockback_one_side_ft += fight_max_knockback_side;
     }
     let avg_duration = total_seconds as f32 / runs as f32;
+    let avg_damage_dealt_by_team = total_damage_dealt_by_team
+        .into_iter()
+        .map(|value| value as f32 / runs as f32)
+        .collect();
+    let avg_damage_taken_by_team = total_damage_taken_by_team
+        .into_iter()
+        .map(|value| value as f32 / runs as f32)
+        .collect();
+    let avg_remaining_hp_by_team = total_remaining_hp_by_team
+        .into_iter()
+        .map(|value| value as f32 / runs as f32)
+        .collect();
     BulkSimResult {
         wins,
         ties,
         avg_duration,
+        shortest_duration: if shortest_duration == u32::MAX {
+            0
+        } else {
+            shortest_duration
+        },
+        longest_duration,
         fights_with_second_charge,
         fights_with_trauma,
         fights_with_trauma_first_exchange,
         fights_with_knockback_20ft,
         fights_with_charge_within_20ft,
+        highest_single_hit,
+        highest_single_shield_hit,
+        highest_single_hit_by_team,
+        highest_single_shield_hit_by_team,
+        avg_damage_dealt_by_team,
+        avg_damage_taken_by_team,
+        avg_remaining_hp_by_team,
+        max_total_knockback_one_side_ft,
+        avg_max_knockback_one_side_ft: total_max_knockback_one_side_ft / runs as f32,
     }
 }
 
