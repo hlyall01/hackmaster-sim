@@ -11,8 +11,8 @@
       },
       "masteries": {
         "attack": 2,
-        "defense": 1,
-        "damage": 1,
+        "defense": 2,
+        "damage": 2,
         "speed": 1,
         "shield_defense": 0,
         "shield_speed": 0
@@ -232,6 +232,103 @@
           "id": "attack_bonus_weapon",
           "rank": 1,
           "weapon": "claw"
+        }
+      ]
+    },
+    {
+      "name": "Riley 2",
+      "level": 4,
+      "progression": {
+        "attack": "I",
+        "speed": "II",
+        "initiative": "II",
+        "health": "IV"
+      },
+      "masteries": {
+        "attack": 1,
+        "defense": 1,
+        "damage": 1,
+        "speed": 0,
+        "shield_defense": 1,
+        "shield_speed": 0
+      },
+      "base_hp": 10,
+      "move_speed": 20.0,
+      "strength_base": 13,
+      "strength_pct": 50,
+      "dex_base": 11,
+      "dex_pct": 83,
+      "intelligence": 8,
+      "wisdom": 10,
+      "constitution": 15,
+      "looks": 13,
+      "charisma": 14,
+      "weapon": "Flamberge",
+      "armor": "Brigandine",
+      "shield": "Small metallic shield",
+      "weapon_material_tier": 1,
+      "armor_material_tier": 1,
+      "projectile_material_tier": 0,
+      "shield_material_tier": 1,
+      "two_hand_grip": false,
+      "maneuvers": {},
+      "defensive_dualwielding": false,
+      "race_id": "pather",
+      "proficiencies": [
+        "Flamberge",
+        "Lance",
+        "Shields",
+        "Light armor",
+        "Medium armor",
+        "Heavy armor",
+        "Hiking",
+        "Roadmarching"
+      ],
+      "talents": [
+        {
+          "id": "armor_focus",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "armor_specialization",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "armor_master",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "shield_focus",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "shield_specialization",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "weapon_focus",
+          "rank": 1,
+          "weapon": "Large swords"
+        },
+        {
+          "id": "twelve_paths",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "mounted_juggernaut",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "pedestrian",
+          "rank": 1,
+          "weapon": null
         }
       ]
     },

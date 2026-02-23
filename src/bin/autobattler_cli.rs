@@ -423,6 +423,7 @@ fn player_config_from_preset(
     player.flee = maneuvers.flee;
     player.defensive_dualwielding = preset.defensive_dualwielding;
     player.offensive_dualwielding = preset.offensive_dualwielding;
+    player.proficiencies = preset.proficiencies.clone();
     player.talents = preset.talents.clone();
     player.race_id = preset.race_id.clone();
     player.race_applied = false;
@@ -474,7 +475,7 @@ fn player_profile_from_config(config: &PlayerConfig) -> PlayerProfile {
         flaws: Vec::new(),
         skills: Vec::new(),
         skill_levels: Vec::new(),
-        proficiencies: Vec::new(),
+        proficiencies: config.proficiencies.clone(),
         weapon_masteries: Vec::new(),
         talents: config.talents.clone(),
     }

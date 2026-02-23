@@ -384,6 +384,7 @@ fn player_config_from_preset(
     player.flee = maneuvers.flee;
     player.defensive_dualwielding = preset.defensive_dualwielding;
     player.offensive_dualwielding = preset.offensive_dualwielding;
+    player.proficiencies = preset.proficiencies.clone();
     player.talents = preset.talents.clone();
     player.race_id = preset.race_id.clone();
     player.race_applied = false;
@@ -1889,6 +1890,89 @@ fn damage_respects_dr_under_five() {
         &mut rng,
     );
     assert_eq!(state.combatants[1].state.hp, 18);
+}
+
+#[test]
+fn shield_block_damage_stacks_shield_dr_and_armor_dr() {
+    let attacker = combatant_basic(
+        "Attacker".to_string(),
+        "Test Blade".to_string(),
+        0,
+        0,
+        0,
+        false,
+        0,
+        "12".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        20,
+    );
+    let mut defender = combatant_basic(
+        "Defender".to_string(),
+        "Shield".to_string(),
+        0,
+        5,
+        4,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        40,
+    );
+    defender.sheet.defense.shield_name = Some("Small metallic shield".to_string());
+    defender.sheet.defense.shield_dr = 3;
+
+    let mut state = make_state(attacker, defender);
+    state.combatants[1].state.shield_intact = true;
+    let mut rng = FixedRng(0);
+    let event = resolve_attack(
+        &mut state.combatants,
+        0,
+        1,
+        0,
+        false,
+        1.0,
+        AttackMode::Normal,
+        WeaponSlot::Primary,
+        0.0,
+        None,
+        &mut rng,
+    );
+
+    assert!(!event.hit);
+    assert!(
+        event.shield_block,
+        "shield block missing: atk={} def={} shield_intact={}",
+        event.roll.attack_total,
+        event.roll.defense_total,
+        state.combatants[1].state.shield_intact
+    );
+    assert_eq!(event.damage, 5);
+    assert_eq!(state.combatants[1].state.hp, 35);
+
+    let breakdown = event
+        .shield_damage_breakdown
+        .as_ref()
+        .expect("expected shield damage breakdown");
+    assert_eq!(breakdown.raw_damage, 12);
+    assert_eq!(breakdown.shield_dr, 3);
+    assert_eq!(breakdown.effective_armor_dr, 4);
+    assert_eq!(breakdown.hp_damage, 5);
 }
 
 #[test]

@@ -749,13 +749,24 @@ impl AutobattlerApp {
                                         for (idx, weapon) in
                                             self.weapon_catalog.entries().iter().enumerate()
                                         {
-                                            let effective_shield_cost = if weapon.handedness
-                                                == crate::game_logic::WeaponHandedness::TwoHanded
-                                            {
-                                                0
-                                            } else {
-                                                shield_cost
-                                            };
+                                            let effective_shield_cost = self
+                                                .shield_catalog
+                                                .get(self.creation.player.shield_id)
+                                                .and_then(|entry| entry.shield.as_ref())
+                                                .map(|shield| {
+                                                    if game_logic::shield_option_allowed(
+                                                        &self.creation.player,
+                                                        weapon,
+                                                        Some(shield),
+                                                        &self.talent_catalog,
+                                                        &self.weapon_catalog,
+                                                    ) {
+                                                        shield_cost
+                                                    } else {
+                                                        0
+                                                    }
+                                                })
+                                                .unwrap_or(0);
                                             let new_total = weapon.price_gp
                                                 + armor_cost
                                                 + effective_shield_cost;
@@ -772,14 +783,6 @@ impl AutobattlerApp {
                                     });
                                 if let Some(id) = self.weapon_catalog.id_from_index(weapon_index) {
                                     self.creation.player.weapon_id = id;
-                                    if let Some(weapon) = self.weapon_catalog.get(id) {
-                                        if weapon.handedness
-                                            == crate::game_logic::WeaponHandedness::TwoHanded
-                                        {
-                                            self.creation.player.shield_id =
-                                                crate::game_logic::ShieldId::new(0);
-                                        }
-                                    }
                                 }
                                 weapon_cost = self
                                     .weapon_catalog
@@ -856,6 +859,7 @@ impl AutobattlerApp {
                                                     weapon,
                                                     Some(shield),
                                                     &self.talent_catalog,
+                                                    &self.weapon_catalog,
                                                 )
                                             })
                                     })
@@ -876,6 +880,7 @@ impl AutobattlerApp {
                                                         weapon,
                                                         Some(shield),
                                                         &self.talent_catalog,
+                                                        &self.weapon_catalog,
                                                     )
                                                 })
                                                 .unwrap_or(false)
@@ -921,6 +926,7 @@ impl AutobattlerApp {
                                                                 weapon,
                                                                 Some(shield),
                                                                 &self.talent_catalog,
+                                                                &self.weapon_catalog,
                                                             )
                                                         })
                                                     })
@@ -3082,12 +3088,14 @@ fn render_talent_entry(
         max_rank.min(available_rank)
     };
     let can_adjust = (meets_requirements || current_rank > 0) && !style_conflict;
+    let force_add_enabled = !meets_requirements && current_rank == 0 && !style_conflict;
     let muted_color = ui.style().visuals.weak_text_color();
     let name_color = if meets_requirements {
         ui.style().visuals.text_color()
     } else {
         Color32::from_rgb(190, 90, 90)
     };
+    let mut force_add_requested = false;
     ui.group(|ui| {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(&spec.name).color(name_color));
@@ -3109,6 +3117,12 @@ fn render_talent_entry(
                     Color32::from_rgb(190, 90, 90),
                     format_talent_requirement_failure(failure, talent_catalog),
                 );
+            }
+            if ui
+                .add_enabled(force_add_enabled, egui::Button::new("Force add"))
+                .clicked()
+            {
+                force_add_requested = true;
             }
         }
         if style_conflict {
@@ -3216,7 +3230,10 @@ fn render_talent_entry(
             });
         }
 
-        if rank != selection.rank {
+        if force_add_requested {
+            selection.rank = 1;
+            add_queue.push(selection);
+        } else if rank != selection.rank {
             if rank == 0 {
                 if let Some(idx) = selection_idx {
                     remove_queue.push(idx);

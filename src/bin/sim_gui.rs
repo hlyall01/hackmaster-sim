@@ -1324,6 +1324,7 @@ fn render_player_editor(
                             weapon,
                             Some(shield),
                             talent_catalog,
+                            weapon_catalog,
                         )
                     })
                     .unwrap_or(true);
@@ -1341,6 +1342,7 @@ fn render_player_editor(
                                 weapon,
                                 Some(shield),
                                 talent_catalog,
+                                weapon_catalog,
                             )
                         })
                         .unwrap_or(false)
@@ -1366,6 +1368,7 @@ fn render_player_editor(
                                                 weapon,
                                                 Some(shield),
                                                 talent_catalog,
+                                                weapon_catalog,
                                             )
                                         })
                                         .unwrap_or(true);
@@ -1678,6 +1681,7 @@ fn render_player_editor(
                     weapon,
                     shield_catalog,
                     talent_catalog,
+                    weapon_catalog,
                 );
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
@@ -1959,6 +1963,7 @@ fn apply_fighter_preset(
     player.offensive_dualwielding = preset.offensive_dualwielding;
     player.environment = game_logic::EnvironmentConfig::default();
     player.misc_modifiers = game_logic::MiscRollModifiers::default();
+    player.proficiencies = preset.proficiencies.clone();
     player.talents = preset.talents.clone();
     player.weapon_id = find_weapon_id_by_name(weapon_catalog, &preset.weapon)
         .or_else(|| weapon_catalog.first_id())
@@ -2061,6 +2066,7 @@ fn fighter_preset_from_player(
         defensive_dualwielding: player.defensive_dualwielding,
         offensive_dualwielding: player.offensive_dualwielding,
         race_id: player.race_id.clone(),
+        proficiencies: player.proficiencies.clone(),
         talents: player.talents.clone(),
     }
 }
@@ -2505,6 +2511,7 @@ fn render_talent_entry(
     let muted_color = ui.visuals().weak_text_color();
     let can_adjust = !locked && (!is_nyi || requires_group);
     let allow_add = !locked && (!is_nyi || requires_group) && !style_conflict;
+    let allow_force_add = locked && (!is_nyi || requires_group) && !style_conflict;
     ui.group(|ui| {
         ui.horizontal(|ui| {
             if is_nyi {
@@ -2516,30 +2523,38 @@ fn render_talent_entry(
                 if ui.button("Remove").clicked() {
                     remove_queue.push(index);
                 }
-            } else if ui
-                .add_enabled(allow_add, egui::Button::new("Add"))
-                .clicked()
-            {
-                let weapon = if requires_group {
-                    Some(default_group.to_string())
-                } else if game_logic::talent_requires_weapon(spec) {
-                    weapon_catalog
-                        .get(player.weapon_id)
-                        .map(|weapon| weapon.name.clone())
-                        .or_else(|| {
-                            weapon_catalog
-                                .entries()
-                                .first()
-                                .map(|weapon| weapon.name.clone())
-                        })
+            } else {
+                let add_clicked = ui
+                    .add_enabled(allow_add, egui::Button::new("Add"))
+                    .clicked();
+                let force_add_clicked = if locked {
+                    ui.add_enabled(allow_force_add, egui::Button::new("Force add"))
+                        .clicked()
                 } else {
-                    None
+                    false
                 };
-                add_queue.push(TalentSelection {
-                    id: spec.id.clone(),
-                    rank: 1,
-                    weapon,
-                });
+                if add_clicked || force_add_clicked {
+                    let weapon = if requires_group {
+                        Some(default_group.to_string())
+                    } else if game_logic::talent_requires_weapon(spec) {
+                        weapon_catalog
+                            .get(player.weapon_id)
+                            .map(|weapon| weapon.name.clone())
+                            .or_else(|| {
+                                weapon_catalog
+                                    .entries()
+                                    .first()
+                                    .map(|weapon| weapon.name.clone())
+                            })
+                    } else {
+                        None
+                    };
+                    add_queue.push(TalentSelection {
+                        id: spec.id.clone(),
+                        rank: 1,
+                        weapon,
+                    });
+                }
             }
         });
         if let Some(cost) = spec.cost_bp {

@@ -254,6 +254,8 @@ pub struct FighterPreset {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub race_id: Option<String>,
     #[serde(default)]
+    pub proficiencies: Vec<String>,
+    #[serde(default)]
     pub talents: Vec<TalentSelection>,
 }
 
@@ -1132,15 +1134,35 @@ fn talent_effects_active(spec: &TalentSpec, player: &PlayerConfig) -> bool {
     }
 }
 
+fn is_proficiency_requirement_failure(failure: &TalentRequirementFailure) -> bool {
+    matches!(
+        failure,
+        TalentRequirementFailure::MissingSizeLLargeSwordProficiency
+            | TalentRequirementFailure::MissingShieldProficiency
+            | TalentRequirementFailure::MissingArmerociPoleProficiency
+            | TalentRequirementFailure::MissingFymblwngerProficiency
+            | TalentRequirementFailure::MissingHammererProficiency
+            | TalentRequirementFailure::MissingHobblerProficiency
+            | TalentRequirementFailure::MissingIthicanPrinceProficiency
+            | TalentRequirementFailure::MissingRegenstatProficiency
+            | TalentRequirementFailure::MissingReturnerProficiency
+            | TalentRequirementFailure::MissingSixPathsProficiency
+            | TalentRequirementFailure::MissingThreeMountainsProficiency
+            | TalentRequirementFailure::MissingUnbreakableWallProficiency
+    )
+}
+
 fn style_effects_active(
     selection: &TalentSelection,
     spec: &TalentSpec,
     context: &TalentContext<'_>,
     player: &PlayerConfig,
 ) -> bool {
-    evaluate_talent_requirements(spec, context).is_empty()
-        && talent_effects_active(spec, player)
-        && selection.rank.max(1) > 0
+    let failures = evaluate_talent_requirements(spec, context);
+    let blocked = failures
+        .iter()
+        .any(|failure| !is_proficiency_requirement_failure(failure));
+    !blocked && talent_effects_active(spec, player) && selection.rank.max(1) > 0
 }
 
 fn active_weapon_style_spec<'a>(
@@ -1748,11 +1770,12 @@ pub fn shield_equipped_with_catalog(
     weapon: &WeaponPreset,
     shield_catalog: &ShieldCatalog,
     talent_catalog: &TalentCatalog,
+    weapon_catalog: &WeaponCatalog,
 ) -> bool {
     let shield = shield_catalog
         .get(player.shield_id)
         .and_then(|entry| entry.shield.as_ref());
-    can_equip_shield(player, weapon, shield, talent_catalog)
+    can_equip_shield(player, weapon, shield, talent_catalog, weapon_catalog)
 }
 
 pub fn defensive_dualwielding_active(player: &PlayerConfig, weapon: &WeaponPreset) -> bool {
@@ -2092,7 +2115,13 @@ pub fn build_character(
         base_threshold: base_weapon_threshold(weapon_preset.group),
     };
 
-    let shield = if can_equip_shield(player, weapon_preset, shield.as_ref(), talent_catalog) {
+    let shield = if can_equip_shield(
+        player,
+        weapon_preset,
+        shield.as_ref(),
+        talent_catalog,
+        weapon_catalog,
+    ) {
         shield.map(|shield| apply_shield_material_tier(shield, player.shield_material_tier))
     } else {
         None
@@ -2763,6 +2792,7 @@ pub fn shield_option_allowed(
     weapon: &WeaponPreset,
     shield: Option<&ShieldPreset>,
     talent_catalog: &TalentCatalog,
+    weapon_catalog: &WeaponCatalog,
 ) -> bool {
     let Some(shield) = shield else {
         return true;
@@ -2776,7 +2806,7 @@ pub fn shield_option_allowed(
     if weapon.group != WeaponGroup::LargeSwords || weapon.size != WeaponSize::Large {
         return false;
     }
-    active_weapon_style_spec(player, talent_catalog, None)
+    active_weapon_style_spec(player, talent_catalog, Some(weapon_catalog))
         .map(has_large_sword_shield_style_effect)
         .unwrap_or(false)
 }
@@ -2786,8 +2816,10 @@ fn can_equip_shield(
     weapon: &WeaponPreset,
     shield: Option<&ShieldPreset>,
     talent_catalog: &TalentCatalog,
+    weapon_catalog: &WeaponCatalog,
 ) -> bool {
-    shield_option_allowed(player, weapon, shield, talent_catalog) && shield.is_some()
+    shield_option_allowed(player, weapon, shield, talent_catalog, weapon_catalog)
+        && shield.is_some()
 }
 
 fn apply_shield_material_tier(shield: ShieldPreset, tier: i32) -> Shield {
@@ -4485,6 +4517,59 @@ mod tests {
         add_talent(&mut player, TALENT_ID_TWELVE_PATHS, None);
         let styled = build_character(&player, &weapons, &armor, &shields, &talents);
         assert!(styled.equipment.shield.is_some());
+    }
+
+    #[test]
+    fn shield_option_allows_twelve_paths_with_named_large_sword_proficiency() {
+        let (weapons, _armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let weapon_id = weapons
+            .entries()
+            .iter()
+            .enumerate()
+            .find(|(_, weapon)| weapon.name.eq_ignore_ascii_case("Flamberge"))
+            .and_then(|(idx, _)| weapons.id_from_index(idx))
+            .expect("no flamberge found");
+        let (_shield_id, shield) = find_shield(&shields, |shield| {
+            is_small_shield_or_buckler_name(&shield.name)
+        });
+        let mut player = base_player(weapon_id);
+        player.proficiencies = vec!["Flamberge".to_string(), "Shields".to_string()];
+        add_talent(&mut player, TALENT_ID_TWELVE_PATHS, None);
+        let weapon = weapons.get(player.weapon_id).expect("selected weapon missing");
+        assert!(shield_option_allowed(
+            &player,
+            weapon,
+            Some(&shield),
+            &talents,
+            &weapons,
+        ));
+    }
+
+    #[test]
+    fn shield_option_allows_twelve_paths_without_proficiencies_when_selected() {
+        let (weapons, _armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let weapon_id = weapons
+            .entries()
+            .iter()
+            .enumerate()
+            .find(|(_, weapon)| weapon.name.eq_ignore_ascii_case("Flamberge"))
+            .and_then(|(idx, _)| weapons.id_from_index(idx))
+            .expect("no flamberge found");
+        let (_shield_id, shield) = find_shield(&shields, |shield| {
+            is_small_shield_or_buckler_name(&shield.name)
+        });
+        let mut player = base_player(weapon_id);
+        add_talent(&mut player, TALENT_ID_TWELVE_PATHS, None);
+        let weapon = weapons.get(player.weapon_id).expect("selected weapon missing");
+        assert!(shield_option_allowed(
+            &player,
+            weapon,
+            Some(&shield),
+            &talents,
+            &weapons,
+        ));
     }
 
     #[test]

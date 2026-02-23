@@ -1357,6 +1357,8 @@ impl AutobattlerApp {
         creation.player.offhand_projectile_material_tier = preset.offhand_projectile_material_tier;
         creation.player.shield_material_tier = preset.shield_material_tier;
         creation.player.two_hand_grip = preset.two_hand_grip;
+        creation.proficiencies = preset.proficiencies.clone();
+        creation.player.proficiencies = preset.proficiencies.clone();
         creation.player.talents = preset.talents.clone();
         creation.player.race_id = preset.race_id.clone();
         creation.player.race_applied = preset.race_id.is_some();
@@ -1426,6 +1428,7 @@ impl AutobattlerApp {
             tier_from_label(&preset.progression.health),
         );
         creation.player.base_hp = preset.base_hp.max(1);
+        creation.player.proficiencies = preset.proficiencies.clone();
         creation.player.talents = preset.talents.clone();
         creation.player.race_id = preset.race_id.clone();
         creation.player.race_applied = preset.race_id.is_some();
