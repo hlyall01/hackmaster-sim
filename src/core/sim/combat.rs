@@ -1,6 +1,6 @@
 use rand::Rng;
 
-use crate::core::rules::{clean_damage_expr, penetrating_roll, roll_damage_expr};
+use crate::core::rules::{DamageExprCache, clean_damage_expr, penetrating_roll, roll_damage_expr};
 
 use super::modifiers::{ModifierOpI32, StatIdF32, StatIdI32, TemporaryEffect};
 use super::types::{
@@ -371,6 +371,25 @@ fn roll_extra_damage(expr: &str, dice: i32, force_nonpenetrating: bool, rng: &mu
         };
     }
     total
+}
+
+fn shield_block_raw_damage(
+    shield_expr_cache: Option<&DamageExprCache>,
+    strength_damage: i32,
+    damage_penalty: i32,
+    damage_multiplier: i32,
+    rng: &mut impl Rng,
+) -> (i32, i32) {
+    let Some(expr_cache) = shield_expr_cache else {
+        return (0, 0);
+    };
+    let rolled_damage = expr_cache.roll(rng, false);
+    let mut raw = rolled_damage + strength_damage + damage_penalty;
+    if raw < 0 {
+        raw = 0;
+    }
+    raw = raw.saturating_mul(damage_multiplier.max(1));
+    (rolled_damage, raw)
 }
 
 fn cached_damage_dice<'a>(
@@ -817,21 +836,19 @@ fn resolve_counter_attack(
         };
         if miss_margin < shield_block_window {
             shield_block = true;
-            let rolled_damage = if use_weapon {
+            let (rolled_damage, raw) = if use_weapon {
                 let weapon = weapon_profile.as_ref().expect("weapon profile missing");
-                weapon
-                    .shield_damage_expr_cache
-                    .as_ref()
-                    .unwrap_or(&weapon.damage_expr_cache)
-                    .roll(rng, false)
+                shield_block_raw_damage(
+                    weapon.shield_damage_expr_cache.as_ref(),
+                    strength_damage,
+                    damage_penalty,
+                    damage_multiplier,
+                    rng,
+                )
             } else {
-                roll_damage_expr(unarmed_expr, rng, false)
+                // Unarmed has no dedicated shield-damage expression, so shield hits do zero.
+                (0, 0)
             };
-            let mut raw = rolled_damage + strength_damage + damage_penalty;
-            raw = raw.saturating_mul(damage_multiplier);
-            if raw < 0 {
-                raw = 0;
-            }
             shield_damage = raw;
             let effective_shield_dr = if ignore_armor { 0 } else { shield_dr };
             let shield_after_dr = (raw - effective_shield_dr).max(0);
@@ -1370,15 +1387,13 @@ pub(crate) fn resolve_attack(
         };
         if miss_margin < shield_block_window {
             shield_block = true;
-            let rolled_damage = weapon
-                .shield_damage_expr_cache
-                .as_ref()
-                .unwrap_or(&weapon.damage_expr_cache)
-                .roll(rng, false);
-            let mut raw = rolled_damage + strength_damage + damage_penalty;
-            if raw < 0 {
-                raw = 0;
-            }
+            let (rolled_damage, raw) = shield_block_raw_damage(
+                weapon.shield_damage_expr_cache.as_ref(),
+                strength_damage,
+                damage_penalty,
+                1,
+                rng,
+            );
             shield_damage = raw;
             let shield_after_dr = (raw - shield_dr).max(0);
 

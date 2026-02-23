@@ -222,6 +222,8 @@ impl SimGuiApp {
     }
 
     fn run_bulk_sim(&mut self) {
+        self.bulk_result = None;
+        self.bulk_sim_duration = None;
         let combatants = game_logic::build_combatants(
             &self.players,
             &self.weapon_catalog,

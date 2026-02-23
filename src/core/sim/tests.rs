@@ -1894,7 +1894,7 @@ fn damage_respects_dr_under_five() {
 
 #[test]
 fn shield_block_damage_stacks_shield_dr_and_armor_dr() {
-    let attacker = combatant_basic(
+    let mut attacker = combatant_basic(
         "Attacker".to_string(),
         "Test Blade".to_string(),
         0,
@@ -1914,6 +1914,10 @@ fn shield_block_damage_stacks_shield_dr_and_armor_dr() {
         false,
         20,
     );
+    let mut attacker_weapon = attacker.sheet.offense.weapon.as_ref().clone();
+    attacker_weapon.shield_damage_expr = Some("12".to_string());
+    attacker_weapon.shield_damage_expr_cache = Some(DamageExprCache::new("12"));
+    attacker.sheet.offense.weapon = Arc::new(attacker_weapon);
     let mut defender = combatant_basic(
         "Defender".to_string(),
         "Shield".to_string(),
@@ -1973,6 +1977,81 @@ fn shield_block_damage_stacks_shield_dr_and_armor_dr() {
     assert_eq!(breakdown.shield_dr, 3);
     assert_eq!(breakdown.effective_armor_dr, 4);
     assert_eq!(breakdown.hp_damage, 5);
+}
+
+#[test]
+fn shield_block_with_null_shield_damage_expr_deals_zero_total_damage() {
+    let attacker = combatant_basic(
+        "Attacker".to_string(),
+        "Test Blade".to_string(),
+        0,
+        0,
+        0,
+        false,
+        0,
+        "12".to_string(),
+        5,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        20,
+    );
+    let mut defender = combatant_basic(
+        "Defender".to_string(),
+        "Shield".to_string(),
+        0,
+        5,
+        4,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        40,
+    );
+    defender.sheet.defense.shield_name = Some("Small metallic shield".to_string());
+    defender.sheet.defense.shield_dr = 3;
+
+    let mut state = make_state(attacker, defender);
+    state.combatants[1].state.shield_intact = true;
+    let starting_hp = state.combatants[1].state.hp;
+    let mut rng = FixedRng(0);
+    let event = resolve_attack(
+        &mut state.combatants,
+        0,
+        1,
+        0,
+        false,
+        1.0,
+        AttackMode::Normal,
+        WeaponSlot::Primary,
+        0.0,
+        None,
+        &mut rng,
+    );
+
+    assert!(event.shield_block);
+    assert_eq!(event.shield_damage, 0);
+    assert_eq!(event.damage, 0);
+    assert_eq!(state.combatants[1].state.hp, starting_hp);
+    let breakdown = event
+        .shield_damage_breakdown
+        .as_ref()
+        .expect("expected shield damage breakdown");
+    assert_eq!(breakdown.raw_damage, 0);
+    assert_eq!(breakdown.hp_damage, 0);
 }
 
 #[test]
@@ -2809,6 +2888,69 @@ fn arthur_mirror_symmetry_large_sample() {
             "warning: mirror symmetry drift at scale: wins A L/R {wins_a_left}/{wins_a_right}, wins B L/R {wins_b_left}/{wins_b_right} (max diff {max_diff}, allowed {allowed})"
         );
     }
+}
+
+#[test]
+fn bulk_highest_hit_metrics_reset_between_bulk_runs() {
+    let attacker = combatant_basic(
+        "Attacker".to_string(),
+        "Test Blade".to_string(),
+        20,
+        0,
+        0,
+        false,
+        0,
+        "12".to_string(),
+        0,
+        1.0,
+        5.0,
+        0.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        100,
+    );
+    let defender = combatant_basic(
+        "Defender".to_string(),
+        "Shield".to_string(),
+        0,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        5.0,
+        0.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        100,
+    );
+    let mut first_attacker = attacker.clone();
+    let mut first_defender = defender.clone();
+    first_attacker.team_id = 0;
+    first_defender.team_id = 1;
+    let mut second_attacker = attacker;
+    let mut second_defender = defender;
+    second_attacker.team_id = 0;
+    second_defender.team_id = 1;
+    let config = SimConfig::new(5.0, 5.0);
+
+    let first = bulk_simulate(config, vec![first_attacker, first_defender], 1, 20);
+    assert!(
+        first.highest_single_hit > 0,
+        "expected first bulk run to record at least one hit"
+    );
+
+    let second = bulk_simulate(config, vec![second_attacker, second_defender], 1, 0);
+    assert_eq!(second.highest_single_hit, 0);
+    assert_eq!(second.highest_single_shield_hit, 0);
 }
 
 #[test]
