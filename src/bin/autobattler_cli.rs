@@ -421,6 +421,7 @@ fn player_config_from_preset(
     player.scamper_back = maneuvers.scamper_back;
     player.fighting_withdrawal = maneuvers.fighting_withdrawal;
     player.flee = maneuvers.flee;
+    player.mounted = maneuvers.mounted;
     player.defensive_dualwielding = preset.defensive_dualwielding;
     player.offensive_dualwielding = preset.offensive_dualwielding;
     player.proficiencies = preset.proficiencies.clone();

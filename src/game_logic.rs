@@ -201,6 +201,8 @@ pub struct CombatManeuverConfig {
     pub fighting_withdrawal: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub flee: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub mounted: bool,
 }
 
 impl CombatManeuverConfig {
@@ -336,6 +338,7 @@ pub struct PlayerConfig {
     pub scamper_back: bool,
     pub fighting_withdrawal: bool,
     pub flee: bool,
+    pub mounted: bool,
     pub defensive_dualwielding: bool,
     pub offensive_dualwielding: bool,
     pub environment: EnvironmentConfig,
@@ -395,6 +398,7 @@ impl PlayerConfig {
             scamper_back: false,
             fighting_withdrawal: false,
             flee: false,
+            mounted: false,
             defensive_dualwielding: false,
             offensive_dualwielding: false,
             environment: EnvironmentConfig::default(),
@@ -2731,6 +2735,7 @@ pub fn build_combatant(
             scamper_back: player.scamper_back,
             fighting_withdrawal: player.fighting_withdrawal,
             flee: player.flee,
+            mounted: player.mounted,
             defensive_dualwielding,
             offensive_dualwielding,
         },
@@ -3072,6 +3077,10 @@ mod tests {
         let mut player = base.clone();
         player.flee = true;
         assert!(build_maneuvers(&player).flee);
+
+        let mut player = base.clone();
+        player.mounted = true;
+        assert!(build_maneuvers(&player).mounted);
 
         let mut player = base.clone();
         player.defensive_dualwielding = true;
@@ -4536,7 +4545,9 @@ mod tests {
         let mut player = base_player(weapon_id);
         player.proficiencies = vec!["Flamberge".to_string(), "Shields".to_string()];
         add_talent(&mut player, TALENT_ID_TWELVE_PATHS, None);
-        let weapon = weapons.get(player.weapon_id).expect("selected weapon missing");
+        let weapon = weapons
+            .get(player.weapon_id)
+            .expect("selected weapon missing");
         assert!(shield_option_allowed(
             &player,
             weapon,
@@ -4562,7 +4573,9 @@ mod tests {
         });
         let mut player = base_player(weapon_id);
         add_talent(&mut player, TALENT_ID_TWELVE_PATHS, None);
-        let weapon = weapons.get(player.weapon_id).expect("selected weapon missing");
+        let weapon = weapons
+            .get(player.weapon_id)
+            .expect("selected weapon missing");
         assert!(shield_option_allowed(
             &player,
             weapon,

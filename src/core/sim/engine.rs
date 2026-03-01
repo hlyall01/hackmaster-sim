@@ -217,9 +217,8 @@ impl SimState {
             let attacker = &mut self.combatants[attacker_idx].state;
             attacker.max_hit_dealt = attacker.max_hit_dealt.max(hp_damage.max(0));
             attacker.max_shield_hit_dealt = attacker.max_shield_hit_dealt.max(shield_damage.max(0));
-            attacker.total_hp_damage_dealt = attacker
-                .total_hp_damage_dealt
-                .saturating_add(hp_damage_u32);
+            attacker.total_hp_damage_dealt =
+                attacker.total_hp_damage_dealt.saturating_add(hp_damage_u32);
             attacker.total_shield_damage_dealt = attacker
                 .total_shield_damage_dealt
                 .saturating_add(shield_damage_u32);
@@ -227,9 +226,8 @@ impl SimState {
         }
         {
             let defender = &mut self.combatants[defender_idx].state;
-            defender.total_hp_damage_taken = defender
-                .total_hp_damage_taken
-                .saturating_add(hp_damage_u32);
+            defender.total_hp_damage_taken =
+                defender.total_hp_damage_taken.saturating_add(hp_damage_u32);
             defender.total_shield_damage_taken = defender
                 .total_shield_damage_taken
                 .saturating_add(shield_damage_u32);
@@ -1468,12 +1466,12 @@ pub fn bulk_simulate(
                 .saturating_add(u64::from(state.total_hp_damage_dealt));
             total_damage_taken_by_team[team_idx] = total_damage_taken_by_team[team_idx]
                 .saturating_add(u64::from(state.total_hp_damage_taken));
-            total_remaining_hp_by_team[team_idx] = total_remaining_hp_by_team[team_idx]
-                .saturating_add(state.hp.max(0) as u64);
-            fight_max_knockback_side =
-                fight_max_knockback_side.max(state.total_knockback_taken_ft);
+            total_remaining_hp_by_team[team_idx] =
+                total_remaining_hp_by_team[team_idx].saturating_add(state.hp.max(0) as u64);
+            fight_max_knockback_side = fight_max_knockback_side.max(state.total_knockback_taken_ft);
         }
-        max_total_knockback_one_side_ft = max_total_knockback_one_side_ft.max(fight_max_knockback_side);
+        max_total_knockback_one_side_ft =
+            max_total_knockback_one_side_ft.max(fight_max_knockback_side);
         total_max_knockback_one_side_ft += fight_max_knockback_side;
     }
     let avg_duration = total_seconds as f32 / runs as f32;

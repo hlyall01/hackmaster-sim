@@ -229,6 +229,7 @@ fn main() {
             scamper_back: false,
             fighting_withdrawal: false,
             flee: false,
+            mounted: false,
             defensive_dualwielding: false,
             offensive_dualwielding: false,
         },

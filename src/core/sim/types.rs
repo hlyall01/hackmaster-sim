@@ -121,6 +121,7 @@ pub struct ManeuverProfile {
     pub scamper_back: bool,
     pub fighting_withdrawal: bool,
     pub flee: bool,
+    pub mounted: bool,
     pub defensive_dualwielding: bool,
     pub offensive_dualwielding: bool,
 }

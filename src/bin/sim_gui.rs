@@ -321,6 +321,7 @@ impl SimGuiApp {
                 downed,
                 knocked_back,
                 weapon_icon,
+                player.mounted,
             );
             if knocked_back && !downed {
                 painter.text(
@@ -433,6 +434,7 @@ impl SimGuiApp {
         downed: bool,
         knocked_back: bool,
         weapon_icon: WeaponIcon,
+        mounted: bool,
     ) {
         let head_color = color;
         let body_color = Color32::from_gray(230);
@@ -492,6 +494,11 @@ impl SimGuiApp {
             return;
         }
 
+        if mounted {
+            self.draw_mounted_person(painter, base, facing, head_color, weapon_icon);
+            return;
+        }
+
         let head = Pos2::new(base.x, base.y - 34.0);
         let neck = Pos2::new(base.x, base.y - 26.0);
         let torso = Pos2::new(base.x, base.y - 14.0);
@@ -503,6 +510,126 @@ impl SimGuiApp {
         let arm_end = Pos2::new(base.x + facing * 12.0, base.y - 18.0);
         painter.line_segment([arm_start, arm_end], stroke);
         draw_weapon_icon(painter, arm_end, facing, weapon_icon);
+    }
+
+    fn draw_mounted_person(
+        &self,
+        painter: &egui::Painter,
+        base: Pos2,
+        facing: f32,
+        rider_color: Color32,
+        weapon_icon: WeaponIcon,
+    ) {
+        let scale = 3.0_f32;
+        let pt = |dx: f32, dy: f32| Pos2::new(base.x + facing * dx * scale, base.y + dy * scale);
+
+        let horse_line = Color32::from_rgb(205, 176, 136);
+        let horse_accent = Color32::from_rgb(140, 113, 84);
+        let outline = (2.2, horse_line);
+        let leg_stroke = (2.3, horse_line);
+
+        // Large line-art horse body outline with an explicit neck silhouette.
+        let rump = pt(-21.0, -17.0);
+        let croup = pt(-14.0, -21.2);
+        let back_mid = pt(-6.0, -23.3);
+        let withers = pt(1.5, -24.5);
+        let neck_crest = pt(10.5, -29.0);
+        let poll = pt(17.2, -30.2);
+        let forehead = pt(21.0, -29.2);
+        let nose_bridge = pt(27.0, -26.8);
+        let muzzle_tip = pt(31.4, -23.6);
+        let chin = pt(29.4, -19.8);
+        let jaw = pt(23.0, -17.9);
+        let throat_latch = pt(16.6, -19.6);
+        let neck_base_front = pt(10.8, -21.8);
+        let chest = pt(7.8, -17.7);
+        let belly_front = pt(5.0, -14.0);
+        let belly_mid = pt(-4.8, -13.2);
+        let belly_rear = pt(-15.5, -14.2);
+
+        painter.line_segment([rump, croup], outline);
+        painter.line_segment([croup, back_mid], outline);
+        painter.line_segment([back_mid, withers], outline);
+        painter.line_segment([withers, neck_crest], outline);
+        painter.line_segment([neck_crest, poll], outline);
+        painter.line_segment([poll, forehead], outline);
+        painter.line_segment([forehead, nose_bridge], outline);
+        painter.line_segment([nose_bridge, muzzle_tip], outline);
+        painter.line_segment([muzzle_tip, chin], outline);
+        painter.line_segment([chin, jaw], outline);
+        painter.line_segment([jaw, throat_latch], outline);
+        painter.line_segment([throat_latch, neck_base_front], outline);
+        painter.line_segment([neck_base_front, chest], outline);
+        painter.line_segment([chest, belly_front], outline);
+        painter.line_segment([belly_front, belly_mid], outline);
+        painter.line_segment([belly_mid, belly_rear], outline);
+        painter.line_segment([belly_rear, rump], outline);
+
+        // Tail.
+        painter.line_segment([pt(-20.8, -18.1), pt(-28.6, -27.8)], outline);
+        painter.line_segment([pt(-20.2, -16.9), pt(-28.0, -22.1)], (1.6, horse_accent));
+
+        // Head and face details.
+        painter.line_segment([pt(19.3, -31.0), pt(20.8, -34.4)], outline);
+        painter.line_segment([pt(16.8, -31.0), pt(17.3, -34.1)], outline);
+        painter.line_segment([pt(25.8, -25.4), pt(29.3, -24.1)], (1.2, horse_line));
+        painter.circle_filled(pt(24.2, -25.8), 1.25, Color32::from_rgb(38, 30, 24));
+        painter.circle_filled(pt(30.2, -22.6), 0.95, Color32::from_rgb(66, 46, 32));
+
+        // All hoof points are exactly on the ground line (base.y).
+        let legs = [
+            (
+                -15.5_f32, -14.0_f32, -17.2_f32, -5.8_f32, -16.6_f32, 0.0_f32,
+            ),
+            (-7.5, -13.6, -6.8, -5.2, -7.4, 0.0),
+            (4.5, -16.3, 6.5, -6.5, 6.1, 0.0),
+            (9.6, -17.2, 12.4, -6.0, 11.8, 0.0),
+        ];
+        for (sx, sy, kx, ky, hx, hy) in legs {
+            let hip = pt(sx, sy);
+            let knee = pt(kx, ky);
+            let hoof = pt(hx, hy);
+            painter.line_segment([hip, knee], leg_stroke);
+            painter.line_segment([knee, hoof], leg_stroke);
+            painter.circle_filled(knee, 1.6, horse_accent);
+            painter.line_segment(
+                [
+                    Pos2::new(hoof.x - facing * 2.6, hoof.y),
+                    Pos2::new(hoof.x + facing * 2.6, hoof.y),
+                ],
+                (2.3, horse_accent),
+            );
+        }
+
+        // Rider line art.
+        let rider_stroke = (2.0, Color32::from_gray(232));
+        let saddle = pt(-2.2, -24.2);
+        let rider_hips = Pos2::new(saddle.x - facing * 1.5, saddle.y + 3.0);
+        let rider_torso = Pos2::new(rider_hips.x - facing * 0.5, rider_hips.y - 12.0);
+        let rider_neck = Pos2::new(rider_torso.x, rider_torso.y - 8.0);
+        let rider_head = Pos2::new(rider_neck.x, rider_neck.y - 8.0);
+        painter.circle_filled(rider_head, 6.5, rider_color);
+        painter.line_segment([rider_neck, rider_torso], rider_stroke);
+        painter.line_segment([rider_torso, rider_hips], rider_stroke);
+        painter.line_segment(
+            [
+                rider_hips,
+                Pos2::new(rider_hips.x - facing * 6.0, rider_hips.y + 4.5),
+            ],
+            rider_stroke,
+        );
+        painter.line_segment(
+            [
+                rider_hips,
+                Pos2::new(rider_hips.x + facing * 5.0, rider_hips.y + 4.2),
+            ],
+            rider_stroke,
+        );
+        let arm_start = Pos2::new(rider_torso.x + facing * 0.8, rider_torso.y + 2.0);
+        let arm_end = Pos2::new(arm_start.x + facing * 12.0, arm_start.y + 1.5);
+        painter.line_segment([arm_start, arm_end], rider_stroke);
+        let weapon_anchor = arm_end;
+        draw_weapon_icon(painter, weapon_anchor, facing, weapon_icon);
     }
 }
 
@@ -778,9 +905,9 @@ impl eframe::App for SimGuiApp {
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         if let Some(result) = &self.bulk_result {
-                            let total_runs =
-                                (result.wins.iter().copied().sum::<u32>() + result.ties).max(1)
-                                    as f32;
+                            let total_runs = (result.wins.iter().copied().sum::<u32>()
+                                + result.ties)
+                                .max(1) as f32;
                             let wins_a = result.wins.get(0).copied().unwrap_or(0);
                             let wins_b = result.wins.get(1).copied().unwrap_or(0);
                             ui.label(format!(
@@ -806,9 +933,18 @@ impl eframe::App for SimGuiApp {
                             egui::CollapsingHeader::new("Detailed metrics")
                                 .default_open(true)
                                 .show(ui, |ui| {
-                                    ui.label(format!("Shortest fight: {}s", result.shortest_duration));
-                                    ui.label(format!("Longest fight: {}s", result.longest_duration));
-                                    ui.label(format!("Highest HP hit: {}", result.highest_single_hit));
+                                    ui.label(format!(
+                                        "Shortest fight: {}s",
+                                        result.shortest_duration
+                                    ));
+                                    ui.label(format!(
+                                        "Longest fight: {}s",
+                                        result.longest_duration
+                                    ));
+                                    ui.label(format!(
+                                        "Highest HP hit: {}",
+                                        result.highest_single_hit
+                                    ));
                                     ui.label(format!(
                                         "Highest shield hit: {}",
                                         result.highest_single_shield_hit
@@ -866,7 +1002,10 @@ impl eframe::App for SimGuiApp {
                                         ui.label(format!("{name} avg dmg taken: {:.1}", avg_taken));
                                         ui.label(format!("{name} avg remaining HP: {:.1}", avg_hp));
                                         ui.label(format!("{name} highest hit: {}", top_hit));
-                                        ui.label(format!("{name} highest shield hit: {}", top_shield_hit));
+                                        ui.label(format!(
+                                            "{name} highest shield hit: {}",
+                                            top_shield_hit
+                                        ));
                                     }
                                 });
                             if let Some(duration) = self.bulk_sim_duration {
@@ -1627,6 +1766,7 @@ fn render_player_editor(
             ui.add_enabled_ui(false, |ui| {
                 ui.checkbox(&mut player.flee, "Flee (NYI)");
             });
+            ui.checkbox(&mut player.mounted, "Mounted");
         }
         PlayerEditorTab::Stats => {
             let npc_active = player.npc_preset.is_some();
@@ -2039,6 +2179,7 @@ fn apply_fighter_preset(
     player.scamper_back = maneuvers.scamper_back;
     player.fighting_withdrawal = maneuvers.fighting_withdrawal;
     player.flee = maneuvers.flee;
+    player.mounted = maneuvers.mounted;
     player.defensive_dualwielding = preset.defensive_dualwielding;
     player.offensive_dualwielding = preset.offensive_dualwielding;
     player.environment = game_logic::EnvironmentConfig::default();
@@ -2142,6 +2283,7 @@ fn fighter_preset_from_player(
             scamper_back: player.scamper_back,
             fighting_withdrawal: player.fighting_withdrawal,
             flee: player.flee,
+            mounted: player.mounted,
         },
         defensive_dualwielding: player.defensive_dualwielding,
         offensive_dualwielding: player.offensive_dualwielding,

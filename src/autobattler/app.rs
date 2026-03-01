@@ -1376,6 +1376,7 @@ impl AutobattlerApp {
         creation.player.scamper_back = preset.maneuvers.scamper_back;
         creation.player.fighting_withdrawal = preset.maneuvers.fighting_withdrawal;
         creation.player.flee = preset.maneuvers.flee;
+        creation.player.mounted = preset.maneuvers.mounted;
         creation.player.defensive_dualwielding = preset.defensive_dualwielding;
         creation.player.offensive_dualwielding = preset.offensive_dualwielding;
         creation.player.environment = game_logic::EnvironmentConfig::default();

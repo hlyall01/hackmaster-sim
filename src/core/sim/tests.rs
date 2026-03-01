@@ -382,6 +382,7 @@ fn player_config_from_preset(
     player.scamper_back = maneuvers.scamper_back;
     player.fighting_withdrawal = maneuvers.fighting_withdrawal;
     player.flee = maneuvers.flee;
+    player.mounted = maneuvers.mounted;
     player.defensive_dualwielding = preset.defensive_dualwielding;
     player.offensive_dualwielding = preset.offensive_dualwielding;
     player.proficiencies = preset.proficiencies.clone();
@@ -1962,9 +1963,7 @@ fn shield_block_damage_stacks_shield_dr_and_armor_dr() {
     assert!(
         event.shield_block,
         "shield block missing: atk={} def={} shield_intact={}",
-        event.roll.attack_total,
-        event.roll.defense_total,
-        state.combatants[1].state.shield_intact
+        event.roll.attack_total, event.roll.defense_total, state.combatants[1].state.shield_intact
     );
     assert_eq!(event.damage, 5);
     assert_eq!(state.combatants[1].state.hp, 35);
