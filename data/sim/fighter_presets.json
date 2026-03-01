@@ -86,37 +86,37 @@
     },
     {
       "name": "Zorya",
-      "level": 3,
+      "level": 5,
       "progression": {
         "attack": "II",
-        "speed": "II",
+        "speed": "V",
         "initiative": "III",
         "health": "II"
       },
       "masteries": {
-        "attack": 1,
-        "defense": 0,
+        "attack": 2,
+        "defense": 1,
         "damage": 1,
-        "speed": 0,
+        "speed": 1,
         "shield_defense": 0,
         "shield_speed": 0
       },
       "base_hp": 10,
       "move_speed": 20.0,
-      "strength_base": 10,
-      "strength_pct": 81,
-      "dex_base": 16,
-      "dex_pct": 59,
+      "strength_base": 11,
+      "strength_pct": 5,
+      "dex_base": 17,
+      "dex_pct": 11,
       "intelligence": 11,
       "wisdom": 15,
       "constitution": 13,
       "looks": 7,
       "charisma": 8,
       "weapon": "Battle axe",
-      "armor": "Kaftan",
+      "armor": "Gambeson",
       "shield": "Medium wooden shield",
       "weapon_material_tier": 1,
-      "armor_material_tier": 0,
+      "armor_material_tier": 2,
       "projectile_material_tier": 0,
       "shield_material_tier": 1,
       "two_hand_grip": false,
@@ -148,6 +148,16 @@
         },
         {
           "id": "advanced_sighting",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "ranged_weapon_specialization",
+          "rank": 1,
+          "weapon": "Axes"
+        },
+        {
+          "id": "light_armor_optimization",
           "rank": 1,
           "weapon": null
         },
@@ -236,8 +246,8 @@
       ]
     },
     {
-      "name": "Riley 2",
-      "level": 4,
+      "name": "Erit",
+      "level": 5,
       "progression": {
         "attack": "I",
         "speed": "II",
@@ -255,9 +265,9 @@
       "base_hp": 10,
       "move_speed": 20.0,
       "strength_base": 13,
-      "strength_pct": 50,
-      "dex_base": 11,
-      "dex_pct": 83,
+      "strength_pct": 61,
+      "dex_base": 12,
+      "dex_pct": 1,
       "intelligence": 8,
       "wisdom": 10,
       "constitution": 15,
@@ -326,7 +336,17 @@
           "weapon": null
         },
         {
+          "id": "knight_hardened",
+          "rank": 1,
+          "weapon": null
+        },
+        {
           "id": "pedestrian",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "destined",
           "rank": 1,
           "weapon": null
         }
