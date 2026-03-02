@@ -23,6 +23,8 @@ const CHARGE_DEFENSE_EFFECT_ID: &str = "charge_defense_penalty";
 const REGENSTAT_STACK_CAP: i32 = 8;
 const SIX_PATHS_SHIELD_BLOCK_WINDOW: i32 = 5;
 const DEFAULT_SHIELD_BLOCK_WINDOW: i32 = 10;
+const DECEPTIVE_DEFENDER_CALLED_SHOT_DEFENSE_BONUS: i32 = 4;
+const CALLED_SHOT_PRECISION_BONUS_SCALE_BASE: i32 = 8;
 
 struct AttackProfile {
     weapon: Arc<super::types::WeaponProfile>,
@@ -81,6 +83,57 @@ fn regenstat_stack_from_state(state: &CombatantState) -> i32 {
 
 fn regenstat_active(combatants: &[Combatant], idx: usize) -> bool {
     combatants[idx].apply_i32(StatIdI32::FlagRegenstatStyle, 0) > 0
+}
+
+fn fight_defensively_attack_penalty(combatant: &Combatant) -> i32 {
+    if combatant.sheet.maneuvers.fight_defensively {
+        combatant
+            .sheet
+            .maneuvers
+            .fight_defensively_attack_penalty
+            .max(0)
+    } else {
+        0
+    }
+}
+
+fn fight_defensively_defense_bonus(combatant: &Combatant) -> i32 {
+    if combatant.sheet.maneuvers.fight_defensively {
+        combatant
+            .sheet
+            .maneuvers
+            .fight_defensively_defense_bonus
+            .max(0)
+    } else {
+        0
+    }
+}
+
+fn called_shot_active(combatant: &Combatant) -> bool {
+    combatant.sheet.maneuvers.called_shot
+}
+
+fn called_shot_defense_penalty(combatant: &Combatant) -> i32 {
+    if called_shot_active(combatant) {
+        combatant.sheet.maneuvers.called_shot_defense_penalty.max(0)
+    } else {
+        0
+    }
+}
+
+fn called_shot_defense_bonus(combatant: &Combatant) -> i32 {
+    combatant.sheet.maneuvers.called_shot_defense_bonus.max(0)
+}
+
+fn called_shot_precision_target_bonus(attacker: &Combatant, defender: &Combatant) -> i32 {
+    let defender_base = defender
+        .sheet
+        .maneuvers
+        .called_shot_target_defense_bonus_base
+        .max(1);
+    let attacker_scale = called_shot_defense_bonus(attacker).max(1);
+    let scaled = defender_base.saturating_mul(attacker_scale);
+    (scaled / CALLED_SHOT_PRECISION_BONUS_SCALE_BASE).max(1)
 }
 
 fn update_regenstat_on_exchange(
@@ -592,6 +645,10 @@ fn resolve_counter_attack(
         )
     };
     let unarmed_expr = unarmed_expr.unwrap_or("d4p");
+    let attacker_fight_defensively_penalty =
+        fight_defensively_attack_penalty(&combatants[attacker_idx]);
+    let defender_fight_defensively_bonus = fight_defensively_defense_bonus(defender);
+    let defender_called_shot_penalty = called_shot_defense_penalty(defender);
 
     let (
         defense_mod,
@@ -612,7 +669,9 @@ fn resolve_counter_attack(
     ) = {
         (
             defender.apply_i32(StatIdI32::DefenseMod, defender.sheet.defense.defense_mod)
-                + defender_regenstat_bonus,
+                + defender_regenstat_bonus
+                + defender_fight_defensively_bonus
+                - defender_called_shot_penalty,
             defender.apply_i32(StatIdI32::ArmorDr, defender.sheet.defense.armor_dr),
             defender.apply_i32(StatIdI32::NaturalDr, defender.sheet.defense.natural_dr),
             defender.sheet.defense.armor_is_heavy,
@@ -659,12 +718,14 @@ fn resolve_counter_attack(
         ),
         rng,
     );
-    let attack_roll = attack_die + attack_bonus + attacker_regenstat_bonus;
+    let attack_bonus_total =
+        attack_bonus + attacker_regenstat_bonus - attacker_fight_defensively_penalty;
+    let attack_roll = attack_die + attack_bonus_total;
     let defense_roll = defense_die + defense_mod + weapon_defense_bonus + shield_defense_bonus;
     let roll = AttackRollBreakdown {
         attack_die,
         defense_die,
-        attack_bonus: attack_bonus + attacker_regenstat_bonus,
+        attack_bonus: attack_bonus_total,
         range_mod: 0,
         defense_base: defense_mod,
         weapon_defense_bonus,
@@ -1033,11 +1094,64 @@ pub(crate) fn resolve_attack(
             counter_attack: None,
         };
     }
+    let defender_initial_attack_bonus = if combatants[defender_idx]
+        .sheet
+        .maneuvers
+        .called_shot_deceptive_defender
+    {
+        let seen_in_snapshot = defender_state
+            .deceptive_defender_seen_attackers
+            .contains(&attacker_idx);
+        let seen_in_live = combatants[defender_idx]
+            .state
+            .deceptive_defender_seen_attackers
+            .contains(&attacker_idx);
+        if seen_in_snapshot || seen_in_live {
+            0
+        } else {
+            1
+        }
+    } else {
+        0
+    };
+    if combatants[defender_idx]
+        .sheet
+        .maneuvers
+        .called_shot_deceptive_defender
+        && !combatants[defender_idx]
+            .state
+            .deceptive_defender_seen_attackers
+            .contains(&attacker_idx)
+    {
+        combatants[defender_idx]
+            .state
+            .deceptive_defender_seen_attackers
+            .push(attacker_idx);
+    }
+    let attacker_fight_defensively_penalty =
+        fight_defensively_attack_penalty(&combatants[attacker_idx]);
+    let defender_fight_defensively_bonus =
+        fight_defensively_defense_bonus(&combatants[defender_idx]);
+    let attacker_called_shot = called_shot_active(&combatants[attacker_idx]);
+    let attacker_called_shot_precision_bonus =
+        called_shot_precision_target_bonus(&combatants[attacker_idx], &combatants[defender_idx]);
+    let defender_called_shot_penalty = called_shot_defense_penalty(&combatants[defender_idx]);
+    let defender_called_shot_bonus = if attacker_called_shot
+        && combatants[defender_idx]
+            .sheet
+            .maneuvers
+            .called_shot_deceptive_defender
+    {
+        DECEPTIVE_DEFENDER_CALLED_SHOT_DEFENSE_BONUS
+    } else {
+        0
+    };
     let mut attack_bonus = attack_profile.attack_bonus;
     if attack_mode == AttackMode::Charge {
         attack_bonus += CHARGE_ATTACK_BONUS;
     }
     attack_bonus += attacker_regenstat_bonus;
+    attack_bonus -= attacker_fight_defensively_penalty;
     let strength_damage = attack_profile.strength_damage;
     let armor_penetration = attack_profile.armor_penetration;
     let use_jab = attack_profile.use_jab;
@@ -1053,6 +1167,7 @@ pub(crate) fn resolve_attack(
         defense_mod,
         ranged_defense_mod,
         armor_dr,
+        natural_dr,
         armor_is_heavy,
         shield_active,
         shield_defense_bonus,
@@ -1072,12 +1187,17 @@ pub(crate) fn resolve_attack(
         let defender = &combatants[defender_idx];
         (
             defender.apply_i32(StatIdI32::DefenseMod, defender.sheet.defense.defense_mod)
-                + defender_regenstat_bonus,
+                + defender_regenstat_bonus
+                - defender_called_shot_penalty
+                + defender_initial_attack_bonus,
             defender.apply_i32(
                 StatIdI32::RangedDefenseMod,
                 defender.sheet.defense.ranged_defense_mod,
-            ) + defender_regenstat_bonus,
+            ) + defender_regenstat_bonus
+                - defender_called_shot_penalty
+                + defender_initial_attack_bonus,
             defender.apply_i32(StatIdI32::ArmorDr, defender.sheet.defense.armor_dr),
+            defender.apply_i32(StatIdI32::NaturalDr, defender.sheet.defense.natural_dr),
             defender.sheet.defense.armor_is_heavy,
             defender_state.shield_intact,
             defender.apply_i32(
@@ -1141,24 +1261,35 @@ pub(crate) fn resolve_attack(
     let mut attack_roll = attack_die + attack_bonus + range_mod;
     let mut use_shield_for_ranged = false;
     let (defense_mod_used, shield_defense_bonus_used) = if is_ranged {
-        let dodge_total = defense_die + ranged_defense_mod;
-        let shield_total = defense_die + shield_defense_bonus;
+        let dodge_total = defense_die + ranged_defense_mod + defender_fight_defensively_bonus;
+        let shield_total = defense_die + shield_defense_bonus + defender_fight_defensively_bonus;
         if ranged_defense_mod != 0 && dodge_total >= shield_total {
-            (ranged_defense_mod, 0)
+            (ranged_defense_mod + defender_fight_defensively_bonus, 0)
         } else {
             use_shield_for_ranged = shield_active;
-            (0, shield_defense_bonus)
+            (defender_fight_defensively_bonus, shield_defense_bonus)
         }
     } else {
-        (defense_mod, shield_defense_bonus)
+        (
+            defense_mod + defender_fight_defensively_bonus,
+            shield_defense_bonus,
+        )
     };
     if is_ranged && use_shield_for_ranged {
         if let Some(cap) = shield_cover_value {
             attack_roll = attack_roll.min(cap);
         }
     }
-    let defense_roll =
-        defense_die + defense_mod_used + weapon_defense_bonus + shield_defense_bonus_used;
+    let defense_roll = defense_die
+        + defense_mod_used
+        + weapon_defense_bonus
+        + shield_defense_bonus_used
+        + defender_called_shot_bonus;
+    let called_shot_precision_target = if attacker_called_shot {
+        defense_roll + attacker_called_shot_precision_bonus
+    } else {
+        defense_roll
+    };
     let roll = AttackRollBreakdown {
         attack_die,
         defense_die,
@@ -1196,12 +1327,21 @@ pub(crate) fn resolve_attack(
     let crit_trigger = attack_first >= crit_min_roll;
     let mut counter_attack = None;
 
-    let mut attack_hits = attack_roll >= defense_roll;
+    let mut attack_hits = if attacker_called_shot {
+        attack_roll > defense_roll
+    } else {
+        attack_roll >= defense_roll
+    };
+    let mut called_shot_precise_hit =
+        attacker_called_shot && attack_roll >= called_shot_precision_target;
     if crit_trigger && defense_first == 20 {
         if defense_roll > attack_roll {
             attack_hits = false;
+            called_shot_precise_hit = false;
         } else if attack_roll > defense_roll {
             attack_hits = true;
+            called_shot_precise_hit =
+                attacker_called_shot && attack_roll >= called_shot_precision_target;
         }
     }
     let armeroci_opening = attacker_armeroci
@@ -1255,17 +1395,26 @@ pub(crate) fn resolve_attack(
             damage = 0;
             knockback_ft = 0.0;
         } else {
-            let mut effective_dr = armor_dr;
-            if armor_dr >= 5 || armor_is_heavy {
-                effective_dr = (armor_dr - armor_penetration).max(0);
-            }
+            let armor_ignored = called_shot_precise_hit;
+            let effective_dr = if armor_ignored {
+                natural_dr.max(0)
+            } else if armor_dr >= 5 || armor_is_heavy {
+                (armor_dr - armor_penetration).max(0)
+            } else {
+                armor_dr
+            };
             let raw_base = raw;
             let defender_hp_before = combatants[defender_idx].state.hp;
             let mut crit_effect = None;
             let mut crit_extra_damage = 0;
             let mut crit_trauma_seconds = None;
             if crit_trigger || attacker_hobbler {
-                let severity = (attack_roll - defense_roll + raw_base - effective_dr + {
+                let severity_defense_roll = if armor_ignored {
+                    called_shot_precision_target
+                } else {
+                    defense_roll
+                };
+                let severity = (attack_roll - severity_defense_roll + raw_base - effective_dr + {
                     let attacker = &combatants[attacker_idx];
                     attacker.apply_i32(StatIdI32::CritSeverityBonus, weapon.crit_severity_bonus)
                 })
@@ -1372,8 +1521,8 @@ pub(crate) fn resolve_attack(
                 rolled_damage,
                 strength_damage,
                 raw_damage: raw,
-                armor_dr,
-                armor_penetration,
+                armor_dr: if armor_ignored { natural_dr } else { armor_dr },
+                armor_penetration: if armor_ignored { 0 } else { armor_penetration },
                 effective_armor_dr: effective_dr,
                 final_damage: damage,
             });
@@ -1643,8 +1792,12 @@ pub(crate) fn resolve_knock_aside(
         .unwrap_or(&combatants[defender_idx].state);
     let attacker = &combatants[attacker_idx];
     let defender = &combatants[defender_idx];
+    let attacker_fight_defensively_penalty = fight_defensively_attack_penalty(attacker);
+    let defender_fight_defensively_bonus = fight_defensively_defense_bonus(defender);
+    let defender_called_shot_penalty = called_shot_defense_penalty(defender);
     let attack_die = penetrating_roll(20, rng);
-    let attack_roll = attack_die + attacker.sheet.offense.attack_bonus;
+    let attack_bonus = attacker.sheet.offense.attack_bonus - attacker_fight_defensively_penalty;
+    let attack_roll = attack_die + attack_bonus;
     let defense_die = penetrating_roll(
         defense_die_sides(
             false,
@@ -1662,13 +1815,15 @@ pub(crate) fn resolve_knock_aside(
         } else {
             0
         };
-    let defense_roll = defense_die + defender.sheet.defense.defense_mod + weapon_defense_bonus;
+    let defense_base = defender.sheet.defense.defense_mod + defender_fight_defensively_bonus
+        - defender_called_shot_penalty;
+    let defense_roll = defense_die + defense_base + weapon_defense_bonus;
     let success = attack_roll >= defense_roll;
     let roll = KnockAsideRollBreakdown {
         attack_die,
         defense_die,
-        attack_bonus: attacker.sheet.offense.attack_bonus,
-        defense_base: defender.sheet.defense.defense_mod,
+        attack_bonus,
+        defense_base,
         weapon_defense_bonus,
         attack_total: attack_roll,
         defense_total: defense_roll,

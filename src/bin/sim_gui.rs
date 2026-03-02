@@ -1734,6 +1734,20 @@ fn render_player_editor(
                 }
             }
             ui.checkbox(&mut player.hold_at_bay, "Hold at bay");
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut player.called_shot, "Called shot");
+                let (called_shot_light_bonus, called_shot_medium_bonus, called_shot_heavy_bonus) =
+                    game_logic::called_shot_target_defense_bonuses_for_player(player);
+                let called_shot_self_penalty =
+                    game_logic::called_shot_self_defense_penalty_for_player(player);
+                let called_shot_delay_expr = game_logic::called_shot_delay_expr_for_player(
+                    player,
+                    game_logic::is_ranged_weapon(weapon),
+                );
+                ui.label(format!(
+                    "Target defense (light/medium/heavy): +{called_shot_light_bonus}/+{called_shot_medium_bonus}/+{called_shot_heavy_bonus}, self -{called_shot_self_penalty} defense, speed +{called_shot_delay_expr}"
+                ));
+            });
             ui.separator();
             ui.add_enabled_ui(false, |ui| {
                 ui.checkbox(&mut player.aggressive_attack, "Aggressive attack (NYI)");
@@ -1748,8 +1762,23 @@ fn render_player_editor(
             ui.add_enabled_ui(false, |ui| {
                 ui.checkbox(&mut player.tactical_move, "Tactical move (NYI)");
             });
-            ui.add_enabled_ui(false, |ui| {
-                ui.checkbox(&mut player.fight_defensively, "Fight defensively (NYI)");
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut player.fight_defensively, "Fight defensively");
+                let mut penalty = game_logic::normalize_fight_defensively_penalty(
+                    player.fight_defensively_penalty,
+                );
+                egui::ComboBox::from_id_source(format!("{id_prefix}_fight_defensively_penalty"))
+                    .selected_text(format!("-{penalty}/+{}", penalty / 2))
+                    .show_ui(ui, |ui| {
+                        for option in game_logic::FIGHT_DEFENSIVELY_PENALTY_OPTIONS {
+                            ui.selectable_value(
+                                &mut penalty,
+                                option,
+                                format!("-{option}/+{}", option / 2),
+                            );
+                        }
+                    });
+                player.fight_defensively_penalty = penalty;
             });
             ui.add_enabled_ui(false, |ui| {
                 ui.checkbox(&mut player.full_parry, "Full parry (NYI)");
@@ -2048,6 +2077,29 @@ fn render_player_editor(
                 "Weapon speed: {:.1}",
                 combatant.sheet.offense.weapon.speed
             ));
+            if player.called_shot {
+                let (called_shot_light_bonus, called_shot_medium_bonus, called_shot_heavy_bonus) =
+                    game_logic::called_shot_target_defense_bonuses_for_player(player);
+                let called_shot_target_bonus_vs_opponent =
+                    game_logic::called_shot_target_defense_bonus_against_target(
+                        player,
+                        opponent,
+                        armor_catalog,
+                    );
+                let called_shot_self_penalty =
+                    game_logic::called_shot_self_defense_penalty_for_player(player);
+                let called_shot_delay_expr =
+                    game_logic::called_shot_delay_expr_for_player(player, roll.is_ranged_weapon);
+                ui.label(format!(
+                    "Called shot: target +{called_shot_target_bonus_vs_opponent} defense vs current target (light/medium/heavy +{called_shot_light_bonus}/+{called_shot_medium_bonus}/+{called_shot_heavy_bonus}), self -{called_shot_self_penalty} defense, speed +{called_shot_delay_expr}"
+                ));
+                if game_logic::called_shot_deceptive_defender_effect_active(opponent) {
+                    ui.label(format!(
+                        "Vs Deceptive Defender target: speed +{} and target +4 defense",
+                        game_logic::CALLED_SHOT_DECEPTIVE_DEFENDER_DELAY_EXPR
+                    ));
+                }
+            }
             ui.label(format!("Initiative mod: {}", derived.initiative_mod));
             ui.label(format!("Base DV: {}", derived.base_dv));
             if let Some(dv_with_shield) = defense.melee_with_shield_dv {
@@ -2062,21 +2114,33 @@ fn render_player_editor(
 
             let attack_bonus = roll.attack_bonus;
             let strength_damage = roll.strength_damage;
-            let target_dr = opponent
-                .npc_preset
-                .and_then(|id| npc_presets.get(id))
-                .map(|preset| preset.armor_dr)
-                .unwrap_or_else(|| {
-                    game_logic::player_summary(
-                        opponent,
-                        weapon_catalog,
-                        armor_catalog,
-                        shield_catalog,
-                        talent_catalog,
-                    )
-                    .derived
-                    .armor_dr
-                });
+            let opponent_combatant = game_logic::build_combatant(
+                opponent,
+                weapon_catalog,
+                armor_catalog,
+                shield_catalog,
+                npc_presets,
+                talent_catalog,
+            );
+            let target_armor_dr = opponent_combatant.sheet.defense.armor_dr.max(0);
+            let target_natural_dr = opponent_combatant.sheet.defense.natural_dr.max(0);
+            let called_shot_target_bonus_vs_opponent =
+                game_logic::called_shot_target_defense_bonus_against_target(
+                    player,
+                    opponent,
+                    armor_catalog,
+                );
+            let (called_shot_light_bonus, called_shot_medium_bonus, called_shot_heavy_bonus) =
+                game_logic::called_shot_target_defense_bonuses_for_player(player);
+            let called_shot_mainhand_delay_expr = if player.called_shot {
+                if game_logic::called_shot_deceptive_defender_effect_active(opponent) {
+                    game_logic::CALLED_SHOT_DECEPTIVE_DEFENDER_DELAY_EXPR
+                } else {
+                    game_logic::called_shot_delay_expr_for_player(player, roll.is_ranged_weapon)
+                }
+            } else {
+                ""
+            };
 
             ui.separator();
             ui.label("Defense");
@@ -2094,19 +2158,45 @@ fn render_player_editor(
                 .shield_damage_expr
                 .as_deref()
                 .unwrap_or("-");
-            ui.label(format!(
-                "Weapon speed: {}",
-                combatant.sheet.offense.weapon.speed
-            ));
+            if player.called_shot {
+                ui.label(format!(
+                    "Weapon speed: {} + {} (called shot)",
+                    combatant.sheet.offense.weapon.speed, called_shot_mainhand_delay_expr
+                ));
+            } else {
+                ui.label(format!(
+                    "Weapon speed: {}",
+                    combatant.sheet.offense.weapon.speed
+                ));
+            }
             ui.label(format!("Weapon shield damage: {}", weapon_shield_damage));
-            ui.label(format!("Attack roll: d20p + {}", attack_bonus));
-            ui.label(format!(
-                "Damage roll: {} + {} vs target DR {} (AP {})",
-                combatant.sheet.offense.weapon.damage_expr,
-                strength_damage,
-                target_dr,
-                combatant.sheet.offense.weapon.armor_penetration
-            ));
+            if player.called_shot {
+                ui.label(format!(
+                    "Attack roll: d20p + {} (called shot: hit if > defense; precise at defense +{} vs current target armor, light/medium/heavy +{}/+{}/+{})",
+                    attack_bonus,
+                    called_shot_target_bonus_vs_opponent,
+                    called_shot_light_bonus,
+                    called_shot_medium_bonus,
+                    called_shot_heavy_bonus
+                ));
+                ui.label(format!(
+                    "Damage roll: {} + {} vs target DR {} on precise called shot (near-miss DR {}, AP {})",
+                    combatant.sheet.offense.weapon.damage_expr,
+                    strength_damage,
+                    target_natural_dr,
+                    target_armor_dr,
+                    combatant.sheet.offense.weapon.armor_penetration
+                ));
+            } else {
+                ui.label(format!("Attack roll: d20p + {}", attack_bonus));
+                ui.label(format!(
+                    "Damage roll: {} + {} vs target DR {} (AP {})",
+                    combatant.sheet.offense.weapon.damage_expr,
+                    strength_damage,
+                    target_armor_dr,
+                    combatant.sheet.offense.weapon.armor_penetration
+                ));
+            }
             if let Some(offhand) = combatant.sheet.offense.offhand.as_ref() {
                 ui.separator();
                 ui.label("Offhand");
@@ -2119,7 +2209,7 @@ fn render_player_editor(
                     "Damage roll: {} + {} - 2 vs target DR {} (AP {})",
                     offhand.weapon.damage_expr,
                     offhand.strength_damage,
-                    target_dr,
+                    target_armor_dr,
                     offhand.weapon.armor_penetration
                 ));
             }
@@ -2169,11 +2259,13 @@ fn apply_fighter_preset(
     let maneuvers = preset.maneuvers;
     player.use_jab = maneuvers.use_jab;
     player.hold_at_bay = maneuvers.hold_at_bay;
+    player.called_shot = maneuvers.called_shot;
     player.aggressive_attack = maneuvers.aggressive_attack;
     player.charge = maneuvers.charge;
     player.ready_against_charge = maneuvers.ready_against_charge;
     player.tactical_move = maneuvers.tactical_move;
     player.fight_defensively = maneuvers.fight_defensively;
+    player.fight_defensively_penalty = maneuvers.fight_defensively_penalty;
     player.full_parry = maneuvers.full_parry;
     player.give_ground = maneuvers.give_ground;
     player.scamper_back = maneuvers.scamper_back;
@@ -2273,11 +2365,15 @@ fn fighter_preset_from_player(
         maneuvers: game_logic::CombatManeuverConfig {
             use_jab: player.use_jab,
             hold_at_bay: player.hold_at_bay,
+            called_shot: player.called_shot,
             aggressive_attack: player.aggressive_attack,
             charge: player.charge,
             ready_against_charge: player.ready_against_charge,
             tactical_move: player.tactical_move,
             fight_defensively: player.fight_defensively,
+            fight_defensively_penalty: game_logic::normalize_fight_defensively_penalty(
+                player.fight_defensively_penalty,
+            ),
             full_parry: player.full_parry,
             give_ground: player.give_ground,
             scamper_back: player.scamper_back,

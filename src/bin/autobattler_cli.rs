@@ -411,11 +411,13 @@ fn player_config_from_preset(
     let maneuvers = preset.maneuvers;
     player.use_jab = maneuvers.use_jab;
     player.hold_at_bay = maneuvers.hold_at_bay;
+    player.called_shot = maneuvers.called_shot;
     player.aggressive_attack = maneuvers.aggressive_attack;
     player.charge = maneuvers.charge;
     player.ready_against_charge = maneuvers.ready_against_charge;
     player.tactical_move = maneuvers.tactical_move;
     player.fight_defensively = maneuvers.fight_defensively;
+    player.fight_defensively_penalty = maneuvers.fight_defensively_penalty;
     player.full_parry = maneuvers.full_parry;
     player.give_ground = maneuvers.give_ground;
     player.scamper_back = maneuvers.scamper_back;

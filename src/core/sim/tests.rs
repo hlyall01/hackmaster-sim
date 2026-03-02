@@ -1,5 +1,6 @@
 use super::combat::{
     AttackMode, critical_effect_for, defense_die_sides, extra_damage_dice_sequence, resolve_attack,
+    resolve_knock_aside,
 };
 use super::*;
 use crate::character::{Progression, ProgressionTier};
@@ -372,11 +373,13 @@ fn player_config_from_preset(
     let maneuvers = preset.maneuvers;
     player.use_jab = maneuvers.use_jab;
     player.hold_at_bay = maneuvers.hold_at_bay;
+    player.called_shot = maneuvers.called_shot;
     player.aggressive_attack = maneuvers.aggressive_attack;
     player.charge = maneuvers.charge;
     player.ready_against_charge = maneuvers.ready_against_charge;
     player.tactical_move = maneuvers.tactical_move;
     player.fight_defensively = maneuvers.fight_defensively;
+    player.fight_defensively_penalty = maneuvers.fight_defensively_penalty;
     player.full_parry = maneuvers.full_parry;
     player.give_ground = maneuvers.give_ground;
     player.scamper_back = maneuvers.scamper_back;
@@ -2347,6 +2350,799 @@ fn charge_attack_applies_bonus_knockback_and_defense_penalty() {
             .iter()
             .any(|effect| effect.id == "charge_defense_penalty")
     );
+}
+
+#[test]
+fn fight_defensively_applies_attack_penalty_and_defense_bonus() {
+    let attacker = combatant_basic(
+        "Attacker".to_string(),
+        "Test Blade".to_string(),
+        0,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        20,
+    );
+    let defender = combatant_basic(
+        "Defender".to_string(),
+        "Test Blade".to_string(),
+        0,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        20,
+    );
+    let mut state = make_state(attacker, defender);
+    state.combatants[0].sheet.maneuvers.fight_defensively = true;
+    state.combatants[0]
+        .sheet
+        .maneuvers
+        .fight_defensively_attack_penalty = 4;
+    state.combatants[0]
+        .sheet
+        .maneuvers
+        .fight_defensively_defense_bonus = 2;
+    state.combatants[1].sheet.maneuvers.fight_defensively = true;
+    state.combatants[1]
+        .sheet
+        .maneuvers
+        .fight_defensively_attack_penalty = 2;
+    state.combatants[1]
+        .sheet
+        .maneuvers
+        .fight_defensively_defense_bonus = 3;
+
+    let mut rng = FixedRng(0);
+    let event = resolve_attack(
+        &mut state.combatants,
+        0,
+        1,
+        0,
+        false,
+        1.0,
+        AttackMode::Normal,
+        WeaponSlot::Primary,
+        0.0,
+        None,
+        &mut rng,
+    );
+    assert_eq!(event.roll.attack_bonus, -4);
+    assert_eq!(event.roll.defense_base, 3);
+}
+
+#[test]
+fn fight_defensively_applies_to_knock_aside_rolls() {
+    let attacker = combatant_basic(
+        "Attacker".to_string(),
+        "Test Blade".to_string(),
+        10,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        20,
+    );
+    let defender = combatant_basic(
+        "Defender".to_string(),
+        "Test Blade".to_string(),
+        0,
+        5,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        20,
+    );
+    let mut state = make_state(attacker, defender);
+    state.combatants[0].sheet.maneuvers.fight_defensively = true;
+    state.combatants[0]
+        .sheet
+        .maneuvers
+        .fight_defensively_attack_penalty = 6;
+    state.combatants[1].sheet.maneuvers.fight_defensively = true;
+    state.combatants[1]
+        .sheet
+        .maneuvers
+        .fight_defensively_defense_bonus = 2;
+
+    let mut rng = FixedRng(0);
+    let outcome = resolve_knock_aside(&mut state.combatants, 0, 1, 0.0, None, &mut rng);
+    assert_eq!(outcome.roll.attack_bonus, 4);
+    assert_eq!(outcome.roll.defense_base, 7);
+}
+
+#[test]
+fn called_shot_applies_defense_penalty_to_user() {
+    let attacker = combatant_basic(
+        "Attacker".to_string(),
+        "Test Blade".to_string(),
+        0,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        20,
+    );
+    let defender = combatant_basic(
+        "Defender".to_string(),
+        "Test Blade".to_string(),
+        0,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        20,
+    );
+    let mut state = make_state(attacker, defender);
+    state.combatants[1].sheet.maneuvers.called_shot = true;
+
+    let mut rng = FixedRng(0);
+    let event = resolve_attack(
+        &mut state.combatants,
+        0,
+        1,
+        0,
+        false,
+        1.0,
+        AttackMode::Normal,
+        WeaponSlot::Primary,
+        0.0,
+        None,
+        &mut rng,
+    );
+    assert_eq!(event.roll.defense_base, -4);
+}
+
+#[test]
+fn precision_combatant_reduces_called_shot_defense_penalty_to_two() {
+    let attacker = combatant_basic(
+        "Attacker".to_string(),
+        "Test Blade".to_string(),
+        0,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        20,
+    );
+    let defender = combatant_basic(
+        "Defender".to_string(),
+        "Test Blade".to_string(),
+        0,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        20,
+    );
+    let mut state = make_state(attacker, defender);
+    state.combatants[1].sheet.maneuvers.called_shot = true;
+    state.combatants[1]
+        .sheet
+        .maneuvers
+        .called_shot_defense_penalty = 2;
+
+    let mut rng = FixedRng(0);
+    let event = resolve_attack(
+        &mut state.combatants,
+        0,
+        1,
+        0,
+        false,
+        1.0,
+        AttackMode::Normal,
+        WeaponSlot::Primary,
+        0.0,
+        None,
+        &mut rng,
+    );
+    assert_eq!(event.roll.defense_base, -2);
+}
+
+#[test]
+fn called_shot_precise_hit_ignores_armor_dr() {
+    let attacker = combatant_basic(
+        "Attacker".to_string(),
+        "Test Blade".to_string(),
+        15,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        20,
+    );
+    let defender = combatant_basic(
+        "Defender".to_string(),
+        "Test Blade".to_string(),
+        0,
+        0,
+        5,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        20,
+    );
+    let mut state = make_state(attacker, defender);
+    state.combatants[0].sheet.maneuvers.called_shot = true;
+
+    let mut rng = FixedRng(0);
+    let event = resolve_attack(
+        &mut state.combatants,
+        0,
+        1,
+        0,
+        false,
+        1.0,
+        AttackMode::Normal,
+        WeaponSlot::Primary,
+        0.0,
+        None,
+        &mut rng,
+    );
+    assert!(event.hit);
+    assert_eq!(event.damage, 1);
+    let breakdown = event.damage_breakdown.expect("expected damage breakdown");
+    assert_eq!(breakdown.armor_dr, 0);
+    assert_eq!(breakdown.armor_penetration, 0);
+    assert_eq!(breakdown.effective_armor_dr, 0);
+}
+
+#[test]
+fn called_shot_precise_hit_still_applies_natural_dr_like_tough_hide() {
+    let attacker = combatant_basic(
+        "Attacker".to_string(),
+        "Test Blade".to_string(),
+        15,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        20,
+    );
+    let defender = combatant_basic(
+        "Defender".to_string(),
+        "Test Blade".to_string(),
+        0,
+        0,
+        5,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        20,
+    );
+    let mut state = make_state(attacker, defender);
+    state.combatants[0].sheet.maneuvers.called_shot = true;
+    // Simulate Tough Hide-like DR that should remain when armor DR is ignored.
+    state.combatants[1].sheet.defense.natural_dr = 1;
+    state.combatants[1].sheet.defense.armor_dr = 6;
+
+    let mut rng = FixedRng(0);
+    let event = resolve_attack(
+        &mut state.combatants,
+        0,
+        1,
+        0,
+        false,
+        1.0,
+        AttackMode::Normal,
+        WeaponSlot::Primary,
+        0.0,
+        None,
+        &mut rng,
+    );
+    assert!(event.hit);
+    assert_eq!(event.damage, 0);
+    let breakdown = event.damage_breakdown.expect("expected damage breakdown");
+    assert_eq!(breakdown.armor_dr, 1);
+    assert_eq!(breakdown.effective_armor_dr, 1);
+}
+
+#[test]
+fn called_shot_near_miss_still_hits_but_keeps_armor_dr() {
+    let attacker = combatant_basic(
+        "Attacker".to_string(),
+        "Test Blade".to_string(),
+        5,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        20,
+    );
+    let defender = combatant_basic(
+        "Defender".to_string(),
+        "Test Blade".to_string(),
+        0,
+        0,
+        5,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        20,
+    );
+    let mut state = make_state(attacker, defender);
+    state.combatants[0].sheet.maneuvers.called_shot = true;
+
+    let mut rng = FixedRng(0);
+    let event = resolve_attack(
+        &mut state.combatants,
+        0,
+        1,
+        0,
+        false,
+        1.0,
+        AttackMode::Normal,
+        WeaponSlot::Primary,
+        0.0,
+        None,
+        &mut rng,
+    );
+    assert!(event.hit);
+    assert_eq!(event.damage, 0);
+    let breakdown = event.damage_breakdown.expect("expected damage breakdown");
+    assert_eq!(breakdown.armor_dr, 5);
+    assert_eq!(breakdown.effective_armor_dr, 5);
+    assert!(event.roll.attack_total > event.roll.defense_total);
+    assert!(event.roll.attack_total < event.roll.defense_total + 8);
+}
+
+#[test]
+fn called_shot_precision_threshold_depends_on_target_armor_type() {
+    let attacker = combatant_basic(
+        "Attacker".to_string(),
+        "Test Blade".to_string(),
+        4,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        20,
+    );
+    let defender = combatant_basic(
+        "Defender".to_string(),
+        "Test Blade".to_string(),
+        0,
+        0,
+        5,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        20,
+    );
+
+    let mut light_state = make_state(attacker.clone(), defender.clone());
+    light_state.combatants[0].sheet.maneuvers.called_shot = true;
+    light_state.combatants[1]
+        .sheet
+        .maneuvers
+        .called_shot_target_defense_bonus_base = game_logic::CALLED_SHOT_TARGET_DEFENSE_BONUS_LIGHT;
+
+    let mut heavy_state = make_state(attacker, defender);
+    heavy_state.combatants[0].sheet.maneuvers.called_shot = true;
+    heavy_state.combatants[1]
+        .sheet
+        .maneuvers
+        .called_shot_target_defense_bonus_base = game_logic::CALLED_SHOT_TARGET_DEFENSE_BONUS_HEAVY;
+
+    let mut light_rng = FixedRng(0);
+    let light = resolve_attack(
+        &mut light_state.combatants,
+        0,
+        1,
+        0,
+        false,
+        1.0,
+        AttackMode::Normal,
+        WeaponSlot::Primary,
+        0.0,
+        None,
+        &mut light_rng,
+    );
+    assert!(light.hit);
+    assert_eq!(light.damage, 1);
+    assert_eq!(
+        light
+            .damage_breakdown
+            .expect("expected light armor damage breakdown")
+            .effective_armor_dr,
+        0
+    );
+
+    let mut heavy_rng = FixedRng(0);
+    let heavy = resolve_attack(
+        &mut heavy_state.combatants,
+        0,
+        1,
+        0,
+        false,
+        1.0,
+        AttackMode::Normal,
+        WeaponSlot::Primary,
+        0.0,
+        None,
+        &mut heavy_rng,
+    );
+    assert!(heavy.hit);
+    assert_eq!(heavy.damage, 0);
+    assert_eq!(
+        heavy
+            .damage_breakdown
+            .expect("expected heavy armor damage breakdown")
+            .effective_armor_dr,
+        5
+    );
+}
+
+#[test]
+fn precision_combatant_halved_called_shot_bonus_can_turn_glance_into_precise_hit() {
+    let attacker = combatant_basic(
+        "Attacker".to_string(),
+        "Test Blade".to_string(),
+        5,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        20,
+    );
+    let defender = combatant_basic(
+        "Defender".to_string(),
+        "Test Blade".to_string(),
+        0,
+        0,
+        5,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        20,
+    );
+    let mut state = make_state(attacker, defender);
+    state.combatants[0].sheet.maneuvers.called_shot = true;
+    state.combatants[0]
+        .sheet
+        .maneuvers
+        .called_shot_defense_bonus = 4;
+
+    let mut rng = FixedRng(0);
+    let event = resolve_attack(
+        &mut state.combatants,
+        0,
+        1,
+        0,
+        false,
+        1.0,
+        AttackMode::Normal,
+        WeaponSlot::Primary,
+        0.0,
+        None,
+        &mut rng,
+    );
+    assert!(event.hit);
+    assert_eq!(event.damage, 1);
+    let breakdown = event.damage_breakdown.expect("expected damage breakdown");
+    assert_eq!(breakdown.effective_armor_dr, 0);
+}
+
+#[test]
+fn deceptive_defender_adds_four_defense_against_called_shot() {
+    let attacker = combatant_basic(
+        "Attacker".to_string(),
+        "Test Blade".to_string(),
+        1,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        20,
+    );
+    let defender = combatant_basic(
+        "Defender".to_string(),
+        "Test Blade".to_string(),
+        0,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        20,
+    );
+    let mut state = make_state(attacker, defender);
+    state.combatants[0].sheet.maneuvers.called_shot = true;
+    state.combatants[1]
+        .sheet
+        .maneuvers
+        .called_shot_deceptive_defender = true;
+
+    let mut rng = FixedRng(0);
+    let event = resolve_attack(
+        &mut state.combatants,
+        0,
+        1,
+        0,
+        false,
+        1.0,
+        AttackMode::Normal,
+        WeaponSlot::Primary,
+        0.0,
+        None,
+        &mut rng,
+    );
+    assert!(!event.hit);
+}
+
+#[test]
+fn deceptive_defender_adds_one_defense_on_initial_attack_only() {
+    let attacker = combatant_basic(
+        "Attacker".to_string(),
+        "Test Blade".to_string(),
+        0,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        20,
+    );
+    let defender = combatant_basic(
+        "Defender".to_string(),
+        "Test Blade".to_string(),
+        0,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        20,
+    );
+    let mut state = make_state(attacker, defender);
+    state.combatants[1]
+        .sheet
+        .maneuvers
+        .called_shot_deceptive_defender = true;
+
+    let mut rng = FixedRng(0);
+    let first = resolve_attack(
+        &mut state.combatants,
+        0,
+        1,
+        0,
+        false,
+        1.0,
+        AttackMode::Normal,
+        WeaponSlot::Primary,
+        0.0,
+        None,
+        &mut rng,
+    );
+    let second = resolve_attack(
+        &mut state.combatants,
+        0,
+        1,
+        0,
+        false,
+        1.0,
+        AttackMode::Normal,
+        WeaponSlot::Primary,
+        0.0,
+        None,
+        &mut rng,
+    );
+
+    assert_eq!(first.roll.defense_base, 1);
+    assert_eq!(second.roll.defense_base, 0);
 }
 
 #[test]

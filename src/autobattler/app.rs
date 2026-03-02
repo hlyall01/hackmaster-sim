@@ -1366,11 +1366,13 @@ impl AutobattlerApp {
             game_logic::knockback_step_for_race_id(preset.race_id.as_deref(), &self.race_catalog);
         creation.player.use_jab = preset.maneuvers.use_jab;
         creation.player.hold_at_bay = preset.maneuvers.hold_at_bay;
+        creation.player.called_shot = preset.maneuvers.called_shot;
         creation.player.aggressive_attack = preset.maneuvers.aggressive_attack;
         creation.player.charge = preset.maneuvers.charge;
         creation.player.ready_against_charge = preset.maneuvers.ready_against_charge;
         creation.player.tactical_move = preset.maneuvers.tactical_move;
         creation.player.fight_defensively = preset.maneuvers.fight_defensively;
+        creation.player.fight_defensively_penalty = preset.maneuvers.fight_defensively_penalty;
         creation.player.full_parry = preset.maneuvers.full_parry;
         creation.player.give_ground = preset.maneuvers.give_ground;
         creation.player.scamper_back = preset.maneuvers.scamper_back;

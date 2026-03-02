@@ -13,11 +13,11 @@ pub use modifiers::{
 };
 pub use movement::{max_range_for_bands, max_range_for_weapon_name, range_bands_for_weapon_name};
 pub use types::{
-    AttackEvent, AttackRollBreakdown, CombatEvent, CombatEventKind, Combatant, CombatantCache,
-    CombatantSheet, CombatantState, CriticalHit, DamageBreakdown, DamageDie, DefenseProfile,
-    GridPos, KnockAsideEvent, KnockAsideRollBreakdown, ManeuverProfile, MobilityProfile,
-    OffenseProfile, OffhandProfile, ShieldBreakageStep, ShieldDamageBreakdown, SimActor, SimConfig,
-    Vitals, WeaponCache, WeaponProfile, WeaponSlot,
+    AttackEvent, AttackRollBreakdown, CalledShotDelayProfile, CombatEvent, CombatEventKind,
+    Combatant, CombatantCache, CombatantSheet, CombatantState, CriticalHit, DamageBreakdown,
+    DamageDie, DefenseProfile, GridPos, KnockAsideEvent, KnockAsideRollBreakdown, ManeuverProfile,
+    MobilityProfile, OffenseProfile, OffhandProfile, ShieldBreakageStep, ShieldDamageBreakdown,
+    SimActor, SimConfig, Vitals, WeaponCache, WeaponProfile, WeaponSlot,
 };
 
 #[cfg(test)]

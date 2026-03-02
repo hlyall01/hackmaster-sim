@@ -1,18 +1,45 @@
 use crate::core::rng::SimRng;
+use crate::core::rules::roll_damage_expr;
 use rand::RngCore;
 
 use super::combat::{AttackMode, resolve_attack, resolve_knock_aside};
 use super::modifiers::{StatIdF32, StatIdI32};
 use super::movement::{max_range_for_weapon, range_modifier_for_weapon_with_scale};
 use super::types::{
-    AttackEvent, CombatEvent, CombatEventKind, Combatant, GridPos, KnockAsideEvent, SimActor,
-    SimConfig, WeaponSlot,
+    AttackEvent, CalledShotDelayProfile, CombatEvent, CombatEventKind, Combatant, GridPos,
+    KnockAsideEvent, SimActor, SimConfig, WeaponSlot,
 };
 use std::collections::{HashMap, HashSet};
 
 const CHARGE_MIN_DISTANCE_FT: f32 = 20.0;
 const SHIELD_STRIKE_SPEEDUP_SECONDS: f32 = 2.0;
 const SIX_PATHS_FOLLOWUP_SECONDS: f32 = 1.0;
+
+fn called_shot_delay_seconds(
+    attacker: &Combatant,
+    defender: &Combatant,
+    is_ranged: bool,
+    rng: &mut SimRng,
+) -> f32 {
+    if !attacker.sheet.maneuvers.called_shot {
+        return 0.0;
+    }
+    if defender.sheet.maneuvers.called_shot_deceptive_defender {
+        return roll_damage_expr("4d4p", rng, false).max(0) as f32;
+    }
+    match attacker.sheet.maneuvers.called_shot_delay_profile {
+        CalledShotDelayProfile::Standard => {
+            let delay_expr = if is_ranged { "1d4p" } else { "2d4p" };
+            roll_damage_expr(delay_expr, rng, false).max(0) as f32
+        }
+        CalledShotDelayProfile::PrecisionCombatant => {
+            roll_damage_expr("1d4p", rng, false).max(0) as f32
+        }
+        CalledShotDelayProfile::PrecisionAiming => {
+            roll_damage_expr("1d2", rng, false).max(0) as f32
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct SimState {
@@ -784,7 +811,12 @@ impl SimState {
                         .set_next_attack_time(WeaponSlot::Secondary, None);
                 }
                 let next_attack = if use_snapshot_timing {
-                    snapshot_next_attack_primary.unwrap_or(now)
+                    snapshot_next_attack_primary.unwrap_or_else(|| {
+                        self.combatants[attacker_idx]
+                            .state
+                            .next_attack_time_primary
+                            .unwrap_or(now)
+                    })
                 } else {
                     self.combatants[attacker_idx]
                         .state
@@ -896,12 +928,24 @@ impl SimState {
                 } else {
                     0.0
                 };
-                self.combatants[attacker_idx]
-                    .state
-                    .set_next_attack_time(WeaponSlot::Primary, Some(now + delay));
+                let called_shot_delay = called_shot_delay_seconds(
+                    &self.combatants[attacker_idx],
+                    &self.combatants[defender_idx],
+                    use_ranged,
+                    &mut self.rng,
+                );
+                self.combatants[attacker_idx].state.set_next_attack_time(
+                    WeaponSlot::Primary,
+                    Some(now + delay + called_shot_delay),
+                );
             }
             let next_attack = if use_snapshot_timing {
-                snapshot_next_attack_primary.unwrap_or(now)
+                snapshot_next_attack_primary.unwrap_or_else(|| {
+                    self.combatants[attacker_idx]
+                        .state
+                        .next_attack_time_primary
+                        .unwrap_or(now)
+                })
             } else {
                 self.combatants[attacker_idx]
                     .state
@@ -1074,6 +1118,12 @@ impl SimState {
                 if self.combatants[defender_idx].state.trauma_remaining_seconds > 0 {
                     speed = (speed / 2.0).ceil().max(1.0);
                 }
+                speed += called_shot_delay_seconds(
+                    &self.combatants[attacker_idx],
+                    &self.combatants[event.defender_idx],
+                    event.is_ranged,
+                    &mut self.rng,
+                );
                 self.combatants[attacker_idx]
                     .state
                     .set_next_attack_time(WeaponSlot::Primary, Some(next_attack + speed));
@@ -1139,9 +1189,16 @@ impl SimState {
                         .or_else(|| self.combatants[attacker_idx].state.next_attack_time_primary)
                         .unwrap_or(now);
                     let offset = 2.0 + (primary_speed_base / 2.0).ceil();
-                    self.combatants[attacker_idx]
-                        .state
-                        .set_next_attack_time(WeaponSlot::Secondary, Some(primary_anchor + offset));
+                    let called_shot_delay = called_shot_delay_seconds(
+                        &self.combatants[attacker_idx],
+                        &self.combatants[defender_idx],
+                        use_ranged,
+                        &mut self.rng,
+                    );
+                    self.combatants[attacker_idx].state.set_next_attack_time(
+                        WeaponSlot::Secondary,
+                        Some(primary_anchor + offset + called_shot_delay),
+                    );
                 }
                 let next_attack = if use_snapshot_timing {
                     snapshot_next_attack_secondary.unwrap_or_else(|| {
@@ -1296,6 +1353,12 @@ impl SimState {
                     if self.combatants[defender_idx].state.trauma_remaining_seconds > 0 {
                         speed = (speed / 2.0).ceil().max(1.0);
                     }
+                    speed += called_shot_delay_seconds(
+                        &self.combatants[attacker_idx],
+                        &self.combatants[event.defender_idx],
+                        event.is_ranged,
+                        &mut self.rng,
+                    );
                     self.combatants[attacker_idx]
                         .state
                         .set_next_attack_time(WeaponSlot::Secondary, Some(next_attack + speed));
@@ -1305,6 +1368,107 @@ impl SimState {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn called_shot_delay_requires_called_shot_toggle() {
+        let attacker = Combatant::default();
+        let defender = Combatant::default();
+        let mut rng = SimRng::from_seed(1);
+        let delay = called_shot_delay_seconds(&attacker, &defender, false, &mut rng);
+        assert_eq!(delay, 0.0);
+    }
+
+    #[test]
+    fn called_shot_delay_standard_melee_is_at_least_two_seconds() {
+        let mut attacker = Combatant::default();
+        attacker.sheet.maneuvers.called_shot = true;
+        let defender = Combatant::default();
+        let mut rng = SimRng::from_seed(2);
+        let delay = called_shot_delay_seconds(&attacker, &defender, false, &mut rng);
+        assert!(delay >= 2.0, "expected 2d4p delay >= 2, got {delay}");
+    }
+
+    #[test]
+    fn called_shot_delay_precision_combatant_is_at_least_one_second() {
+        let mut attacker = Combatant::default();
+        attacker.sheet.maneuvers.called_shot = true;
+        attacker.sheet.maneuvers.called_shot_delay_profile =
+            CalledShotDelayProfile::PrecisionCombatant;
+        let defender = Combatant::default();
+        let mut rng = SimRng::from_seed(3);
+        let delay = called_shot_delay_seconds(&attacker, &defender, false, &mut rng);
+        assert!(delay >= 1.0, "expected 1d4p delay >= 1, got {delay}");
+    }
+
+    #[test]
+    fn called_shot_delay_precision_aiming_is_between_one_and_two_seconds() {
+        let mut attacker = Combatant::default();
+        attacker.sheet.maneuvers.called_shot = true;
+        attacker.sheet.maneuvers.called_shot_delay_profile =
+            CalledShotDelayProfile::PrecisionAiming;
+        let defender = Combatant::default();
+        let mut rng = SimRng::from_seed(4);
+        let delay = called_shot_delay_seconds(&attacker, &defender, false, &mut rng);
+        assert!(
+            (1.0..=2.0).contains(&delay),
+            "expected precision aiming delay in [1, 2], got {delay}"
+        );
+    }
+
+    #[test]
+    fn called_shot_delay_deceptive_defender_forces_four_d4p() {
+        let mut attacker = Combatant::default();
+        attacker.sheet.maneuvers.called_shot = true;
+        attacker.sheet.maneuvers.called_shot_delay_profile =
+            CalledShotDelayProfile::PrecisionAiming;
+        let mut defender = Combatant::default();
+        defender.sheet.maneuvers.called_shot_deceptive_defender = true;
+        let mut rng = SimRng::from_seed(5);
+        let delay = called_shot_delay_seconds(&attacker, &defender, false, &mut rng);
+        assert!(
+            delay >= 4.0,
+            "expected deceptive defender delay >= 4 (4d4p), got {delay}"
+        );
+    }
+
+    #[test]
+    fn called_shot_delay_applies_before_opening_melee_attack() {
+        let mut called_shot_attacker = Combatant::default();
+        called_shot_attacker.team_id = 0;
+        called_shot_attacker.sheet.maneuvers.called_shot = true;
+        called_shot_attacker.sheet.vitals.max_hp = 100;
+        called_shot_attacker.sheet.defense.defense_mod = 100;
+        called_shot_attacker.reset_state();
+
+        let mut defender = Combatant::default();
+        defender.team_id = 1;
+        defender.sheet.vitals.max_hp = 100;
+        defender.reset_state();
+
+        let mut sim = SimState::with_rng(SimConfig::new(1.0, 1.0), SimRng::from_seed(9));
+        sim.reset_with_combatants(vec![called_shot_attacker, defender]);
+        sim.tick();
+
+        assert!(
+            !sim.combat_events
+                .iter()
+                .any(|event| event.time == 0 && event.attacker_idx == 0),
+            "called-shot attacker should not attack on opening tick before delay elapses"
+        );
+        let next_attack = sim.combatants[0]
+            .state
+            .next_attack_time_primary
+            .unwrap_or(0.0);
+        assert!(
+            next_attack >= 2.0,
+            "expected opening called-shot melee delay >= 2s (2d4p), got {next_attack}"
+        );
     }
 }
 

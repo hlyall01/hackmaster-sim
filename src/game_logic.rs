@@ -85,11 +85,23 @@ const TALENT_ID_RETURNER: &str = "returner";
 const TALENT_ID_SIX_PATHS: &str = "six_paths";
 const TALENT_ID_THREE_MOUNTAINS: &str = "three_mountains";
 const TALENT_ID_UNBREAKABLE_WALL: &str = "unbreakable_wall";
+const TALENT_ID_COMBAT_EXPERTISE: &str = "combat_expertise";
+const TALENT_ID_DUELIST: &str = "duelist";
+const TALENT_ID_CONTENDER: &str = "contender";
+const TALENT_ID_DECEPTIVE_DEFENDER: &str = "deceptive_defender";
+const TALENT_ID_PRECISION_AIMING: &str = "precision_aiming";
+const TALENT_ID_PRECISION_COMBATANT: &str = "precision_combatant";
 const TWELVE_PATHS_DAMAGE_PENALTY: i32 = 3;
 const ARMEROCI_POLE_REACH_BONUS_FT: f32 = 1.0;
 const ARMEROCI_POLE_SPEED_PENALTY: f32 = 2.0;
 const HOBBLER_ATTACK_PENALTY: i32 = 4;
 const RETURNER_DEFENSE_PENALTY: i32 = 4;
+pub const FIGHT_DEFENSIVELY_PENALTY_OPTIONS: [i32; 4] = [2, 4, 6, 8];
+const DEFAULT_FIGHT_DEFENSIVELY_PENALTY: i32 = FIGHT_DEFENSIVELY_PENALTY_OPTIONS[0];
+pub const CALLED_SHOT_DECEPTIVE_DEFENDER_DELAY_EXPR: &str = "4d4p";
+pub const CALLED_SHOT_TARGET_DEFENSE_BONUS_LIGHT: i32 = 4;
+pub const CALLED_SHOT_TARGET_DEFENSE_BONUS_MEDIUM: i32 = 8;
+pub const CALLED_SHOT_TARGET_DEFENSE_BONUS_HEAVY: i32 = 16;
 
 pub fn weapon_allows_two_handed_mode(weapon: &WeaponPreset) -> bool {
     weapon.handedness == WeaponHandedness::OneHanded
@@ -115,6 +127,26 @@ fn two_hand_speed_penalty(weapon: &WeaponPreset, two_hand_grip: bool) -> f32 {
     } else {
         0.0
     }
+}
+
+pub fn normalize_fight_defensively_penalty(penalty: i32) -> i32 {
+    if penalty <= FIGHT_DEFENSIVELY_PENALTY_OPTIONS[0] {
+        FIGHT_DEFENSIVELY_PENALTY_OPTIONS[0]
+    } else if penalty <= FIGHT_DEFENSIVELY_PENALTY_OPTIONS[1] {
+        FIGHT_DEFENSIVELY_PENALTY_OPTIONS[1]
+    } else if penalty <= FIGHT_DEFENSIVELY_PENALTY_OPTIONS[2] {
+        FIGHT_DEFENSIVELY_PENALTY_OPTIONS[2]
+    } else {
+        FIGHT_DEFENSIVELY_PENALTY_OPTIONS[3]
+    }
+}
+
+fn default_fight_defensively_penalty() -> i32 {
+    DEFAULT_FIGHT_DEFENSIVELY_PENALTY
+}
+
+fn is_default_fight_defensively_penalty(value: &i32) -> bool {
+    *value == DEFAULT_FIGHT_DEFENSIVELY_PENALTY
 }
 
 #[derive(Clone)]
@@ -175,12 +207,14 @@ pub struct FighterMasteries {
     pub shield_speed: i32,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct CombatManeuverConfig {
     #[serde(default, skip_serializing_if = "is_false")]
     pub use_jab: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub hold_at_bay: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub called_shot: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub aggressive_attack: bool,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -191,6 +225,11 @@ pub struct CombatManeuverConfig {
     pub tactical_move: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub fight_defensively: bool,
+    #[serde(
+        default = "default_fight_defensively_penalty",
+        skip_serializing_if = "is_default_fight_defensively_penalty"
+    )]
+    pub fight_defensively_penalty: i32,
     #[serde(default, skip_serializing_if = "is_false")]
     pub full_parry: bool,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -203,6 +242,28 @@ pub struct CombatManeuverConfig {
     pub flee: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub mounted: bool,
+}
+
+impl Default for CombatManeuverConfig {
+    fn default() -> Self {
+        Self {
+            use_jab: false,
+            hold_at_bay: false,
+            called_shot: false,
+            aggressive_attack: false,
+            charge: false,
+            ready_against_charge: false,
+            tactical_move: false,
+            fight_defensively: false,
+            fight_defensively_penalty: DEFAULT_FIGHT_DEFENSIVELY_PENALTY,
+            full_parry: false,
+            give_ground: false,
+            scamper_back: false,
+            fighting_withdrawal: false,
+            flee: false,
+            mounted: false,
+        }
+    }
 }
 
 impl CombatManeuverConfig {
@@ -328,11 +389,13 @@ pub struct PlayerConfig {
     pub two_hand_grip: bool,
     pub use_jab: bool,
     pub hold_at_bay: bool,
+    pub called_shot: bool,
     pub aggressive_attack: bool,
     pub charge: bool,
     pub ready_against_charge: bool,
     pub tactical_move: bool,
     pub fight_defensively: bool,
+    pub fight_defensively_penalty: i32,
     pub full_parry: bool,
     pub give_ground: bool,
     pub scamper_back: bool,
@@ -388,11 +451,13 @@ impl PlayerConfig {
             two_hand_grip: false,
             use_jab: false,
             hold_at_bay: false,
+            called_shot: false,
             aggressive_attack: false,
             charge: false,
             ready_against_charge: false,
             tactical_move: false,
             fight_defensively: false,
+            fight_defensively_penalty: DEFAULT_FIGHT_DEFENSIVELY_PENALTY,
             full_parry: false,
             give_ground: false,
             scamper_back: false,
@@ -1620,6 +1685,144 @@ fn player_has_talent(player: &PlayerConfig, id: &str) -> bool {
     player.talents.iter().any(|talent| talent.id == id)
 }
 
+fn has_fight_defensively_enhancer(player: &PlayerConfig) -> bool {
+    player_has_talent(player, TALENT_ID_COMBAT_EXPERTISE)
+        || player_has_talent(player, TALENT_ID_DUELIST)
+}
+
+fn fight_defensively_attack_penalty_for_player(player: &PlayerConfig) -> i32 {
+    if !player.fight_defensively {
+        return 0;
+    }
+    let base_penalty = normalize_fight_defensively_penalty(player.fight_defensively_penalty);
+    if has_fight_defensively_enhancer(player) {
+        base_penalty / 2
+    } else {
+        base_penalty
+    }
+}
+
+fn fight_defensively_defense_bonus_for_player(player: &PlayerConfig) -> i32 {
+    if !player.fight_defensively {
+        return 0;
+    }
+    normalize_fight_defensively_penalty(player.fight_defensively_penalty) / 2
+}
+
+fn has_precision_combatant_effect(player: &PlayerConfig) -> bool {
+    player_has_talent(player, TALENT_ID_PRECISION_COMBATANT)
+        || player_has_talent(player, TALENT_ID_CONTENDER)
+        || player_has_talent(player, TALENT_ID_DUELIST)
+}
+
+fn has_deceptive_defender_effect(player: &PlayerConfig) -> bool {
+    player_has_talent(player, TALENT_ID_DECEPTIVE_DEFENDER)
+        || player_has_talent(player, TALENT_ID_CONTENDER)
+        || player_has_talent(player, TALENT_ID_DUELIST)
+}
+
+fn called_shot_defense_bonus_for_player(player: &PlayerConfig) -> i32 {
+    let mut bonus = 8;
+    if player_has_talent(player, TALENT_ID_PRECISION_AIMING)
+        || has_precision_combatant_effect(player)
+    {
+        bonus /= 2;
+    }
+    bonus.max(1)
+}
+
+fn called_shot_defense_penalty_for_player(player: &PlayerConfig) -> i32 {
+    if player_has_talent(player, TALENT_ID_DUELIST) {
+        0
+    } else if has_precision_combatant_effect(player) {
+        2
+    } else {
+        4
+    }
+}
+
+fn called_shot_delay_profile_for_player(player: &PlayerConfig) -> sim::CalledShotDelayProfile {
+    if player_has_talent(player, TALENT_ID_PRECISION_AIMING) {
+        sim::CalledShotDelayProfile::PrecisionAiming
+    } else if has_precision_combatant_effect(player) {
+        sim::CalledShotDelayProfile::PrecisionCombatant
+    } else {
+        sim::CalledShotDelayProfile::Standard
+    }
+}
+
+fn called_shot_target_defense_bonus_base_for_armor_type(armor_type: ArmorType) -> i32 {
+    match armor_type {
+        ArmorType::Heavy => CALLED_SHOT_TARGET_DEFENSE_BONUS_HEAVY,
+        ArmorType::Medium => CALLED_SHOT_TARGET_DEFENSE_BONUS_MEDIUM,
+        ArmorType::Light | ArmorType::None => CALLED_SHOT_TARGET_DEFENSE_BONUS_LIGHT,
+    }
+}
+
+fn called_shot_target_defense_bonus_for_armor_type(
+    player: &PlayerConfig,
+    armor_type: ArmorType,
+) -> i32 {
+    let mut bonus = called_shot_target_defense_bonus_base_for_armor_type(armor_type);
+    if player_has_talent(player, TALENT_ID_PRECISION_AIMING)
+        || has_precision_combatant_effect(player)
+    {
+        bonus /= 2;
+    }
+    bonus.max(1)
+}
+
+pub fn called_shot_target_defense_bonus_for_player(player: &PlayerConfig) -> i32 {
+    called_shot_target_defense_bonus_for_armor_type(player, ArmorType::Medium)
+}
+
+pub fn called_shot_self_defense_penalty_for_player(player: &PlayerConfig) -> i32 {
+    called_shot_defense_penalty_for_player(player)
+}
+
+pub fn called_shot_deceptive_defender_effect_active(player: &PlayerConfig) -> bool {
+    has_deceptive_defender_effect(player)
+}
+
+pub fn called_shot_delay_expr_for_player(player: &PlayerConfig, is_ranged: bool) -> &'static str {
+    match called_shot_delay_profile_for_player(player) {
+        sim::CalledShotDelayProfile::Standard => {
+            if is_ranged {
+                "1d4p"
+            } else {
+                "2d4p"
+            }
+        }
+        sim::CalledShotDelayProfile::PrecisionCombatant => "1d4p",
+        sim::CalledShotDelayProfile::PrecisionAiming => "1d2",
+    }
+}
+
+pub fn called_shot_target_defense_bonuses_for_player(player: &PlayerConfig) -> (i32, i32, i32) {
+    (
+        called_shot_target_defense_bonus_for_armor_type(player, ArmorType::Light),
+        called_shot_target_defense_bonus_for_armor_type(player, ArmorType::Medium),
+        called_shot_target_defense_bonus_for_armor_type(player, ArmorType::Heavy),
+    )
+}
+
+pub fn called_shot_target_defense_bonus_against_target(
+    attacker: &PlayerConfig,
+    target: &PlayerConfig,
+    armor_catalog: &ArmorCatalog,
+) -> i32 {
+    let target_armor_type = if target.npc_preset.is_some() {
+        ArmorType::Medium
+    } else {
+        armor_catalog
+            .get(target.armor_id)
+            .and_then(|entry| entry.armor.as_ref())
+            .map(|armor| armor.armor_type)
+            .unwrap_or(ArmorType::None)
+    };
+    called_shot_target_defense_bonus_for_armor_type(attacker, target_armor_type)
+}
+
 fn resolve_misc_modifiers(player: &PlayerConfig) -> MiscRollModifiers {
     let mut modifiers = player.misc_modifiers;
     if let Some(race_id) = player.race_id.as_deref() {
@@ -1888,6 +2091,13 @@ pub fn player_summary(
         armor_talent_adjustments(character.equipment.armor.as_ref(), &modifiers);
     let defensive_dualwielding = defensive_dualwielding_active(player, weapon);
     let offensive_dualwielding = offensive_dualwielding_active(player, weapon);
+    let fight_defensively_attack_penalty = fight_defensively_attack_penalty_for_player(player);
+    let fight_defensively_defense_bonus = fight_defensively_defense_bonus_for_player(player);
+    let called_shot_defense_penalty = if player.called_shot {
+        called_shot_defense_penalty_for_player(player)
+    } else {
+        0
+    };
     let defense_bonus_weapon = modifiers.defense_bonus_for_weapon(player.weapon_id)
         * if defensive_dualwielding { 2 } else { 1 };
     let mut derived = character.derived();
@@ -1935,7 +2145,15 @@ pub fn player_summary(
             0
         };
     derived.base_dv += style_defense_bonus;
-    let defense = defense_display_summary(player, weapon, &character, &derived, &modifiers);
+    let defense = defense_display_summary(
+        player,
+        weapon,
+        &character,
+        &derived,
+        &modifiers,
+        fight_defensively_defense_bonus,
+        called_shot_defense_penalty,
+    );
     let roll = roll_summary(
         player,
         weapon,
@@ -1951,6 +2169,7 @@ pub fn player_summary(
             0
         },
         ithican_half_int_bonus,
+        fight_defensively_attack_penalty,
     );
     PlayerSummary {
         derived,
@@ -1965,6 +2184,8 @@ fn defense_display_summary(
     character: &Character,
     derived: &DerivedStats,
     modifiers: &TalentModifiers,
+    fight_defensively_defense_bonus: i32,
+    called_shot_defense_penalty: i32,
 ) -> DefenseDisplaySummary {
     let defensive_dualwielding = defensive_dualwielding_active(player, weapon);
     let offensive_dualwielding = offensive_dualwielding_active(player, weapon);
@@ -1998,12 +2219,21 @@ fn defense_display_summary(
         (defensive_dualwielding || player.two_hand_grip) && !weapon.defense_bonus_always;
     let weapon_defense_bonus = if weapon.defense_bonus_always { 4 } else { 0 };
     let (melee_roll_label, melee_with_shield_dv) = if let Some(shield_bonus) = shield_bonus {
-        let melee_base = derived.base_dv + defense_mastery + 4;
+        let melee_base = derived.base_dv + defense_mastery + 4 + fight_defensively_defense_bonus
+            - called_shot_defense_penalty;
         (
             format!(
                 "Defense roll (melee): {melee_die} + {melee_base} + {shield_bonus}{weapon_note}"
             ),
-            Some(derived.base_dv + defense_mastery + weapon_defense_bonus + 4 + shield_bonus),
+            Some(
+                derived.base_dv
+                    + defense_mastery
+                    + weapon_defense_bonus
+                    + fight_defensively_defense_bonus
+                    - called_shot_defense_penalty
+                    + 4
+                    + shield_bonus,
+            ),
         )
     } else {
         let dual_note = if after_attack_bonus {
@@ -2011,18 +2241,32 @@ fn defense_display_summary(
         } else {
             ""
         };
+        let melee_base = derived.base_dv + defense_mastery + fight_defensively_defense_bonus
+            - called_shot_defense_penalty;
         (
             format!(
                 "Defense roll (melee): {melee_die} + {}{weapon_note}{dual_note}",
-                derived.base_dv + defense_mastery
+                melee_base
             ),
             None,
         )
     };
     let ranged_roll_label = if let Some(shield_bonus) = shield_bonus {
-        format!("Defense roll (ranged): d20p + {shield_bonus} (cover cap applies)")
+        if called_shot_defense_penalty > 0 {
+            format!(
+                "Defense roll (ranged): d20p + {shield_bonus} - {called_shot_defense_penalty} (cover cap applies)"
+            )
+        } else {
+            format!("Defense roll (ranged): d20p + {shield_bonus} (cover cap applies)")
+        }
     } else {
-        "Defense roll (ranged): d12p if stationary, else d20p".to_string()
+        if called_shot_defense_penalty > 0 {
+            format!(
+                "Defense roll (ranged): d12p if stationary, else d20p - {called_shot_defense_penalty}"
+            )
+        } else {
+            "Defense roll (ranged): d12p if stationary, else d20p".to_string()
+        }
     };
 
     DefenseDisplaySummary {
@@ -2045,6 +2289,7 @@ fn roll_summary(
     twelve_paths_active: bool,
     style_attack_bonus: i32,
     style_damage_bonus: i32,
+    fight_defensively_attack_penalty: i32,
 ) -> RollSummary {
     let is_ranged_weapon = is_ranged_weapon(weapon);
     let uses_projectiles = uses_projectiles(&weapon.name, weapon.ammunition.is_some());
@@ -2060,7 +2305,8 @@ fn roll_summary(
         + material_attack_bonus
         + attack_mastery
         + modifiers.attack_bonus_for_weapon(player.weapon_id)
-        + style_attack_bonus;
+        + style_attack_bonus
+        - fight_defensively_attack_penalty;
     let two_hand_bonus = two_hand_damage_bonus(weapon, player.two_hand_grip);
     let mut strength_damage =
         strength_damage_for_weapon(weapon, character.ability_mods.strength.damage)
@@ -2300,6 +2546,18 @@ pub fn build_combatant(
     let has_offhand = player.offhand_weapon_id.is_some();
     let mut defensive_dualwielding = defensive_dualwielding_active(player, weapon_preset);
     let mut offensive_dualwielding = offensive_dualwielding_active(player, weapon_preset);
+    let fight_defensively_attack_penalty = fight_defensively_attack_penalty_for_player(player);
+    let fight_defensively_defense_bonus = fight_defensively_defense_bonus_for_player(player);
+    let called_shot_defense_bonus = called_shot_defense_bonus_for_player(player);
+    let called_shot_defense_penalty = called_shot_defense_penalty_for_player(player);
+    let called_shot_delay_profile = called_shot_delay_profile_for_player(player);
+    let called_shot_deceptive_defender = has_deceptive_defender_effect(player);
+    let mut called_shot_target_defense_bonus_base = character
+        .equipment
+        .armor
+        .as_ref()
+        .map(|armor| called_shot_target_defense_bonus_base_for_armor_type(armor.armor_type))
+        .unwrap_or(CALLED_SHOT_TARGET_DEFENSE_BONUS_LIGHT);
     if offensive_dualwielding {
         defensive_dualwielding = false;
     }
@@ -2466,6 +2724,7 @@ pub fn build_combatant(
         trauma_die_penetrating = false;
         defensive_dualwielding = false;
         offensive_dualwielding = false;
+        called_shot_target_defense_bonus_base = CALLED_SHOT_TARGET_DEFENSE_BONUS_MEDIUM;
     }
 
     let weapon_speed = if use_jab {
@@ -2725,11 +2984,19 @@ pub fn build_combatant(
         },
         maneuvers: sim::ManeuverProfile {
             hold_at_bay: player.hold_at_bay,
+            called_shot: player.called_shot,
+            called_shot_defense_bonus,
+            called_shot_defense_penalty,
+            called_shot_delay_profile,
+            called_shot_deceptive_defender,
+            called_shot_target_defense_bonus_base,
             aggressive_attack: player.aggressive_attack,
             charge: player.charge,
             ready_against_charge: player.ready_against_charge,
             tactical_move: player.tactical_move,
             fight_defensively: player.fight_defensively,
+            fight_defensively_attack_penalty,
+            fight_defensively_defense_bonus,
             full_parry: player.full_parry,
             give_ground: player.give_ground,
             scamper_back: player.scamper_back,
@@ -3039,6 +3306,10 @@ mod tests {
         assert!(build_maneuvers(&player).hold_at_bay);
 
         let mut player = base.clone();
+        player.called_shot = true;
+        assert!(build_maneuvers(&player).called_shot);
+
+        let mut player = base.clone();
         player.aggressive_attack = true;
         assert!(build_maneuvers(&player).aggressive_attack);
 
@@ -3056,7 +3327,11 @@ mod tests {
 
         let mut player = base.clone();
         player.fight_defensively = true;
-        assert!(build_maneuvers(&player).fight_defensively);
+        player.fight_defensively_penalty = 6;
+        let maneuvers = build_maneuvers(&player);
+        assert!(maneuvers.fight_defensively);
+        assert_eq!(maneuvers.fight_defensively_attack_penalty, 6);
+        assert_eq!(maneuvers.fight_defensively_defense_bonus, 3);
 
         let mut player = base.clone();
         player.full_parry = true;
@@ -3129,6 +3404,381 @@ mod tests {
             rank: 1,
             weapon,
         });
+    }
+
+    #[test]
+    fn fight_defensively_penalty_is_quantized_and_feat_adjusted() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npc_presets = sample_npc_presets();
+        let build_maneuvers = |player: &PlayerConfig| {
+            build_combatant(player, &weapons, &armor, &shields, &npc_presets, &talents)
+                .sheet
+                .maneuvers
+        };
+        let weapon_id = one_handed_weapon_id(&weapons);
+
+        let mut player = base_player(weapon_id);
+        player.fight_defensively = true;
+        player.fight_defensively_penalty = 1;
+        let maneuvers = build_maneuvers(&player);
+        assert_eq!(maneuvers.fight_defensively_attack_penalty, 2);
+        assert_eq!(maneuvers.fight_defensively_defense_bonus, 1);
+
+        player.fight_defensively_penalty = 5;
+        let maneuvers = build_maneuvers(&player);
+        assert_eq!(maneuvers.fight_defensively_attack_penalty, 6);
+        assert_eq!(maneuvers.fight_defensively_defense_bonus, 3);
+
+        player.fight_defensively_penalty = 12;
+        let maneuvers = build_maneuvers(&player);
+        assert_eq!(maneuvers.fight_defensively_attack_penalty, 8);
+        assert_eq!(maneuvers.fight_defensively_defense_bonus, 4);
+
+        let mut expertise_player = base_player(weapon_id);
+        expertise_player.fight_defensively = true;
+        expertise_player.fight_defensively_penalty = 8;
+        add_talent(&mut expertise_player, "combat_expertise", None);
+        let maneuvers = build_maneuvers(&expertise_player);
+        assert_eq!(maneuvers.fight_defensively_attack_penalty, 4);
+        assert_eq!(maneuvers.fight_defensively_defense_bonus, 4);
+
+        let mut duelist_player = base_player(weapon_id);
+        duelist_player.fight_defensively = true;
+        duelist_player.fight_defensively_penalty = 6;
+        add_talent(&mut duelist_player, "duelist", None);
+        let maneuvers = build_maneuvers(&duelist_player);
+        assert_eq!(maneuvers.fight_defensively_attack_penalty, 3);
+        assert_eq!(maneuvers.fight_defensively_defense_bonus, 3);
+    }
+
+    #[test]
+    fn called_shot_talents_adjust_maneuver_profile() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npc_presets = sample_npc_presets();
+        let build_maneuvers = |player: &PlayerConfig| {
+            build_combatant(player, &weapons, &armor, &shields, &npc_presets, &talents)
+                .sheet
+                .maneuvers
+        };
+        let weapon_id = one_handed_weapon_id(&weapons);
+
+        let mut baseline = base_player(weapon_id);
+        baseline.called_shot = true;
+        let maneuvers = build_maneuvers(&baseline);
+        assert_eq!(maneuvers.called_shot_defense_bonus, 8);
+        assert_eq!(maneuvers.called_shot_defense_penalty, 4);
+        assert_eq!(
+            maneuvers.called_shot_delay_profile,
+            sim::CalledShotDelayProfile::Standard
+        );
+        assert!(!maneuvers.called_shot_deceptive_defender);
+
+        let mut precision_combatant = baseline.clone();
+        add_talent(
+            &mut precision_combatant,
+            TALENT_ID_PRECISION_COMBATANT,
+            None,
+        );
+        let maneuvers = build_maneuvers(&precision_combatant);
+        assert_eq!(maneuvers.called_shot_defense_bonus, 4);
+        assert_eq!(maneuvers.called_shot_defense_penalty, 2);
+        assert_eq!(
+            maneuvers.called_shot_delay_profile,
+            sim::CalledShotDelayProfile::PrecisionCombatant
+        );
+
+        let mut precision_aiming = baseline.clone();
+        add_talent(&mut precision_aiming, TALENT_ID_PRECISION_AIMING, None);
+        let maneuvers = build_maneuvers(&precision_aiming);
+        assert_eq!(maneuvers.called_shot_defense_bonus, 4);
+        assert_eq!(maneuvers.called_shot_defense_penalty, 4);
+        assert_eq!(
+            maneuvers.called_shot_delay_profile,
+            sim::CalledShotDelayProfile::PrecisionAiming
+        );
+
+        let mut deceptive = baseline.clone();
+        add_talent(&mut deceptive, TALENT_ID_DECEPTIVE_DEFENDER, None);
+        let maneuvers = build_maneuvers(&deceptive);
+        assert!(maneuvers.called_shot_deceptive_defender);
+
+        let mut contender = baseline.clone();
+        add_talent(&mut contender, TALENT_ID_CONTENDER, None);
+        let maneuvers = build_maneuvers(&contender);
+        assert_eq!(maneuvers.called_shot_defense_bonus, 4);
+        assert_eq!(maneuvers.called_shot_defense_penalty, 2);
+        assert_eq!(
+            maneuvers.called_shot_delay_profile,
+            sim::CalledShotDelayProfile::PrecisionCombatant
+        );
+        assert!(maneuvers.called_shot_deceptive_defender);
+
+        let mut duelist = baseline.clone();
+        add_talent(&mut duelist, TALENT_ID_DUELIST, None);
+        let maneuvers = build_maneuvers(&duelist);
+        assert_eq!(maneuvers.called_shot_defense_bonus, 4);
+        assert_eq!(maneuvers.called_shot_defense_penalty, 0);
+        assert_eq!(
+            maneuvers.called_shot_delay_profile,
+            sim::CalledShotDelayProfile::PrecisionCombatant
+        );
+        assert!(maneuvers.called_shot_deceptive_defender);
+    }
+
+    #[test]
+    fn called_shot_updates_player_summary_defense_penalty() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let weapon_id = one_handed_weapon_id(&weapons);
+        let (shield_id, _) = find_shield(&shields, |_| true);
+
+        let mut baseline = base_player(weapon_id);
+        baseline.shield_id = shield_id;
+        let baseline_summary = player_summary(&baseline, &weapons, &armor, &shields, &talents);
+
+        let mut called = baseline.clone();
+        called.called_shot = true;
+        let called_summary = player_summary(&called, &weapons, &armor, &shields, &talents);
+
+        assert_eq!(
+            called_summary.defense.melee_with_shield_dv,
+            baseline_summary
+                .defense
+                .melee_with_shield_dv
+                .map(|dv| dv - called_shot_defense_penalty_for_player(&called)),
+        );
+    }
+
+    #[test]
+    fn called_shot_delay_expr_reflects_weapon_mode_and_talents() {
+        let (weapons, _armor, _shields) = sample_catalogs();
+        let melee_player = base_player(one_handed_weapon_id(&weapons));
+        assert_eq!(
+            called_shot_delay_expr_for_player(&melee_player, false),
+            "2d4p"
+        );
+        assert_eq!(
+            called_shot_delay_expr_for_player(&melee_player, true),
+            "1d4p"
+        );
+
+        let mut precision_combatant = melee_player.clone();
+        add_talent(
+            &mut precision_combatant,
+            TALENT_ID_PRECISION_COMBATANT,
+            None,
+        );
+        assert_eq!(
+            called_shot_delay_expr_for_player(&precision_combatant, false),
+            "1d4p"
+        );
+        assert_eq!(
+            called_shot_delay_expr_for_player(&precision_combatant, true),
+            "1d4p"
+        );
+
+        let mut precision_aiming = melee_player.clone();
+        add_talent(&mut precision_aiming, TALENT_ID_PRECISION_AIMING, None);
+        assert_eq!(
+            called_shot_delay_expr_for_player(&precision_aiming, false),
+            "1d2"
+        );
+        assert_eq!(
+            called_shot_delay_expr_for_player(&precision_aiming, true),
+            "1d2"
+        );
+    }
+
+    #[test]
+    fn called_shot_target_defense_bonus_depends_on_target_armor_type() {
+        let (weapons, armor, _shields) = sample_catalogs();
+        let weapon_id = one_handed_weapon_id(&weapons);
+        let attacker = base_player(weapon_id);
+        assert_eq!(
+            called_shot_target_defense_bonuses_for_player(&attacker),
+            (4, 8, 16)
+        );
+
+        let mut precision_attacker = attacker.clone();
+        add_talent(&mut precision_attacker, TALENT_ID_PRECISION_COMBATANT, None);
+        assert_eq!(
+            called_shot_target_defense_bonuses_for_player(&precision_attacker),
+            (2, 4, 8)
+        );
+
+        let (light_armor_id, _) = find_armor(&armor, |entry| entry.armor_type == ArmorType::Light);
+        let (medium_armor_id, _) =
+            find_armor(&armor, |entry| entry.armor_type == ArmorType::Medium);
+        let (heavy_armor_id, _) = find_armor(&armor, |entry| entry.armor_type == ArmorType::Heavy);
+
+        let mut target = base_player(weapon_id);
+        target.armor_id = light_armor_id;
+        assert_eq!(
+            called_shot_target_defense_bonus_against_target(&attacker, &target, &armor),
+            4
+        );
+        assert_eq!(
+            called_shot_target_defense_bonus_against_target(&precision_attacker, &target, &armor),
+            2
+        );
+
+        target.armor_id = medium_armor_id;
+        assert_eq!(
+            called_shot_target_defense_bonus_against_target(&attacker, &target, &armor),
+            8
+        );
+        assert_eq!(
+            called_shot_target_defense_bonus_against_target(&precision_attacker, &target, &armor),
+            4
+        );
+
+        target.armor_id = heavy_armor_id;
+        assert_eq!(
+            called_shot_target_defense_bonus_against_target(&attacker, &target, &armor),
+            16
+        );
+        assert_eq!(
+            called_shot_target_defense_bonus_against_target(&precision_attacker, &target, &armor),
+            8
+        );
+
+        target.npc_preset = Some(NpcPresetId::new(0));
+        assert_eq!(
+            called_shot_target_defense_bonus_against_target(&attacker, &target, &armor),
+            8
+        );
+    }
+
+    #[test]
+    fn combat_expertise_halves_fight_defensively_attack_penalty_only() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npc_presets = sample_npc_presets();
+        let build_maneuvers = |player: &PlayerConfig| {
+            build_combatant(player, &weapons, &armor, &shields, &npc_presets, &talents)
+                .sheet
+                .maneuvers
+        };
+
+        let weapon_id = one_handed_weapon_id(&weapons);
+        let mut player = base_player(weapon_id);
+        player.fight_defensively = true;
+        player.fight_defensively_penalty = 8;
+
+        let without_feat = build_maneuvers(&player);
+        add_talent(&mut player, "combat_expertise", None);
+        let with_feat = build_maneuvers(&player);
+
+        assert_eq!(without_feat.fight_defensively_attack_penalty, 8);
+        assert_eq!(without_feat.fight_defensively_defense_bonus, 4);
+        assert_eq!(with_feat.fight_defensively_attack_penalty, 4);
+        assert_eq!(with_feat.fight_defensively_defense_bonus, 4);
+    }
+
+    #[test]
+    fn duelist_halves_fight_defensively_attack_penalty_without_combat_expertise() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npc_presets = sample_npc_presets();
+        let build_maneuvers = |player: &PlayerConfig| {
+            build_combatant(player, &weapons, &armor, &shields, &npc_presets, &talents)
+                .sheet
+                .maneuvers
+        };
+
+        let weapon_id = one_handed_weapon_id(&weapons);
+        let mut player = base_player(weapon_id);
+        player.fight_defensively = true;
+        player.fight_defensively_penalty = 6;
+        add_talent(&mut player, "duelist", None);
+
+        let with_duelist = build_maneuvers(&player);
+        assert_eq!(with_duelist.fight_defensively_attack_penalty, 3);
+        assert_eq!(with_duelist.fight_defensively_defense_bonus, 3);
+    }
+
+    #[test]
+    fn fight_defensively_feat_attack_penalty_reduction_does_not_stack() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npc_presets = sample_npc_presets();
+        let build_maneuvers = |player: &PlayerConfig| {
+            build_combatant(player, &weapons, &armor, &shields, &npc_presets, &talents)
+                .sheet
+                .maneuvers
+        };
+
+        let weapon_id = one_handed_weapon_id(&weapons);
+        let mut player = base_player(weapon_id);
+        player.fight_defensively = true;
+        player.fight_defensively_penalty = 8;
+        add_talent(&mut player, "combat_expertise", None);
+        add_talent(&mut player, "duelist", None);
+
+        let maneuvers = build_maneuvers(&player);
+        assert_eq!(maneuvers.fight_defensively_attack_penalty, 4);
+        assert_eq!(maneuvers.fight_defensively_defense_bonus, 4);
+    }
+
+    #[test]
+    fn fight_defensively_updates_player_summary_effective_attack_and_defense() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let weapon_id = one_handed_weapon_id(&weapons);
+        let (shield_id, _) = find_shield(&shields, |_| true);
+
+        let mut baseline = base_player(weapon_id);
+        baseline.shield_id = shield_id;
+        let baseline_summary = player_summary(&baseline, &weapons, &armor, &shields, &talents);
+
+        let mut player = baseline.clone();
+        player.fight_defensively = true;
+        player.fight_defensively_penalty = 6;
+        let summary = player_summary(&player, &weapons, &armor, &shields, &talents);
+
+        assert_eq!(
+            summary.roll.attack_bonus,
+            baseline_summary.roll.attack_bonus - 6
+        );
+        assert_eq!(
+            summary.defense.melee_with_shield_dv,
+            baseline_summary
+                .defense
+                .melee_with_shield_dv
+                .map(|dv| dv + 3),
+        );
+    }
+
+    #[test]
+    fn combat_expertise_updates_player_summary_fight_defensively_attack_penalty() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let weapon_id = one_handed_weapon_id(&weapons);
+        let (shield_id, _) = find_shield(&shields, |_| true);
+
+        let mut baseline = base_player(weapon_id);
+        baseline.shield_id = shield_id;
+        let baseline_summary = player_summary(&baseline, &weapons, &armor, &shields, &talents);
+
+        let mut player = baseline.clone();
+        player.fight_defensively = true;
+        player.fight_defensively_penalty = 8;
+        add_talent(&mut player, "combat_expertise", None);
+        let summary = player_summary(&player, &weapons, &armor, &shields, &talents);
+
+        assert_eq!(
+            summary.roll.attack_bonus,
+            baseline_summary.roll.attack_bonus - 4
+        );
+        assert_eq!(
+            summary.defense.melee_with_shield_dv,
+            baseline_summary
+                .defense
+                .melee_with_shield_dv
+                .map(|dv| dv + 4),
+        );
     }
 
     fn find_armor_opt<F>(armor: &ArmorCatalog, predicate: F) -> Option<(ArmorId, Armor)>

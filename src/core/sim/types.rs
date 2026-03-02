@@ -108,14 +108,35 @@ pub struct WeaponProfile {
     pub crit_severity_bonus: i32,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CalledShotDelayProfile {
+    Standard,
+    PrecisionCombatant,
+    PrecisionAiming,
+}
+
+impl Default for CalledShotDelayProfile {
+    fn default() -> Self {
+        Self::Standard
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct ManeuverProfile {
     pub hold_at_bay: bool,
+    pub called_shot: bool,
+    pub called_shot_defense_bonus: i32,
+    pub called_shot_defense_penalty: i32,
+    pub called_shot_delay_profile: CalledShotDelayProfile,
+    pub called_shot_deceptive_defender: bool,
+    pub called_shot_target_defense_bonus_base: i32,
     pub aggressive_attack: bool,
     pub charge: bool,
     pub ready_against_charge: bool,
     pub tactical_move: bool,
     pub fight_defensively: bool,
+    pub fight_defensively_attack_penalty: i32,
+    pub fight_defensively_defense_bonus: i32,
     pub full_parry: bool,
     pub give_ground: bool,
     pub scamper_back: bool,
@@ -124,6 +145,35 @@ pub struct ManeuverProfile {
     pub mounted: bool,
     pub defensive_dualwielding: bool,
     pub offensive_dualwielding: bool,
+}
+
+impl Default for ManeuverProfile {
+    fn default() -> Self {
+        Self {
+            hold_at_bay: false,
+            called_shot: false,
+            called_shot_defense_bonus: 8,
+            called_shot_defense_penalty: 4,
+            called_shot_delay_profile: CalledShotDelayProfile::Standard,
+            called_shot_deceptive_defender: false,
+            called_shot_target_defense_bonus_base: 8,
+            aggressive_attack: false,
+            charge: false,
+            ready_against_charge: false,
+            tactical_move: false,
+            fight_defensively: false,
+            fight_defensively_attack_penalty: 0,
+            fight_defensively_defense_bonus: 0,
+            full_parry: false,
+            give_ground: false,
+            scamper_back: false,
+            fighting_withdrawal: false,
+            flee: false,
+            mounted: false,
+            defensive_dualwielding: false,
+            offensive_dualwielding: false,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -218,6 +268,7 @@ pub struct CombatantState {
     pub returner_double_counter_ready: bool,
     pub three_mountains_hit_streak: i32,
     pub force_trauma_roll_20: bool,
+    pub deceptive_defender_seen_attackers: Vec<usize>,
     pub active_effects: Vec<TemporaryEffect>,
     pub cache: CombatantCache,
 }
@@ -469,6 +520,7 @@ impl CombatantState {
             returner_double_counter_ready: false,
             three_mountains_hit_streak: 0,
             force_trauma_roll_20: false,
+            deceptive_defender_seen_attackers: Vec::new(),
             active_effects: Vec::new(),
             cache: CombatantCache::default(),
         };

@@ -670,6 +670,41 @@ impl AutobattlerApp {
                             ui.label(format!("Speed mod: {}", summary.derived.speed_mod));
                             ui.label(format!("Armor DR: {}", summary.derived.armor_dr));
                             ui.label(format!("Sprint duration: {} sec", sprint_duration));
+                            if self.creation.player.called_shot {
+                                let (
+                                    called_shot_light_bonus,
+                                    called_shot_medium_bonus,
+                                    called_shot_heavy_bonus,
+                                ) = game_logic::called_shot_target_defense_bonuses_for_player(
+                                    &self.creation.player,
+                                );
+                                let called_shot_self_penalty =
+                                    game_logic::called_shot_self_defense_penalty_for_player(
+                                        &self.creation.player,
+                                    );
+                                let called_shot_is_ranged = self
+                                    .weapon_catalog
+                                    .get(self.creation.player.weapon_id)
+                                    .map(game_logic::is_ranged_weapon)
+                                    .unwrap_or(false);
+                                let called_shot_delay_expr = game_logic::called_shot_delay_expr_for_player(
+                                    &self.creation.player,
+                                    called_shot_is_ranged,
+                                );
+                                ui.label(format!(
+                                    "Called shot target defense (light/medium/heavy): +{called_shot_light_bonus}/+{called_shot_medium_bonus}/+{called_shot_heavy_bonus}"
+                                ));
+                                ui.label(format!(
+                                    "Called shot self defense: -{called_shot_self_penalty}"
+                                ));
+                                ui.label(format!(
+                                    "Called shot speed: +{called_shot_delay_expr}"
+                                ));
+                                ui.label(format!(
+                                    "Defense (DV while called shot): {}",
+                                    summary.derived.base_dv - called_shot_self_penalty
+                                ));
+                            }
                         }
                         CreationStep::MoneyGear => {
                             ui.heading("Money and Gear");
