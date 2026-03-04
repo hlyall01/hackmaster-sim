@@ -112,7 +112,7 @@
       "constitution": 13,
       "looks": 7,
       "charisma": 8,
-      "weapon": "Battle axe",
+      "weapon": "Throwing axe",
       "armor": "Gambeson",
       "shield": "Medium wooden shield",
       "weapon_material_tier": 1,
@@ -455,6 +455,10 @@
       "projectile_material_tier": 0,
       "shield_material_tier": 0,
       "two_hand_grip": false,
+      "maneuvers": {
+        "fight_defensively": true,
+        "fight_defensively_penalty": 8
+      },
       "defensive_dualwielding": true,
       "race_id": "ithican",
       "proficiencies": [

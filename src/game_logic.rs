@@ -42,6 +42,7 @@ pub struct WeaponPreset {
     pub reach_ft: f32,
     pub range_bands_feet: Option<[f32; 4]>,
     pub armor_pen: i32,
+    pub hacking_or_piercing: bool,
     pub defense_bonus_always: bool,
     pub size: WeaponSize,
     pub handedness: WeaponHandedness,
@@ -519,6 +520,9 @@ struct TalentModifiers {
     crit_min_by_group: HashMap<WeaponGroup, i32>,
     crit_min_ranged_by_group: HashMap<WeaponGroup, i32>,
     crit_severity_bonus_by_group: HashMap<WeaponGroup, i32>,
+    light_armor_crit_extra_damage_halved: bool,
+    medium_armor_crit_severity_reduction: i32,
+    heavy_armor_ignore_ancillary_crit_effects: bool,
     knockback_step_bumps: i32,
     defiant: bool,
     superior_defense: bool,
@@ -569,6 +573,9 @@ impl Default for TalentModifiers {
             crit_min_by_group: HashMap::new(),
             crit_min_ranged_by_group: HashMap::new(),
             crit_severity_bonus_by_group: HashMap::new(),
+            light_armor_crit_extra_damage_halved: false,
+            medium_armor_crit_severity_reduction: 0,
+            heavy_armor_ignore_ancillary_crit_effects: false,
             knockback_step_bumps: 0,
             defiant: false,
             superior_defense: false,
@@ -756,6 +763,24 @@ pub fn talent_requires_weapon_group(spec: &TalentSpec) -> bool {
             | "critical_mastery"
             | "wounding_criticals"
             | "ranged_critical_mastery"
+    )
+}
+
+pub fn talent_is_implemented(spec: &TalentSpec) -> bool {
+    if !spec.effects.is_empty() {
+        return true;
+    }
+    matches!(
+        spec.id.as_str(),
+        "improved_critical"
+            | "critical_mastery"
+            | "wounding_criticals"
+            | "ranged_critical_mastery"
+            | "stout"
+            | "sturdy"
+            | "defiant"
+            | "superior_defense"
+            | "edge_counter"
     )
 }
 
@@ -1667,6 +1692,15 @@ fn resolve_talent_modifiers(
                     *entry += 3 * rank;
                 }
             }
+            "light_armor_optimization" => {
+                modifiers.light_armor_crit_extra_damage_halved = true;
+            }
+            "medium_armor_optimization" => {
+                modifiers.medium_armor_crit_severity_reduction += 10 * rank;
+            }
+            "heavy_armor_optimization" => {
+                modifiers.heavy_armor_ignore_ancillary_crit_effects = true;
+            }
             "stout" | "sturdy" => {
                 modifiers.knockback_step_bumps += rank;
             }
@@ -2518,6 +2552,12 @@ pub fn build_combatant(
         .as_ref()
         .map(|armor| matches!(armor.armor_type, ArmorType::Heavy))
         .unwrap_or(false);
+    let armor_type = character
+        .equipment
+        .armor
+        .as_ref()
+        .map(|armor| armor.armor_type)
+        .unwrap_or(ArmorType::None);
     let armor_penetration = character
         .equipment
         .weapon
@@ -2891,6 +2931,7 @@ pub fn build_combatant(
                             uses_projectiles: offhand_uses_projectiles,
                             is_small_weapon: offhand_is_small,
                             is_unarmed: offhand_is_unarmed,
+                            hacking_or_piercing: offhand_preset.hacking_or_piercing,
                             crit_min_roll: offhand_crit_min_roll,
                             crit_min_roll_ranged: offhand_crit_min_roll_ranged,
                             crit_severity_bonus: offhand_crit_severity_bonus,
@@ -2919,6 +2960,25 @@ pub fn build_combatant(
     }
     if modifiers.edge_counter {
         sheet_modifiers.add_i32(sim::StatIdI32::FlagEdgeCounter, sim::ModifierOpI32::Set(1));
+    }
+    if matches!(armor_type, ArmorType::Light) && modifiers.light_armor_crit_extra_damage_halved {
+        sheet_modifiers.add_i32(
+            sim::StatIdI32::FlagIncomingCritExtraDamageHalved,
+            sim::ModifierOpI32::Set(1),
+        );
+    }
+    if matches!(armor_type, ArmorType::Medium) && modifiers.medium_armor_crit_severity_reduction > 0
+    {
+        sheet_modifiers.add_i32(
+            sim::StatIdI32::IncomingCritSeverityReduction,
+            sim::ModifierOpI32::Add(modifiers.medium_armor_crit_severity_reduction),
+        );
+    }
+    if modifiers.heavy_armor_ignore_ancillary_crit_effects {
+        sheet_modifiers.add_i32(
+            sim::StatIdI32::FlagIgnoreAncillaryCritEffects,
+            sim::ModifierOpI32::Set(1),
+        );
     }
     if twelve_paths_active {
         sheet_modifiers.add_i32(
@@ -3011,6 +3071,7 @@ pub fn build_combatant(
                 uses_projectiles: primary_uses_projectiles,
                 is_small_weapon,
                 is_unarmed: is_unarmed_weapon,
+                hacking_or_piercing: weapon_preset.hacking_or_piercing,
                 crit_min_roll,
                 crit_min_roll_ranged,
                 crit_severity_bonus,
@@ -4951,6 +5012,37 @@ mod tests {
             summary.roll.strength_damage - baseline_summary.roll.strength_damage,
             expected_bonus
         );
+        let npc_presets = Catalog::new(Vec::new());
+        let combatant =
+            build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
+        assert_eq!(
+            combatant
+                .sheet
+                .modifiers
+                .apply_i32(0, sim::StatIdI32::FlagIgnoreAncillaryCritEffects),
+            1
+        );
+    }
+
+    #[test]
+    fn talent_heavy_armor_optimization_sets_crit_immunity_flag_without_heavy_armor() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let weapon_id = one_handed_weapon_id(&weapons);
+        let (armor_id, _) = find_armor(&armor, |a| matches!(a.armor_type, ArmorType::Medium));
+        let mut player = base_player(weapon_id);
+        player.armor_id = armor_id;
+        add_talent(&mut player, "heavy_armor_optimization", None);
+        let npc_presets = Catalog::new(Vec::new());
+        let combatant =
+            build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
+        assert_eq!(
+            combatant
+                .sheet
+                .modifiers
+                .apply_i32(0, sim::StatIdI32::FlagIgnoreAncillaryCritEffects),
+            1
+        );
     }
 
     #[test]
@@ -5001,6 +5093,16 @@ mod tests {
             summary.derived.base_dv - baseline_summary.derived.base_dv,
             expected_bonus
         );
+        let npc_presets = Catalog::new(Vec::new());
+        let combatant =
+            build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
+        assert_eq!(
+            combatant
+                .sheet
+                .modifiers
+                .apply_i32(0, sim::StatIdI32::FlagIncomingCritExtraDamageHalved),
+            1
+        );
     }
 
     #[test]
@@ -5026,6 +5128,16 @@ mod tests {
         assert_eq!(
             summary.derived.base_dv - baseline_summary.derived.base_dv,
             expected_defense_bonus
+        );
+        let npc_presets = Catalog::new(Vec::new());
+        let combatant =
+            build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
+        assert_eq!(
+            combatant
+                .sheet
+                .modifiers
+                .apply_i32(0, sim::StatIdI32::IncomingCritSeverityReduction),
+            10
         );
     }
 
@@ -6329,6 +6441,41 @@ mod tests {
         assert_eq!(
             combatant.sheet.offense.weapon.crit_min_roll_ranged,
             Some(18)
+        );
+    }
+
+    #[test]
+    fn talent_is_implemented_marks_critical_talents_as_supported() {
+        let talents = sample_talents();
+        for talent_id in [
+            "improved_critical",
+            "critical_mastery",
+            "wounding_criticals",
+            "ranged_critical_mastery",
+        ] {
+            let spec = talents
+                .entries()
+                .iter()
+                .find(|entry| entry.id == talent_id)
+                .expect("missing critical talent");
+            assert!(
+                talent_is_implemented(spec),
+                "{talent_id} should be treated as implemented"
+            );
+        }
+    }
+
+    #[test]
+    fn talent_is_implemented_keeps_empty_non_runtime_talents_as_nyi() {
+        let talents = sample_talents();
+        let spec = talents
+            .entries()
+            .iter()
+            .find(|entry| entry.id == "great_cleave")
+            .expect("missing great_cleave");
+        assert!(
+            !talent_is_implemented(spec),
+            "great_cleave should remain NYI until runtime behavior exists"
         );
     }
 }

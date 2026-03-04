@@ -2859,7 +2859,7 @@ fn render_talent_entry(
     let selected_index = player.talents.iter().position(|sel| sel.id == spec.id);
     let requirement_failures = game_logic::evaluate_talent_requirements(spec, context);
     let locked = !requirement_failures.is_empty();
-    let is_nyi = spec.effects.is_empty();
+    let is_nyi = !game_logic::talent_is_implemented(spec);
     let requires_group = game_logic::talent_requires_weapon_group(spec);
     let style_conflict = selected_index.is_none()
         && game_logic::has_other_weapon_style_selected(player, spec, talent_catalog);

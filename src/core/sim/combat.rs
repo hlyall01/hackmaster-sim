@@ -317,6 +317,17 @@ pub(crate) fn critical_effect_for(severity: i32) -> CriticalEffect {
     }
 }
 
+fn apply_ancillary_critical_immunity(effect: CriticalEffect, immune: bool) -> CriticalEffect {
+    if !immune {
+        return effect;
+    }
+    CriticalEffect {
+        speed_reset: false,
+        auto_trauma: false,
+        ..effect
+    }
+}
+
 fn parse_damage_dice(expr: &str, force_nonpenetrating: bool) -> Vec<DamageDie> {
     let cleaned = clean_damage_expr(expr).to_ascii_lowercase();
     let chars: Vec<char> = cleaned.chars().collect();
@@ -580,6 +591,7 @@ fn resolve_counter_attack(
         armor_penetration,
         crit_min_roll,
         crit_severity,
+        attacker_weapon_hacking_or_piercing,
         damage_penalty,
         weapon_profile,
         unarmed_expr,
@@ -606,6 +618,7 @@ fn resolve_counter_attack(
             profile.armor_penetration,
             crit_min_roll,
             crit_severity,
+            profile.weapon.hacking_or_piercing,
             profile.damage_penalty,
             Some(profile.weapon),
             None,
@@ -639,6 +652,7 @@ fn resolve_counter_attack(
             0,
             20,
             0,
+            false,
             0,
             None,
             Some(damage_expr),
@@ -664,6 +678,9 @@ fn resolve_counter_attack(
         defender_weapon_speed,
         defender_knockback_step,
         defender_defiant,
+        defender_crit_severity_reduction,
+        defender_halves_crit_extra_damage,
+        defender_ignore_ancillary_crit_effects,
         defender_six_paths,
         defender_unbreakable_wall,
     ) = {
@@ -690,6 +707,11 @@ fn resolve_counter_attack(
                 defender.sheet.defense.knockback_step,
             ),
             defender.apply_i32(StatIdI32::FlagDefiant, 0) > 0,
+            defender
+                .apply_i32(StatIdI32::IncomingCritSeverityReduction, 0)
+                .max(0),
+            defender.apply_i32(StatIdI32::FlagIncomingCritExtraDamageHalved, 0) > 0,
+            defender.apply_i32(StatIdI32::FlagIgnoreAncillaryCritEffects, 0) > 0,
             defender.apply_i32(StatIdI32::FlagSixPathsStyle, 0) > 0,
             defender.apply_i32(StatIdI32::FlagUnbreakableWallStyle, 0) > 0,
         )
@@ -789,9 +811,15 @@ fn resolve_counter_attack(
         };
         let mut crit_trauma_seconds = None;
         if crit_trigger || attacker_hobbler {
-            let severity =
-                (attack_roll - defense_roll + raw_base - effective_dr + crit_severity).max(1);
-            let effect = critical_effect_for(severity);
+            let severity = (attack_roll - defense_roll + raw_base - effective_dr + crit_severity
+                - defender_crit_severity_reduction)
+                .max(1);
+            let effect = apply_ancillary_critical_immunity(
+                critical_effect_for(severity),
+                crit_trigger
+                    && attacker_weapon_hacking_or_piercing
+                    && defender_ignore_ancillary_crit_effects,
+            );
             if effect.instant_kill {
                 critical = Some(CriticalHit {
                     severity: effect.severity,
@@ -814,16 +842,26 @@ fn resolve_counter_attack(
                 let extra_damage = if extra_dice > 0 {
                     if let Some(weapon_profile) = weapon_profile.as_ref() {
                         let cache = combatants[attacker_idx].state.weapon_cache_mut(weapon_slot);
-                        roll_extra_damage_cached(
+                        let rolled = roll_extra_damage_cached(
                             cache,
                             weapon_profile.as_ref(),
                             false,
                             extra_dice,
                             false,
                             rng,
-                        )
+                        );
+                        if defender_halves_crit_extra_damage {
+                            rolled / 2
+                        } else {
+                            rolled
+                        }
                     } else {
-                        roll_extra_damage(unarmed_expr, extra_dice, false, rng)
+                        let rolled = roll_extra_damage(unarmed_expr, extra_dice, false, rng);
+                        if defender_halves_crit_extra_damage {
+                            rolled / 2
+                        } else {
+                            rolled
+                        }
                     }
                 } else {
                     0
@@ -1182,6 +1220,9 @@ pub(crate) fn resolve_attack(
         defender_weapon_speed,
         defender_knockback_step,
         defender_defiant,
+        defender_crit_severity_reduction,
+        defender_halves_crit_extra_damage,
+        defender_ignore_ancillary_crit_effects,
         defender_superior_defense,
         defender_edge_counter,
         defender_six_paths,
@@ -1222,6 +1263,11 @@ pub(crate) fn resolve_attack(
                 defender.sheet.defense.knockback_step,
             ),
             defender.apply_i32(StatIdI32::FlagDefiant, 0) > 0,
+            defender
+                .apply_i32(StatIdI32::IncomingCritSeverityReduction, 0)
+                .max(0),
+            defender.apply_i32(StatIdI32::FlagIncomingCritExtraDamageHalved, 0) > 0,
+            defender.apply_i32(StatIdI32::FlagIgnoreAncillaryCritEffects, 0) > 0,
             defender.apply_i32(StatIdI32::FlagSuperiorDefense, 0) > 0,
             defender.apply_i32(StatIdI32::FlagEdgeCounter, 0) > 0,
             defender.apply_i32(StatIdI32::FlagSixPathsStyle, 0) > 0,
@@ -1420,9 +1466,14 @@ pub(crate) fn resolve_attack(
                 let severity = (attack_roll - severity_defense_roll + raw_base - effective_dr + {
                     let attacker = &combatants[attacker_idx];
                     attacker.apply_i32(StatIdI32::CritSeverityBonus, weapon.crit_severity_bonus)
-                })
-                .max(1);
-                let effect = critical_effect_for(severity);
+                } - defender_crit_severity_reduction)
+                    .max(1);
+                let effect = apply_ancillary_critical_immunity(
+                    critical_effect_for(severity),
+                    crit_trigger
+                        && weapon.hacking_or_piercing
+                        && defender_ignore_ancillary_crit_effects,
+                );
                 if effect.instant_kill {
                     crit_effect = Some(effect);
                 } else {
@@ -1433,14 +1484,19 @@ pub(crate) fn resolve_attack(
                     };
                     crit_extra_damage = if extra_dice > 0 {
                         let cache = combatants[attacker_idx].state.weapon_cache_mut(weapon_slot);
-                        roll_extra_damage_cached(
+                        let rolled = roll_extra_damage_cached(
                             cache,
                             weapon.as_ref(),
                             use_jab,
                             extra_dice,
                             use_jab,
                             rng,
-                        )
+                        );
+                        if defender_halves_crit_extra_damage {
+                            rolled / 2
+                        } else {
+                            rolled
+                        }
                     } else {
                         0
                     };

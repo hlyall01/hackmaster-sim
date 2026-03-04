@@ -978,6 +978,7 @@ mod tests {
             reach_ft: 1.0,
             range_bands_feet: None,
             armor_pen,
+            hacking_or_piercing: false,
             defense_bonus_always: false,
             size,
             handedness,

@@ -79,6 +79,7 @@ fn combatant_basic(
                 uses_projectiles,
                 is_small_weapon: false,
                 is_unarmed: false,
+                hacking_or_piercing: false,
                 crit_min_roll: 20,
                 crit_min_roll_ranged: None,
                 crit_severity_bonus: 0,
@@ -529,6 +530,7 @@ fn advanced_sighting_scale_keeps_throwing_axe_at_minus_six_at_sixty_feet() {
         uses_projectiles: false,
         is_small_weapon: true,
         is_unarmed: false,
+        hacking_or_piercing: false,
         crit_min_roll: 20,
         crit_min_roll_ranged: None,
         crit_severity_bonus: 0,
@@ -975,6 +977,7 @@ fn ranged_weapons_cannot_hold_at_bay() {
         uses_projectiles: false,
         is_small_weapon: false,
         is_unarmed: false,
+        hacking_or_piercing: false,
         crit_min_roll: 20,
         crit_min_roll_ranged: None,
         crit_severity_bonus: 0,
@@ -999,6 +1002,7 @@ fn ranged_weapons_cannot_hold_at_bay() {
         uses_projectiles: false,
         is_small_weapon: false,
         is_unarmed: false,
+        hacking_or_piercing: false,
         crit_min_roll: 20,
         crit_min_roll_ranged: None,
         crit_severity_bonus: 0,
@@ -1185,6 +1189,7 @@ fn equal_reach_trauma_does_not_block_simultaneous_attacks() {
                 uses_projectiles: false,
                 is_small_weapon: false,
                 is_unarmed: false,
+                hacking_or_piercing: false,
                 crit_min_roll: 20,
                 crit_min_roll_ranged: None,
                 crit_severity_bonus: 0,
@@ -1909,6 +1914,7 @@ fn equal_reach_knockback_does_not_block_simultaneous_attacks() {
                 uses_projectiles: false,
                 is_small_weapon: false,
                 is_unarmed: false,
+                hacking_or_piercing: false,
                 crit_min_roll: 20,
                 crit_min_roll_ranged: None,
                 crit_severity_bonus: 0,
@@ -4090,6 +4096,359 @@ fn defiant_uses_lower_damage_roll_on_crit() {
 }
 
 #[test]
+fn incoming_crit_severity_reduction_lowers_crit_severity() {
+    let mut attacker = combatant_basic(
+        "Attacker".to_string(),
+        "Sword".to_string(),
+        80,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        20,
+    );
+    let mut weapon = attacker.sheet.offense.weapon.as_ref().clone();
+    weapon.crit_min_roll = 1;
+    attacker.sheet.offense.weapon = Arc::new(weapon);
+
+    let baseline_defender = combatant_basic(
+        "Defender".to_string(),
+        "Shield".to_string(),
+        0,
+        -40,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        20,
+    );
+    let mut reduced_defender = baseline_defender.clone();
+    reduced_defender.sheet.modifiers.add_i32(
+        StatIdI32::IncomingCritSeverityReduction,
+        ModifierOpI32::Add(10),
+    );
+
+    let mut baseline_state = make_state(attacker.clone(), baseline_defender);
+    let mut reduced_state = make_state(attacker.clone(), reduced_defender);
+    let mut baseline_rng = rand::rngs::StdRng::seed_from_u64(7);
+    let mut reduced_rng = rand::rngs::StdRng::seed_from_u64(7);
+    let baseline = resolve_attack(
+        &mut baseline_state.combatants,
+        0,
+        1,
+        0,
+        false,
+        1.0,
+        AttackMode::Normal,
+        WeaponSlot::Primary,
+        0.0,
+        None,
+        &mut baseline_rng,
+    );
+    let reduced = resolve_attack(
+        &mut reduced_state.combatants,
+        0,
+        1,
+        0,
+        false,
+        1.0,
+        AttackMode::Normal,
+        WeaponSlot::Primary,
+        0.0,
+        None,
+        &mut reduced_rng,
+    );
+    let baseline_crit = baseline.critical.expect("expected baseline critical hit");
+    let reduced_crit = reduced.critical.expect("expected reduced critical hit");
+    assert!(baseline_crit.severity > 10);
+    assert_eq!(baseline_crit.severity - reduced_crit.severity, 10);
+}
+
+#[test]
+fn incoming_crit_extra_damage_halving_halves_extra_crit_damage() {
+    let mut attacker = combatant_basic(
+        "Attacker".to_string(),
+        "Sword".to_string(),
+        40,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        20,
+    );
+    let mut weapon = attacker.sheet.offense.weapon.as_ref().clone();
+    weapon.crit_min_roll = 1;
+    attacker.sheet.offense.weapon = Arc::new(weapon);
+
+    let baseline_defender = combatant_basic(
+        "Defender".to_string(),
+        "Shield".to_string(),
+        0,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        100,
+    );
+    let mut halved_defender = baseline_defender.clone();
+    halved_defender.sheet.modifiers.add_i32(
+        StatIdI32::FlagIncomingCritExtraDamageHalved,
+        ModifierOpI32::Set(1),
+    );
+
+    let mut found = false;
+    for seed in 0..1000u64 {
+        let mut baseline_state = make_state(attacker.clone(), baseline_defender.clone());
+        let mut halved_state = make_state(attacker.clone(), halved_defender.clone());
+        let mut baseline_rng = rand::rngs::StdRng::seed_from_u64(seed);
+        let mut halved_rng = rand::rngs::StdRng::seed_from_u64(seed);
+        let baseline = resolve_attack(
+            &mut baseline_state.combatants,
+            0,
+            1,
+            0,
+            false,
+            1.0,
+            AttackMode::Normal,
+            WeaponSlot::Primary,
+            0.0,
+            None,
+            &mut baseline_rng,
+        );
+        let halved = resolve_attack(
+            &mut halved_state.combatants,
+            0,
+            1,
+            0,
+            false,
+            1.0,
+            AttackMode::Normal,
+            WeaponSlot::Primary,
+            0.0,
+            None,
+            &mut halved_rng,
+        );
+        let Some(baseline_crit) = baseline.critical.as_ref() else {
+            continue;
+        };
+        if baseline_crit.instant_kill || baseline_crit.extra_damage < 2 {
+            continue;
+        }
+        let Some(halved_crit) = halved.critical.as_ref() else {
+            continue;
+        };
+        assert_eq!(halved_crit.extra_damage, baseline_crit.extra_damage / 2);
+        found = true;
+        break;
+    }
+    assert!(
+        found,
+        "expected a seed where critical extra damage is halved"
+    );
+}
+
+#[test]
+fn ignore_ancillary_crit_effects_does_not_block_instant_kill_for_hacking_or_piercing() {
+    let mut attacker = combatant_basic(
+        "Attacker".to_string(),
+        "Sword".to_string(),
+        100,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        20,
+    );
+    let mut weapon = attacker.sheet.offense.weapon.as_ref().clone();
+    weapon.crit_min_roll = 1;
+    weapon.crit_severity_bonus = 100;
+    weapon.hacking_or_piercing = true;
+    attacker.sheet.offense.weapon = Arc::new(weapon);
+
+    let baseline_defender = combatant_basic(
+        "Defender".to_string(),
+        "Shield".to_string(),
+        0,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        60,
+    );
+    let mut armored_defender = baseline_defender.clone();
+    armored_defender.sheet.modifiers.add_i32(
+        StatIdI32::FlagIgnoreAncillaryCritEffects,
+        ModifierOpI32::Set(1),
+    );
+
+    let mut baseline_state = make_state(attacker.clone(), baseline_defender);
+    let mut armored_state = make_state(attacker.clone(), armored_defender);
+    let mut baseline_rng = rand::rngs::StdRng::seed_from_u64(3);
+    let mut armored_rng = rand::rngs::StdRng::seed_from_u64(3);
+    let baseline = resolve_attack(
+        &mut baseline_state.combatants,
+        0,
+        1,
+        0,
+        false,
+        1.0,
+        AttackMode::Normal,
+        WeaponSlot::Primary,
+        0.0,
+        None,
+        &mut baseline_rng,
+    );
+    let armored = resolve_attack(
+        &mut armored_state.combatants,
+        0,
+        1,
+        0,
+        false,
+        1.0,
+        AttackMode::Normal,
+        WeaponSlot::Primary,
+        0.0,
+        None,
+        &mut armored_rng,
+    );
+    let baseline_crit = baseline.critical.expect("expected baseline critical hit");
+    let armored_crit = armored.critical.expect("expected armored critical hit");
+    assert!(baseline_crit.instant_kill);
+    assert!(armored_crit.instant_kill);
+    assert_eq!(armored.defender_hp_after, 0);
+}
+
+#[test]
+fn ignore_ancillary_crit_effects_requires_hacking_or_piercing_weapon() {
+    let mut attacker = combatant_basic(
+        "Attacker".to_string(),
+        "Maul".to_string(),
+        100,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        20,
+    );
+    let mut weapon = attacker.sheet.offense.weapon.as_ref().clone();
+    weapon.crit_min_roll = 1;
+    weapon.crit_severity_bonus = 100;
+    weapon.hacking_or_piercing = false;
+    attacker.sheet.offense.weapon = Arc::new(weapon);
+
+    let mut defender = combatant_basic(
+        "Defender".to_string(),
+        "Shield".to_string(),
+        0,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        60,
+    );
+    defender.sheet.modifiers.add_i32(
+        StatIdI32::FlagIgnoreAncillaryCritEffects,
+        ModifierOpI32::Set(1),
+    );
+    let mut state = make_state(attacker, defender);
+    let mut rng = rand::rngs::StdRng::seed_from_u64(3);
+    let outcome = resolve_attack(
+        &mut state.combatants,
+        0,
+        1,
+        0,
+        false,
+        1.0,
+        AttackMode::Normal,
+        WeaponSlot::Primary,
+        0.0,
+        None,
+        &mut rng,
+    );
+    let critical = outcome.critical.expect("expected critical hit");
+    assert!(critical.instant_kill);
+}
+
+#[test]
 fn superior_defense_uses_upgraded_unarmed_counter_damage() {
     let attacker = combatant_basic(
         "Attacker".to_string(),
@@ -4746,6 +5105,7 @@ fn throwing_axe_switches_to_melee_at_close_range() {
         uses_projectiles: false,
         is_small_weapon: false,
         is_unarmed: false,
+        hacking_or_piercing: false,
         crit_min_roll: 20,
         crit_min_roll_ranged: None,
         crit_severity_bonus: 0,
@@ -4770,6 +5130,7 @@ fn throwing_axe_switches_to_melee_at_close_range() {
         uses_projectiles: false,
         is_small_weapon: false,
         is_unarmed: false,
+        hacking_or_piercing: false,
         crit_min_roll: 20,
         crit_min_roll_ranged: None,
         crit_severity_bonus: 0,
@@ -4911,6 +5272,7 @@ fn throwing_axe_cooldown_resets_on_melee_engagement() {
         uses_projectiles: false,
         is_small_weapon: false,
         is_unarmed: false,
+        hacking_or_piercing: false,
         crit_min_roll: 20,
         crit_min_roll_ranged: None,
         crit_severity_bonus: 0,
@@ -4935,6 +5297,7 @@ fn throwing_axe_cooldown_resets_on_melee_engagement() {
         uses_projectiles: false,
         is_small_weapon: false,
         is_unarmed: false,
+        hacking_or_piercing: false,
         crit_min_roll: 20,
         crit_min_roll_ranged: None,
         crit_severity_bonus: 0,

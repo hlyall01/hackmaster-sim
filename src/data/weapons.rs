@@ -32,6 +32,8 @@ struct WeaponJson {
     ammunition: Option<String>,
     range_bands_feet: Option<Vec<f32>>,
     armor_penetration: Option<i32>,
+    #[serde(rename = "type")]
+    damage_type: Option<String>,
     defense_bonus_always: Option<bool>,
     #[serde(rename = "reach_or_range")]
     reach_or_range: Option<String>,
@@ -102,6 +104,11 @@ pub fn load_weapon_catalog(path: &str) -> Result<WeaponCatalog, String> {
             reach_ft,
             range_bands_feet,
             armor_pen: entry.armor_penetration.unwrap_or(0),
+            hacking_or_piercing: entry
+                .damage_type
+                .as_deref()
+                .map(is_hacking_or_piercing_type)
+                .unwrap_or(false),
             defense_bonus_always: entry.defense_bonus_always.unwrap_or(false),
             size,
             handedness,
@@ -206,6 +213,11 @@ fn weapon_handedness_from_str(handedness: &str) -> Option<WeaponHandedness> {
         "2h" => Some(WeaponHandedness::TwoHanded),
         _ => None,
     }
+}
+
+fn is_hacking_or_piercing_type(damage_type: &str) -> bool {
+    let normalized = damage_type.to_ascii_uppercase();
+    normalized.contains('H') || normalized.contains('P')
 }
 
 fn parse_leading_number(value: &str) -> f32 {

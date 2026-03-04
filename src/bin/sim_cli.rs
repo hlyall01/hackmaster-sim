@@ -151,6 +151,9 @@ fn main() {
     let uses_projectiles = weapon_preset
         .map(|preset| game_logic::weapon_uses_projectiles(preset))
         .unwrap_or(false);
+    let hacking_or_piercing = weapon_preset
+        .map(|preset| preset.hacking_or_piercing)
+        .unwrap_or(false);
     let armor_is_heavy = character
         .equipment
         .armor
@@ -186,6 +189,7 @@ fn main() {
                 uses_projectiles,
                 is_small_weapon: false,
                 is_unarmed: weapon.group == WeaponGroup::Unarmed,
+                hacking_or_piercing,
                 crit_min_roll: 20,
                 crit_min_roll_ranged: None,
                 crit_severity_bonus: 0,
