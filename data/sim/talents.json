@@ -110,7 +110,7 @@
       "effects": [
         {
           "type": "range_distance_multiplier",
-          "multiplier": 0.6667
+          "multiplier": 0.666
         }
       ]
     },

@@ -240,6 +240,10 @@ fn main() {
             mounted: false,
             defensive_dualwielding: false,
             offensive_dualwielding: false,
+            offensive_dualwielding_defense_penalty: false,
+            dualwield_offhand_damage_penalty: -2,
+            dualwield_primary_recovery_penalty: 2.0,
+            dualwield_secondary_recovery_penalty: 2.0,
         },
         modifiers: sim::ModifierStack::default(),
     };

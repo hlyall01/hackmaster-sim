@@ -88,6 +88,10 @@ const TALENT_ID_UNBREAKABLE_WALL: &str = "unbreakable_wall";
 const TALENT_ID_COMBAT_EXPERTISE: &str = "combat_expertise";
 const TALENT_ID_DUELIST: &str = "duelist";
 const TALENT_ID_CONTENDER: &str = "contender";
+const TALENT_ID_TWO_WEAPON_FIGHTING: &str = "two_weapon_fighting";
+const TALENT_ID_IMPROVED_TWO_WEAPON_FIGHTING: &str = "improved_two_weapon_fighting";
+const TALENT_ID_GREATER_TWO_WEAPON_FIGHTING: &str = "greater_two_weapon_fighting";
+const TALENT_ID_PERFECT_TWO_WEAPON_FIGHTING: &str = "perfect_two_weapon_fighting";
 const TALENT_ID_DECEPTIVE_DEFENDER: &str = "deceptive_defender";
 const TALENT_ID_PRECISION_AIMING: &str = "precision_aiming";
 const TALENT_ID_PRECISION_COMBATANT: &str = "precision_combatant";
@@ -1985,18 +1989,48 @@ pub fn shield_equipped_with_catalog(
     can_equip_shield(player, weapon, shield, talent_catalog, weapon_catalog)
 }
 
+fn has_two_weapon_fighting_effect(player: &PlayerConfig) -> bool {
+    player_has_talent(player, TALENT_ID_TWO_WEAPON_FIGHTING)
+        || player_has_talent(player, TALENT_ID_IMPROVED_TWO_WEAPON_FIGHTING)
+        || player_has_talent(player, TALENT_ID_GREATER_TWO_WEAPON_FIGHTING)
+        || player_has_talent(player, TALENT_ID_PERFECT_TWO_WEAPON_FIGHTING)
+}
+
+fn has_improved_two_weapon_fighting_effect(player: &PlayerConfig) -> bool {
+    player_has_talent(player, TALENT_ID_IMPROVED_TWO_WEAPON_FIGHTING)
+        || player_has_talent(player, TALENT_ID_GREATER_TWO_WEAPON_FIGHTING)
+        || player_has_talent(player, TALENT_ID_PERFECT_TWO_WEAPON_FIGHTING)
+}
+
+fn has_greater_two_weapon_fighting_effect(player: &PlayerConfig) -> bool {
+    player_has_talent(player, TALENT_ID_GREATER_TWO_WEAPON_FIGHTING)
+        || player_has_talent(player, TALENT_ID_PERFECT_TWO_WEAPON_FIGHTING)
+}
+
+fn has_perfect_two_weapon_fighting_effect(player: &PlayerConfig) -> bool {
+    player_has_talent(player, TALENT_ID_PERFECT_TWO_WEAPON_FIGHTING)
+}
+
+fn dualwield_mode_flags(player: &PlayerConfig, weapon: &WeaponPreset) -> (bool, bool, bool) {
+    if weapon.handedness != WeaponHandedness::OneHanded || player.two_hand_grip {
+        return (false, false, false);
+    }
+    let offensive = player.offensive_dualwielding;
+    let perfect_with_offense = offensive && has_perfect_two_weapon_fighting_effect(player);
+    let defensive = if offensive {
+        perfect_with_offense
+    } else {
+        player.defensive_dualwielding
+    };
+    (defensive, offensive, perfect_with_offense)
+}
+
 pub fn defensive_dualwielding_active(player: &PlayerConfig, weapon: &WeaponPreset) -> bool {
-    player.defensive_dualwielding
-        && !player.offensive_dualwielding
-        && weapon.handedness == WeaponHandedness::OneHanded
-        && !player.two_hand_grip
+    dualwield_mode_flags(player, weapon).0
 }
 
 pub fn offensive_dualwielding_active(player: &PlayerConfig, weapon: &WeaponPreset) -> bool {
-    player.offensive_dualwielding
-        && !player.defensive_dualwielding
-        && weapon.handedness == WeaponHandedness::OneHanded
-        && !player.two_hand_grip
+    dualwield_mode_flags(player, weapon).1
 }
 
 pub fn effective_attack_mastery(player: &PlayerConfig) -> i32 {
@@ -2089,8 +2123,8 @@ pub fn player_summary(
     let misc_modifiers = resolve_misc_modifiers(player);
     let armor_adjustments =
         armor_talent_adjustments(character.equipment.armor.as_ref(), &modifiers);
-    let defensive_dualwielding = defensive_dualwielding_active(player, weapon);
-    let offensive_dualwielding = offensive_dualwielding_active(player, weapon);
+    let (defensive_dualwielding, offensive_dualwielding, perfect_two_weapon_fighting_active) =
+        dualwield_mode_flags(player, weapon);
     let fight_defensively_attack_penalty = fight_defensively_attack_penalty_for_player(player);
     let fight_defensively_defense_bonus = fight_defensively_defense_bonus_for_player(player);
     let called_shot_defense_penalty = if player.called_shot {
@@ -2120,7 +2154,7 @@ pub fn player_summary(
         + modifiers.armor_dr_bonus
         + misc_modifiers.armor_dr_bonus)
         .max(0);
-    if offensive_dualwielding {
+    if offensive_dualwielding && !perfect_two_weapon_fighting_active {
         derived.base_dv = 0;
     }
     derived.base_dv += modifiers.defense_bonus
@@ -2187,8 +2221,8 @@ fn defense_display_summary(
     fight_defensively_defense_bonus: i32,
     called_shot_defense_penalty: i32,
 ) -> DefenseDisplaySummary {
-    let defensive_dualwielding = defensive_dualwielding_active(player, weapon);
-    let offensive_dualwielding = offensive_dualwielding_active(player, weapon);
+    let (defensive_dualwielding, offensive_dualwielding, perfect_two_weapon_fighting_active) =
+        dualwield_mode_flags(player, weapon);
     let has_shield = character.equipment.shield.is_some();
     let defense_mastery = if has_shield {
         clamp_mastery(player.shield_mastery_defense)
@@ -2210,7 +2244,7 @@ fn defense_display_summary(
     } else {
         ""
     };
-    let melee_die = if offensive_dualwielding {
+    let melee_die = if offensive_dualwielding && !perfect_two_weapon_fighting_active {
         "d10p"
     } else {
         "d20p"
@@ -2544,8 +2578,29 @@ pub fn build_combatant(
         0.0
     };
     let has_offhand = player.offhand_weapon_id.is_some();
-    let mut defensive_dualwielding = defensive_dualwielding_active(player, weapon_preset);
-    let mut offensive_dualwielding = offensive_dualwielding_active(player, weapon_preset);
+    let (
+        defensive_dualwielding_selected,
+        mut offensive_dualwielding,
+        perfect_two_weapon_fighting_active,
+    ) = dualwield_mode_flags(player, weapon_preset);
+    let mut defensive_dualwielding = defensive_dualwielding_selected;
+    let dualwield_offhand_damage_penalty = if has_two_weapon_fighting_effect(player) {
+        0
+    } else {
+        -2
+    };
+    let dualwield_primary_recovery_penalty = if has_improved_two_weapon_fighting_effect(player) {
+        1.0
+    } else {
+        2.0
+    };
+    let dualwield_secondary_recovery_penalty = if has_greater_two_weapon_fighting_effect(player) {
+        1.0
+    } else {
+        2.0
+    };
+    let mut offensive_dualwielding_defense_penalty =
+        offensive_dualwielding && !perfect_two_weapon_fighting_active;
     let fight_defensively_attack_penalty = fight_defensively_attack_penalty_for_player(player);
     let fight_defensively_defense_bonus = fight_defensively_defense_bonus_for_player(player);
     let called_shot_defense_bonus = called_shot_defense_bonus_for_player(player);
@@ -2559,7 +2614,7 @@ pub fn build_combatant(
         .map(|armor| called_shot_target_defense_bonus_base_for_armor_type(armor.armor_type))
         .unwrap_or(CALLED_SHOT_TARGET_DEFENSE_BONUS_LIGHT);
     if offensive_dualwielding {
-        defensive_dualwielding = false;
+        defensive_dualwielding = perfect_two_weapon_fighting_active;
     }
     let free_hand_speed_bonus = if weapon_preset.handedness == WeaponHandedness::OneHanded
         && !effective_two_hand
@@ -2614,7 +2669,7 @@ pub fn build_combatant(
     );
     let attack_mastery = effective_attack_mastery(player);
     let mut attack_bonus_base = derived.attack_bonus + attack_mastery;
-    if offensive_dualwielding {
+    if offensive_dualwielding && !perfect_two_weapon_fighting_active {
         derived.base_dv = 0;
     }
     let defense_mastery = if has_shield {
@@ -2847,6 +2902,10 @@ pub fn build_combatant(
     }
     if offhand_profile.is_none() {
         offensive_dualwielding = false;
+        if perfect_two_weapon_fighting_active {
+            defensive_dualwielding = defensive_dualwielding_selected;
+            offensive_dualwielding_defense_penalty = false;
+        }
     }
     let mut sheet_modifiers = sim::ModifierStack::default();
     if modifiers.defiant {
@@ -3005,6 +3064,10 @@ pub fn build_combatant(
             mounted: player.mounted,
             defensive_dualwielding,
             offensive_dualwielding,
+            offensive_dualwielding_defense_penalty,
+            dualwield_offhand_damage_penalty,
+            dualwield_primary_recovery_penalty,
+            dualwield_secondary_recovery_penalty,
         },
         modifiers: sheet_modifiers,
     };
@@ -4434,6 +4497,85 @@ mod tests {
     }
 
     #[test]
+    fn two_weapon_fighting_talents_adjust_offensive_dualwield_profile() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npc_presets = sample_npc_presets();
+        let weapon_id = one_handed_weapon_id(&weapons);
+        let build_maneuvers = |player: &PlayerConfig| {
+            build_combatant(player, &weapons, &armor, &shields, &npc_presets, &talents)
+                .sheet
+                .maneuvers
+        };
+
+        let mut baseline = base_player(weapon_id);
+        baseline.offensive_dualwielding = true;
+        baseline.offhand_weapon_id = Some(weapon_id);
+        let maneuvers = build_maneuvers(&baseline);
+        assert!(maneuvers.offensive_dualwielding);
+        assert!(!maneuvers.defensive_dualwielding);
+        assert!(maneuvers.offensive_dualwielding_defense_penalty);
+        assert_eq!(maneuvers.dualwield_offhand_damage_penalty, -2);
+        assert_eq!(maneuvers.dualwield_primary_recovery_penalty, 2.0);
+        assert_eq!(maneuvers.dualwield_secondary_recovery_penalty, 2.0);
+
+        let mut two_weapon = baseline.clone();
+        add_talent(&mut two_weapon, TALENT_ID_TWO_WEAPON_FIGHTING, None);
+        let maneuvers = build_maneuvers(&two_weapon);
+        assert_eq!(maneuvers.dualwield_offhand_damage_penalty, 0);
+        assert_eq!(maneuvers.dualwield_primary_recovery_penalty, 2.0);
+        assert_eq!(maneuvers.dualwield_secondary_recovery_penalty, 2.0);
+
+        let mut improved = baseline.clone();
+        add_talent(&mut improved, TALENT_ID_IMPROVED_TWO_WEAPON_FIGHTING, None);
+        let maneuvers = build_maneuvers(&improved);
+        assert_eq!(maneuvers.dualwield_primary_recovery_penalty, 1.0);
+        assert_eq!(maneuvers.dualwield_secondary_recovery_penalty, 2.0);
+
+        let mut greater = baseline.clone();
+        add_talent(&mut greater, TALENT_ID_GREATER_TWO_WEAPON_FIGHTING, None);
+        let maneuvers = build_maneuvers(&greater);
+        assert_eq!(maneuvers.dualwield_primary_recovery_penalty, 1.0);
+        assert_eq!(maneuvers.dualwield_secondary_recovery_penalty, 1.0);
+    }
+
+    #[test]
+    fn perfect_two_weapon_fighting_combines_offense_and_defense_modes() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npc_presets = sample_npc_presets();
+        let weapon_id = one_handed_weapon_id(&weapons);
+
+        let mut baseline = base_player(weapon_id);
+        baseline.offensive_dualwielding = true;
+        baseline.offhand_weapon_id = Some(weapon_id);
+        let baseline_summary = player_summary(&baseline, &weapons, &armor, &shields, &talents);
+
+        let mut perfect = baseline.clone();
+        add_talent(&mut perfect, TALENT_ID_PERFECT_TWO_WEAPON_FIGHTING, None);
+        let perfect_combatant =
+            build_combatant(&perfect, &weapons, &armor, &shields, &npc_presets, &talents);
+        let perfect_summary = player_summary(&perfect, &weapons, &armor, &shields, &talents);
+
+        assert!(perfect_combatant.sheet.maneuvers.offensive_dualwielding);
+        assert!(perfect_combatant.sheet.maneuvers.defensive_dualwielding);
+        assert!(
+            !perfect_combatant
+                .sheet
+                .maneuvers
+                .offensive_dualwielding_defense_penalty
+        );
+        assert!(
+            perfect_summary.derived.base_dv > baseline_summary.derived.base_dv,
+            "perfect two-weapon fighting should preserve defensive value while offensively dual-wielding"
+        );
+        assert!(
+            perfect_summary.defense.melee_roll_label.contains("d20p"),
+            "perfect two-weapon fighting should keep d20p melee defense die"
+        );
+    }
+
+    #[test]
     fn mastery_speed_reduces_weapon_speed() {
         let (weapons, armor, shields) = sample_catalogs();
         let talents = Catalog::new(Vec::new());
@@ -4705,7 +4847,7 @@ mod tests {
         let combatant =
             build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
         let multiplier = combatant.sheet.offense.weapon.range_distance_multiplier;
-        assert!((multiplier - 0.6667).abs() < 0.0001);
+        assert!((multiplier - 0.666).abs() < 0.0001);
     }
 
     #[test]

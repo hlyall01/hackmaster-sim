@@ -2,6 +2,7 @@ use super::combat::{
     AttackMode, critical_effect_for, defense_die_sides, extra_damage_dice_sequence, resolve_attack,
     resolve_knock_aside,
 };
+use super::movement::range_modifier_for_weapon_with_scale;
 use super::*;
 use crate::character::{Progression, ProgressionTier};
 use crate::core::rng::SimRng;
@@ -504,6 +505,37 @@ fn critical_effects_follow_severity_table() {
     let deadly = critical_effect_for(41);
     assert!(deadly.instant_kill);
     assert_eq!(deadly.extra_dice, 0);
+}
+
+#[test]
+fn advanced_sighting_scale_keeps_throwing_axe_at_minus_six_at_sixty_feet() {
+    let weapon = WeaponProfile {
+        name: "Throwing axe".to_string(),
+        damage_expr: "d4p+d6p".to_string(),
+        damage_expr_cache: DamageExprCache::new("d4p+d6p"),
+        shield_damage_expr: Some("d4p".to_string()),
+        shield_damage_expr_cache: Some(DamageExprCache::new("d4p")),
+        armor_penetration: 0,
+        speed: 7.0,
+        reach_ft: 1.0,
+        range_bands_feet: Some([20.0, 30.0, 40.0, 60.0]),
+        range_distance_multiplier: 1.0,
+        two_hand_grip: false,
+        use_jab: false,
+        jab_special_expr: None,
+        jab_special_expr_cache: None,
+        has_weapon: true,
+        defense_bonus_always: false,
+        uses_projectiles: false,
+        is_small_weapon: true,
+        is_unarmed: false,
+        crit_min_roll: 20,
+        crit_min_roll_ranged: None,
+        crit_severity_bonus: 0,
+    };
+
+    let penalty = range_modifier_for_weapon_with_scale(&weapon, 60.0, 0.666);
+    assert_eq!(penalty, Some(-6));
 }
 
 #[test]
@@ -1262,6 +1294,90 @@ fn offensive_dualwielding_schedules_offhand_after_primary() {
     assert_eq!(
         sim.combatants[0].state.next_attack_time_secondary,
         Some(7.0)
+    );
+}
+
+#[test]
+fn offensive_dualwielding_recovery_penalties_follow_maneuver_profile() {
+    let mut attacker = combatant_basic(
+        "Attacker".to_string(),
+        "Short Sword".to_string(),
+        0,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        20,
+    );
+    let mut weapon = attacker.sheet.offense.weapon.as_ref().clone();
+    weapon.crit_min_roll = 21;
+    attacker.sheet.offense.weapon = Arc::new(weapon);
+    let mut offhand_weapon = attacker.sheet.offense.weapon.as_ref().clone();
+    offhand_weapon.name = "Offhand".to_string();
+    offhand_weapon.speed = 6.0;
+    attacker.sheet.offense.offhand = Some(OffhandProfile {
+        attack_bonus: attacker.sheet.offense.attack_bonus,
+        strength_damage: attacker.sheet.offense.strength_damage,
+        weapon: Arc::new(offhand_weapon),
+    });
+    attacker.sheet.maneuvers.offensive_dualwielding = true;
+    attacker.sheet.maneuvers.dualwield_primary_recovery_penalty = 1.0;
+    attacker
+        .sheet
+        .maneuvers
+        .dualwield_secondary_recovery_penalty = 1.0;
+
+    let defender = combatant_basic(
+        "Defender".to_string(),
+        "Fist".to_string(),
+        0,
+        -1000,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        200,
+    );
+    let mut sim = SimState::new(SimConfig::new(1.0, 1.0));
+    let mut attacker = attacker;
+    let mut defender = defender;
+    attacker.team_id = 0;
+    defender.team_id = 1;
+    sim.reset_with_combatants(vec![attacker, defender]);
+    sim.set_rng(SimRng::from_seed(2));
+
+    sim.tick();
+    assert_eq!(sim.combatants[0].state.next_attack_time_primary, Some(11.0));
+    assert_eq!(
+        sim.combatants[0].state.next_attack_time_secondary,
+        Some(7.0)
+    );
+
+    for _ in 0..7 {
+        sim.tick();
+    }
+    assert_eq!(
+        sim.combatants[0].state.next_attack_time_secondary,
+        Some(14.0)
     );
 }
 
@@ -3739,13 +3855,134 @@ fn bulk_highest_hit_metrics_reset_between_bulk_runs() {
 
     let first = bulk_simulate(config, vec![first_attacker, first_defender], 1, 20);
     assert!(
-        first.highest_single_hit > 0,
+        first.highest_single_crit_hit > 0 || first.highest_single_noncrit_hit > 0,
         "expected first bulk run to record at least one hit"
     );
 
     let second = bulk_simulate(config, vec![second_attacker, second_defender], 1, 0);
-    assert_eq!(second.highest_single_hit, 0);
+    assert_eq!(second.highest_single_crit_hit, 0);
+    assert_eq!(second.highest_single_noncrit_hit, 0);
     assert_eq!(second.highest_single_shield_hit, 0);
+}
+
+#[test]
+fn bulk_shield_metrics_report_presence_without_combat() {
+    let attacker = combatant_basic(
+        "Attacker".to_string(),
+        "Test Blade".to_string(),
+        20,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        20,
+    );
+    let mut defender = combatant_basic(
+        "Defender".to_string(),
+        "Shield".to_string(),
+        0,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        20,
+    );
+    defender.sheet.defense.shield_name = Some("Small metallic shield".to_string());
+    let mut attacker = attacker;
+    attacker.team_id = 0;
+    defender.team_id = 1;
+
+    let result = bulk_simulate(SimConfig::new(5.0, 5.0), vec![attacker, defender], 1, 0);
+    assert!(result.shields_present);
+    assert_eq!(result.shield_breaks, 0);
+    assert_eq!(result.avg_hits_shield_survived, 0.0);
+}
+
+#[test]
+fn instant_kill_crit_does_not_count_toward_highest_crit_metric() {
+    let mut attacker = combatant_basic(
+        "Attacker".to_string(),
+        "Sword".to_string(),
+        100,
+        100,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        6.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        100,
+    );
+    let mut weapon = attacker.sheet.offense.weapon.as_ref().clone();
+    weapon.crit_min_roll = 1;
+    weapon.crit_severity_bonus = 100;
+    attacker.sheet.offense.weapon = Arc::new(weapon);
+
+    let defender = combatant_basic(
+        "Defender".to_string(),
+        "Shield".to_string(),
+        -100,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        0.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        80,
+    );
+    let mut attacker = attacker;
+    let mut defender = defender;
+    attacker.team_id = 0;
+    defender.team_id = 1;
+    let result = bulk_simulate(SimConfig::new(5.0, 5.0), vec![attacker, defender], 1, 20);
+
+    assert_eq!(result.highest_single_crit_hit, 0);
+    assert_eq!(result.instakills, 1);
+    assert_eq!(result.instakills_by_team.first().copied().unwrap_or(0), 1);
+    assert!(
+        result
+            .avg_damage_dealt_by_team
+            .first()
+            .copied()
+            .unwrap_or(0.0)
+            > 0.0,
+        "expected instant-kill damage to still count toward total damage"
+    );
 }
 
 #[test]
@@ -4350,6 +4587,75 @@ fn offhand_attack_applies_damage_penalty() {
     );
     assert_eq!(primary.damage, 1);
     assert_eq!(secondary.damage, 0);
+}
+
+#[test]
+fn offhand_attack_damage_penalty_can_be_removed() {
+    let mut attacker = combatant_basic(
+        "Attacker".to_string(),
+        "Short Sword".to_string(),
+        100,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        20,
+    );
+    let mut offhand_weapon = attacker.sheet.offense.weapon.as_ref().clone();
+    offhand_weapon.name = "Offhand".to_string();
+    attacker.sheet.offense.offhand = Some(OffhandProfile {
+        attack_bonus: attacker.sheet.offense.attack_bonus,
+        strength_damage: attacker.sheet.offense.strength_damage,
+        weapon: Arc::new(offhand_weapon),
+    });
+    attacker.sheet.maneuvers.offensive_dualwielding = true;
+    attacker.sheet.maneuvers.dualwield_offhand_damage_penalty = 0;
+    let defender = combatant_basic(
+        "Defender".to_string(),
+        "Fist".to_string(),
+        0,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        20,
+    );
+    let mut state = make_state(attacker, defender);
+    let mut rng = FixedRng(0);
+    let secondary = resolve_attack(
+        &mut state.combatants,
+        0,
+        1,
+        0,
+        false,
+        1.0,
+        AttackMode::Normal,
+        WeaponSlot::Secondary,
+        0.0,
+        None,
+        &mut rng,
+    );
+    assert_eq!(secondary.damage, 1);
 }
 
 #[test]

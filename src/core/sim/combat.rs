@@ -71,7 +71,7 @@ fn attack_profile_for_slot(attacker: &Combatant, slot: WeaponSlot) -> Option<Att
                     ),
                     use_jab: offhand.weapon.use_jab,
                     uses_projectiles: offhand.weapon.uses_projectiles,
-                    damage_penalty: -2,
+                    damage_penalty: attacker.sheet.maneuvers.dualwield_offhand_damage_penalty,
                 })
         }
     }
@@ -714,7 +714,10 @@ fn resolve_counter_attack(
             defender_state.moved_last_tick,
             shield_active,
             trauma_incapacitated,
-            defender.sheet.maneuvers.offensive_dualwielding,
+            defender
+                .sheet
+                .maneuvers
+                .offensive_dualwielding_defense_penalty,
         ),
         rng,
     );
@@ -1254,7 +1257,7 @@ pub(crate) fn resolve_attack(
             combatants[defender_idx]
                 .sheet
                 .maneuvers
-                .offensive_dualwielding,
+                .offensive_dualwielding_defense_penalty,
         ),
         rng,
     );
@@ -1804,7 +1807,10 @@ pub(crate) fn resolve_knock_aside(
             defender_state.moved_last_tick,
             false,
             defender_state.trauma_remaining_seconds > 0,
-            defender.sheet.maneuvers.offensive_dualwielding,
+            defender
+                .sheet
+                .maneuvers
+                .offensive_dualwielding_defense_penalty,
         ),
         rng,
     );

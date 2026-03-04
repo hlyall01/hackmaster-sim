@@ -942,13 +942,32 @@ impl eframe::App for SimGuiApp {
                                         result.longest_duration
                                     ));
                                     ui.label(format!(
-                                        "Highest HP hit: {}",
-                                        result.highest_single_hit
+                                        "Highest crit HP hit: {}",
+                                        result.highest_single_crit_hit
+                                    ));
+                                    ui.label(format!(
+                                        "Highest non-crit HP hit: {}",
+                                        result.highest_single_noncrit_hit
                                     ));
                                     ui.label(format!(
                                         "Highest shield hit: {}",
                                         result.highest_single_shield_hit
                                     ));
+                                    if result.shields_present {
+                                        ui.label(format!(
+                                            "Shield breaks: {}",
+                                            result.shield_breaks
+                                        ));
+                                        if result.shield_breaks > 0 {
+                                            ui.label(format!(
+                                                "Avg hits shield survived: {:.2}",
+                                                result.avg_hits_shield_survived
+                                            ));
+                                        } else {
+                                            ui.label("Avg hits shield survived: n/a (no breaks)");
+                                        }
+                                    }
+                                    ui.label(format!("Instakills: {}", result.instakills));
                                     ui.label(format!(
                                         "Max one-side knockback in a fight: {:.1} ft",
                                         result.max_total_knockback_one_side_ft
@@ -987,8 +1006,13 @@ impl eframe::App for SimGuiApp {
                                             .get(idx)
                                             .copied()
                                             .unwrap_or(0.0);
-                                        let top_hit = result
-                                            .highest_single_hit_by_team
+                                        let top_crit_hit = result
+                                            .highest_single_crit_hit_by_team
+                                            .get(idx)
+                                            .copied()
+                                            .unwrap_or(0);
+                                        let top_noncrit_hit = result
+                                            .highest_single_noncrit_hit_by_team
                                             .get(idx)
                                             .copied()
                                             .unwrap_or(0);
@@ -997,15 +1021,28 @@ impl eframe::App for SimGuiApp {
                                             .get(idx)
                                             .copied()
                                             .unwrap_or(0);
+                                        let instakills = result
+                                            .instakills_by_team
+                                            .get(idx)
+                                            .copied()
+                                            .unwrap_or(0);
                                         ui.separator();
                                         ui.label(format!("{name} avg dmg dealt: {:.1}", avg_dealt));
                                         ui.label(format!("{name} avg dmg taken: {:.1}", avg_taken));
                                         ui.label(format!("{name} avg remaining HP: {:.1}", avg_hp));
-                                        ui.label(format!("{name} highest hit: {}", top_hit));
+                                        ui.label(format!(
+                                            "{name} highest crit hit: {}",
+                                            top_crit_hit
+                                        ));
+                                        ui.label(format!(
+                                            "{name} highest non-crit hit: {}",
+                                            top_noncrit_hit
+                                        ));
                                         ui.label(format!(
                                             "{name} highest shield hit: {}",
                                             top_shield_hit
                                         ));
+                                        ui.label(format!("{name} instakills: {}", instakills));
                                     }
                                 });
                             if let Some(duration) = self.bulk_sim_duration {

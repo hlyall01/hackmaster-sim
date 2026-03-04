@@ -233,6 +233,10 @@ impl SimState {
         attacker_idx: usize,
         defender_idx: usize,
         hp_damage: i32,
+        highest_hit_bucket: Option<bool>,
+        instant_kill: bool,
+        shield_block: bool,
+        shield_broken: bool,
         shield_damage: i32,
         knockback_ft: f32,
     ) {
@@ -242,13 +246,23 @@ impl SimState {
 
         {
             let attacker = &mut self.combatants[attacker_idx].state;
-            attacker.max_hit_dealt = attacker.max_hit_dealt.max(hp_damage.max(0));
+            if let Some(critical_hit) = highest_hit_bucket {
+                if critical_hit {
+                    attacker.max_crit_hit_dealt = attacker.max_crit_hit_dealt.max(hp_damage.max(0));
+                } else {
+                    attacker.max_noncrit_hit_dealt =
+                        attacker.max_noncrit_hit_dealt.max(hp_damage.max(0));
+                }
+            }
             attacker.max_shield_hit_dealt = attacker.max_shield_hit_dealt.max(shield_damage.max(0));
             attacker.total_hp_damage_dealt =
                 attacker.total_hp_damage_dealt.saturating_add(hp_damage_u32);
             attacker.total_shield_damage_dealt = attacker
                 .total_shield_damage_dealt
                 .saturating_add(shield_damage_u32);
+            if instant_kill {
+                attacker.total_instakills_dealt = attacker.total_instakills_dealt.saturating_add(1);
+            }
             attacker.total_knockback_inflicted_ft += knockback;
         }
         {
@@ -258,6 +272,16 @@ impl SimState {
             defender.total_shield_damage_taken = defender
                 .total_shield_damage_taken
                 .saturating_add(shield_damage_u32);
+            if shield_block {
+                defender.shield_blocks_taken = defender.shield_blocks_taken.saturating_add(1);
+                if shield_broken {
+                    defender.total_shield_breaks_taken =
+                        defender.total_shield_breaks_taken.saturating_add(1);
+                    defender.total_shield_hits_survived_before_break = defender
+                        .total_shield_hits_survived_before_break
+                        .saturating_add(defender.shield_blocks_taken.saturating_sub(1));
+                }
+            }
             defender.total_knockback_taken_ft += knockback;
         }
     }
@@ -1000,6 +1024,22 @@ impl SimState {
                     event.attacker_idx,
                     event.defender_idx,
                     event.damage,
+                    match event.critical.as_ref() {
+                        Some(crit) if crit.instant_kill => None,
+                        Some(_) => Some(true),
+                        None => Some(false),
+                    },
+                    event
+                        .critical
+                        .as_ref()
+                        .map(|crit| crit.instant_kill)
+                        .unwrap_or(false),
+                    event.shield_block,
+                    event
+                        .shield_damage_breakdown
+                        .as_ref()
+                        .map(|breakdown| breakdown.shield_broken)
+                        .unwrap_or(false),
                     event.shield_damage,
                     event.knockback_ft,
                 );
@@ -1056,6 +1096,22 @@ impl SimState {
                         counter.attacker_idx,
                         counter.defender_idx,
                         counter.damage,
+                        match counter.critical.as_ref() {
+                            Some(crit) if crit.instant_kill => None,
+                            Some(_) => Some(true),
+                            None => Some(false),
+                        },
+                        counter
+                            .critical
+                            .as_ref()
+                            .map(|crit| crit.instant_kill)
+                            .unwrap_or(false),
+                        counter.shield_block,
+                        counter
+                            .shield_damage_breakdown
+                            .as_ref()
+                            .map(|breakdown| breakdown.shield_broken)
+                            .unwrap_or(false),
                         counter.shield_damage,
                         counter.knockback_ft,
                     );
@@ -1113,7 +1169,11 @@ impl SimState {
                     .maneuvers
                     .offensive_dualwielding
                 {
-                    speed += 2.0;
+                    speed += self.combatants[attacker_idx]
+                        .sheet
+                        .maneuvers
+                        .dualwield_primary_recovery_penalty
+                        .max(0.0);
                 }
                 if self.combatants[defender_idx].state.trauma_remaining_seconds > 0 {
                     speed = (speed / 2.0).ceil().max(1.0);
@@ -1235,6 +1295,22 @@ impl SimState {
                         event.attacker_idx,
                         event.defender_idx,
                         event.damage,
+                        match event.critical.as_ref() {
+                            Some(crit) if crit.instant_kill => None,
+                            Some(_) => Some(true),
+                            None => Some(false),
+                        },
+                        event
+                            .critical
+                            .as_ref()
+                            .map(|crit| crit.instant_kill)
+                            .unwrap_or(false),
+                        event.shield_block,
+                        event
+                            .shield_damage_breakdown
+                            .as_ref()
+                            .map(|breakdown| breakdown.shield_broken)
+                            .unwrap_or(false),
                         event.shield_damage,
                         event.knockback_ft,
                     );
@@ -1295,6 +1371,22 @@ impl SimState {
                             counter.attacker_idx,
                             counter.defender_idx,
                             counter.damage,
+                            match counter.critical.as_ref() {
+                                Some(crit) if crit.instant_kill => None,
+                                Some(_) => Some(true),
+                                None => Some(false),
+                            },
+                            counter
+                                .critical
+                                .as_ref()
+                                .map(|crit| crit.instant_kill)
+                                .unwrap_or(false),
+                            counter.shield_block,
+                            counter
+                                .shield_damage_breakdown
+                                .as_ref()
+                                .map(|breakdown| breakdown.shield_broken)
+                                .unwrap_or(false),
                             counter.shield_damage,
                             counter.knockback_ft,
                         );
@@ -1349,7 +1441,11 @@ impl SimState {
                     let mut speed = self.combatants[attacker_idx]
                         .apply_f32(StatIdF32::WeaponSpeed, weapon.speed)
                         .max(1.0)
-                        + 2.0;
+                        + self.combatants[attacker_idx]
+                            .sheet
+                            .maneuvers
+                            .dualwield_secondary_recovery_penalty
+                            .max(0.0);
                     if self.combatants[defender_idx].state.trauma_remaining_seconds > 0 {
                         speed = (speed / 2.0).ceil().max(1.0);
                     }
@@ -1491,6 +1587,9 @@ fn max_range_cached(
 pub struct BulkSimResult {
     pub wins: Vec<u32>,
     pub ties: u32,
+    pub shields_present: bool,
+    pub shield_breaks: u32,
+    pub avg_hits_shield_survived: f32,
     pub avg_duration: f32,
     pub shortest_duration: u32,
     pub longest_duration: u32,
@@ -1499,9 +1598,13 @@ pub struct BulkSimResult {
     pub fights_with_trauma_first_exchange: u32,
     pub fights_with_knockback_20ft: u32,
     pub fights_with_charge_within_20ft: u32,
-    pub highest_single_hit: i32,
+    pub instakills: u32,
+    pub instakills_by_team: Vec<u32>,
+    pub highest_single_crit_hit: i32,
+    pub highest_single_noncrit_hit: i32,
     pub highest_single_shield_hit: i32,
-    pub highest_single_hit_by_team: Vec<i32>,
+    pub highest_single_crit_hit_by_team: Vec<i32>,
+    pub highest_single_noncrit_hit_by_team: Vec<i32>,
     pub highest_single_shield_hit_by_team: Vec<i32>,
     pub avg_damage_dealt_by_team: Vec<f32>,
     pub avg_damage_taken_by_team: Vec<f32>,
@@ -1520,6 +1623,9 @@ pub fn bulk_simulate(
     if runs == 0 {
         return BulkSimResult::default();
     }
+    let shields_present = combatants
+        .iter()
+        .any(|combatant| combatant.sheet.defense.shield_name.is_some());
     let mut team_ids: Vec<u8> = combatants
         .iter()
         .map(|combatant| combatant.team_id)
@@ -1539,17 +1645,23 @@ pub fn bulk_simulate(
     let mut fights_with_trauma_first_exchange = 0u32;
     let mut fights_with_knockback_20ft = 0u32;
     let mut fights_with_charge_within_20ft = 0u32;
+    let mut instakills = 0u32;
     let mut shortest_duration = u32::MAX;
     let mut longest_duration = 0u32;
-    let mut highest_single_hit = 0i32;
+    let mut highest_single_crit_hit = 0i32;
+    let mut highest_single_noncrit_hit = 0i32;
     let mut highest_single_shield_hit = 0i32;
-    let mut highest_single_hit_by_team = vec![0i32; team_ids.len()];
+    let mut highest_single_crit_hit_by_team = vec![0i32; team_ids.len()];
+    let mut highest_single_noncrit_hit_by_team = vec![0i32; team_ids.len()];
     let mut highest_single_shield_hit_by_team = vec![0i32; team_ids.len()];
+    let mut instakills_by_team = vec![0u32; team_ids.len()];
     let mut total_damage_dealt_by_team = vec![0u64; team_ids.len()];
     let mut total_damage_taken_by_team = vec![0u64; team_ids.len()];
     let mut total_remaining_hp_by_team = vec![0u64; team_ids.len()];
     let mut max_total_knockback_one_side_ft = 0.0f32;
     let mut total_max_knockback_one_side_ft = 0.0f32;
+    let mut shield_breaks = 0u32;
+    let mut total_hits_shield_survived = 0u64;
     let mut total_seconds = 0u64;
     for _ in 0..runs {
         sim.reset_preserve_rng();
@@ -1620,12 +1732,22 @@ pub fn bulk_simulate(
                 continue;
             };
             let state = &combatant.state;
-            highest_single_hit = highest_single_hit.max(state.max_hit_dealt);
+            highest_single_crit_hit = highest_single_crit_hit.max(state.max_crit_hit_dealt);
+            highest_single_noncrit_hit =
+                highest_single_noncrit_hit.max(state.max_noncrit_hit_dealt);
             highest_single_shield_hit = highest_single_shield_hit.max(state.max_shield_hit_dealt);
-            highest_single_hit_by_team[team_idx] =
-                highest_single_hit_by_team[team_idx].max(state.max_hit_dealt);
+            highest_single_crit_hit_by_team[team_idx] =
+                highest_single_crit_hit_by_team[team_idx].max(state.max_crit_hit_dealt);
+            highest_single_noncrit_hit_by_team[team_idx] =
+                highest_single_noncrit_hit_by_team[team_idx].max(state.max_noncrit_hit_dealt);
             highest_single_shield_hit_by_team[team_idx] =
                 highest_single_shield_hit_by_team[team_idx].max(state.max_shield_hit_dealt);
+            instakills = instakills.saturating_add(state.total_instakills_dealt);
+            instakills_by_team[team_idx] =
+                instakills_by_team[team_idx].saturating_add(state.total_instakills_dealt);
+            shield_breaks = shield_breaks.saturating_add(state.total_shield_breaks_taken);
+            total_hits_shield_survived = total_hits_shield_survived
+                .saturating_add(u64::from(state.total_shield_hits_survived_before_break));
             total_damage_dealt_by_team[team_idx] = total_damage_dealt_by_team[team_idx]
                 .saturating_add(u64::from(state.total_hp_damage_dealt));
             total_damage_taken_by_team[team_idx] = total_damage_taken_by_team[team_idx]
@@ -1651,9 +1773,17 @@ pub fn bulk_simulate(
         .into_iter()
         .map(|value| value as f32 / runs as f32)
         .collect();
+    let avg_hits_shield_survived = if shield_breaks > 0 {
+        total_hits_shield_survived as f32 / shield_breaks as f32
+    } else {
+        0.0
+    };
     BulkSimResult {
         wins,
         ties,
+        shields_present,
+        shield_breaks,
+        avg_hits_shield_survived,
         avg_duration,
         shortest_duration: if shortest_duration == u32::MAX {
             0
@@ -1666,9 +1796,13 @@ pub fn bulk_simulate(
         fights_with_trauma_first_exchange,
         fights_with_knockback_20ft,
         fights_with_charge_within_20ft,
-        highest_single_hit,
+        instakills,
+        instakills_by_team,
+        highest_single_crit_hit,
+        highest_single_noncrit_hit,
         highest_single_shield_hit,
-        highest_single_hit_by_team,
+        highest_single_crit_hit_by_team,
+        highest_single_noncrit_hit_by_team,
         highest_single_shield_hit_by_team,
         avg_damage_dealt_by_team,
         avg_damage_taken_by_team,
