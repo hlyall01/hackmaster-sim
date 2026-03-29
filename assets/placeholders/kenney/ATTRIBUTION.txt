@@ -1,0 +1,11 @@
+Kenney placeholder assets
+
+Source packs:
+- Kenney UI Pack
+- Kenney Tiny Dungeon
+
+License:
+- CC0 1.0 Universal (public domain dedication)
+- Original packs and license text were downloaded from kenney.nl and are available in the temp/kenney workspace for reference.
+
+This folder contains a small curated subset copied for local placeholder use only.

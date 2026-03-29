@@ -5,6 +5,7 @@ use bevy::utils::Duration;
 use bevy::window::WindowResizeConstraints;
 use bevy::winit::WinitPlugin;
 use bevy_egui::EguiPlugin;
+use rand::Rng;
 
 use crate::autobattler::args::AutobattlerArgs;
 use crate::autobattler::constants::{
@@ -27,8 +28,9 @@ use crate::autobattler::screenshot::{
 use crate::autobattler::sprite_review::sprite_review_system;
 use crate::autobattler::state::{
     AppScreen, AutobattlerState, CharacterSave, CreationState, CreationStep, DowntimeActivity,
-    DowntimeFeedback, EncounterPreview, EventPreview, PointPool, RunAction, RunSave, RunStateSave,
-    RunViewState, SaveEntry, SeedContext, SpriteReviewState,
+    DowntimeFeedback, EncounterPreview, EventPreview, GearOfferPreview, MerchantPreview,
+    PointPool, RunAction, RunRoomKind, RunSave, RunStateSave, RunViewState, SaveEntry,
+    SeedContext, SpriteReviewState, TreasurePreview,
 };
 use crate::autobattler::ui::ui_system;
 use crate::autobattler::weapon_mastery;
@@ -41,14 +43,15 @@ use crate::core::catalog::Catalog;
 use crate::core::gameplay::{
     AutobattlerConfig, CombatantBuilder, DepthBand, EnemySpawnEntry, EnemySpawner, EventCatalog,
     FightResult, LootTable, RunState, XpCurve, apply_downtime, apply_fight_result, choose_event,
-    depth_band_for_depth, encounter_tier_for_depth, resolve_event_choice, should_spawn_event,
+    depth_band_for_depth, encounter_tier_for_depth, resolve_event_choice,
 };
 use crate::core::rng::{SimRng, derive_seed};
 use crate::core::rules::roll_damage_expr;
 use crate::core::sim::SimConfig;
 use crate::core::skills::{self, SkillCheckResult, SkillDifficulty};
 use crate::core::types::{
-    EnemyProfile, Inventory, PlayerProfile, PointPools, RaceSpec, SkillProgress,
+    EnemyProfile, EquipmentLoadout, EquipmentSlot, Inventory, InventoryGear, PlayerProfile,
+    PointPools, RaceSpec, SkillProgress,
 };
 use crate::game_logic::{
     ArmorCatalog, ArmorId, FighterPreset, FighterPresetCatalog, NpcPresetCatalog, PlayerConfig,
@@ -68,6 +71,9 @@ pub struct AutobattlerApp {
     pub quick_start_presets: FighterPresetCatalog,
     pub selected_quick_start: Option<usize>,
     pub quick_start_status: Option<String>,
+    pub fast_start_name: String,
+    pub fast_start_weapon: WeaponId,
+    pub fast_start_status: Option<String>,
     pub save_name: String,
     pub save_status: Option<String>,
     pub run_save_name: String,
@@ -155,6 +161,7 @@ impl AutobattlerApp {
             days_elapsed: run_view.days_elapsed,
             training_days: run_view.training_days,
             run_over: run_view.run_over,
+            victory: run_view.victory,
             awaiting_downtime_choice: run_view.awaiting_downtime_choice,
             pending_levelup: run_view.pending_levelup.clone(),
             last_action: run_view.last_action,
@@ -242,6 +249,11 @@ impl AutobattlerApp {
             .first_id()
             .unwrap_or_else(|| WeaponId::new(0));
         let creation = CreationState::new(weapon_id, run_seed);
+        let selected_quick_start = if quick_start_presets.is_empty() {
+            None
+        } else {
+            Some(0)
+        };
         let enemy_weapon_id =
             find_weapon_id_by_name(&weapon_catalog, &autobattler_config.enemy_weapon)
                 .or_else(|| weapon_catalog.first_id())
@@ -271,8 +283,11 @@ impl AutobattlerApp {
             run_save_entries: Vec::new(),
             selected_run_save: None,
             quick_start_presets,
-            selected_quick_start: None,
+            selected_quick_start,
             quick_start_status: None,
+            fast_start_name: "Adventurer".to_string(),
+            fast_start_weapon: weapon_id,
+            fast_start_status: None,
             save_name: String::new(),
             save_status: None,
             run_save_name: String::new(),
@@ -374,6 +389,9 @@ impl AutobattlerApp {
         self.creation = CreationState::new(weapon_id, self.run_seed);
         self.creation_step = CreationStep::Points;
         self.creation_done = false;
+        self.fast_start_name = "Adventurer".to_string();
+        self.fast_start_weapon = weapon_id;
+        self.fast_start_status = None;
         self.save_name.clear();
         self.save_status = None;
         self.run_save_name.clear();
@@ -691,12 +709,15 @@ impl AutobattlerApp {
                     },
                     pending_encounter: None,
                     pending_event: None,
+                    pending_treasure: None,
+                    pending_merchant: None,
                     last_outcome: None,
                     last_action: save.last_action,
                     last_log: save.last_log.clone(),
                     days_elapsed: save.days_elapsed,
                     training_days: save.training_days,
                     run_over: save.run_over,
+                    victory: save.victory,
                     awaiting_downtime_choice: save.awaiting_downtime_choice,
                     pending_levelup: save.pending_levelup.clone(),
                     selected_activity: save.selected_activity,
@@ -772,6 +793,8 @@ impl AutobattlerApp {
             inventory: Inventory {
                 gold: starting_gold,
                 items: Vec::new(),
+                stash: Vec::new(),
+                loadout: self.starting_loadout_from_creation(),
             },
             run_depth: 1,
             run_seed,
@@ -791,30 +814,83 @@ impl AutobattlerApp {
     }
 
     pub fn prepare_next_encounter(&mut self) {
+        let run_state = {
+            let Some(run_view) = self.run_state.as_ref() else {
+                return;
+            };
+            if run_view.run_over
+                || run_view.live_fight.is_some()
+                || run_view.awaiting_downtime_choice
+                || run_view.pending_levelup.is_some()
+                || run_view.pending_encounter.is_some()
+                || run_view.pending_event.is_some()
+                || run_view.pending_treasure.is_some()
+                || run_view.pending_merchant.is_some()
+            {
+                return;
+            }
+            run_view.run_state.clone()
+        };
+        let room_kind = next_room_kind(&run_state, &self.autobattler_config);
+        let encounter_index = run_state.encounter_index as u64;
+        let encounter_tier = if matches!(room_kind, RunRoomKind::Boss) {
+            crate::core::gameplay::EncounterTier::Boss
+        } else {
+            encounter_tier_for_depth(run_state.run_depth)
+        };
+        let reward_seed = match room_kind {
+            RunRoomKind::Treasure => Some(derive_seed(
+                run_state.run_seed,
+                "treasure-room",
+                encounter_index,
+            )),
+            RunRoomKind::Merchant => Some(derive_seed(
+                run_state.run_seed,
+                "merchant-room",
+                encounter_index,
+            )),
+            _ => None,
+        };
+        let pending_treasure = if matches!(room_kind, RunRoomKind::Treasure) {
+            reward_seed.map(|seed| self.build_treasure_preview(&run_state, seed))
+        } else {
+            None
+        };
+        let pending_merchant = if matches!(room_kind, RunRoomKind::Merchant) {
+            reward_seed.map(|seed| self.build_merchant_preview(&run_state, seed))
+        } else {
+            None
+        };
         let Some(run_view) = self.run_state.as_mut() else {
             return;
         };
-        if run_view.run_over
-            || run_view.live_fight.is_some()
-            || run_view.awaiting_downtime_choice
-            || run_view.pending_levelup.is_some()
-            || run_view.pending_encounter.is_some()
-            || run_view.pending_event.is_some()
-        {
+        if let Some(seed) = reward_seed {
+            match room_kind {
+                RunRoomKind::Treasure => {
+                    run_view.pending_treasure = pending_treasure;
+                }
+                RunRoomKind::Merchant => {
+                    run_view.pending_merchant = pending_merchant;
+                }
+                _ => {}
+            }
+            run_view.seed_context = SeedContext {
+                run_seed: run_state.run_seed,
+                reward_seed: Some(seed),
+                ..SeedContext::default()
+            };
             return;
         }
-        let player_level = run_view.run_state.player.level;
-        let tier = encounter_tier_for_depth(run_view.run_state.run_depth);
-        let effective_level = scaled_enemy_level(player_level, run_view.run_state.run_depth)
-            .saturating_add(match tier {
+        let player_level = run_state.player.level;
+        let effective_level = scaled_enemy_level(player_level, run_state.run_depth)
+            .saturating_add(match encounter_tier {
                 crate::core::gameplay::EncounterTier::Normal => 0,
                 crate::core::gameplay::EncounterTier::Elite => 1,
                 crate::core::gameplay::EncounterTier::Boss => 2,
             });
-        let encounter_index = run_view.run_state.encounter_index as u64;
+        let allow_event = matches!(room_kind, RunRoomKind::Event);
         let event_seed = derive_seed(run_view.run_state.run_seed, "event-spawn", encounter_index);
-        let mut event_rng = SimRng::from_seed(event_seed);
-        if should_spawn_event(&mut event_rng) {
+        if allow_event {
             let kind_seed = derive_seed(run_view.run_state.run_seed, "event-kind", encounter_index);
             let resolve_seed = derive_seed(
                 run_view.run_state.run_seed,
@@ -825,20 +901,18 @@ impl AutobattlerApp {
             if let Some(event) = choose_event(
                 &self.event_catalog,
                 &run_view.run_state,
-                tier,
+                encounter_tier,
                 &mut kind_rng,
             ) {
                 run_view.pending_event = Some(EventPreview {
                     event,
-                    tier,
+                    tier: encounter_tier,
                     resolve_seed,
                 });
                 run_view.seed_context = SeedContext {
                     run_seed: run_view.run_state.run_seed,
-                    spawn_seed: None,
-                    combat_seed: None,
-                    loot_seed: None,
                     event_seed: Some(event_seed),
+                    ..SeedContext::default()
                 };
                 return;
             }
@@ -875,7 +949,7 @@ impl AutobattlerApp {
             });
         run_view.pending_encounter = Some(EncounterPreview {
             enemy: enemy_profile,
-            tier,
+            tier: encounter_tier,
             enemy_name,
             armor_label,
             weapon_name,
@@ -885,8 +959,9 @@ impl AutobattlerApp {
             run_seed: run_view.run_state.run_seed,
             spawn_seed: Some(spawn_seed),
             combat_seed: Some(fight_seed),
-            loot_seed: None,
             event_seed: Some(event_seed),
+            reward_seed: None,
+            ..SeedContext::default()
         };
     }
 
@@ -948,7 +1023,7 @@ impl AutobattlerApp {
         {
             return;
         }
-        let rest_days = 8;
+        let rest_days = self.autobattler_config.rest_days_between_encounters.max(1);
         let resting = action.is_resting();
         apply_downtime(&mut run_view.run_state, rest_days, resting);
         run_view.last_action = Some(action);
@@ -975,7 +1050,7 @@ impl AutobattlerApp {
             run_view.downtime_feedback = Some(DowntimeFeedback {
                 title: "Downtime: Rest".to_string(),
                 activity: None,
-                lines: vec!["Recovered with full rest for 8 days.".to_string()],
+                lines: vec![format!("Recovered with full rest for {rest_days} days.")],
                 animation_seconds: 1.0,
             });
         }
@@ -1063,6 +1138,8 @@ impl AutobattlerApp {
             || run_view.live_fight.is_some()
             || run_view.pending_encounter.is_some()
             || run_view.pending_event.is_some()
+            || run_view.pending_treasure.is_some()
+            || run_view.pending_merchant.is_some()
         {
             return false;
         }
@@ -1279,11 +1356,22 @@ impl AutobattlerApp {
         } else {
             None
         };
-        run_view.run_over = !run_view
+        let won_fight = run_view
             .last_outcome
             .as_ref()
             .map(|outcome| outcome.fight.won)
             .unwrap_or(false);
+        run_view.victory = won_fight
+            && matches!(live.tier, crate::core::gameplay::EncounterTier::Boss)
+            && run_view.run_state.run_depth > self.autobattler_config.fights_to_run;
+        if run_view.victory {
+            run_view.last_log.push(format!(
+                "Run complete at depth {}. The boss is down.",
+                self.autobattler_config.fights_to_run
+            ));
+            run_view.pending_levelup = None;
+        }
+        run_view.run_over = !won_fight || run_view.victory;
         run_view.awaiting_downtime_choice =
             !run_view.run_over && run_view.pending_levelup.is_none();
         run_view.seed_context.loot_seed = Some(derive_seed(
@@ -1318,6 +1406,280 @@ impl AutobattlerApp {
         self.apply_quick_start_preset(&preset);
         self.quick_start_status = Some(format!("Starting run with {}.", preset.name));
         self.start_run_from_creation();
+    }
+
+    pub fn start_fast_run(&mut self) {
+        let preset_index = self.selected_quick_start.unwrap_or(0);
+        let Some(preset_id) = self.quick_start_presets.id_from_index(preset_index) else {
+            self.fast_start_status = Some("No quick-start archetype is available.".to_string());
+            return;
+        };
+        let Some(preset) = self.quick_start_presets.get(preset_id).cloned() else {
+            self.fast_start_status = Some("The selected archetype is unavailable.".to_string());
+            return;
+        };
+        self.apply_quick_start_preset(&preset);
+        let custom_name = self.fast_start_name.trim();
+        if !custom_name.is_empty() {
+            self.creation.name = custom_name.to_string();
+            self.creation.player.name = custom_name.to_string();
+        }
+        self.creation.player.weapon_id = self.fast_start_weapon;
+        if let Some(weapon) = self.weapon_catalog.get(self.creation.player.weapon_id) {
+            let shield_allowed = self
+                .shield_catalog
+                .get(self.creation.player.shield_id)
+                .and_then(|entry| entry.shield.as_ref())
+                .map(|shield| {
+                    game_logic::shield_option_allowed(
+                        &self.creation.player,
+                        weapon,
+                        Some(shield),
+                        &self.talent_catalog,
+                        &self.weapon_catalog,
+                    )
+                })
+                .unwrap_or(true);
+            if !shield_allowed {
+                self.creation.player.shield_id = ShieldId::new(0);
+            }
+        }
+        self.creation.sync_player_from_stats();
+        self.fast_start_status = Some(format!(
+            "Fast run ready: {} with {}.",
+            self.creation.name,
+            self.weapon_catalog
+                .get(self.creation.player.weapon_id)
+                .map(|weapon| weapon.name.as_str())
+                .unwrap_or("Unknown weapon")
+        ));
+        self.start_run_from_creation();
+    }
+
+    pub fn claim_treasure(&mut self, index: usize) {
+        let selected = self
+            .run_state
+            .as_ref()
+            .and_then(|run_view| run_view.pending_treasure.as_ref())
+            .and_then(|preview| preview.options.get(index).cloned());
+        let Some(choice) = selected else {
+            return;
+        };
+        let Some(run_view) = self.run_state.as_mut() else {
+            return;
+        };
+        if run_view.run_over || run_view.live_fight.is_some() {
+            return;
+        }
+        let title = run_view
+            .pending_treasure
+            .as_ref()
+            .map(|preview| preview.title.clone())
+            .unwrap_or_else(|| "Treasure".to_string());
+        run_view.pending_treasure = None;
+        run_view.run_state.inventory.add_gear(choice.gear.clone());
+        run_view.run_state.encounter_index = run_view.run_state.encounter_index.saturating_add(1);
+        run_view.last_outcome = None;
+        run_view.last_action = None;
+        run_view.last_log = vec![format!("Recovered {}.", choice.gear.label())];
+        run_view.awaiting_downtime_choice = true;
+        run_view.downtime_feedback = Some(DowntimeFeedback {
+            title,
+            activity: None,
+            lines: vec![
+                format!("Added {} to your stash.", choice.gear.label()),
+                choice.blurb,
+            ],
+            animation_seconds: 0.9,
+        });
+        self.autosave_run_checkpoint("post-fight");
+    }
+
+    pub fn skip_treasure(&mut self) {
+        let Some(run_view) = self.run_state.as_mut() else {
+            return;
+        };
+        if run_view.run_over || run_view.live_fight.is_some() {
+            return;
+        }
+        let Some(preview) = run_view.pending_treasure.take() else {
+            return;
+        };
+        run_view.run_state.encounter_index = run_view.run_state.encounter_index.saturating_add(1);
+        run_view.last_outcome = None;
+        run_view.last_action = None;
+        run_view.last_log = vec!["You leave the cache untouched.".to_string()];
+        run_view.awaiting_downtime_choice = true;
+        run_view.downtime_feedback = Some(DowntimeFeedback {
+            title: preview.title,
+            activity: None,
+            lines: vec!["You move on without taking any gear.".to_string()],
+            animation_seconds: 0.7,
+        });
+        self.autosave_run_checkpoint("post-fight");
+    }
+
+    pub fn buy_merchant_offer(&mut self, index: usize) {
+        let selected = self
+            .run_state
+            .as_ref()
+            .and_then(|run_view| run_view.pending_merchant.as_ref())
+            .and_then(|preview| preview.stock.get(index).cloned());
+        let Some(choice) = selected else {
+            return;
+        };
+        let Some(run_view) = self.run_state.as_mut() else {
+            return;
+        };
+        if run_view.run_over || run_view.live_fight.is_some() {
+            return;
+        }
+        if run_view.run_state.inventory.gold < choice.price_gp {
+            run_view.last_log = vec![format!(
+                "Not enough gold for {} (need {}, have {}).",
+                choice.gear.label(),
+                choice.price_gp,
+                run_view.run_state.inventory.gold
+            )];
+            return;
+        }
+        let title = run_view
+            .pending_merchant
+            .as_ref()
+            .map(|preview| preview.title.clone())
+            .unwrap_or_else(|| "Merchant".to_string());
+        run_view.pending_merchant = None;
+        run_view.run_state.inventory.gold =
+            run_view.run_state.inventory.gold.saturating_sub(choice.price_gp);
+        run_view.run_state.inventory.add_gear(choice.gear.clone());
+        run_view.run_state.encounter_index = run_view.run_state.encounter_index.saturating_add(1);
+        run_view.last_outcome = None;
+        run_view.last_action = None;
+        run_view.last_log = vec![format!(
+            "Bought {} for {} gp.",
+            choice.gear.label(),
+            choice.price_gp
+        )];
+        run_view.awaiting_downtime_choice = true;
+        run_view.downtime_feedback = Some(DowntimeFeedback {
+            title,
+            activity: None,
+            lines: vec![
+                format!("Purchased {}.", choice.gear.label()),
+                choice.blurb,
+            ],
+            animation_seconds: 0.9,
+        });
+        self.autosave_run_checkpoint("post-fight");
+    }
+
+    pub fn leave_merchant(&mut self) {
+        let Some(run_view) = self.run_state.as_mut() else {
+            return;
+        };
+        if run_view.run_over || run_view.live_fight.is_some() {
+            return;
+        }
+        let Some(preview) = run_view.pending_merchant.take() else {
+            return;
+        };
+        run_view.run_state.encounter_index = run_view.run_state.encounter_index.saturating_add(1);
+        run_view.last_outcome = None;
+        run_view.last_action = None;
+        run_view.last_log = vec!["You leave the merchant and keep your gold.".to_string()];
+        run_view.awaiting_downtime_choice = true;
+        run_view.downtime_feedback = Some(DowntimeFeedback {
+            title: preview.title,
+            activity: None,
+            lines: vec!["No purchase made.".to_string()],
+            animation_seconds: 0.7,
+        });
+        self.autosave_run_checkpoint("post-fight");
+    }
+
+    pub fn equip_stash_gear(&mut self, stash_index: usize) {
+        let selected = self
+            .run_state
+            .as_ref()
+            .and_then(|run_view| run_view.run_state.inventory.stash.get(stash_index).cloned());
+        let Some(gear) = selected else {
+            return;
+        };
+        if matches!(gear.slot, EquipmentSlot::Shield) {
+            let weapon = self
+                .run_state
+                .as_ref()
+                .and_then(|run_view| run_view.run_state.inventory.loadout.weapon.clone());
+            if let Some(weapon) = weapon.as_ref() {
+                if !self.shield_gear_allowed_with_weapon(weapon, &gear) {
+                    if let Some(run_view) = self.run_state.as_mut() {
+                        run_view.last_log = vec![format!(
+                            "{} cannot be used with your current weapon.",
+                            gear.label()
+                        )];
+                    }
+                    return;
+                }
+            }
+        }
+        let drop_shield = if matches!(gear.slot, EquipmentSlot::Weapon) {
+            self.run_state
+                .as_ref()
+                .and_then(|run_view| run_view.run_state.inventory.loadout.shield.clone())
+                .map(|shield| !self.shield_gear_allowed_with_weapon(&gear, &shield))
+                .unwrap_or(false)
+        } else {
+            false
+        };
+        let Some(run_view) = self.run_state.as_mut() else {
+            return;
+        };
+        if run_view.live_fight.is_some() {
+            return;
+        }
+        let selected_gear = run_view.run_state.inventory.stash.remove(stash_index);
+        let mut lines = vec![format!(
+            "Equipped {} ({})",
+            selected_gear.label(),
+            selected_gear.slot.label()
+        )];
+        match selected_gear.slot {
+            EquipmentSlot::Weapon => {
+                if let Some(previous) = run_view.run_state.inventory.loadout.weapon.replace(selected_gear)
+                {
+                    run_view.run_state.inventory.stash.push(previous);
+                }
+                if drop_shield {
+                    if let Some(previous_shield) = run_view.run_state.inventory.loadout.shield.take()
+                    {
+                        lines.push(format!(
+                            "Moved {} to the stash because the new weapon needs both hands.",
+                            previous_shield.label()
+                        ));
+                        run_view.run_state.inventory.stash.push(previous_shield);
+                    }
+                }
+            }
+            EquipmentSlot::Armor => {
+                if let Some(previous) = run_view.run_state.inventory.loadout.armor.replace(selected_gear)
+                {
+                    run_view.run_state.inventory.stash.push(previous);
+                }
+            }
+            EquipmentSlot::Shield => {
+                if let Some(previous) = run_view.run_state.inventory.loadout.shield.replace(selected_gear)
+                {
+                    run_view.run_state.inventory.stash.push(previous);
+                }
+            }
+        }
+        run_view.last_log = lines.clone();
+        run_view.downtime_feedback = Some(DowntimeFeedback {
+            title: "Loadout Updated".to_string(),
+            activity: None,
+            lines,
+            animation_seconds: 0.6,
+        });
     }
 
     fn apply_quick_start_preset(&mut self, preset: &FighterPreset) {
@@ -1440,6 +1802,309 @@ impl AutobattlerApp {
         self.creation_step = CreationStep::MoneyGear;
         self.creation_done = true;
     }
+
+    fn starting_loadout_from_creation(&self) -> EquipmentLoadout {
+        let weapon = self
+            .weapon_catalog
+            .get(self.creation.player.weapon_id)
+            .map(|entry| InventoryGear {
+                slot: EquipmentSlot::Weapon,
+                name: entry.name.clone(),
+                material_tier: self.creation.player.weapon_material_tier,
+                value_gp: gear_value_for_price(entry.price_gp, self.creation.player.weapon_material_tier),
+            });
+        let armor = self
+            .armor_catalog
+            .get(self.creation.player.armor_id)
+            .and_then(|entry| entry.armor.as_ref().map(|armor| (entry.label.clone(), armor.price_gp)))
+            .map(|(label, price_gp)| InventoryGear {
+                slot: EquipmentSlot::Armor,
+                name: label,
+                material_tier: self.creation.player.armor_material_tier,
+                value_gp: gear_value_for_price(price_gp, self.creation.player.armor_material_tier),
+            });
+        let shield = self
+            .shield_catalog
+            .get(self.creation.player.shield_id)
+            .and_then(|entry| entry.shield.as_ref().map(|shield| (entry.label.clone(), shield.price_gp)))
+            .map(|(label, price_gp)| InventoryGear {
+                slot: EquipmentSlot::Shield,
+                name: label,
+                material_tier: self.creation.player.shield_material_tier,
+                value_gp: gear_value_for_price(price_gp, self.creation.player.shield_material_tier),
+            });
+        EquipmentLoadout {
+            weapon,
+            armor,
+            shield,
+        }
+    }
+
+    fn build_treasure_preview(&self, state: &RunState, seed: u64) -> TreasurePreview {
+        let mut rng = SimRng::from_seed(seed);
+        TreasurePreview {
+            title: "Treasure Cache".to_string(),
+            options: vec![
+                GearOfferPreview {
+                    gear: self.sample_weapon_gear(state, &mut rng),
+                    price_gp: 0,
+                    blurb: "A weapon upgrade or sidegrade for the next fights.".to_string(),
+                },
+                GearOfferPreview {
+                    gear: self.sample_armor_gear(state, &mut rng),
+                    price_gp: 0,
+                    blurb: "A sturdier set of armor to blunt incoming damage.".to_string(),
+                },
+                GearOfferPreview {
+                    gear: self.sample_shield_gear(state, &mut rng),
+                    price_gp: 0,
+                    blurb: "Defensive gear for tighter melee exchanges.".to_string(),
+                },
+            ],
+        }
+    }
+
+    fn build_merchant_preview(&self, state: &RunState, seed: u64) -> MerchantPreview {
+        let mut rng = SimRng::from_seed(seed);
+        let price_markup = state.run_depth.saturating_mul(5);
+        let with_price = |gear: InventoryGear, blurb: &str| GearOfferPreview {
+            price_gp: gear.value_gp.saturating_mul(6) / 5 + price_markup,
+            gear,
+            blurb: blurb.to_string(),
+        };
+        MerchantPreview {
+            title: "Wandering Merchant".to_string(),
+            stock: vec![
+                with_price(
+                    self.sample_weapon_gear(state, &mut rng),
+                    "Steel, weight, and reach for sale.",
+                ),
+                with_price(
+                    self.sample_armor_gear(state, &mut rng),
+                    "A tougher shell for the next room.",
+                ),
+                with_price(
+                    self.sample_shield_gear(state, &mut rng),
+                    "Guarding gear for a more defensive line.",
+                ),
+            ],
+        }
+    }
+
+    fn sample_weapon_gear(&self, state: &RunState, rng: &mut SimRng) -> InventoryGear {
+        let current = state.inventory.loadout.weapon.as_ref();
+        let max_tier = max_run_material_tier(state.run_depth);
+        let current_tier = current.map(|gear| gear.material_tier.max(0)).unwrap_or(0);
+        if let Some(current) = current {
+            if current_tier < max_tier && rng.gen_range(0..100) < 55 {
+                let next_tier = (current_tier + 1).min(max_tier);
+                let base_price = self
+                    .weapon_catalog
+                    .entries()
+                    .iter()
+                    .find(|entry| entry.name.eq_ignore_ascii_case(&current.name))
+                    .map(|entry| entry.price_gp)
+                    .unwrap_or(current.value_gp);
+                return InventoryGear {
+                    slot: EquipmentSlot::Weapon,
+                    name: current.name.clone(),
+                    material_tier: next_tier,
+                    value_gp: gear_value_for_price(base_price, next_tier),
+                };
+            }
+        }
+        let candidates: Vec<_> = self
+            .weapon_catalog
+            .entries()
+            .iter()
+            .filter(|weapon| !weapon.name.eq_ignore_ascii_case("Unarmed"))
+            .collect();
+        let weapon = candidates
+            .get(rng.gen_range(0..candidates.len()))
+            .copied()
+            .unwrap_or_else(|| &self.weapon_catalog.entries()[0]);
+        InventoryGear {
+            slot: EquipmentSlot::Weapon,
+            name: weapon.name.clone(),
+            material_tier: max_tier.max(current_tier),
+            value_gp: gear_value_for_price(weapon.price_gp, max_tier.max(current_tier)),
+        }
+    }
+
+    fn sample_armor_gear(&self, state: &RunState, rng: &mut SimRng) -> InventoryGear {
+        let current = state.inventory.loadout.armor.as_ref();
+        let max_tier = max_run_material_tier(state.run_depth);
+        let current_tier = current.map(|gear| gear.material_tier.max(0)).unwrap_or(0);
+        if let Some(current) = current {
+            if current_tier < max_tier && rng.gen_range(0..100) < 60 {
+                let next_tier = (current_tier + 1).min(max_tier);
+                let base_price = self
+                    .armor_catalog
+                    .entries()
+                    .iter()
+                    .find(|entry| entry.label.eq_ignore_ascii_case(&current.name))
+                    .and_then(|entry| entry.armor.as_ref())
+                    .map(|entry| entry.price_gp)
+                    .unwrap_or(current.value_gp);
+                return InventoryGear {
+                    slot: EquipmentSlot::Armor,
+                    name: current.name.clone(),
+                    material_tier: next_tier,
+                    value_gp: gear_value_for_price(base_price, next_tier),
+                };
+            }
+        }
+        let candidates: Vec<_> = self
+            .armor_catalog
+            .entries()
+            .iter()
+            .filter(|entry| entry.armor.is_some())
+            .collect();
+        let armor = candidates
+            .get(rng.gen_range(0..candidates.len()))
+            .copied()
+            .unwrap_or_else(|| &self.armor_catalog.entries()[0]);
+        let price_gp = armor.armor.as_ref().map(|entry| entry.price_gp).unwrap_or(0);
+        InventoryGear {
+            slot: EquipmentSlot::Armor,
+            name: armor.label.clone(),
+            material_tier: max_tier.max(current_tier),
+            value_gp: gear_value_for_price(price_gp, max_tier.max(current_tier)),
+        }
+    }
+
+    fn sample_shield_gear(&self, state: &RunState, rng: &mut SimRng) -> InventoryGear {
+        let current = state.inventory.loadout.shield.as_ref();
+        let max_tier = max_run_material_tier(state.run_depth);
+        let current_tier = current.map(|gear| gear.material_tier.max(0)).unwrap_or(0);
+        if let Some(current) = current {
+            if current_tier < max_tier && rng.gen_range(0..100) < 50 {
+                let next_tier = (current_tier + 1).min(max_tier);
+                let base_price = self
+                    .shield_catalog
+                    .entries()
+                    .iter()
+                    .find(|entry| entry.label.eq_ignore_ascii_case(&current.name))
+                    .and_then(|entry| entry.shield.as_ref())
+                    .map(|entry| entry.price_gp)
+                    .unwrap_or(current.value_gp);
+                return InventoryGear {
+                    slot: EquipmentSlot::Shield,
+                    name: current.name.clone(),
+                    material_tier: next_tier,
+                    value_gp: gear_value_for_price(base_price, next_tier),
+                };
+            }
+        }
+        let candidates: Vec<_> = self
+            .shield_catalog
+            .entries()
+            .iter()
+            .filter(|entry| entry.shield.is_some())
+            .collect();
+        let shield = candidates
+            .get(rng.gen_range(0..candidates.len()))
+            .copied()
+            .unwrap_or_else(|| &self.shield_catalog.entries()[0]);
+        let price_gp = shield.shield.as_ref().map(|entry| entry.price_gp).unwrap_or(0);
+        InventoryGear {
+            slot: EquipmentSlot::Shield,
+            name: shield.label.clone(),
+            material_tier: max_tier.max(current_tier),
+            value_gp: gear_value_for_price(price_gp, max_tier.max(current_tier)),
+        }
+    }
+
+    fn shield_gear_allowed_with_weapon(
+        &self,
+        weapon: &InventoryGear,
+        shield: &InventoryGear,
+    ) -> bool {
+        let Some(weapon_entry) = self
+            .weapon_catalog
+            .entries()
+            .iter()
+            .find(|entry| entry.name.eq_ignore_ascii_case(&weapon.name))
+        else {
+            return true;
+        };
+        let Some(shield_entry) = self
+            .shield_catalog
+            .entries()
+            .iter()
+            .find(|entry| entry.label.eq_ignore_ascii_case(&shield.name))
+            .and_then(|entry| entry.shield.as_ref())
+        else {
+            return true;
+        };
+        game_logic::shield_option_allowed(
+            &self.creation.player,
+            weapon_entry,
+            Some(shield_entry),
+            &self.talent_catalog,
+            &self.weapon_catalog,
+        )
+    }
+
+    pub fn upcoming_room_sequence(&self, count: usize) -> Vec<RunRoomKind> {
+        let Some(run_view) = self.run_state.as_ref() else {
+            return Vec::new();
+        };
+        let mut rooms = Vec::new();
+        let mut depth = run_view.run_state.run_depth;
+        let mut encounter_index = run_view.run_state.encounter_index;
+        while rooms.len() < count {
+            let preview_state = RunState {
+                player: run_view.run_state.player.clone(),
+                inventory: run_view.run_state.inventory.clone(),
+                run_depth: depth,
+                run_seed: run_view.run_state.run_seed,
+                encounter_index,
+                last_encounter_tier: run_view.run_state.last_encounter_tier,
+                last_encounter_band: run_view.run_state.last_encounter_band,
+                event_flags: run_view.run_state.event_flags.clone(),
+                seen_event_ids: run_view.run_state.seen_event_ids.clone(),
+                wounds: run_view.run_state.wounds.clone(),
+            };
+            let room = next_room_kind(&preview_state, &self.autobattler_config);
+            rooms.push(room);
+            encounter_index = encounter_index.saturating_add(1);
+            if matches!(room, RunRoomKind::Encounter | RunRoomKind::Boss) {
+                depth = depth.saturating_add(1);
+            }
+            if matches!(room, RunRoomKind::Boss) {
+                break;
+            }
+        }
+        rooms
+    }
+}
+
+fn next_room_kind(state: &RunState, config: &AutobattlerConfig) -> RunRoomKind {
+    if state.run_depth >= config.fights_to_run.max(1) {
+        return RunRoomKind::Boss;
+    }
+    if state.encounter_index > 0 && state.encounter_index % 5 == 0 {
+        return RunRoomKind::Merchant;
+    }
+    let seed = derive_seed(state.run_seed, "room-kind", state.encounter_index as u64);
+    let mut rng = SimRng::from_seed(seed);
+    match rng.gen_range(0..100) {
+        0..=17 => RunRoomKind::Treasure,
+        18..=37 => RunRoomKind::Event,
+        _ => RunRoomKind::Encounter,
+    }
+}
+
+fn max_run_material_tier(run_depth: u32) -> i32 {
+    ((run_depth + 1) / 2).clamp(0, 3) as i32
+}
+
+fn gear_value_for_price(base_price: u32, material_tier: i32) -> u32 {
+    let tier = material_tier.max(0) as u32;
+    base_price
+        .saturating_add(tier.saturating_mul(base_price / 3 + 8))
+        .max(base_price)
 }
 
 struct AutobattlerBuilder<'a> {
@@ -1471,6 +2136,24 @@ impl CombatantBuilder for AutobattlerBuilder<'_> {
         player.race_applied = player.race_id.is_some();
         player.proficiencies = state.player.proficiencies.clone();
         player.talents = state.player.talents.clone();
+        if let Some(weapon) = state.inventory.loadout.weapon.as_ref() {
+            if let Some(id) = find_weapon_id_by_name(self.weapon_catalog, &weapon.name) {
+                player.weapon_id = id;
+                player.weapon_material_tier = weapon.material_tier;
+            }
+        }
+        if let Some(armor) = state.inventory.loadout.armor.as_ref() {
+            if let Some(id) = find_armor_id_by_label(self.armor_catalog, &armor.name) {
+                player.armor_id = id;
+                player.armor_material_tier = armor.material_tier;
+            }
+        }
+        if let Some(shield) = state.inventory.loadout.shield.as_ref() {
+            if let Some(id) = find_shield_id_by_name(self.shield_catalog, &shield.name) {
+                player.shield_id = id;
+                player.shield_material_tier = shield.material_tier;
+            }
+        }
         weapon_mastery::apply_profile_masteries_to_config(
             &state.player,
             &mut player,

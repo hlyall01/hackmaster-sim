@@ -18,7 +18,7 @@ use crate::autobattler::logic::{
 use crate::autobattler::screenshot::ScreenshotState;
 use crate::autobattler::state::{
     AppScreen, CreationState, DamageFloat, DowntimeActivity, LiveFight, PointPool, RunAction,
-    RunViewState,
+    RunRoomKind, RunViewState,
 };
 use crate::autobattler::state::{AutobattlerState, CreationStep};
 use crate::character::{
@@ -26,7 +26,7 @@ use crate::character::{
 };
 use crate::core::rules::roll_damage_expr;
 use crate::core::skills;
-use crate::core::types::{PlayerProfile, RaceSpec, TalentSelection, TalentSpec};
+use crate::core::types::{Inventory, PlayerProfile, RaceSpec, TalentSelection, TalentSpec};
 use crate::game_logic::{self, PlayerConfig, TalentCatalog, WeaponCatalog};
 use crate::sim;
 use crate::ui_widgets::searchable_select;
@@ -71,9 +71,38 @@ impl AutobattlerApp {
                     self.needs_save_refresh = false;
                 }
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    ui.heading("Autobattler");
-                    ui.separator();
-                    ui.label("Load an existing character or start a new one.");
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.heading("Autobattler");
+                            ui.label(
+                                "Build a fighter quickly, then work through a seeded run of fights, events, treasure, and merchants.",
+                            );
+                        });
+                        ui.add_space(24.0);
+                        ui.vertical(|ui| {
+                            ui.horizontal(|ui| {
+                                ui.add(
+                                    egui::Image::new(egui::include_image!(
+                                        "../../assets/placeholders/kenney/characters/hero.png"
+                                    ))
+                                    .fit_to_exact_size(egui::vec2(56.0, 56.0)),
+                                );
+                                ui.add(
+                                    egui::Image::new(egui::include_image!(
+                                        "../../assets/placeholders/kenney/characters/enemy.png"
+                                    ))
+                                    .fit_to_exact_size(egui::vec2(56.0, 56.0)),
+                                );
+                                ui.add(
+                                    egui::Image::new(egui::include_image!(
+                                        "../../assets/placeholders/kenney/characters/boss.png"
+                                    ))
+                                    .fit_to_exact_size(egui::vec2(56.0, 56.0)),
+                                );
+                            });
+                            ui.small("Kenney CC0 placeholders staged locally for the run UI.");
+                        });
+                    });
                     if !self.startup_data_issues.is_empty() {
                         ui.separator();
                         ui.colored_label(
@@ -85,10 +114,84 @@ impl AutobattlerApp {
                         }
                     }
                     ui.separator();
-
-                    ui.horizontal(|ui| {
-                        if ui.button("New character").clicked() {
-                            self.start_new_character();
+                    ui.group(|ui| {
+                        ui.heading("Fast Character");
+                        ui.label(
+                            "Use a quick-start archetype as the chassis, set a name and weapon, and begin immediately.",
+                        );
+                        ui.horizontal(|ui| {
+                            ui.label("Name");
+                            ui.text_edit_singleline(&mut self.fast_start_name);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Run seed");
+                            let mut seed_value = self.run_seed.min(i64::MAX as u64) as i64;
+                            if ui
+                                .add(egui::DragValue::new(&mut seed_value).speed(1.0))
+                                .changed()
+                            {
+                                self.run_seed = seed_value.max(0) as u64;
+                            }
+                        });
+                        ui.label("Archetype");
+                        if self.quick_start_presets.is_empty() {
+                            ui.label("No quick-start presets found.");
+                        } else {
+                            egui::ScrollArea::vertical()
+                                .max_height(140.0)
+                                .show(ui, |ui| {
+                                    for (idx, preset) in
+                                        self.quick_start_presets.entries().iter().enumerate()
+                                    {
+                                        let selected = self.selected_quick_start == Some(idx);
+                                        let label = format!(
+                                            "{} (Lvl {}, {}, {})",
+                                            preset.name, preset.level, preset.weapon, preset.armor
+                                        );
+                                        if ui.selectable_label(selected, label).clicked() {
+                                            self.selected_quick_start = Some(idx);
+                                        }
+                                    }
+                                });
+                        }
+                        ui.horizontal(|ui| {
+                            ui.label("Weapon");
+                            let mut weapon_index =
+                                self.weapon_catalog.index_of(self.fast_start_weapon);
+                            let weapon_label = self
+                                .weapon_catalog
+                                .get(self.fast_start_weapon)
+                                .map(|weapon| weapon.name.as_str())
+                                .unwrap_or("Unknown");
+                            searchable_select(
+                                ui,
+                                "fast_start_weapon",
+                                weapon_label,
+                                &mut weapon_index,
+                                self.weapon_catalog
+                                    .entries()
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(idx, weapon)| (idx, weapon.name.clone(), true)),
+                            );
+                            if let Some(id) = self.weapon_catalog.id_from_index(weapon_index) {
+                                self.fast_start_weapon = id;
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            let can_start = !self.quick_start_presets.is_empty();
+                            if ui
+                                .add_enabled(can_start, egui::Button::new("Create And Start"))
+                                .clicked()
+                            {
+                                self.start_fast_run();
+                            }
+                            if ui.button("Open Full Builder").clicked() {
+                                self.start_new_character();
+                            }
+                        });
+                        if let Some(status) = self.fast_start_status.as_ref() {
+                            ui.small(status);
                         }
                     });
                     ui.separator();
@@ -97,7 +200,7 @@ impl AutobattlerApp {
                         ui.label("No quick-start presets found.");
                     } else {
                         egui::ScrollArea::vertical()
-                            .max_height(160.0)
+                            .max_height(120.0)
                             .show(ui, |ui| {
                                 for (idx, preset) in
                                     self.quick_start_presets.entries().iter().enumerate()
@@ -1055,6 +1158,8 @@ impl AutobattlerApp {
                             && run_view.live_fight.is_none()
                             && run_view.pending_encounter.is_none()
                             && run_view.pending_event.is_none()
+                            && run_view.pending_treasure.is_none()
+                            && run_view.pending_merchant.is_none()
                     })
                     .unwrap_or(false);
                 if should_prepare_encounter {
@@ -1066,8 +1171,14 @@ impl AutobattlerApp {
                 let mut fight_encounter = false;
                 let mut resolve_event_choice: Option<String> = None;
                 let mut ignore_event = false;
+                let mut claim_treasure: Option<usize> = None;
+                let mut skip_treasure = false;
+                let mut buy_merchant_offer: Option<usize> = None;
+                let mut leave_merchant = false;
                 let mut confirm_levelup = false;
                 let mut finish_fight = false;
+                let mut equip_stash_index: Option<usize> = None;
+                let upcoming_rooms = self.upcoming_room_sequence(5);
                 egui::SidePanel::left("run_panel")
                     .resizable(false)
                     .min_width(RUN_PANEL_WIDTH)
@@ -1079,7 +1190,9 @@ impl AutobattlerApp {
                             ui.label("No active run.");
                             return;
                         };
-                        if run_view.run_over {
+                        if run_view.victory {
+                            ui.colored_label(Color32::from_rgb(84, 180, 110), "Run cleared!");
+                        } else if run_view.run_over {
                             ui.colored_label(Color32::from_rgb(190, 80, 80), "Run over!");
                         }
                         ui.label(format!("Run seed: {}", run_view.seed_context.run_seed));
@@ -1095,6 +1208,16 @@ impl AutobattlerApp {
                         if let Some(seed) = run_view.seed_context.event_seed {
                             ui.label(format!("Event seed: {seed}"));
                         }
+                        if let Some(seed) = run_view.seed_context.reward_seed {
+                            ui.label(format!("Reward seed: {seed}"));
+                        }
+                        ui.separator();
+                        ui.label("Upcoming rooms");
+                        ui.horizontal_wrapped(|ui| {
+                            for room in &upcoming_rooms {
+                                ui.label(format!("[{}]", room.label()));
+                            }
+                        });
                         ui.separator();
                         if let Some(checkpoint) = run_view.pending_levelup.as_mut() {
                             ui.heading("Level-Up Checkpoint");
@@ -1196,7 +1319,7 @@ impl AutobattlerApp {
                             && !run_view.run_over
                             && run_view.pending_levelup.is_none()
                             && run_view.awaiting_downtime_choice;
-                        let downtime_days: u32 = 8;
+                        let downtime_days = self.autobattler_config.rest_days_between_encounters;
                         let downtime_steps = downtime_days.saturating_mul(4);
                         ui.label(format!(
                             "Downtime per encounter: {downtime_days} days ({downtime_steps} steps)."
@@ -1238,7 +1361,48 @@ impl AutobattlerApp {
                                     .size(16.0),
                             );
                         } else if run_view.live_fight.is_none() && !run_view.run_over {
-                            if let Some(event) = run_view.pending_event.as_ref() {
+                            if let Some(merchant) = run_view.pending_merchant.as_ref() {
+                                ui.heading("Merchant");
+                                ui.label(&merchant.title);
+                                ui.separator();
+                                for (idx, offer) in merchant.stock.iter().enumerate() {
+                                    ui.group(|ui| {
+                                        ui.label(format!(
+                                            "{} [{}]",
+                                            offer.gear.label(),
+                                            offer.gear.slot.label()
+                                        ));
+                                        ui.label(format!("{} gp", offer.price_gp));
+                                        ui.small(&offer.blurb);
+                                        if ui.button("Buy").clicked() {
+                                            buy_merchant_offer = Some(idx);
+                                        }
+                                    });
+                                }
+                                if ui.button("Leave merchant").clicked() {
+                                    leave_merchant = true;
+                                }
+                            } else if let Some(treasure) = run_view.pending_treasure.as_ref() {
+                                ui.heading("Treasure");
+                                ui.label(&treasure.title);
+                                ui.separator();
+                                for (idx, offer) in treasure.options.iter().enumerate() {
+                                    ui.group(|ui| {
+                                        ui.label(format!(
+                                            "{} [{}]",
+                                            offer.gear.label(),
+                                            offer.gear.slot.label()
+                                        ));
+                                        ui.small(&offer.blurb);
+                                        if ui.button("Take").clicked() {
+                                            claim_treasure = Some(idx);
+                                        }
+                                    });
+                                }
+                                if ui.button("Leave cache").clicked() {
+                                    skip_treasure = true;
+                                }
+                            } else if let Some(event) = run_view.pending_event.as_ref() {
                                 ui.heading("Encounter Event");
                                 ui.label(format!("{}: {}", event.event.name, event.event.description));
                                 ui.separator();
@@ -1296,6 +1460,12 @@ impl AutobattlerApp {
                             &self.creation.player,
                             &self.weapon_catalog,
                             &mut run_view.last_log,
+                        );
+                        ui.separator();
+                        render_inventory_panel(
+                            ui,
+                            &run_view.run_state.inventory,
+                            &mut equip_stash_index,
                         );
                         if let Some(live) = run_view.live_fight.as_mut() {
                             let state_label = if live.running { "Running" } else { "Paused" };
@@ -1408,19 +1578,7 @@ impl AutobattlerApp {
                         return;
                     }
                     let Some(live) = run_view.live_fight.as_ref() else {
-                        ui.centered_and_justified(|ui| {
-                            if run_view.awaiting_downtime_choice {
-                                ui.label("Encounter complete. Choose Rest or Activity.");
-                            } else if run_view.pending_levelup.is_some() {
-                                ui.label("Allocate level-up slots, then confirm.");
-                            } else if run_view.pending_event.is_some() {
-                                ui.label("Choose an event option or leave.");
-                            } else if run_view.pending_encounter.is_some() {
-                                ui.label("Choose Run or Fight to resolve the encounter.");
-                            } else {
-                                ui.label("Starting encounter...");
-                            }
-                        });
+                        draw_run_room_placeholder(ui, run_view);
                         return;
                     };
                     let (rect, _) =
@@ -1461,6 +1619,18 @@ impl AutobattlerApp {
                 if ignore_event {
                     self.ignore_pending_event();
                 }
+                if let Some(index) = claim_treasure {
+                    self.claim_treasure(index);
+                }
+                if skip_treasure {
+                    self.skip_treasure();
+                }
+                if let Some(index) = buy_merchant_offer {
+                    self.buy_merchant_offer(index);
+                }
+                if leave_merchant {
+                    self.leave_merchant();
+                }
                 if skip_encounter {
                     self.skip_encounter();
                 }
@@ -1469,6 +1639,9 @@ impl AutobattlerApp {
                 }
                 if let Some(action) = next_action {
                     self.run_action(action);
+                }
+                if let Some(index) = equip_stash_index {
+                    self.equip_stash_gear(index);
                 }
 
                 let available_points = self.available_points();
@@ -1615,10 +1788,17 @@ fn render_character_summary(
             }
             ui.separator();
             ui.label("Points");
-            ui.label(format!("BP: {}", available_points.bp));
-            ui.label(format!("LP: {}", available_points.lp));
-            ui.label(format!("AP: {}", available_points.ap));
-            ui.label(format!("RP: {}", available_points.rp));
+            if let Some(run_view) = run_view {
+                ui.label(format!("BP: {}", run_view.run_state.player.points.bp));
+                ui.label(format!("LP: {}", run_view.run_state.player.points.lp));
+                ui.label(format!("AP: {}", run_view.run_state.player.points.ap));
+                ui.label(format!("RP: {}", run_view.run_state.player.points.rp));
+            } else {
+                ui.label(format!("BP: {}", available_points.bp));
+                ui.label(format!("LP: {}", available_points.lp));
+                ui.label(format!("AP: {}", available_points.ap));
+                ui.label(format!("RP: {}", available_points.rp));
+            }
             ui.separator();
             ui.label("Details");
             ui.label(format!("Seed: {}", creation.run_seed));
@@ -1684,6 +1864,25 @@ fn render_character_summary(
                 ui.label(format!("Depth: {}", run_view.run_state.run_depth));
                 ui.label(format!("Days: {}", run_view.days_elapsed));
                 ui.label(format!("Gold: {}", run_view.run_state.inventory.gold));
+                if let Some(weapon) = run_view.run_state.inventory.loadout.weapon.as_ref() {
+                    ui.label(format!("Weapon: {}", weapon.label()));
+                }
+                if let Some(armor) = run_view.run_state.inventory.loadout.armor.as_ref() {
+                    ui.label(format!("Armor: {}", armor.label()));
+                }
+                if let Some(shield) = run_view.run_state.inventory.loadout.shield.as_ref() {
+                    ui.label(format!("Shield: {}", shield.label()));
+                } else {
+                    ui.label("Shield: none");
+                }
+                ui.label(format!(
+                    "Stash items: {}",
+                    run_view.run_state.inventory.stash.len()
+                ));
+                ui.label(format!(
+                    "Curios: {}",
+                    run_view.run_state.inventory.items.len()
+                ));
                 ui.label(format!(
                     "Wounds: {}",
                     run_view.run_state.total_wound_damage()
@@ -1717,6 +1916,160 @@ fn render_character_summary(
                 }
             }
         });
+}
+
+fn render_inventory_panel(
+    ui: &mut egui::Ui,
+    inventory: &Inventory,
+    equip_stash_index: &mut Option<usize>,
+) {
+    ui.heading("Inventory");
+    if let Some(weapon) = inventory.loadout.weapon.as_ref() {
+        ui.label(format!("Weapon: {}", weapon.label()));
+    }
+    if let Some(armor) = inventory.loadout.armor.as_ref() {
+        ui.label(format!("Armor: {}", armor.label()));
+    }
+    if let Some(shield) = inventory.loadout.shield.as_ref() {
+        ui.label(format!("Shield: {}", shield.label()));
+    } else {
+        ui.label("Shield: none");
+    }
+    if !inventory.items.is_empty() {
+        ui.label(format!("Curios: {}", inventory.items.join(", ")));
+    }
+    if inventory.stash.is_empty() {
+        ui.small("No stash gear yet. Treasure rooms and merchants add options here.");
+        return;
+    }
+    egui::ScrollArea::vertical()
+        .max_height(180.0)
+        .show(ui, |ui| {
+            for (idx, gear) in inventory.stash.iter().enumerate() {
+                ui.group(|ui| {
+                    ui.label(format!("{} [{}]", gear.label(), gear.slot.label()));
+                    ui.horizontal(|ui| {
+                        ui.small(format!("Value {} gp", gear.value_gp));
+                        if ui.small_button("Equip").clicked() {
+                            *equip_stash_index = Some(idx);
+                        }
+                    });
+                });
+            }
+        });
+}
+
+fn current_room_kind(run_view: &RunViewState) -> Option<RunRoomKind> {
+    if run_view.pending_merchant.is_some() {
+        Some(RunRoomKind::Merchant)
+    } else if run_view.pending_treasure.is_some() {
+        Some(RunRoomKind::Treasure)
+    } else if run_view.pending_event.is_some() {
+        Some(RunRoomKind::Event)
+    } else if let Some(encounter) = run_view.pending_encounter.as_ref() {
+        if matches!(encounter.tier, crate::core::gameplay::EncounterTier::Boss) {
+            Some(RunRoomKind::Boss)
+        } else {
+            Some(RunRoomKind::Encounter)
+        }
+    } else if run_view.victory {
+        Some(RunRoomKind::Boss)
+    } else {
+        None
+    }
+}
+
+fn draw_run_room_placeholder(ui: &mut egui::Ui, run_view: &RunViewState) {
+    let room_kind = current_room_kind(run_view);
+    let status = if run_view.victory {
+        "The run is complete. The boss fell and the expedition is over.".to_string()
+    } else if run_view.run_over {
+        "The run ended in defeat. Start a new fighter or load a checkpoint.".to_string()
+    } else if run_view.awaiting_downtime_choice {
+        "Encounter complete. Choose Rest or Activity before the next room.".to_string()
+    } else if run_view.pending_levelup.is_some() {
+        "Allocate level-up slots, then confirm the checkpoint.".to_string()
+    } else if let Some(kind) = room_kind {
+        kind.description().to_string()
+    } else {
+        "Starting encounter...".to_string()
+    };
+
+    ui.centered_and_justified(|ui| {
+        ui.vertical_centered(|ui| {
+            if let Some(kind) = room_kind {
+                ui.horizontal_centered(|ui| {
+                    ui.add(
+                        egui::Image::new(egui::include_image!(
+                            "../../assets/placeholders/kenney/dungeon/floor.png"
+                        ))
+                        .fit_to_exact_size(egui::vec2(64.0, 64.0)),
+                    );
+                    match kind {
+                        RunRoomKind::Encounter | RunRoomKind::Event => {
+                            ui.add(
+                                egui::Image::new(egui::include_image!(
+                                    "../../assets/placeholders/kenney/characters/hero.png"
+                                ))
+                                .fit_to_exact_size(egui::vec2(96.0, 96.0)),
+                            );
+                            ui.add(
+                                egui::Image::new(egui::include_image!(
+                                    "../../assets/placeholders/kenney/characters/enemy.png"
+                                ))
+                                .fit_to_exact_size(egui::vec2(96.0, 96.0)),
+                            );
+                        }
+                        RunRoomKind::Boss => {
+                            ui.add(
+                                egui::Image::new(egui::include_image!(
+                                    "../../assets/placeholders/kenney/characters/hero.png"
+                                ))
+                                .fit_to_exact_size(egui::vec2(96.0, 96.0)),
+                            );
+                            ui.add(
+                                egui::Image::new(egui::include_image!(
+                                    "../../assets/placeholders/kenney/characters/boss.png"
+                                ))
+                                .fit_to_exact_size(egui::vec2(110.0, 110.0)),
+                            );
+                        }
+                        RunRoomKind::Treasure => {
+                            ui.add(
+                                egui::Image::new(egui::include_image!(
+                                    "../../assets/placeholders/kenney/dungeon/stairs.png"
+                                ))
+                                .fit_to_exact_size(egui::vec2(96.0, 96.0)),
+                            );
+                        }
+                        RunRoomKind::Merchant => {
+                            ui.add(
+                                egui::Image::new(egui::include_image!(
+                                    "../../assets/placeholders/kenney/dungeon/door.png"
+                                ))
+                                .fit_to_exact_size(egui::vec2(96.0, 96.0)),
+                            );
+                            ui.add(
+                                egui::Image::new(egui::include_image!(
+                                    "../../assets/placeholders/kenney/characters/hero.png"
+                                ))
+                                .fit_to_exact_size(egui::vec2(96.0, 96.0)),
+                            );
+                        }
+                    }
+                    ui.add(
+                        egui::Image::new(egui::include_image!(
+                            "../../assets/placeholders/kenney/dungeon/floor.png"
+                        ))
+                        .fit_to_exact_size(egui::vec2(64.0, 64.0)),
+                    );
+                });
+                ui.add_space(12.0);
+                ui.heading(kind.label());
+            }
+            ui.label(status);
+        });
+    });
 }
 
 fn render_wound_status(

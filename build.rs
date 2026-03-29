@@ -97,10 +97,26 @@ fn main() {
         let obj_path = match target_env.as_str() {
             "msvc" => match compile_msvc(&rc_path, &staging_dir, icon.bin) {
                 Ok(path) => path,
+                Err(err) if is_missing_icon_tool_error(&err.to_string()) => {
+                    eprintln!(
+                        "Warning: skipping icon embedding for {} because the Windows resource tool is unavailable: {}",
+                        icon.bin,
+                        err
+                    );
+                    continue;
+                }
                 Err(err) => panic!("Failed to compile {}: {}", icon.bin, err),
             },
             "gnu" => match compile_gnu(&rc_path, &staging_dir, icon.bin) {
                 Ok(path) => path,
+                Err(err) if is_missing_icon_tool_error(&err.to_string()) => {
+                    eprintln!(
+                        "Warning: skipping icon embedding for {} because windres is unavailable: {}",
+                        icon.bin,
+                        err
+                    );
+                    continue;
+                }
                 Err(err) => panic!("Failed to compile {}: {}", icon.bin, err),
             },
             other => {
@@ -209,4 +225,8 @@ fn run_tool(candidates: &[&str], args: &[String]) -> Result<(), String> {
         candidates.join(", "),
         last_err
     ))
+}
+
+fn is_missing_icon_tool_error(err: &str) -> bool {
+    err.contains("Required tool not found")
 }

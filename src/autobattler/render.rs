@@ -377,6 +377,14 @@ fn embedded_race_png(id: &str) -> Option<&'static [u8]> {
             env!("CARGO_MANIFEST_DIR"),
             "/assets/sprites/races/limmtrig.png"
         ))),
+        "cirodes" => Some(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/sprites/races/cirodes.png"
+        ))),
+        "qaraz" => Some(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/sprites/races/qaraz.png"
+        ))),
         "vorova_female" => Some(include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/assets/sprites/races/vorova_female.png"
@@ -426,6 +434,14 @@ fn embedded_race_pained_png(id: &str) -> Option<&'static [u8]> {
         "limmtrig" => Some(include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/assets/sprites/races/limmtrig_pained.png"
+        ))),
+        "cirodes" => Some(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/sprites/races/cirodes_pained.png"
+        ))),
+        "qaraz" => Some(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/sprites/races/qaraz_pained.png"
         ))),
         "vorova_female" => Some(include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),

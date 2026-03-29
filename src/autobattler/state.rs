@@ -8,8 +8,8 @@ use crate::core::gameplay::{DepthBand, EncounterTier, EventSpec, RunOutcome, Run
 use crate::core::rng::{SimRng, derive_seed};
 use crate::core::sim::SimState;
 use crate::core::types::{
-    EnemyProfile, Inventory, PlayerProfile, PointPools, SkillProgress, TalentSelection,
-    WeaponMasteryProgress,
+    EnemyProfile, EquipmentLoadout, Inventory, InventoryGear, PlayerProfile, PointPools,
+    SkillProgress, TalentSelection, WeaponMasteryProgress,
 };
 use crate::game_logic::{PlayerConfig, WeaponId};
 
@@ -285,6 +285,56 @@ pub struct DowntimeFeedback {
     pub animation_seconds: f32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RunRoomKind {
+    Encounter,
+    Event,
+    Treasure,
+    Merchant,
+    Boss,
+}
+
+impl RunRoomKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            RunRoomKind::Encounter => "Fight",
+            RunRoomKind::Event => "Event",
+            RunRoomKind::Treasure => "Treasure",
+            RunRoomKind::Merchant => "Merchant",
+            RunRoomKind::Boss => "Boss",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            RunRoomKind::Encounter => "A straight fight for gold, XP, and mastery.",
+            RunRoomKind::Event => "A narrative room with a skill check or a forced fight.",
+            RunRoomKind::Treasure => "Choose one piece of loot to add to your run inventory.",
+            RunRoomKind::Merchant => "Spend gold on a better weapon, armor, or shield.",
+            RunRoomKind::Boss => "The run-ending fight. Win it and the run is complete.",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct GearOfferPreview {
+    pub gear: InventoryGear,
+    pub price_gp: u32,
+    pub blurb: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct TreasurePreview {
+    pub title: String,
+    pub options: Vec<GearOfferPreview>,
+}
+
+#[derive(Clone, Debug)]
+pub struct MerchantPreview {
+    pub title: String,
+    pub stock: Vec<GearOfferPreview>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LevelUpCheckpoint {
     pub levels_gained: u8,
@@ -335,12 +385,15 @@ pub struct RunViewState {
     pub seed_context: SeedContext,
     pub pending_encounter: Option<EncounterPreview>,
     pub pending_event: Option<EventPreview>,
+    pub pending_treasure: Option<TreasurePreview>,
+    pub pending_merchant: Option<MerchantPreview>,
     pub last_outcome: Option<RunOutcome>,
     pub last_action: Option<RunAction>,
     pub last_log: Vec<String>,
     pub days_elapsed: u32,
     pub training_days: u32,
     pub run_over: bool,
+    pub victory: bool,
     pub awaiting_downtime_choice: bool,
     pub pending_levelup: Option<LevelUpCheckpoint>,
     pub selected_activity: DowntimeActivity,
@@ -355,12 +408,15 @@ impl RunViewState {
             seed_context: SeedContext::default(),
             pending_encounter: None,
             pending_event: None,
+            pending_treasure: None,
+            pending_merchant: None,
             last_outcome: None,
             last_action: None,
             last_log: Vec::new(),
             days_elapsed: 0,
             training_days: 0,
             run_over: false,
+            victory: false,
             awaiting_downtime_choice: false,
             pending_levelup: None,
             selected_activity: DowntimeActivity::default(),
@@ -393,6 +449,7 @@ pub struct SeedContext {
     pub combat_seed: Option<u64>,
     pub loot_seed: Option<u64>,
     pub event_seed: Option<u64>,
+    pub reward_seed: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -704,7 +761,12 @@ impl PlayerProfileSave {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InventorySave {
     pub gold: u32,
+    #[serde(default)]
     pub items: Vec<String>,
+    #[serde(default)]
+    pub stash: Vec<InventoryGear>,
+    #[serde(default)]
+    pub loadout: EquipmentLoadout,
 }
 
 impl InventorySave {
@@ -712,6 +774,8 @@ impl InventorySave {
         Self {
             gold: inventory.gold,
             items: inventory.items.clone(),
+            stash: inventory.stash.clone(),
+            loadout: inventory.loadout.clone(),
         }
     }
 
@@ -719,6 +783,8 @@ impl InventorySave {
         Inventory {
             gold: self.gold,
             items: self.items.clone(),
+            stash: self.stash.clone(),
+            loadout: self.loadout.clone(),
         }
     }
 }
@@ -808,6 +874,8 @@ pub struct RunSave {
     pub days_elapsed: u32,
     pub training_days: u32,
     pub run_over: bool,
+    #[serde(default)]
+    pub victory: bool,
     #[serde(default)]
     pub awaiting_downtime_choice: bool,
     #[serde(default)]

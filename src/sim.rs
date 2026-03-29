@@ -182,22 +182,31 @@ fn format_knock_aside_roll(roll: &KnockAsideRollBreakdown) -> String {
 }
 
 fn format_damage_breakdown(breakdown: &DamageBreakdown) -> String {
+    let mut raw_terms = format!("roll {}", breakdown.rolled_damage);
+    let mods = breakdown.raw_damage - breakdown.rolled_damage;
+    if mods > 0 {
+        raw_terms.push_str(&format!(" + mods {}", mods));
+    } else if mods < 0 {
+        raw_terms.push_str(&format!(" - mods {}", -mods));
+    }
     format!(
-        "raw {} (roll {} + str {}) - dr {} = {}",
-        breakdown.raw_damage,
-        breakdown.rolled_damage,
-        breakdown.strength_damage,
-        breakdown.effective_armor_dr,
-        breakdown.final_damage
+        "raw {} ({}) - dr {} = {}",
+        breakdown.raw_damage, raw_terms, breakdown.effective_armor_dr, breakdown.final_damage
     )
 }
 
 fn format_shield_damage_breakdown(breakdown: &ShieldDamageBreakdown) -> String {
+    let mut raw_terms = format!("roll {}", breakdown.rolled_damage);
+    let mods = breakdown.raw_damage - breakdown.rolled_damage;
+    if mods > 0 {
+        raw_terms.push_str(&format!(" + mods {}", mods));
+    } else if mods < 0 {
+        raw_terms.push_str(&format!(" - mods {}", -mods));
+    }
     let mut text = format!(
-        "shield raw {} (roll {} + str {}) - sdr {} - dr {} = hp {}",
+        "shield raw {} ({}) - sdr {} - dr {} = hp {}",
         breakdown.raw_damage,
-        breakdown.rolled_damage,
-        breakdown.strength_damage,
+        raw_terms,
         breakdown.shield_dr,
         breakdown.effective_armor_dr,
         breakdown.hp_damage
@@ -206,4 +215,45 @@ fn format_shield_damage_breakdown(breakdown: &ShieldDamageBreakdown) -> String {
         text.push_str(" (shield broken)");
     }
     text
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn damage_breakdown_shows_hidden_modifiers() {
+        let breakdown = DamageBreakdown {
+            rolled_damage: 5,
+            strength_damage: 2,
+            raw_damage: 5,
+            armor_dr: 7,
+            armor_penetration: 0,
+            effective_armor_dr: 7,
+            final_damage: 0,
+        };
+        assert_eq!(
+            format_damage_breakdown(&breakdown),
+            "raw 5 (roll 5) - dr 7 = 0"
+        );
+    }
+
+    #[test]
+    fn shield_breakdown_shows_hidden_modifiers() {
+        let breakdown = ShieldDamageBreakdown {
+            rolled_damage: 4,
+            strength_damage: 3,
+            raw_damage: 10,
+            shield_dr: 2,
+            armor_dr: 5,
+            armor_penetration: 0,
+            effective_armor_dr: 5,
+            hp_damage: 3,
+            shield_broken: false,
+        };
+        assert_eq!(
+            format_shield_damage_breakdown(&breakdown),
+            "shield raw 10 (roll 4 + mods 6) - sdr 2 - dr 5 = hp 3"
+        );
+    }
 }

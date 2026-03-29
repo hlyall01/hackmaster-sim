@@ -2261,18 +2261,101 @@ fn render_player_editor(
             if let Some(offhand) = combatant.sheet.offense.offhand.as_ref() {
                 ui.separator();
                 ui.label("Offhand");
-                ui.label(format!("Weapon speed: {}", offhand.weapon.speed));
+                let offhand_is_ranged = offhand.weapon.range_bands_feet.is_some();
+                let offhand_called_shot_delay_expr = if player.called_shot {
+                    if game_logic::called_shot_deceptive_defender_effect_active(opponent) {
+                        game_logic::CALLED_SHOT_DECEPTIVE_DEFENDER_DELAY_EXPR
+                    } else {
+                        game_logic::called_shot_delay_expr_for_player(player, offhand_is_ranged)
+                    }
+                } else {
+                    ""
+                };
+                if player.called_shot {
+                    ui.label(format!(
+                        "Weapon speed: {} + {} (called shot)",
+                        offhand.weapon.speed, offhand_called_shot_delay_expr
+                    ));
+                } else {
+                    ui.label(format!("Weapon speed: {}", offhand.weapon.speed));
+                }
                 let offhand_shield_damage =
                     offhand.weapon.shield_damage_expr.as_deref().unwrap_or("-");
                 ui.label(format!("Weapon shield damage: {}", offhand_shield_damage));
-                ui.label(format!("Attack roll: d20p + {}", offhand.attack_bonus));
-                ui.label(format!(
-                    "Damage roll: {} + {} - 2 vs target DR {} (AP {})",
-                    offhand.weapon.damage_expr,
-                    offhand.strength_damage,
-                    target_armor_dr,
-                    offhand.weapon.armor_penetration
-                ));
+                let offhand_fight_defensively_penalty =
+                    if combatant.sheet.maneuvers.fight_defensively {
+                        combatant
+                            .sheet
+                            .maneuvers
+                            .fight_defensively_attack_penalty
+                            .max(0)
+                    } else {
+                        0
+                    };
+                let offhand_effective_attack_bonus =
+                    offhand.attack_bonus - offhand_fight_defensively_penalty;
+                if player.called_shot {
+                    if offhand_fight_defensively_penalty > 0 {
+                        ui.label(format!(
+                            "Attack roll: d20p + {} (fight defensively: -{}; called shot: hit if > defense; precise at defense +{} vs current target armor, light/medium/heavy +{}/+{}/+{})",
+                            offhand_effective_attack_bonus,
+                            offhand_fight_defensively_penalty,
+                            called_shot_target_bonus_vs_opponent,
+                            called_shot_light_bonus,
+                            called_shot_medium_bonus,
+                            called_shot_heavy_bonus
+                        ));
+                    } else {
+                        ui.label(format!(
+                            "Attack roll: d20p + {} (called shot: hit if > defense; precise at defense +{} vs current target armor, light/medium/heavy +{}/+{}/+{})",
+                            offhand_effective_attack_bonus,
+                            called_shot_target_bonus_vs_opponent,
+                            called_shot_light_bonus,
+                            called_shot_medium_bonus,
+                            called_shot_heavy_bonus
+                        ));
+                    }
+                } else if offhand_fight_defensively_penalty > 0 {
+                    ui.label(format!(
+                        "Attack roll: d20p + {} (fight defensively: -{})",
+                        offhand_effective_attack_bonus, offhand_fight_defensively_penalty
+                    ));
+                } else {
+                    ui.label(format!(
+                        "Attack roll: d20p + {}",
+                        offhand_effective_attack_bonus
+                    ));
+                }
+
+                let offhand_damage_penalty =
+                    combatant.sheet.maneuvers.dualwield_offhand_damage_penalty;
+                let offhand_damage_penalty_label = if offhand_damage_penalty > 0 {
+                    format!(" + {}", offhand_damage_penalty)
+                } else if offhand_damage_penalty < 0 {
+                    format!(" - {}", -offhand_damage_penalty)
+                } else {
+                    String::new()
+                };
+                if player.called_shot {
+                    ui.label(format!(
+                        "Damage roll: {} + {}{} vs target DR {} on precise called shot (near-miss DR {}, AP {})",
+                        offhand.weapon.damage_expr,
+                        offhand.strength_damage,
+                        offhand_damage_penalty_label,
+                        target_natural_dr,
+                        target_armor_dr,
+                        offhand.weapon.armor_penetration
+                    ));
+                } else {
+                    ui.label(format!(
+                        "Damage roll: {} + {}{} vs target DR {} (AP {})",
+                        offhand.weapon.damage_expr,
+                        offhand.strength_damage,
+                        offhand_damage_penalty_label,
+                        target_armor_dr,
+                        offhand.weapon.armor_penetration
+                    ));
+                }
             }
         }
     }

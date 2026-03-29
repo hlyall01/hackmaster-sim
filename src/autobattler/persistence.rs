@@ -141,7 +141,9 @@ mod tests {
         RunStateSave, WoundSave,
     };
     use crate::core::gameplay::{DepthBand, EncounterTier};
-    use crate::core::types::TalentSelection;
+    use crate::core::types::{
+        EquipmentLoadout, EquipmentSlot, InventoryGear, TalentSelection,
+    };
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_json_path(prefix: &str) -> PathBuf {
@@ -289,6 +291,8 @@ mod tests {
             inventory: crate::autobattler::state::InventorySave {
                 gold: 12,
                 items: vec![],
+                stash: vec![],
+                loadout: Default::default(),
             },
             run_depth: 3,
             seed: 99,
@@ -310,6 +314,7 @@ mod tests {
             days_elapsed: 16,
             training_days: 8,
             run_over: false,
+            victory: false,
             awaiting_downtime_choice: false,
             pending_levelup: Some(LevelUpCheckpoint {
                 levels_gained: 1,
@@ -327,6 +332,141 @@ mod tests {
         let loaded = read_run_save(&path).expect("read run save");
         assert_eq!(loaded.pending_levelup.as_ref().map(|p| p.bp_slots), Some(4));
         assert_eq!(loaded.run_state.last_encounter_tier, EncounterTier::Elite);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn run_save_roundtrip_preserves_inventory_loadout_and_victory() {
+        let path = temp_json_path("run_save_inventory_roundtrip");
+        let equipped_weapon = InventoryGear {
+            slot: EquipmentSlot::Weapon,
+            name: "Longsword".to_string(),
+            material_tier: 2,
+            value_gp: 96,
+        };
+        let equipped_armor = InventoryGear {
+            slot: EquipmentSlot::Armor,
+            name: "Mail".to_string(),
+            material_tier: 1,
+            value_gp: 78,
+        };
+        let stash_item = InventoryGear {
+            slot: EquipmentSlot::Shield,
+            name: "Round Shield".to_string(),
+            material_tier: 0,
+            value_gp: 25,
+        };
+        let save = RunSave {
+            version: RUN_SAVE_VERSION,
+            name: "Cleared Run".to_string(),
+            character: CharacterSave {
+                version: SAVE_VERSION,
+                name: "Rhea".to_string(),
+                stats: vec![],
+                race_id: None,
+                talents: vec![],
+                bp_history: vec![],
+                weapon_name: equipped_weapon.name.clone(),
+                armor_label: equipped_armor.name.clone(),
+                shield_name: stash_item.name.clone(),
+                alignment: String::new(),
+                honor: 12,
+                background: String::new(),
+                height: String::new(),
+                weight: String::new(),
+                age: String::new(),
+                handedness: String::new(),
+                quirks: vec![],
+                flaws: vec![],
+                skills: vec![],
+                skill_levels: vec![],
+                proficiencies: vec![],
+                starting_money: 0,
+                money_rolled: false,
+            },
+            run_state: RunStateSave {
+                player: crate::autobattler::state::PlayerProfileSave {
+                    name: "Rhea".to_string(),
+                    level: 4,
+                    xp: 85,
+                    base_stats: crate::autobattler::state::AbilitySetSave {
+                        strength: AbilityScoreSave {
+                            base: 11,
+                            percentile: 0,
+                        },
+                        intelligence: 10,
+                        wisdom: 10,
+                        dexterity: AbilityScoreSave {
+                            base: 12,
+                            percentile: 0,
+                        },
+                        constitution: 10,
+                        looks: 10,
+                        charisma: 10,
+                    },
+                    ability_scores_full: None,
+                    progression: Default::default(),
+                    points: Default::default(),
+                    banked_points: Default::default(),
+                    honor: 12,
+                    alignment: None,
+                    race_id: None,
+                    background: None,
+                    quirks: vec![],
+                    flaws: vec![],
+                    skills: vec![],
+                    skill_levels: vec![],
+                    proficiencies: vec![],
+                    weapon_masteries: vec![],
+                    talents: vec![],
+                },
+                inventory: crate::autobattler::state::InventorySave {
+                    gold: 143,
+                    items: vec!["healing salve".to_string()],
+                    stash: vec![stash_item.clone()],
+                    loadout: EquipmentLoadout {
+                        weapon: Some(equipped_weapon.clone()),
+                        armor: Some(equipped_armor.clone()),
+                        shield: None,
+                    },
+                },
+                run_depth: 6,
+                seed: 4242,
+                encounter_index: 9,
+                last_encounter_tier: EncounterTier::Boss,
+                last_encounter_band: DepthBand::Veteran,
+                event_flags: vec!["merchant_seen".to_string()],
+                seen_event_ids: vec!["evt_world_004".to_string()],
+                wounds: vec![],
+            },
+            days_elapsed: 24,
+            training_days: 8,
+            run_over: true,
+            victory: true,
+            awaiting_downtime_choice: false,
+            pending_levelup: None,
+            last_action: Some(RunAction::Rest),
+            selected_activity: DowntimeActivity::WeaponDrills,
+            last_log: vec!["Boss defeated.".to_string()],
+        };
+
+        write_run_save(&path, &save).expect("write run save");
+        let loaded = read_run_save(&path).expect("read run save");
+
+        assert!(loaded.victory);
+        assert!(loaded.run_over);
+        assert_eq!(loaded.run_state.inventory.gold, 143);
+        assert_eq!(loaded.run_state.inventory.items, vec!["healing salve".to_string()]);
+        assert_eq!(loaded.run_state.inventory.stash, vec![stash_item]);
+        assert_eq!(
+            loaded.run_state.inventory.loadout.weapon,
+            Some(equipped_weapon)
+        );
+        assert_eq!(
+            loaded.run_state.inventory.loadout.armor,
+            Some(equipped_armor)
+        );
+
         let _ = fs::remove_file(path);
     }
 }

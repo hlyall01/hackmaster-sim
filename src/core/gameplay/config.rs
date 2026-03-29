@@ -19,7 +19,7 @@ impl Default for AutobattlerConfig {
     fn default() -> Self {
         Self {
             seed: 7,
-            fights_to_run: 5,
+            fights_to_run: 6,
             max_fight_seconds: 120,
             rest_days_between_encounters: 8,
             enemy_weapon: "Battle axe".to_string(),
@@ -64,7 +64,7 @@ impl Default for LootConfig {
         Self {
             gold_min: 8,
             gold_max: 16,
-            xp_per_level: 0,
+            xp_per_level: 18,
             items: Vec::new(),
         }
     }

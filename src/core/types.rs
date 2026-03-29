@@ -99,10 +99,64 @@ impl PointPools {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EquipmentSlot {
+    #[default]
+    Weapon,
+    Armor,
+    Shield,
+}
+
+impl EquipmentSlot {
+    pub fn label(self) -> &'static str {
+        match self {
+            EquipmentSlot::Weapon => "Weapon",
+            EquipmentSlot::Armor => "Armor",
+            EquipmentSlot::Shield => "Shield",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub struct InventoryGear {
+    pub slot: EquipmentSlot,
+    pub name: String,
+    #[serde(default)]
+    pub material_tier: i32,
+    #[serde(default)]
+    pub value_gp: u32,
+}
+
+impl InventoryGear {
+    pub fn label(&self) -> String {
+        if self.material_tier > 0 {
+            format!("{} +{}", self.name, self.material_tier)
+        } else {
+            self.name.clone()
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub struct EquipmentLoadout {
+    #[serde(default)]
+    pub weapon: Option<InventoryGear>,
+    #[serde(default)]
+    pub armor: Option<InventoryGear>,
+    #[serde(default)]
+    pub shield: Option<InventoryGear>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Inventory {
     pub gold: u32,
+    #[serde(default)]
     pub items: Vec<String>,
+    #[serde(default)]
+    pub stash: Vec<InventoryGear>,
+    #[serde(default)]
+    pub loadout: EquipmentLoadout,
 }
 
 impl Inventory {
@@ -112,6 +166,10 @@ impl Inventory {
 
     pub fn add_item(&mut self, item: impl Into<String>) {
         self.items.push(item.into());
+    }
+
+    pub fn add_gear(&mut self, gear: InventoryGear) {
+        self.stash.push(gear);
     }
 }
 
