@@ -776,6 +776,10 @@ pub fn talent_is_implemented(spec: &TalentSpec) -> bool {
             | "critical_mastery"
             | "wounding_criticals"
             | "ranged_critical_mastery"
+            | "two_weapon_fighting"
+            | "improved_two_weapon_fighting"
+            | "greater_two_weapon_fighting"
+            | "perfect_two_weapon_fighting"
             | "stout"
             | "sturdy"
             | "defiant"
@@ -4590,12 +4594,14 @@ mod tests {
         let mut improved = baseline.clone();
         add_talent(&mut improved, TALENT_ID_IMPROVED_TWO_WEAPON_FIGHTING, None);
         let maneuvers = build_maneuvers(&improved);
+        assert_eq!(maneuvers.dualwield_offhand_damage_penalty, -2);
         assert_eq!(maneuvers.dualwield_primary_recovery_penalty, 1.0);
         assert_eq!(maneuvers.dualwield_secondary_recovery_penalty, 2.0);
 
         let mut greater = baseline.clone();
         add_talent(&mut greater, TALENT_ID_GREATER_TWO_WEAPON_FIGHTING, None);
         let maneuvers = build_maneuvers(&greater);
+        assert_eq!(maneuvers.dualwield_offhand_damage_penalty, -2);
         assert_eq!(maneuvers.dualwield_primary_recovery_penalty, 1.0);
         assert_eq!(maneuvers.dualwield_secondary_recovery_penalty, 1.0);
     }
@@ -6445,19 +6451,23 @@ mod tests {
     }
 
     #[test]
-    fn talent_is_implemented_marks_critical_talents_as_supported() {
+    fn talent_is_implemented_marks_runtime_talents_as_supported() {
         let talents = sample_talents();
         for talent_id in [
             "improved_critical",
             "critical_mastery",
             "wounding_criticals",
             "ranged_critical_mastery",
+            "two_weapon_fighting",
+            "improved_two_weapon_fighting",
+            "greater_two_weapon_fighting",
+            "perfect_two_weapon_fighting",
         ] {
             let spec = talents
                 .entries()
                 .iter()
                 .find(|entry| entry.id == talent_id)
-                .expect("missing critical talent");
+                .expect("missing runtime talent");
             assert!(
                 talent_is_implemented(spec),
                 "{talent_id} should be treated as implemented"

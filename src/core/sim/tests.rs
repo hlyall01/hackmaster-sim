@@ -11,7 +11,7 @@ use crate::core::rules::{
     roll_damage_expr_with_detail,
 };
 use crate::core::sim::DamageDie;
-use crate::core::types::RaceSpec;
+use crate::core::types::{RaceSpec, TalentSelection};
 use crate::{data, game_logic};
 use rand::SeedableRng;
 use std::sync::Arc;
@@ -476,6 +476,614 @@ fn find_shield_id_by_name(
                 .unwrap_or(false)
         })
         .and_then(|idx| catalog.id_from_index(idx))
+}
+
+#[derive(Clone, Copy)]
+enum VolfangoMode {
+    OneHanded,
+    DefensiveTwf,
+    OffensiveTwf,
+    OffensiveIwtf,
+    OffensiveGtwf,
+}
+
+#[derive(Debug)]
+struct VolfangoSpeedSnapshot {
+    primary_speed: i32,
+    offhand_speed: Option<i32>,
+    offensive_dualwielding: bool,
+    defensive_dualwielding: bool,
+    offhand_damage_penalty: i32,
+    primary_recovery_penalty: i32,
+    secondary_recovery_penalty: i32,
+}
+
+fn volfango_hardcoded_player(
+    weapon_catalog: &game_logic::WeaponCatalog,
+    armor_catalog: &game_logic::ArmorCatalog,
+    shield_catalog: &game_logic::ShieldCatalog,
+    race_catalog: &[RaceSpec],
+) -> game_logic::PlayerConfig {
+    let short_sword = find_weapon_id_by_name(weapon_catalog, "Short sword")
+        .expect("missing Short sword weapon for Volfango fixture");
+    let mut player = game_logic::PlayerConfig::new("Volfango Drakos", short_sword);
+    player.level = 5;
+    player.progression = Progression::new(
+        ProgressionTier::III,
+        ProgressionTier::II,
+        ProgressionTier::III,
+        ProgressionTier::III,
+    );
+    player.base_hp = 10;
+    player.move_speed = 20.0;
+    player.strength_base = 10;
+    player.strength_pct = 64;
+    player.dex_base = 20;
+    player.dex_pct = 56;
+    player.intelligence = 15;
+    player.wisdom = 12;
+    player.constitution = 11;
+    player.looks = 8;
+    player.charisma = 5;
+    player.weapon_id = short_sword;
+    player.offhand_weapon_id = Some(short_sword);
+    player.armor_id = find_armor_id_by_name(armor_catalog, "Gambeson")
+        .expect("missing Gambeson armor for Volfango fixture");
+    player.shield_id =
+        find_shield_id_by_name(shield_catalog, "None").expect("missing None shield entry");
+    player.weapon_material_tier = 1;
+    player.offhand_weapon_material_tier = 1;
+    player.armor_material_tier = 2;
+    player.projectile_material_tier = 0;
+    player.offhand_projectile_material_tier = 0;
+    player.shield_material_tier = 0;
+    player.mastery_attack = 1;
+    player.mastery_defense = 1;
+    player.mastery_damage = 1;
+    player.mastery_speed = 1;
+    player.shield_mastery_defense = 0;
+    player.shield_mastery_speed = 0;
+    player.two_hand_grip = false;
+    player.fight_defensively = true;
+    player.fight_defensively_penalty = 8;
+    player.defensive_dualwielding = true;
+    player.offensive_dualwielding = false;
+    player.race_id = Some("ithican".to_string());
+    player.race_applied = false;
+    player.knockback_step =
+        game_logic::knockback_step_for_race_id(player.race_id.as_deref(), race_catalog);
+    player.proficiencies = vec![
+        "Short sword".to_string(),
+        "Light armor".to_string(),
+        "Seaman's Cant".to_string(),
+        "Trilingual".to_string(),
+    ];
+    player.talents = vec![
+        TalentSelection {
+            id: "dodge".to_string(),
+            rank: 1,
+            weapon: None,
+        },
+        TalentSelection {
+            id: "deceptive_defender".to_string(),
+            rank: 1,
+            weapon: None,
+        },
+        TalentSelection {
+            id: "precision_combatant".to_string(),
+            rank: 1,
+            weapon: None,
+        },
+        TalentSelection {
+            id: "combat_expertise".to_string(),
+            rank: 1,
+            weapon: None,
+        },
+        TalentSelection {
+            id: "defense_bonus_weapon".to_string(),
+            rank: 1,
+            weapon: Some("Short sword".to_string()),
+        },
+        TalentSelection {
+            id: "swift".to_string(),
+            rank: 1,
+            weapon: Some("Short sword".to_string()),
+        },
+        TalentSelection {
+            id: "damage_bonus_weapon".to_string(),
+            rank: 1,
+            weapon: Some("Short sword".to_string()),
+        },
+        TalentSelection {
+            id: "light_armor_optimization".to_string(),
+            rank: 1,
+            weapon: None,
+        },
+        TalentSelection {
+            id: "backstab".to_string(),
+            rank: 1,
+            weapon: None,
+        },
+        TalentSelection {
+            id: "devious".to_string(),
+            rank: 1,
+            weapon: None,
+        },
+        TalentSelection {
+            id: "hide_in_shadows".to_string(),
+            rank: 1,
+            weapon: None,
+        },
+        TalentSelection {
+            id: "rearward_strike".to_string(),
+            rank: 1,
+            weapon: None,
+        },
+        TalentSelection {
+            id: "contender".to_string(),
+            rank: 1,
+            weapon: None,
+        },
+        TalentSelection {
+            id: "duelist".to_string(),
+            rank: 1,
+            weapon: None,
+        },
+    ];
+    player
+}
+
+fn configure_volfango_mode(player: &mut game_logic::PlayerConfig, mode: VolfangoMode) {
+    const TWF_TALENTS: [&str; 4] = [
+        "two_weapon_fighting",
+        "improved_two_weapon_fighting",
+        "greater_two_weapon_fighting",
+        "perfect_two_weapon_fighting",
+    ];
+    player
+        .talents
+        .retain(|talent| !TWF_TALENTS.contains(&talent.id.as_str()));
+    player.defensive_dualwielding = false;
+    player.offensive_dualwielding = false;
+    player.offhand_weapon_id = None;
+
+    match mode {
+        VolfangoMode::OneHanded => {}
+        VolfangoMode::DefensiveTwf => {
+            player.defensive_dualwielding = true;
+        }
+        VolfangoMode::OffensiveTwf => {
+            player.offensive_dualwielding = true;
+            player.offhand_weapon_id = Some(player.weapon_id);
+        }
+        VolfangoMode::OffensiveIwtf => {
+            player.offensive_dualwielding = true;
+            player.offhand_weapon_id = Some(player.weapon_id);
+            player.talents.push(TalentSelection {
+                id: "improved_two_weapon_fighting".to_string(),
+                rank: 1,
+                weapon: None,
+            });
+        }
+        VolfangoMode::OffensiveGtwf => {
+            player.offensive_dualwielding = true;
+            player.offhand_weapon_id = Some(player.weapon_id);
+            player.talents.push(TalentSelection {
+                id: "greater_two_weapon_fighting".to_string(),
+                rank: 1,
+                weapon: None,
+            });
+        }
+    }
+}
+
+fn collect_attack_timeline_by_slot(
+    sim: &mut SimState,
+    attacker_idx: usize,
+    expected_primary_attacks: usize,
+    expected_secondary_attacks: usize,
+    max_ticks: usize,
+) -> Vec<(u32, WeaponSlot)> {
+    let mut seen_events = 0usize;
+    let mut timeline = Vec::new();
+    let mut primary_seen = 0usize;
+    let mut secondary_seen = 0usize;
+    for _ in 0..max_ticks {
+        sim.tick();
+        for event in &sim.combat_events[seen_events..] {
+            if event.attacker_idx != attacker_idx {
+                continue;
+            }
+            if let CombatEventKind::Attack(attack) = &event.kind {
+                match attack.weapon_slot {
+                    WeaponSlot::Primary if primary_seen < expected_primary_attacks => {
+                        timeline.push((event.time, WeaponSlot::Primary));
+                        primary_seen += 1;
+                    }
+                    WeaponSlot::Secondary if secondary_seen < expected_secondary_attacks => {
+                        timeline.push((event.time, WeaponSlot::Secondary));
+                        secondary_seen += 1;
+                    }
+                    _ => {}
+                }
+                if primary_seen >= expected_primary_attacks
+                    && secondary_seen >= expected_secondary_attacks
+                {
+                    return timeline;
+                }
+            }
+        }
+        seen_events = sim.combat_events.len();
+    }
+    timeline
+}
+
+fn timeline_labels(mut timeline: Vec<(u32, WeaponSlot)>) -> Vec<String> {
+    timeline.sort_by_key(|(time, slot)| {
+        let slot_order = match slot {
+            WeaponSlot::Secondary => 0,
+            WeaponSlot::Primary => 1,
+        };
+        (*time, slot_order)
+    });
+    timeline
+        .into_iter()
+        .map(|(time, slot)| {
+            let display_time = time + 1;
+            let hand = match slot {
+                WeaponSlot::Primary => "main",
+                WeaponSlot::Secondary => "off",
+            };
+            format!("{display_time}{hand}")
+        })
+        .collect()
+}
+
+#[test]
+fn volfango_dual_wield_talent_timelines_match_snapshot() {
+    let (weapon_catalog, armor_catalog, shield_catalog) =
+        data::load_catalogs().expect("failed to load catalogs");
+    let talent_catalog = data::load_talents(data::TALENTS_PATH).expect("failed to load talents");
+    let race_catalog = data::load_races("data/races.json").expect("failed to load races");
+    let npc_presets = game_logic::NpcPresetCatalog::new(Vec::new());
+
+    let fixture = volfango_hardcoded_player(
+        &weapon_catalog,
+        &armor_catalog,
+        &shield_catalog,
+        &race_catalog,
+    );
+    assert_eq!(fixture.name, "Volfango Drakos");
+    assert_eq!(fixture.level, 5);
+    assert_eq!(fixture.strength_base, 10);
+    assert_eq!(fixture.strength_pct, 64);
+    assert_eq!(fixture.dex_base, 20);
+    assert_eq!(fixture.dex_pct, 56);
+    assert_eq!(fixture.intelligence, 15);
+    assert_eq!(fixture.wisdom, 12);
+    assert_eq!(fixture.constitution, 11);
+    assert_eq!(fixture.talents.len(), 14);
+
+    let modes = [
+        (
+            "1h",
+            VolfangoMode::OneHanded,
+            VolfangoSpeedSnapshot {
+                primary_speed: 5,
+                offhand_speed: None,
+                offensive_dualwielding: false,
+                defensive_dualwielding: false,
+                offhand_damage_penalty: -2,
+                primary_recovery_penalty: 2,
+                secondary_recovery_penalty: 2,
+            },
+            vec![
+                "1main", "6main", "11main", "16main", "21main", "26main", "31main", "36main",
+            ],
+        ),
+        (
+            "def twf",
+            VolfangoMode::DefensiveTwf,
+            VolfangoSpeedSnapshot {
+                primary_speed: 6,
+                offhand_speed: None,
+                offensive_dualwielding: false,
+                defensive_dualwielding: true,
+                offhand_damage_penalty: -2,
+                primary_recovery_penalty: 2,
+                secondary_recovery_penalty: 2,
+            },
+            vec![
+                "1main", "7main", "13main", "19main", "25main", "31main", "37main", "43main",
+            ],
+        ),
+        (
+            "off twf",
+            VolfangoMode::OffensiveTwf,
+            VolfangoSpeedSnapshot {
+                primary_speed: 6,
+                offhand_speed: Some(6),
+                offensive_dualwielding: true,
+                defensive_dualwielding: false,
+                offhand_damage_penalty: -2,
+                primary_recovery_penalty: 2,
+                secondary_recovery_penalty: 2,
+            },
+            vec![
+                "1main", "6off", "9main", "14off", "17main", "22off", "25main", "30off",
+            ],
+        ),
+        (
+            "off iwtf",
+            VolfangoMode::OffensiveIwtf,
+            VolfangoSpeedSnapshot {
+                primary_speed: 6,
+                offhand_speed: Some(6),
+                offensive_dualwielding: true,
+                defensive_dualwielding: false,
+                offhand_damage_penalty: -2,
+                primary_recovery_penalty: 1,
+                secondary_recovery_penalty: 2,
+            },
+            vec![
+                "1main", "6off", "8main", "14off", "15main", "22off", "22main", "30off",
+            ],
+        ),
+        (
+            "off gtwf",
+            VolfangoMode::OffensiveGtwf,
+            VolfangoSpeedSnapshot {
+                primary_speed: 6,
+                offhand_speed: Some(6),
+                offensive_dualwielding: true,
+                defensive_dualwielding: false,
+                offhand_damage_penalty: -2,
+                primary_recovery_penalty: 1,
+                secondary_recovery_penalty: 1,
+            },
+            vec![
+                "1main", "6off", "8main", "13off", "15main", "20off", "22main", "27off",
+            ],
+        ),
+    ];
+
+    for (mode_label, mode, expected_snapshot, expected_timeline) in modes {
+        let mut player = fixture.clone();
+        configure_volfango_mode(&mut player, mode);
+        let attacker = game_logic::build_combatant(
+            &player,
+            &weapon_catalog,
+            &armor_catalog,
+            &shield_catalog,
+            &npc_presets,
+            &talent_catalog,
+        );
+        let snapshot = VolfangoSpeedSnapshot {
+            primary_speed: attacker.sheet.offense.weapon.speed.round() as i32,
+            offhand_speed: attacker
+                .sheet
+                .offense
+                .offhand
+                .as_ref()
+                .map(|offhand| offhand.weapon.speed.round() as i32),
+            offensive_dualwielding: attacker.sheet.maneuvers.offensive_dualwielding,
+            defensive_dualwielding: attacker.sheet.maneuvers.defensive_dualwielding,
+            offhand_damage_penalty: attacker.sheet.maneuvers.dualwield_offhand_damage_penalty,
+            primary_recovery_penalty: attacker
+                .sheet
+                .maneuvers
+                .dualwield_primary_recovery_penalty
+                .round() as i32,
+            secondary_recovery_penalty: attacker
+                .sheet
+                .maneuvers
+                .dualwield_secondary_recovery_penalty
+                .round() as i32,
+        };
+        assert_eq!(
+            snapshot.primary_speed, expected_snapshot.primary_speed,
+            "{mode_label}: primary speed mismatch"
+        );
+        assert_eq!(
+            snapshot.offhand_speed, expected_snapshot.offhand_speed,
+            "{mode_label}: offhand speed mismatch"
+        );
+        assert_eq!(
+            snapshot.offensive_dualwielding, expected_snapshot.offensive_dualwielding,
+            "{mode_label}: offensive mode mismatch"
+        );
+        assert_eq!(
+            snapshot.defensive_dualwielding, expected_snapshot.defensive_dualwielding,
+            "{mode_label}: defensive mode mismatch"
+        );
+        assert_eq!(
+            snapshot.offhand_damage_penalty, expected_snapshot.offhand_damage_penalty,
+            "{mode_label}: offhand damage penalty mismatch"
+        );
+        assert_eq!(
+            snapshot.primary_recovery_penalty, expected_snapshot.primary_recovery_penalty,
+            "{mode_label}: primary recovery penalty mismatch"
+        );
+        assert_eq!(
+            snapshot.secondary_recovery_penalty, expected_snapshot.secondary_recovery_penalty,
+            "{mode_label}: secondary recovery penalty mismatch"
+        );
+
+        let defender = combatant_basic(
+            "Training Dummy".to_string(),
+            "Fist".to_string(),
+            -1000,
+            1000,
+            0,
+            false,
+            0,
+            "1d1".to_string(),
+            0,
+            99.0,
+            2.0,
+            0.0,
+            false,
+            false,
+            None,
+            true,
+            false,
+            1_000_000,
+        );
+        let mut sim = SimState::new(SimConfig::new(1.0, 1.0));
+        let mut attacker = attacker;
+        let mut defender = defender;
+        attacker.team_id = 0;
+        defender.team_id = 1;
+        sim.reset_with_combatants(vec![attacker, defender]);
+        sim.set_rng(SimRng::from_seed(7));
+
+        let expected_primary_attacks = expected_timeline
+            .iter()
+            .filter(|entry| entry.ends_with("main"))
+            .count();
+        let expected_secondary_attacks = expected_timeline
+            .iter()
+            .filter(|entry| entry.ends_with("off"))
+            .count();
+        let timeline = collect_attack_timeline_by_slot(
+            &mut sim,
+            0,
+            expected_primary_attacks,
+            expected_secondary_attacks,
+            120,
+        );
+        assert_eq!(
+            timeline.len(),
+            expected_timeline.len(),
+            "{mode_label}: expected {} attacks, got {} ({:?})",
+            expected_timeline.len(),
+            timeline.len(),
+            timeline
+        );
+        let labels = timeline_labels(timeline);
+        assert_eq!(
+            labels, expected_timeline,
+            "{mode_label}: attack cadence mismatch"
+        );
+    }
+}
+
+#[test]
+fn volfango_offhand_damage_penalty_requires_two_weapon_fighting_talent() {
+    fn no_crit(mut combatant: Combatant) -> Combatant {
+        let mut primary = combatant.sheet.offense.weapon.as_ref().clone();
+        primary.crit_min_roll = 21;
+        combatant.sheet.offense.weapon = Arc::new(primary);
+        if let Some(offhand) = combatant.sheet.offense.offhand.as_mut() {
+            let mut secondary = offhand.weapon.as_ref().clone();
+            secondary.crit_min_roll = 21;
+            offhand.weapon = Arc::new(secondary);
+        }
+        combatant
+    }
+
+    fn raw_damage_for_slot(attacker: Combatant, slot: WeaponSlot) -> i32 {
+        let defender = combatant_basic(
+            "Training Dummy".to_string(),
+            "Fist".to_string(),
+            -1000,
+            -1000,
+            0,
+            false,
+            0,
+            "1d1".to_string(),
+            0,
+            99.0,
+            2.0,
+            0.0,
+            false,
+            false,
+            None,
+            true,
+            false,
+            1_000_000,
+        );
+        let mut sim = make_state(attacker, defender);
+        let mut rng = FixedRng(7);
+        let outcome = resolve_attack(
+            &mut sim.combatants,
+            0,
+            1,
+            0,
+            false,
+            1.0,
+            AttackMode::Normal,
+            slot,
+            0.0,
+            None,
+            &mut rng,
+        );
+        assert!(outcome.hit, "expected hit for slot {:?}", slot);
+        outcome
+            .damage_breakdown
+            .expect("expected damage breakdown for hit")
+            .raw_damage
+    }
+
+    let (weapon_catalog, armor_catalog, shield_catalog) =
+        data::load_catalogs().expect("failed to load catalogs");
+    let talent_catalog = data::load_talents(data::TALENTS_PATH).expect("failed to load talents");
+    let race_catalog = data::load_races("data/races.json").expect("failed to load races");
+    let npc_presets = game_logic::NpcPresetCatalog::new(Vec::new());
+
+    let fixture = volfango_hardcoded_player(
+        &weapon_catalog,
+        &armor_catalog,
+        &shield_catalog,
+        &race_catalog,
+    );
+
+    let mut no_twf = fixture.clone();
+    configure_volfango_mode(&mut no_twf, VolfangoMode::OffensiveTwf);
+    let no_twf_attacker = no_crit(game_logic::build_combatant(
+        &no_twf,
+        &weapon_catalog,
+        &armor_catalog,
+        &shield_catalog,
+        &npc_presets,
+        &talent_catalog,
+    ));
+    assert_eq!(
+        no_twf_attacker
+            .sheet
+            .maneuvers
+            .dualwield_offhand_damage_penalty,
+        -2
+    );
+    let no_twf_primary = raw_damage_for_slot(no_twf_attacker.clone(), WeaponSlot::Primary);
+    let no_twf_secondary = raw_damage_for_slot(no_twf_attacker, WeaponSlot::Secondary);
+    assert_eq!(no_twf_secondary, no_twf_primary.saturating_sub(2));
+
+    let mut with_twf = fixture;
+    configure_volfango_mode(&mut with_twf, VolfangoMode::OffensiveTwf);
+    with_twf.talents.push(TalentSelection {
+        id: "two_weapon_fighting".to_string(),
+        rank: 1,
+        weapon: None,
+    });
+    let with_twf_attacker = no_crit(game_logic::build_combatant(
+        &with_twf,
+        &weapon_catalog,
+        &armor_catalog,
+        &shield_catalog,
+        &npc_presets,
+        &talent_catalog,
+    ));
+    assert_eq!(
+        with_twf_attacker
+            .sheet
+            .maneuvers
+            .dualwield_offhand_damage_penalty,
+        0
+    );
+    let with_twf_primary = raw_damage_for_slot(with_twf_attacker.clone(), WeaponSlot::Primary);
+    let with_twf_secondary = raw_damage_for_slot(with_twf_attacker, WeaponSlot::Secondary);
+    assert_eq!(with_twf_secondary, with_twf_primary);
 }
 
 #[test]

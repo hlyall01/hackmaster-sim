@@ -9,6 +9,7 @@ use game_logic::{
 };
 use hackmaster_sim::core::catalog::Catalog;
 use hackmaster_sim::core::types::{RaceSpec, TalentSelection, TalentSpec};
+use hackmaster_sim::ui_widgets::searchable_select;
 use hackmaster_sim::{character, data, game_logic, sim};
 use sim::{BulkSimResult, SimConfig, SimState, bulk_simulate};
 use std::{collections::BTreeMap, time::Instant};
@@ -1221,20 +1222,25 @@ fn render_player_editor(
                         .fighter_preset
                         .map(|id| fighter_presets.index_of(id))
                         .unwrap_or(usize::MAX);
-                    egui::ComboBox::from_id_source(format!("{id_prefix}_fighter_preset"))
-                        .selected_text(
-                            player
-                                .fighter_preset
-                                .and_then(|id| fighter_presets.get(id))
-                                .map(|preset| preset.name.as_str())
-                                .unwrap_or("None"),
-                        )
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut selection, usize::MAX, "None");
-                            for (idx, preset) in fighter_presets.entries().iter().enumerate() {
-                                ui.selectable_value(&mut selection, idx, preset.name.as_str());
-                            }
-                        });
+                    let selected_text = player
+                        .fighter_preset
+                        .and_then(|id| fighter_presets.get(id))
+                        .map(|preset| preset.name.clone())
+                        .unwrap_or_else(|| "None".to_string());
+                    let options = std::iter::once((usize::MAX, "None".to_string(), true)).chain(
+                        fighter_presets
+                            .entries()
+                            .iter()
+                            .enumerate()
+                            .map(|(idx, preset)| (idx, preset.name.clone(), true)),
+                    );
+                    searchable_select(
+                        ui,
+                        format!("{id_prefix}_fighter_preset"),
+                        selected_text,
+                        &mut selection,
+                        options,
+                    );
                     let selection = if selection == usize::MAX {
                         None
                     } else {
@@ -1310,17 +1316,25 @@ fn render_player_editor(
                         .npc_preset
                         .map(|id| npc_presets.index_of(id))
                         .unwrap_or(usize::MAX);
-                    egui::ComboBox::from_id_source(format!("{id_prefix}_npc_preset"))
-                        .selected_text(match player.npc_preset.and_then(|id| npc_presets.get(id)) {
-                            Some(preset) => preset.name.as_str(),
-                            None => "None",
-                        })
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut selection, usize::MAX, "None");
-                            for (idx, preset) in npc_presets.entries().iter().enumerate() {
-                                ui.selectable_value(&mut selection, idx, preset.name.as_str());
-                            }
-                        });
+                    let selected_text = player
+                        .npc_preset
+                        .and_then(|id| npc_presets.get(id))
+                        .map(|preset| preset.name.clone())
+                        .unwrap_or_else(|| "None".to_string());
+                    let options = std::iter::once((usize::MAX, "None".to_string(), true)).chain(
+                        npc_presets
+                            .entries()
+                            .iter()
+                            .enumerate()
+                            .map(|(idx, preset)| (idx, preset.name.clone(), true)),
+                    );
+                    searchable_select(
+                        ui,
+                        format!("{id_prefix}_npc_preset"),
+                        selected_text,
+                        &mut selection,
+                        options,
+                    );
                     player.npc_preset = if selection == usize::MAX {
                         None
                     } else {
@@ -1434,18 +1448,21 @@ fn render_player_editor(
             ui.horizontal(|ui| {
                 ui.label("Weapon");
                 let mut selection = weapon_catalog.index_of(player.weapon_id);
-                egui::ComboBox::from_id_source(format!("{id_prefix}_weapon"))
-                    .selected_text(
-                        weapon_catalog
-                            .get(player.weapon_id)
-                            .map(|weapon| weapon.name.as_str())
-                            .unwrap_or("Unknown"),
-                    )
-                    .show_ui(ui, |ui| {
-                        for (idx, weapon) in weapon_catalog.entries().iter().enumerate() {
-                            ui.selectable_value(&mut selection, idx, weapon.name.as_str());
-                        }
-                    });
+                let selected_text = weapon_catalog
+                    .get(player.weapon_id)
+                    .map(|weapon| weapon.name.clone())
+                    .unwrap_or_else(|| "Unknown".to_string());
+                searchable_select(
+                    ui,
+                    format!("{id_prefix}_weapon"),
+                    selected_text,
+                    &mut selection,
+                    weapon_catalog
+                        .entries()
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, weapon)| (idx, weapon.name.clone(), true)),
+                );
                 if let Some(id) = weapon_catalog.id_from_index(selection) {
                     player.weapon_id = id;
                 }
@@ -1554,13 +1571,17 @@ fn render_player_editor(
                 ui.horizontal(|ui| {
                     ui.label("Armor");
                     let mut selection = armor_catalog.index_of(player.armor_id);
-                    egui::ComboBox::from_id_source(format!("{id_prefix}_armor"))
-                        .selected_text(armor_display_name(armor_catalog.get(player.armor_id)))
-                        .show_ui(ui, |ui| {
-                            for (idx, armor) in armor_catalog.entries().iter().enumerate() {
-                                ui.selectable_value(&mut selection, idx, armor.label.clone());
-                            }
-                        });
+                    searchable_select(
+                        ui,
+                        format!("{id_prefix}_armor"),
+                        armor_display_name(armor_catalog.get(player.armor_id)),
+                        &mut selection,
+                        armor_catalog
+                            .entries()
+                            .iter()
+                            .enumerate()
+                            .map(|(idx, armor)| (idx, armor.label.clone(), true)),
+                    );
                     if let Some(id) = armor_catalog.id_from_index(selection) {
                         player.armor_id = id;
                     }
@@ -1611,10 +1632,16 @@ fn render_player_editor(
                         .map(|entry| entry.label.as_str())
                         .unwrap_or("None");
                     ui.add_enabled_ui(shield_allowed, |ui| {
-                        egui::ComboBox::from_id_source(format!("{id_prefix}_shield"))
-                            .selected_text(selected_name)
-                            .show_ui(ui, |ui| {
-                                for (idx, shield) in shield_catalog.entries().iter().enumerate() {
+                        searchable_select(
+                            ui,
+                            format!("{id_prefix}_shield"),
+                            selected_name,
+                            &mut selection,
+                            shield_catalog
+                                .entries()
+                                .iter()
+                                .enumerate()
+                                .map(|(idx, shield)| {
                                     let option_allowed = shield
                                         .shield
                                         .as_ref()
@@ -1628,15 +1655,9 @@ fn render_player_editor(
                                             )
                                         })
                                         .unwrap_or(true);
-                                    ui.add_enabled_ui(option_allowed, |ui| {
-                                        ui.selectable_value(
-                                            &mut selection,
-                                            idx,
-                                            shield.label.as_str(),
-                                        );
-                                    });
-                                }
-                            });
+                                    (idx, shield.label.clone(), option_allowed)
+                                }),
+                        );
                     });
                     if let Some(id) = shield_catalog.id_from_index(selection) {
                         player.shield_id = id;
@@ -1675,21 +1696,22 @@ fn render_player_editor(
                             .and_then(|idx| weapon_catalog.entries().get(idx))
                             .map(|weapon| weapon.name.as_str())
                             .unwrap_or("None");
-                        egui::ComboBox::from_id_source(format!("{id_prefix}_offhand"))
-                            .selected_text(selected_name)
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut selection, None, "None");
-                                for (idx, weapon) in weapon_catalog.entries().iter().enumerate() {
-                                    if weapon.handedness != WeaponHandedness::OneHanded {
-                                        continue;
-                                    }
-                                    ui.selectable_value(
-                                        &mut selection,
-                                        Some(idx),
-                                        weapon.name.as_str(),
-                                    );
-                                }
-                            });
+                        searchable_select(
+                            ui,
+                            format!("{id_prefix}_offhand"),
+                            selected_name,
+                            &mut selection,
+                            std::iter::once((None, "None".to_string(), true)).chain(
+                                weapon_catalog
+                                    .entries()
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(_, weapon)| {
+                                        weapon.handedness == WeaponHandedness::OneHanded
+                                    })
+                                    .map(|(idx, weapon)| (Some(idx), weapon.name.clone(), true)),
+                            ),
+                        );
                         player.offhand_weapon_id =
                             selection.and_then(|idx| weapon_catalog.id_from_index(idx));
                     });
@@ -1804,17 +1826,15 @@ fn render_player_editor(
                 let mut penalty = game_logic::normalize_fight_defensively_penalty(
                     player.fight_defensively_penalty,
                 );
-                egui::ComboBox::from_id_source(format!("{id_prefix}_fight_defensively_penalty"))
-                    .selected_text(format!("-{penalty}/+{}", penalty / 2))
-                    .show_ui(ui, |ui| {
-                        for option in game_logic::FIGHT_DEFENSIVELY_PENALTY_OPTIONS {
-                            ui.selectable_value(
-                                &mut penalty,
-                                option,
-                                format!("-{option}/+{}", option / 2),
-                            );
-                        }
-                    });
+                searchable_select(
+                    ui,
+                    format!("{id_prefix}_fight_defensively_penalty"),
+                    format!("-{penalty}/+{}", penalty / 2),
+                    &mut penalty,
+                    game_logic::FIGHT_DEFENSIVELY_PENALTY_OPTIONS
+                        .into_iter()
+                        .map(|option| (option, format!("-{option}/+{}", option / 2), true)),
+                );
                 player.fight_defensively_penalty = penalty;
             });
             ui.add_enabled_ui(false, |ui| {
@@ -1850,19 +1870,21 @@ fn render_player_editor(
                 ui.horizontal(|ui| {
                     ui.label("Race");
                     ui.add_enabled_ui(!race_locked, |ui| {
-                        egui::ComboBox::from_id_source(format!("{id_prefix}_race"))
-                            .selected_text(
+                        searchable_select(
+                            ui,
+                            format!("{id_prefix}_race"),
+                            race_catalog
+                                .get(selection)
+                                .map(|race| race.name.as_str())
+                                .unwrap_or("None"),
+                            &mut selection,
+                            std::iter::once((usize::MAX, "None".to_string(), true)).chain(
                                 race_catalog
-                                    .get(selection)
-                                    .map(|race| race.name.as_str())
-                                    .unwrap_or("None"),
-                            )
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut selection, usize::MAX, "None");
-                                for (idx, race) in race_catalog.iter().enumerate() {
-                                    ui.selectable_value(&mut selection, idx, race.name.as_str());
-                                }
-                            });
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(idx, race)| (idx, race.name.clone(), true)),
+                            ),
+                        );
                     });
                     let selected_race = race_catalog.get(selection);
                     let can_apply = selected_race.is_some() && !race_locked;
@@ -2004,19 +2026,21 @@ fn render_player_editor(
                 ui.horizontal(|ui| {
                     ui.label("Race");
                     ui.add_enabled_ui(!race_locked, |ui| {
-                        egui::ComboBox::from_id_source(format!("{id_prefix}_race_talents"))
-                            .selected_text(
+                        searchable_select(
+                            ui,
+                            format!("{id_prefix}_race_talents"),
+                            race_catalog
+                                .get(selection)
+                                .map(|race| race.name.as_str())
+                                .unwrap_or("None"),
+                            &mut selection,
+                            std::iter::once((usize::MAX, "None".to_string(), true)).chain(
                                 race_catalog
-                                    .get(selection)
-                                    .map(|race| race.name.as_str())
-                                    .unwrap_or("None"),
-                            )
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut selection, usize::MAX, "None");
-                                for (idx, race) in race_catalog.iter().enumerate() {
-                                    ui.selectable_value(&mut selection, idx, race.name.as_str());
-                                }
-                            });
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(idx, race)| (idx, race.name.clone(), true)),
+                            ),
+                        );
                     });
                 });
                 let selected_race = if selection == usize::MAX {
@@ -2521,12 +2545,18 @@ fn ability_percentile_editor(
     ui.horizontal(|ui| {
         ui.label(label);
         ui.add(egui::Slider::new(base, 1..=25).step_by(1.0));
-        egui::ComboBox::from_id_source(id)
-            .selected_text(format!("{:02}", percentile))
-            .show_ui(ui, |ui| {
-                ui.selectable_value(percentile, 1, "01");
-                ui.selectable_value(percentile, 51, "51");
-            });
+        let mut selection = *percentile;
+        searchable_select(
+            ui,
+            id,
+            format!("{:02}", percentile),
+            &mut selection,
+            [
+                (1u8, "01".to_string(), true),
+                (51u8, "51".to_string(), true),
+            ],
+        );
+        *percentile = selection;
     });
 }
 
@@ -2998,20 +3028,15 @@ fn render_talent_entry(
                         ui.label("Group");
                     }
                     ui.add_enabled_ui(can_adjust, |ui| {
-                        egui::ComboBox::from_id_source(format!(
-                            "{id_prefix}_talent_group_{}",
-                            spec.id
-                        ))
-                        .selected_text(selected_text)
-                        .show_ui(ui, |ui| {
-                            for label in WEAPON_GROUP_LABELS {
-                                ui.selectable_value(
-                                    &mut selection.weapon,
-                                    Some(label.to_string()),
-                                    label,
-                                );
-                            }
-                        });
+                        searchable_select(
+                            ui,
+                            format!("{id_prefix}_talent_group_{}", spec.id),
+                            selected_text,
+                            &mut selection.weapon,
+                            WEAPON_GROUP_LABELS
+                                .into_iter()
+                                .map(|label| (Some(label.to_string()), label.to_string(), true)),
+                        );
                     });
                 });
             } else if game_logic::talent_requires_weapon(spec) {
@@ -3037,20 +3062,15 @@ fn render_talent_entry(
                         ui.label("Weapon");
                     }
                     ui.add_enabled_ui(can_adjust, |ui| {
-                        egui::ComboBox::from_id_source(format!(
-                            "{id_prefix}_talent_weapon_{}",
-                            spec.id
-                        ))
-                        .selected_text(selected_text)
-                        .show_ui(ui, |ui| {
-                            for weapon in weapon_catalog.entries() {
-                                ui.selectable_value(
-                                    &mut selection.weapon,
-                                    Some(weapon.name.clone()),
-                                    weapon.name.as_str(),
-                                );
-                            }
-                        });
+                        searchable_select(
+                            ui,
+                            format!("{id_prefix}_talent_weapon_{}", spec.id),
+                            selected_text,
+                            &mut selection.weapon,
+                            weapon_catalog.entries().iter().map(|weapon| {
+                                (Some(weapon.name.clone()), weapon.name.clone(), true)
+                            }),
+                        );
                     });
                 });
             }
@@ -3077,24 +3097,28 @@ fn tier_combo(
     tiers: &[ProgressionTier],
 ) {
     ui.label(label);
-    egui::ComboBox::from_id_source(id_source)
-        .selected_text(tier_label(*selection))
-        .show_ui(ui, |ui| {
-            for tier in tiers {
-                ui.selectable_value(selection, *tier, tier_label(*tier));
-            }
-        });
+    let mut value = *selection;
+    searchable_select(
+        ui,
+        id_source,
+        tier_label(*selection),
+        &mut value,
+        tiers
+            .iter()
+            .map(|tier| (*tier, tier_label(*tier).to_string(), true)),
+    );
+    *selection = value;
 }
 
 fn material_tier_combo(ui: &mut egui::Ui, id_source: String, label: &str, selection: &mut i32) {
     ui.label(label);
-    egui::ComboBox::from_id_source(id_source)
-        .selected_text(format!("+{selection}"))
-        .show_ui(ui, |ui| {
-            for tier in 0..=5 {
-                ui.selectable_value(selection, tier, format!("+{tier}"));
-            }
-        });
+    searchable_select(
+        ui,
+        id_source,
+        format!("+{selection}"),
+        selection,
+        (0..=5).map(|tier| (tier, format!("+{tier}"), true)),
+    );
 }
 
 fn armor_display_name(entry: Option<&ArmorEntry>) -> String {

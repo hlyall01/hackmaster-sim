@@ -9,3 +9,4 @@ pub mod core;
 pub mod data;
 pub mod game_logic;
 pub mod sim;
+pub mod ui_widgets;

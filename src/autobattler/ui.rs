@@ -29,6 +29,7 @@ use crate::core::skills;
 use crate::core::types::{PlayerProfile, RaceSpec, TalentSelection, TalentSpec};
 use crate::game_logic::{self, PlayerConfig, TalentCatalog, WeaponCatalog};
 use crate::sim;
+use crate::ui_widgets::searchable_select;
 
 #[derive(Clone, Copy)]
 enum WeaponIcon {
@@ -318,44 +319,41 @@ impl AutobattlerApp {
                                 for stat_idx in 0..STAT_COUNT {
                                     ui.horizontal(|ui| {
                                         ui.label(STAT_LABELS[stat_idx]);
-                                        let selection = self.creation.assignments[stat_idx];
+                                        let mut selection = self.creation.assignments[stat_idx];
+                                        let current_selection = selection;
                                         let selected_text = selection
                                             .map(|idx| format_score(selected_set.rolls[idx]))
                                             .unwrap_or_else(|| "Select roll".to_string());
-                                        egui::ComboBox::from_id_source(format!(
-                                            "assign_{stat_idx}"
-                                        ))
-                                        .selected_text(selected_text)
-                                        .show_ui(
+                                        searchable_select(
                                             ui,
-                                            |ui| {
-                                                for roll_idx in 0..STAT_COUNT {
-                                                    let taken_elsewhere = self
-                                                        .creation
-                                                        .assignments
-                                                        .iter()
-                                                        .enumerate()
-                                                        .any(|(idx, slot)| {
-                                                            idx != stat_idx
-                                                                && *slot == Some(roll_idx)
-                                                        });
-                                                    let roll = selected_set.rolls[roll_idx];
-                                                    let label = format_score(roll);
-                                                    ui.add_enabled_ui(!taken_elsewhere, |ui| {
-                                                        if ui
-                                                            .selectable_label(
-                                                                selection == Some(roll_idx),
-                                                                label,
-                                                            )
-                                                            .clicked()
-                                                        {
-                                                            self.creation
-                                                                .assign_roll(stat_idx, roll_idx);
-                                                        }
+                                            format!("assign_{stat_idx}"),
+                                            selected_text,
+                                            &mut selection,
+                                            (0..STAT_COUNT).map(|roll_idx| {
+                                                let taken_elsewhere = self
+                                                    .creation
+                                                    .assignments
+                                                    .iter()
+                                                    .enumerate()
+                                                    .any(|(idx, slot)| {
+                                                        idx != stat_idx
+                                                            && *slot == Some(roll_idx)
                                                     });
-                                                }
-                                            },
+                                                let roll = selected_set.rolls[roll_idx];
+                                                let label = format_score(roll);
+                                                (
+                                                    Some(roll_idx),
+                                                    label,
+                                                    !taken_elsewhere
+                                                        || current_selection == Some(roll_idx),
+                                                )
+                                            }),
                                         );
+                                        if selection != self.creation.assignments[stat_idx] {
+                                            if let Some(roll_idx) = selection {
+                                                self.creation.assign_roll(stat_idx, roll_idx);
+                                            }
+                                        }
                                     });
                                 }
                             });
@@ -372,29 +370,27 @@ impl AutobattlerApp {
                                     let mut selection =
                                         self.creation.race_index.unwrap_or(usize::MAX);
                                     ui.add_enabled_ui(!self.creation.race_applied, |ui| {
-                                        egui::ComboBox::from_id_source("race_select")
-                                            .selected_text(
-                                                self.race_catalog
-                                                    .get(selection)
-                                                    .map(|race| race.name.as_str())
-                                                    .unwrap_or("None"),
-                                            )
-                                            .show_ui(ui, |ui| {
-                                                ui.selectable_value(
-                                                    &mut selection,
-                                                    usize::MAX,
-                                                    "None",
-                                                );
-                                                for (idx, race) in
-                                                    self.race_catalog.iter().enumerate()
-                                                {
-                                                    ui.selectable_value(
-                                                        &mut selection,
-                                                        idx,
-                                                        race.name.as_str(),
-                                                    );
-                                                }
-                                            });
+                                        searchable_select(
+                                            ui,
+                                            "race_select",
+                                            self.race_catalog
+                                                .get(selection)
+                                                .map(|race| race.name.as_str())
+                                                .unwrap_or("None"),
+                                            &mut selection,
+                                            std::iter::once((
+                                                usize::MAX,
+                                                "None".to_string(),
+                                                true,
+                                            ))
+                                            .chain(
+                                                self.race_catalog.iter().enumerate().map(
+                                                    |(idx, race)| {
+                                                        (idx, race.name.clone(), true)
+                                                    },
+                                                ),
+                                            ),
+                                        );
                                     });
                                     if !self.creation.race_applied {
                                         if selection == usize::MAX {
@@ -451,17 +447,16 @@ impl AutobattlerApp {
                             ui.heading("Choose Alignment");
                             ui.separator();
                             ui.label("Alignment");
-                            egui::ComboBox::from_id_source("alignment_select")
-                                .selected_text(self.creation.alignment.as_str())
-                                .show_ui(ui, |ui| {
-                                    for option in ["Unaligned", "Lawful", "Neutral", "Chaotic"] {
-                                        ui.selectable_value(
-                                            &mut self.creation.alignment,
-                                            option.to_string(),
-                                            option,
-                                        );
-                                    }
-                                });
+                            let alignment_label = self.creation.alignment.clone();
+                            searchable_select(
+                                ui,
+                                "alignment_select",
+                                alignment_label,
+                                &mut self.creation.alignment,
+                                ["Unaligned", "Lawful", "Neutral", "Chaotic"]
+                                    .into_iter()
+                                    .map(|option| (option.to_string(), option.to_string(), true)),
+                            );
                             ui.separator();
                             ui.label("Alignment effects are not implemented yet.");
                         }
@@ -778,12 +773,17 @@ impl AutobattlerApp {
                                     .get(self.creation.player.weapon_id)
                                     .map(|weapon| gear_price_label(&weapon.name, weapon.price_gp))
                                     .unwrap_or_else(|| "Unknown".to_string());
-                                egui::ComboBox::from_id_source("starter_weapon")
-                                    .selected_text(weapon_label)
-                                    .show_ui(ui, |ui| {
-                                        for (idx, weapon) in
-                                            self.weapon_catalog.entries().iter().enumerate()
-                                        {
+                                let selected_weapon_index = weapon_index;
+                                searchable_select(
+                                    ui,
+                                    "starter_weapon",
+                                    weapon_label,
+                                    &mut weapon_index,
+                                    self.weapon_catalog
+                                        .entries()
+                                        .iter()
+                                        .enumerate()
+                                        .map(|(idx, weapon)| {
                                             let effective_shield_cost = self
                                                 .shield_catalog
                                                 .get(self.creation.player.shield_id)
@@ -806,16 +806,15 @@ impl AutobattlerApp {
                                                 + armor_cost
                                                 + effective_shield_cost;
                                             let affordable =
-                                                new_total <= budget || idx == weapon_index;
-                                            ui.add_enabled_ui(affordable, |ui| {
-                                                ui.selectable_value(
-                                                    &mut weapon_index,
-                                                    idx,
-                                                    gear_price_label(&weapon.name, weapon.price_gp),
-                                                );
-                                            });
-                                        }
-                                    });
+                                                new_total <= budget
+                                                    || idx == selected_weapon_index;
+                                            (
+                                                idx,
+                                                gear_price_label(&weapon.name, weapon.price_gp),
+                                                affordable,
+                                            )
+                                        }),
+                                );
                                 if let Some(id) = self.weapon_catalog.id_from_index(weapon_index) {
                                     self.creation.player.weapon_id = id;
                                 }
@@ -847,12 +846,14 @@ impl AutobattlerApp {
                                         gear_price_label(&entry.label, price)
                                     })
                                     .unwrap_or_else(|| "Unknown".to_string());
-                                egui::ComboBox::from_id_source("starter_armor")
-                                    .selected_text(armor_label)
-                                    .show_ui(ui, |ui| {
-                                        for (idx, entry) in
-                                            self.armor_catalog.entries().iter().enumerate()
-                                        {
+                                let selected_armor_index = armor_index;
+                                searchable_select(
+                                    ui,
+                                    "starter_armor",
+                                    armor_label,
+                                    &mut armor_index,
+                                    self.armor_catalog.entries().iter().enumerate().map(
+                                        |(idx, entry)| {
                                             let price = entry
                                                 .armor
                                                 .as_ref()
@@ -860,16 +861,15 @@ impl AutobattlerApp {
                                                 .unwrap_or(0);
                                             let new_total = weapon_cost + price + shield_cost;
                                             let affordable =
-                                                new_total <= budget || idx == armor_index;
-                                            ui.add_enabled_ui(affordable, |ui| {
-                                                ui.selectable_value(
-                                                    &mut armor_index,
-                                                    idx,
-                                                    gear_price_label(&entry.label, price),
-                                                );
-                                            });
-                                        }
-                                    });
+                                                new_total <= budget || idx == selected_armor_index;
+                                            (
+                                                idx,
+                                                gear_price_label(&entry.label, price),
+                                                affordable,
+                                            )
+                                        },
+                                    ),
+                                );
                                 if let Some(id) = self.armor_catalog.id_from_index(armor_index) {
                                     self.creation.player.armor_id = id;
                                 }
@@ -939,12 +939,14 @@ impl AutobattlerApp {
                                             gear_price_label(&entry.label, price)
                                         })
                                         .unwrap_or_else(|| "Unknown".to_string());
-                                    egui::ComboBox::from_id_source("starter_shield")
-                                        .selected_text(shield_label)
-                                        .show_ui(ui, |ui| {
-                                            for (idx, entry) in
-                                                self.shield_catalog.entries().iter().enumerate()
-                                            {
+                                    let selected_shield_index = shield_index;
+                                    searchable_select(
+                                        ui,
+                                        "starter_shield",
+                                        shield_label,
+                                        &mut shield_index,
+                                        self.shield_catalog.entries().iter().enumerate().map(
+                                            |(idx, entry)| {
                                                 let price = entry
                                                     .shield
                                                     .as_ref()
@@ -952,7 +954,8 @@ impl AutobattlerApp {
                                                     .unwrap_or(0);
                                                 let new_total = weapon_cost + armor_cost + price;
                                                 let affordable =
-                                                    new_total <= budget || idx == shield_index;
+                                                    new_total <= budget
+                                                        || idx == selected_shield_index;
                                                 let style_allowed = weapon
                                                     .and_then(|weapon| {
                                                         entry.shield.as_ref().map(|shield| {
@@ -966,18 +969,14 @@ impl AutobattlerApp {
                                                         })
                                                     })
                                                     .unwrap_or(true);
-                                                ui.add_enabled_ui(
+                                                (
+                                                    idx,
+                                                    gear_price_label(&entry.label, price),
                                                     affordable && style_allowed,
-                                                    |ui| {
-                                                        ui.selectable_value(
-                                                            &mut shield_index,
-                                                            idx,
-                                                            gear_price_label(&entry.label, price),
-                                                        );
-                                                    },
-                                                );
-                                            }
-                                        });
+                                                )
+                                            },
+                                        ),
+                                    );
                                     if let Some(id) =
                                         self.shield_catalog.id_from_index(shield_index)
                                     {
@@ -1211,17 +1210,15 @@ impl AutobattlerApp {
                                 {
                                     next_action = Some(RunAction::Rest);
                                 }
-                                egui::ComboBox::from_id_source("downtime_activity_select")
-                                    .selected_text(run_view.selected_activity.label())
-                                    .show_ui(ui, |ui| {
-                                        for activity in DowntimeActivity::ALL {
-                                            ui.selectable_value(
-                                                &mut run_view.selected_activity,
-                                                activity,
-                                                activity.label(),
-                                            );
-                                        }
-                                    });
+                                searchable_select(
+                                    ui,
+                                    "downtime_activity_select",
+                                    run_view.selected_activity.label(),
+                                    &mut run_view.selected_activity,
+                                    DowntimeActivity::ALL.into_iter().map(|activity| {
+                                        (activity, activity.label().to_string(), true)
+                                    }),
+                                );
                                 if ui
                                     .add_enabled(action_enabled, egui::Button::new("Activity"))
                                     .clicked()
@@ -3185,18 +3182,18 @@ fn render_talent_entry(
                 selected_text.push_str(" (cap)");
             }
             ui.add_enabled_ui(can_adjust, |ui| {
-                egui::ComboBox::from_id_source(format!("{id_prefix}_talent_{}", spec.id))
-                    .selected_text(selected_text)
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut rank, 0, "None");
-                        for rank_value in 1..=max_rank {
-                            let label = format!("{rank_value}");
+                searchable_select(
+                    ui,
+                    format!("{id_prefix}_talent_{}", spec.id),
+                    selected_text,
+                    &mut rank,
+                    std::iter::once((0u8, "None".to_string(), true)).chain((1..=max_rank).map(
+                        |rank_value| {
                             let can_select = rank_value <= max_selectable;
-                            ui.add_enabled_ui(can_select, |ui| {
-                                ui.selectable_value(&mut rank, rank_value, label);
-                            });
-                        }
-                    });
+                            (rank_value, format!("{rank_value}"), can_select)
+                        },
+                    )),
+                );
             });
         });
 
@@ -3208,16 +3205,15 @@ fn render_talent_entry(
             ui.horizontal(|ui| {
                 ui.label("Weapon group");
                 ui.add_enabled_ui(can_adjust, |ui| {
-                    egui::ComboBox::from_id_source(format!(
-                        "{id_prefix}_talent_weapon_group_{}",
-                        spec.id
-                    ))
-                    .selected_text(weapon_group.clone())
-                    .show_ui(ui, |ui| {
-                        for label in WEAPON_GROUP_LABELS {
-                            ui.selectable_value(&mut weapon_group, label.to_string(), label);
-                        }
-                    });
+                    searchable_select(
+                        ui,
+                        format!("{id_prefix}_talent_weapon_group_{}", spec.id),
+                        weapon_group.clone(),
+                        &mut weapon_group,
+                        WEAPON_GROUP_LABELS
+                            .into_iter()
+                            .map(|label| (label.to_string(), label.to_string(), true)),
+                    );
                 });
             });
             selection.weapon = Some(weapon_group);
@@ -3247,20 +3243,16 @@ fn render_talent_entry(
             ui.horizontal(|ui| {
                 ui.label("Weapon");
                 ui.add_enabled_ui(can_adjust, |ui| {
-                    egui::ComboBox::from_id_source(format!(
-                        "{id_prefix}_talent_weapon_{}",
-                        spec.id
-                    ))
-                    .selected_text(selected_text)
-                    .show_ui(ui, |ui| {
-                        for weapon in weapon_catalog.entries() {
-                            ui.selectable_value(
-                                &mut selection.weapon,
-                                Some(weapon.name.clone()),
-                                weapon.name.as_str(),
-                            );
-                        }
-                    });
+                    searchable_select(
+                        ui,
+                        format!("{id_prefix}_talent_weapon_{}", spec.id),
+                        selected_text,
+                        &mut selection.weapon,
+                        weapon_catalog
+                            .entries()
+                            .iter()
+                            .map(|weapon| (Some(weapon.name.clone()), weapon.name.clone(), true)),
+                    );
                 });
             });
         }
