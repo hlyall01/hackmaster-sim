@@ -2083,6 +2083,22 @@ pub fn effective_defense_mastery(player: &PlayerConfig, weapon: &WeaponPreset) -
     }
 }
 
+fn defense_mastery_bonus(
+    player: &PlayerConfig,
+    has_shield: bool,
+    twelve_paths_active: bool,
+    defensive_dualwielding: bool,
+) -> i32 {
+    let mastery = if twelve_paths_active && has_shield {
+        clamp_mastery(player.mastery_defense) + clamp_mastery(player.shield_mastery_defense)
+    } else if has_shield {
+        clamp_mastery(player.shield_mastery_defense)
+    } else {
+        clamp_mastery(player.mastery_defense)
+    };
+    mastery * if defensive_dualwielding { 2 } else { 1 }
+}
+
 pub fn effective_damage_mastery(player: &PlayerConfig) -> i32 {
     clamp_mastery(player.mastery_damage)
 }
@@ -2223,6 +2239,7 @@ pub fn player_summary(
         &character,
         &derived,
         &modifiers,
+        twelve_paths_active,
         fight_defensively_defense_bonus,
         called_shot_defense_penalty,
     );
@@ -2256,17 +2273,15 @@ fn defense_display_summary(
     character: &Character,
     derived: &DerivedStats,
     modifiers: &TalentModifiers,
+    twelve_paths_active: bool,
     fight_defensively_defense_bonus: i32,
     called_shot_defense_penalty: i32,
 ) -> DefenseDisplaySummary {
     let (defensive_dualwielding, offensive_dualwielding, perfect_two_weapon_fighting_active) =
         dualwield_mode_flags(player, weapon);
     let has_shield = character.equipment.shield.is_some();
-    let defense_mastery = if has_shield {
-        clamp_mastery(player.shield_mastery_defense)
-    } else {
-        clamp_mastery(player.mastery_defense)
-    } * if defensive_dualwielding { 2 } else { 1 };
+    let defense_mastery =
+        defense_mastery_bonus(player, has_shield, twelve_paths_active, defensive_dualwielding);
     let shield_bonus = character
         .equipment
         .shield
@@ -2716,11 +2731,8 @@ pub fn build_combatant(
     if offensive_dualwielding && !perfect_two_weapon_fighting_active {
         derived.base_dv = 0;
     }
-    let defense_mastery = if has_shield {
-        clamp_mastery(player.shield_mastery_defense)
-    } else {
-        clamp_mastery(player.mastery_defense)
-    } * if defensive_dualwielding { 2 } else { 1 };
+    let defense_mastery =
+        defense_mastery_bonus(player, has_shield, twelve_paths_active, defensive_dualwielding);
     let defense_bonus_weapon = modifiers.defense_bonus_for_weapon(player.weapon_id)
         * if defensive_dualwielding { 2 } else { 1 };
     let defense_bonus =
@@ -5564,6 +5576,65 @@ mod tests {
             combatant.sheet.offense.strength_damage
                 - baseline_combatant.sheet.offense.strength_damage,
             -TWELVE_PATHS_DAMAGE_PENALTY
+        );
+    }
+
+    #[test]
+    fn twelve_paths_combines_weapon_and_shield_defense_masteries() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npc_presets = Catalog::new(Vec::new());
+        let weapon_id = weapons
+            .entries()
+            .iter()
+            .enumerate()
+            .find(|(_, weapon)| weapon.name.eq_ignore_ascii_case("Flamberge"))
+            .and_then(|(idx, _)| weapons.id_from_index(idx))
+            .expect("no flamberge found");
+        let (shield_id, _shield) = find_shield(&shields, |shield| {
+            is_small_shield_or_buckler_name(&shield.name)
+        });
+        let mut player = base_player(weapon_id);
+        player.shield_id = shield_id;
+        player.proficiencies = vec!["Flamberge".to_string(), "Shields".to_string()];
+        player.mastery_defense = 2;
+        player.shield_mastery_defense = 1;
+        add_talent(&mut player, TALENT_ID_TWELVE_PATHS, None);
+
+        let summary = player_summary(&player, &weapons, &armor, &shields, &talents);
+        let combatant =
+            build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
+
+        let mut baseline = player.clone();
+        baseline.mastery_defense = 0;
+        baseline.shield_mastery_defense = 0;
+        let baseline_summary = player_summary(&baseline, &weapons, &armor, &shields, &talents);
+        let baseline_combatant = build_combatant(
+            &baseline,
+            &weapons,
+            &armor,
+            &shields,
+            &npc_presets,
+            &talents,
+        );
+
+        let expected_delta = player.mastery_defense + player.shield_mastery_defense;
+        assert_eq!(
+            summary
+                .defense
+                .melee_with_shield_dv
+                .expect("shielded defense summary")
+                - baseline_summary
+                    .defense
+                    .melee_with_shield_dv
+                    .expect("baseline shielded defense summary"),
+            expected_delta
+        );
+        assert_eq!(
+            (combatant.sheet.defense.defense_mod + combatant.sheet.defense.shield_defense_bonus)
+                - (baseline_combatant.sheet.defense.defense_mod
+                    + baseline_combatant.sheet.defense.shield_defense_bonus),
+            expected_delta
         );
     }
 

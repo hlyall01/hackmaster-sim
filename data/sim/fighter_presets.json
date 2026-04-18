@@ -2,7 +2,7 @@
   "presets": [
     {
       "name": "Arthur Du Randt",
-      "level": 5,
+      "level": 6,
       "progression": {
         "attack": "III",
         "speed": "II",
@@ -10,29 +10,29 @@
         "health": "IV"
       },
       "masteries": {
-        "attack": 2,
+        "attack": 3,
         "defense": 2,
-        "damage": 2,
-        "speed": 1,
+        "damage": 3,
+        "speed": 2,
         "shield_defense": 0,
         "shield_speed": 0
       },
       "base_hp": 10,
       "move_speed": 20.0,
       "strength_base": 17,
-      "strength_pct": 10,
+      "strength_pct": 30,
       "dex_base": 15,
-      "dex_pct": 27,
+      "dex_pct": 44,
       "intelligence": 10,
       "wisdom": 12,
       "constitution": 13,
       "looks": 8,
       "charisma": 9,
       "weapon": "Glaive",
-      "armor": "Jazerant",
+      "armor": "Platemail",
       "shield": "None",
       "weapon_material_tier": 1,
-      "armor_material_tier": 2,
+      "armor_material_tier": 1,
       "projectile_material_tier": 0,
       "shield_material_tier": 0,
       "two_hand_grip": true,
@@ -41,6 +41,18 @@
       },
       "defensive_dualwielding": false,
       "race_id": "midlander",
+      "proficiencies": [
+        "Fist",
+        "Glaive",
+        "Poleaxe",
+        "Lance",
+        "Light armor",
+        "Medium armor",
+        "Heavy armor",
+        "Laborer",
+        "Trilingual",
+        "Hiking"
+      ],
       "talents": [
         {
           "id": "armor_focus",
@@ -86,7 +98,7 @@
     },
     {
       "name": "Zorya",
-      "level": 5,
+      "level": 6,
       "progression": {
         "attack": "II",
         "speed": "V",
@@ -96,17 +108,17 @@
       "masteries": {
         "attack": 2,
         "defense": 1,
-        "damage": 1,
-        "speed": 1,
+        "damage": 2,
+        "speed": 2,
         "shield_defense": 0,
-        "shield_speed": 0
+        "shield_speed": 1
       },
       "base_hp": 10,
       "move_speed": 20.0,
-      "strength_base": 11,
-      "strength_pct": 5,
+      "strength_base": 12,
+      "strength_pct": 18,
       "dex_base": 17,
-      "dex_pct": 11,
+      "dex_pct": 26,
       "intelligence": 11,
       "wisdom": 15,
       "constitution": 13,
@@ -125,6 +137,16 @@
       },
       "defensive_dualwielding": false,
       "race_id": "vorova_female",
+      "proficiencies": [
+        "Throwing axe",
+        "Shortbow",
+        "Battle axe",
+        "Light armor",
+        "Shields",
+        "Hiking",
+        "Roadmarching",
+        "Skinning/Tanning"
+      ],
       "talents": [
         {
           "id": "pain_tolerant",
@@ -162,11 +184,6 @@
           "weapon": null
         },
         {
-          "id": "improved_awareness",
-          "rank": 1,
-          "weapon": null
-        },
-        {
           "id": "bloodline",
           "rank": 1,
           "weapon": null
@@ -175,6 +192,11 @@
           "id": "heat_adaptation",
           "rank": 1,
           "weapon": null
+        },
+        {
+          "id": "damage_bonus_weapon",
+          "rank": 1,
+          "weapon": "Throwing axe"
         }
       ]
     },
@@ -247,9 +269,9 @@
     },
     {
       "name": "Errit",
-      "level": 5,
+      "level": 6,
       "progression": {
-        "attack": "I",
+        "attack": "III",
         "speed": "II",
         "initiative": "II",
         "health": "IV"
@@ -258,23 +280,23 @@
         "attack": 1,
         "defense": 1,
         "damage": 1,
-        "speed": 0,
+        "speed": 1,
         "shield_defense": 1,
-        "shield_speed": 0
+        "shield_speed": 1
       },
       "base_hp": 10,
       "move_speed": 20.0,
       "strength_base": 13,
-      "strength_pct": 61,
+      "strength_pct": 79,
       "dex_base": 12,
-      "dex_pct": 1,
+      "dex_pct": 11,
       "intelligence": 8,
       "wisdom": 10,
-      "constitution": 15,
+      "constitution": 16,
       "looks": 13,
       "charisma": 14,
       "weapon": "Flamberge",
-      "armor": "Brigandine",
+      "armor": "Platemail",
       "shield": "Small metallic shield",
       "weapon_material_tier": 1,
       "armor_material_tier": 1,
@@ -337,6 +359,11 @@
         },
         {
           "id": "knight_hardened",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "inspire_others",
           "rank": 1,
           "weapon": null
         },
@@ -419,16 +446,16 @@
     },
     {
       "name": "Volfango Drakos",
-      "level": 5,
+      "level": 6,
       "progression": {
         "attack": "III",
         "speed": "II",
         "initiative": "III",
-        "health": "III"
+        "health": "IV"
       },
       "masteries": {
         "attack": 1,
-        "defense": 1,
+        "defense": 2,
         "damage": 1,
         "speed": 1,
         "shield_defense": 0,
@@ -437,9 +464,9 @@
       "base_hp": 10,
       "move_speed": 20.0,
       "strength_base": 10,
-      "strength_pct": 64,
+      "strength_pct": 1,
       "dex_base": 20,
-      "dex_pct": 56,
+      "dex_pct": 62,
       "intelligence": 15,
       "wisdom": 12,
       "constitution": 11,
@@ -465,7 +492,9 @@
         "Short sword",
         "Light armor",
         "Seaman's Cant",
-        "Trilingual"
+        "Trilingual",
+        "Hiking",
+        "Roadmarching"
       ],
       "talents": [
         {
@@ -541,43 +570,53 @@
       ]
     },
     {
-      "name": "Duncan",
-      "level": 3,
+      "name": "Vill",
+      "level": 6,
       "progression": {
         "attack": "III",
-        "speed": "II",
-        "initiative": "III",
+        "speed": "III",
+        "initiative": "IV",
         "health": "III"
       },
       "masteries": {
-        "attack": 0,
+        "attack": 1,
         "defense": 0,
-        "damage": 0,
-        "speed": 0,
+        "damage": 1,
+        "speed": 2,
         "shield_defense": 0,
         "shield_speed": 0
       },
       "base_hp": 10,
       "move_speed": 20.0,
       "strength_base": 11,
-      "strength_pct": 6,
+      "strength_pct": 25,
       "dex_base": 14,
-      "dex_pct": 15,
+      "dex_pct": 86,
       "intelligence": 10,
       "wisdom": 14,
       "constitution": 14,
       "looks": 10,
       "charisma": 10,
-      "weapon": "Short sword",
+      "weapon": "Recurve bow",
       "armor": "Gambeson",
-      "shield": "Small wooden shield",
+      "shield": "None",
       "weapon_material_tier": 1,
-      "armor_material_tier": 1,
+      "armor_material_tier": 2,
       "projectile_material_tier": 1,
-      "shield_material_tier": 1,
+      "shield_material_tier": 0,
       "two_hand_grip": false,
       "defensive_dualwielding": false,
       "race_id": "vetlander",
+      "proficiencies": [
+        "Short sword",
+        "Recurve bow",
+        "Longbow",
+        "Light armor",
+        "Shields",
+        "Seaman's Cant",
+        "Skinning/Tanning",
+        "Trilingual"
+      ],
       "talents": [
         {
           "id": "crack_shot",
@@ -605,6 +644,11 @@
           "weapon": null
         },
         {
+          "id": "fast_healer",
+          "rank": 1,
+          "weapon": null
+        },
+        {
           "id": "camouflage",
           "rank": 1,
           "weapon": null
@@ -615,7 +659,27 @@
           "weapon": "Bows"
         },
         {
+          "id": "precision_aiming",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "ambush",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "pathfinder",
+          "rank": 1,
+          "weapon": null
+        },
+        {
           "id": "improvisation",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "destined",
           "rank": 1,
           "weapon": null
         }
