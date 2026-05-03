@@ -343,7 +343,7 @@ fn player_has_talent(player: &PlayerProfile, id: &str) -> bool {
     player.talents.iter().any(|talent| talent.id == id)
 }
 
-fn heal_wounds(wounds: &mut Vec<Wound>, rest_days: u32, fast_healer: bool, resting: bool) {
+pub fn heal_wounds(wounds: &mut Vec<Wound>, rest_days: u32, fast_healer: bool, resting: bool) {
     let mut rest_steps = rest_days.saturating_mul(4);
     if !resting {
         rest_steps /= 2;
@@ -356,15 +356,7 @@ fn heal_wounds(wounds: &mut Vec<Wound>, rest_days: u32, fast_healer: bool, resti
         let mut healing_progress = wound.healing_progress_steps.saturating_add(rest_steps);
 
         while wound.damage > 0 {
-            let required_steps = if fast_healer {
-                if wound.damage == 1 {
-                    1
-                } else {
-                    wound.damage.saturating_sub(1).saturating_mul(2)
-                }
-            } else {
-                wound.damage.saturating_mul(2)
-            };
+            let required_steps = required_healing_steps(wound.damage, fast_healer);
             if healing_progress < required_steps {
                 break;
             }
@@ -379,6 +371,18 @@ fn heal_wounds(wounds: &mut Vec<Wound>, rest_days: u32, fast_healer: bool, resti
         }
     }
     wounds.retain(|wound| wound.damage > 0);
+}
+
+pub fn required_healing_steps(damage: u32, fast_healer: bool) -> u32 {
+    if fast_healer {
+        if damage == 1 {
+            1
+        } else {
+            damage.saturating_sub(1).saturating_mul(2)
+        }
+    } else {
+        damage.saturating_mul(2)
+    }
 }
 
 #[cfg(test)]

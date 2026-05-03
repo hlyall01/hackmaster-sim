@@ -11,7 +11,7 @@
       },
       "masteries": {
         "attack": 3,
-        "defense": 2,
+        "defense": 3,
         "damage": 3,
         "speed": 2,
         "shield_defense": 0,
@@ -20,9 +20,9 @@
       "base_hp": 10,
       "move_speed": 20.0,
       "strength_base": 17,
-      "strength_pct": 30,
+      "strength_pct": 46,
       "dex_base": 15,
-      "dex_pct": 44,
+      "dex_pct": 51,
       "intelligence": 10,
       "wisdom": 12,
       "constitution": 13,
@@ -31,7 +31,7 @@
       "weapon": "Glaive",
       "armor": "Platemail",
       "shield": "None",
-      "weapon_material_tier": 1,
+      "weapon_material_tier": 2,
       "armor_material_tier": 1,
       "projectile_material_tier": 0,
       "shield_material_tier": 0,
@@ -66,6 +66,11 @@
         },
         {
           "id": "armor_master",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "heavy_armor_optimization",
           "rank": 1,
           "weapon": null
         },
@@ -197,6 +202,115 @@
           "id": "damage_bonus_weapon",
           "rank": 1,
           "weapon": "Throwing axe"
+        }
+      ]
+    },
+    {
+      "name": "Zorya (axe cursed)",
+      "level": 6,
+      "progression": {
+        "attack": "II",
+        "speed": "V",
+        "initiative": "III",
+        "health": "II"
+      },
+      "masteries": {
+        "attack": 3,
+        "defense": 3,
+        "damage": 3,
+        "speed": 3,
+        "shield_defense": 3,
+        "shield_speed": 3
+      },
+      "base_hp": 10,
+      "move_speed": 20.0,
+      "strength_base": 12,
+      "strength_pct": 18,
+      "dex_base": 17,
+      "dex_pct": 26,
+      "intelligence": 11,
+      "wisdom": 15,
+      "constitution": 13,
+      "looks": 7,
+      "charisma": 8,
+      "weapon": "Greataxe",
+      "armor": "Gambeson",
+      "shield": "Medium wooden shield",
+      "weapon_material_tier": 2,
+      "armor_material_tier": 2,
+      "projectile_material_tier": 0,
+      "shield_material_tier": 1,
+      "two_hand_grip": true,
+      "maneuvers": {
+        "charge": true
+      },
+      "defensive_dualwielding": false,
+      "race_id": "vorova_female",
+      "proficiencies": [
+        "Throwing axe",
+        "Shortbow",
+        "Battle axe",
+        "Light armor",
+        "Shields",
+        "Hiking",
+        "Roadmarching",
+        "Skinning/Tanning"
+      ],
+      "talents": [
+        {
+          "id": "pain_tolerant",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "weapon_focus",
+          "rank": 1,
+          "weapon": "Axes"
+        },
+        {
+          "id": "swift",
+          "rank": 1,
+          "weapon": "Throwing axe"
+        },
+        {
+          "id": "shield_focus",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "advanced_sighting",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "ranged_weapon_specialization",
+          "rank": 1,
+          "weapon": "Axes"
+        },
+        {
+          "id": "light_armor_optimization",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "bloodline",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "heat_adaptation",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "damage_bonus_weapon",
+          "rank": 1,
+          "weapon": "Throwing axe"
+        },
+        {
+          "id": "curse_of_axe",
+          "rank": 1,
+          "weapon": null
         }
       ]
     },

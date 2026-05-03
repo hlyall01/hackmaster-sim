@@ -311,6 +311,7 @@ pub enum TalentEffect {
     ShieldCoverValueAdjustment {
         amount: i32,
     },
+    CurseOfAxe,
     LargeSwordShieldStyle,
     ArmerociPoleStyle,
     FymblwngerStyle,

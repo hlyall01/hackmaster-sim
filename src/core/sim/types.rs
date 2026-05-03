@@ -67,6 +67,7 @@ pub enum WeaponSlot {
 pub struct DamageDie {
     pub sides: i32,
     pub penetrating: bool,
+    pub penetration_triggers: Option<&'static [i32]>,
 }
 
 #[derive(Clone, Debug, Default)]

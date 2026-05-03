@@ -10,6 +10,8 @@ use super::types::{
 };
 use std::sync::Arc;
 
+const CURSE_OF_AXE_D6_TRIGGERS: &[i32] = &[4, 5, 6];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AttackMode {
     Normal,
@@ -328,7 +330,11 @@ fn apply_ancillary_critical_immunity(effect: CriticalEffect, immune: bool) -> Cr
     }
 }
 
-fn parse_damage_dice(expr: &str, force_nonpenetrating: bool) -> Vec<DamageDie> {
+fn parse_damage_dice(
+    expr: &str,
+    force_nonpenetrating: bool,
+    d6_penetration_triggers: Option<&[i32]>,
+) -> Vec<DamageDie> {
     let cleaned = clean_damage_expr(expr).to_ascii_lowercase();
     let chars: Vec<char> = cleaned.chars().collect();
     let mut dice: Vec<DamageDie> = Vec::new();
@@ -351,11 +357,24 @@ fn parse_damage_dice(expr: &str, force_nonpenetrating: bool) -> Vec<DamageDie> {
                 }
                 if has_sides && sides > 0 {
                     let mut penetrating = i < chars.len() && chars[i] == 'p';
+                    let mut penetration_triggers = if penetrating
+                        && sides == 6
+                        && d6_penetration_triggers == Some(CURSE_OF_AXE_D6_TRIGGERS)
+                    {
+                        Some(CURSE_OF_AXE_D6_TRIGGERS)
+                    } else {
+                        None
+                    };
                     if force_nonpenetrating {
                         penetrating = false;
+                        penetration_triggers = None;
                     }
                     for _ in 0..count.max(1) {
-                        dice.push(DamageDie { sides, penetrating });
+                        dice.push(DamageDie {
+                            sides,
+                            penetrating,
+                            penetration_triggers,
+                        });
                     }
                 }
                 if i < chars.len() && chars[i] == 'p' {
@@ -376,10 +395,23 @@ fn parse_damage_dice(expr: &str, force_nonpenetrating: bool) -> Vec<DamageDie> {
             }
             if has_sides && sides > 0 {
                 let mut penetrating = i < chars.len() && chars[i] == 'p';
+                let mut penetration_triggers = if penetrating
+                    && sides == 6
+                    && d6_penetration_triggers == Some(CURSE_OF_AXE_D6_TRIGGERS)
+                {
+                    Some(CURSE_OF_AXE_D6_TRIGGERS)
+                } else {
+                    None
+                };
                 if force_nonpenetrating {
                     penetrating = false;
+                    penetration_triggers = None;
                 }
-                dice.push(DamageDie { sides, penetrating });
+                dice.push(DamageDie {
+                    sides,
+                    penetrating,
+                    penetration_triggers,
+                });
             }
             if i < chars.len() && chars[i] == 'p' {
                 i += 1;
@@ -401,7 +433,7 @@ pub(crate) fn extra_damage_dice_sequence(
     if dice <= 0 {
         return Vec::new();
     }
-    let pool = parse_damage_dice(expr, force_nonpenetrating);
+    let pool = parse_damage_dice(expr, force_nonpenetrating, None);
     extra_damage_dice_sequence_from_cache(&pool, dice, force_nonpenetrating)
 }
 
@@ -418,6 +450,7 @@ fn extra_damage_dice_sequence_from_cache(
         let mut die = pool[idx as usize % pool.len()];
         if force_nonpenetrating {
             die.penetrating = false;
+            die.penetration_triggers = None;
         }
         sequence.push(die);
     }
@@ -428,7 +461,9 @@ fn roll_extra_damage(expr: &str, dice: i32, force_nonpenetrating: bool, rng: &mu
     let sequence = extra_damage_dice_sequence(expr, dice, force_nonpenetrating);
     let mut total = 0;
     for die in sequence {
-        total += if die.penetrating {
+        total += if let Some(triggers) = die.penetration_triggers {
+            crate::core::rules::penetrating_roll_trigger_set(die.sides, triggers, rng)
+        } else if die.penetrating {
             penetrating_roll(die.sides, rng)
         } else {
             roll_die(die.sides, rng)
@@ -475,7 +510,11 @@ fn cached_damage_dice<'a>(
         } else {
             weapon.damage_expr.as_str()
         };
-        *slot = Some(parse_damage_dice(expr, false));
+        *slot = Some(parse_damage_dice(
+            expr,
+            false,
+            weapon.damage_expr_cache.d6_penetration_triggers(),
+        ));
     }
     slot.as_deref().unwrap_or(&[])
 }
@@ -492,7 +531,9 @@ fn roll_extra_damage_cached(
     let sequence = extra_damage_dice_sequence_from_cache(pool, dice, force_nonpenetrating);
     let mut total = 0;
     for die in sequence {
-        let value = if die.penetrating {
+        let value = if let Some(triggers) = die.penetration_triggers {
+            crate::core::rules::penetrating_roll_trigger_set(die.sides, triggers, rng)
+        } else if die.penetrating {
             penetrating_roll(die.sides, rng)
         } else {
             roll_die(die.sides, rng)

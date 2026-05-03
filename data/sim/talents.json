@@ -3632,6 +3632,19 @@
           "amount": 1
         }
       ]
+    },
+    {
+      "id": "curse_of_axe",
+      "name": "Curse of Axe",
+      "description": "You are compelled to wield a +2 greataxe. Its 3d6p damage dice penetrate on 4, 5, or 6.",
+      "cost_bp": 0,
+      "category": "Curses",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "curse_of_axe"
+        }
+      ]
     }
   ]
 }

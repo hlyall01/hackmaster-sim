@@ -8,6 +8,7 @@ use game_logic::{
     WeaponCatalog, WeaponHandedness, WeaponId, WeaponSize,
 };
 use hackmaster_sim::core::catalog::Catalog;
+use hackmaster_sim::core::gameplay::run::{Wound, heal_wounds, required_healing_steps};
 use hackmaster_sim::core::types::{RaceSpec, TalentSelection, TalentSpec};
 use hackmaster_sim::ui_widgets::searchable_select;
 use hackmaster_sim::{character, data, game_logic, sim};
@@ -31,6 +32,21 @@ enum WeaponIcon {
     Shield,
     Unarmed,
     Other,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MainTab {
+    Simulator,
+    Tools,
+}
+
+impl MainTab {
+    fn label(self) -> &'static str {
+        match self {
+            MainTab::Simulator => "Simulator",
+            MainTab::Tools => "Tools",
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -106,6 +122,11 @@ struct SimGuiApp {
     bulk_runs: u32,
     bulk_result: Option<BulkSimResult>,
     bulk_sim_duration: Option<std::time::Duration>,
+    active_tab: MainTab,
+    wound_tool_damage: u32,
+    wound_tool_days: u32,
+    wound_tool_tended: bool,
+    wound_tool_fast_healer: bool,
 }
 
 impl SimGuiApp {
@@ -179,6 +200,11 @@ impl SimGuiApp {
             bulk_runs: 1000,
             bulk_result: None,
             bulk_sim_duration: None,
+            active_tab: MainTab::Simulator,
+            wound_tool_damage: 7,
+            wound_tool_days: 1,
+            wound_tool_tended: true,
+            wound_tool_fast_healer: false,
         };
         app.apply_default_fighter_preset(0, "Arthur Du Randt");
         app.apply_default_fighter_preset(1, "Zorya");
@@ -211,6 +237,7 @@ impl SimGuiApp {
     }
 
     fn reset_positions(&mut self) {
+        self.sanitize_players();
         let combatants = game_logic::build_combatants(
             &self.players,
             &self.weapon_catalog,
@@ -225,6 +252,7 @@ impl SimGuiApp {
     fn run_bulk_sim(&mut self) {
         self.bulk_result = None;
         self.bulk_sim_duration = None;
+        self.sanitize_players();
         let combatants = game_logic::build_combatants(
             &self.players,
             &self.weapon_catalog,
@@ -241,6 +269,17 @@ impl SimGuiApp {
         let result = bulk_simulate(config, combatants, self.bulk_runs, BULK_SIM_MAX_SECONDS);
         self.bulk_result = Some(result);
         self.bulk_sim_duration = Some(start.elapsed());
+    }
+
+    fn sanitize_players(&mut self) {
+        for player in &mut self.players {
+            game_logic::sanitize_player_ids(
+                player,
+                &self.weapon_catalog,
+                &self.armor_catalog,
+                &self.shield_catalog,
+            );
+        }
     }
 
     fn update_sim(&mut self, dt: f32) {
@@ -825,44 +864,66 @@ impl eframe::App for SimGuiApp {
 
         egui::TopBottomPanel::top("controls").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                if ui
-                    .button(if self.running { "Pause" } else { "Start" })
-                    .clicked()
-                {
-                    if !self.running && (self.sim.done || self.sim.elapsed_seconds == 0) {
-                        self.reset_positions();
-                    }
-                    self.running = !self.running;
-                }
-                if ui.button("Reset").clicked() {
-                    self.running = false;
-                    self.reset_positions();
-                }
-                if !self.running {
-                    if ui.button("Next second").clicked() {
-                        if self.sim.done || self.sim.elapsed_seconds == 0 {
+                ui.selectable_value(
+                    &mut self.active_tab,
+                    MainTab::Simulator,
+                    MainTab::Simulator.label(),
+                );
+                ui.selectable_value(&mut self.active_tab, MainTab::Tools, MainTab::Tools.label());
+                if self.active_tab == MainTab::Simulator {
+                    ui.separator();
+                    if ui
+                        .button(if self.running { "Pause" } else { "Start" })
+                        .clicked()
+                    {
+                        if !self.running && (self.sim.done || self.sim.elapsed_seconds == 0) {
                             self.reset_positions();
                         }
-                        self.sim.tick();
+                        self.running = !self.running;
                     }
-                }
-                ui.separator();
-                ui.label("Start distance (ft)");
-                if ui
-                    .add(
-                        egui::Slider::new(&mut self.sim.config.start_distance, 0.0..=400.0)
-                            .step_by(5.0),
-                    )
-                    .changed()
-                {
-                    if !self.running {
+                    if ui.button("Reset").clicked() {
+                        self.running = false;
                         self.reset_positions();
                     }
+                    if !self.running {
+                        if ui.button("Next second").clicked() {
+                            if self.sim.done || self.sim.elapsed_seconds == 0 {
+                                self.reset_positions();
+                            }
+                            self.sim.tick();
+                        }
+                    }
+                    ui.separator();
+                    ui.label("Start distance (ft)");
+                    if ui
+                        .add(
+                            egui::Slider::new(&mut self.sim.config.start_distance, 0.0..=400.0)
+                                .step_by(5.0),
+                        )
+                        .changed()
+                    {
+                        if !self.running {
+                            self.reset_positions();
+                        }
+                    }
+                    ui.label("Timescale");
+                    ui.add(egui::Slider::new(&mut self.time_scale, 0.25..=4.0).step_by(0.25));
                 }
-                ui.label("Timescale");
-                ui.add(egui::Slider::new(&mut self.time_scale, 0.25..=4.0).step_by(0.25));
             });
         });
+
+        if self.active_tab == MainTab::Tools {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                render_tools_tab(
+                    ui,
+                    &mut self.wound_tool_damage,
+                    &mut self.wound_tool_days,
+                    &mut self.wound_tool_tended,
+                    &mut self.wound_tool_fast_healer,
+                );
+            });
+            return;
+        }
 
         egui::SidePanel::left("players")
             .resizable(true)
@@ -1181,6 +1242,65 @@ fn render_player_editor_tabs(ui: &mut egui::Ui, id_prefix: &str, active_tab: &mu
         });
     });
     ui.separator();
+}
+
+fn render_tools_tab(
+    ui: &mut egui::Ui,
+    wound_damage: &mut u32,
+    days: &mut u32,
+    tended: &mut bool,
+    fast_healer: &mut bool,
+) {
+    ui.heading("Tools");
+    ui.separator();
+    ui.heading("Wound Calculator");
+    ui.horizontal(|ui| {
+        ui.label("Wound");
+        ui.add(
+            egui::DragValue::new(wound_damage)
+                .clamp_range(0..=u32::MAX)
+                .speed(1.0),
+        );
+        ui.label("Days");
+        ui.add(
+            egui::DragValue::new(days)
+                .clamp_range(0..=u32::MAX)
+                .speed(1.0),
+        );
+    });
+    ui.horizontal(|ui| {
+        ui.checkbox(tended, "Being tended");
+        ui.checkbox(fast_healer, "Fast Healer");
+    });
+    ui.small("Being tended/resting gives 4 healing steps per day. Untended activity gives half progress: 2 steps per day.");
+    ui.small("Fast Healer reduces the time for each wound point by half a day; the final wound point heals in 1 step.");
+    ui.separator();
+
+    let mut wounds = if *wound_damage == 0 {
+        Vec::new()
+    } else {
+        vec![Wound {
+            damage: *wound_damage,
+            healing_progress_steps: 0,
+        }]
+    };
+    heal_wounds(&mut wounds, *days, *fast_healer, *tended);
+    let remaining = wounds.first().map(|wound| wound.damage).unwrap_or(0);
+    let healed = wound_damage.saturating_sub(remaining);
+
+    ui.label(format!("Healed: {healed}"));
+    ui.label(format!("Remaining wound: {remaining}"));
+    if let Some(wound) = wounds.first() {
+        let required_steps = required_healing_steps(wound.damage, *fast_healer);
+        let progress_steps = wound.healing_progress_steps.min(required_steps);
+        let next_heal = required_steps.saturating_sub(progress_steps);
+        ui.label(format!(
+            "Current progress: {progress_steps} / {required_steps} steps"
+        ));
+        ui.label(format!("Next point heals in {next_heal} steps"));
+    } else {
+        ui.label("The wound is fully healed.");
+    }
 }
 
 fn render_player_editor(

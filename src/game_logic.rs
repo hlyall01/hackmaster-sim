@@ -96,6 +96,9 @@ const TALENT_ID_PERFECT_TWO_WEAPON_FIGHTING: &str = "perfect_two_weapon_fighting
 const TALENT_ID_DECEPTIVE_DEFENDER: &str = "deceptive_defender";
 const TALENT_ID_PRECISION_AIMING: &str = "precision_aiming";
 const TALENT_ID_PRECISION_COMBATANT: &str = "precision_combatant";
+const TALENT_ID_CURSE_OF_AXE: &str = "curse_of_axe";
+const CURSE_OF_AXE_WEAPON_NAME: &str = "Greataxe";
+const CURSE_OF_AXE_D6_TRIGGERS: &[i32] = &[4, 5, 6];
 const TWELVE_PATHS_DAMAGE_PENALTY: i32 = 3;
 const ARMEROCI_POLE_REACH_BONUS_FT: f32 = 1.0;
 const ARMEROCI_POLE_SPEED_PENALTY: f32 = 2.0;
@@ -538,6 +541,7 @@ struct TalentModifiers {
     six_paths_style: bool,
     three_mountains_style: bool,
     unbreakable_wall_style: bool,
+    curse_of_axe: bool,
 }
 
 impl Default for TalentModifiers {
@@ -591,6 +595,7 @@ impl Default for TalentModifiers {
             six_paths_style: false,
             three_mountains_style: false,
             unbreakable_wall_style: false,
+            curse_of_axe: false,
         }
     }
 }
@@ -1630,6 +1635,9 @@ fn resolve_talent_modifiers(
                 TalentEffect::ShieldCoverValueAdjustment { amount } => {
                     modifiers.shield_cover_value_adjustment += amount * rank;
                 }
+                TalentEffect::CurseOfAxe => {
+                    modifiers.curse_of_axe = true;
+                }
                 TalentEffect::LargeSwordShieldStyle => {
                     modifiers.large_sword_shield_style = true;
                 }
@@ -1930,6 +1938,39 @@ pub fn sanitize_player_ids(
             player.shield_id = id;
         }
     }
+    enforce_forced_talent_equipment(player, weapon_catalog, shield_catalog);
+}
+
+pub fn enforce_forced_talent_equipment(
+    player: &mut PlayerConfig,
+    weapon_catalog: &WeaponCatalog,
+    shield_catalog: &ShieldCatalog,
+) {
+    if !curse_of_axe_active(player) {
+        return;
+    }
+    for (idx, weapon) in weapon_catalog.entries().iter().enumerate() {
+        if weapon.name == CURSE_OF_AXE_WEAPON_NAME {
+            if let Some(id) = weapon_catalog.id_from_index(idx) {
+                player.weapon_id = id;
+            }
+            break;
+        }
+    }
+    player.weapon_material_tier = player.weapon_material_tier.max(2);
+    player.projectile_material_tier = 0;
+    player.offhand_weapon_id = None;
+    player.offensive_dualwielding = false;
+    player.defensive_dualwielding = false;
+    player.two_hand_grip = true;
+    for (idx, entry) in shield_catalog.entries().iter().enumerate() {
+        if entry.shield.is_none() || entry.label.eq_ignore_ascii_case("None") {
+            if let Some(id) = shield_catalog.id_from_index(idx) {
+                player.shield_id = id;
+            }
+            break;
+        }
+    }
 }
 
 pub fn weapon_uses_projectiles(weapon: &WeaponPreset) -> bool {
@@ -2137,10 +2178,69 @@ fn weapon_for_player<'a>(
     player: &PlayerConfig,
     weapon_catalog: &'a WeaponCatalog,
 ) -> &'a WeaponPreset {
+    if curse_of_axe_active(player) {
+        if let Some(weapon) = weapon_catalog
+            .entries()
+            .iter()
+            .find(|weapon| weapon.name == CURSE_OF_AXE_WEAPON_NAME)
+        {
+            return weapon;
+        }
+    }
     weapon_catalog
         .get(player.weapon_id)
         .or_else(|| weapon_catalog.entries().first())
         .expect("weapon catalog is empty")
+}
+
+fn curse_of_axe_active(player: &PlayerConfig) -> bool {
+    player
+        .talents
+        .iter()
+        .any(|selection| selection.id == TALENT_ID_CURSE_OF_AXE && selection.rank.max(1) > 0)
+}
+
+fn weapon_id_for_player(player: &PlayerConfig, weapon_catalog: &WeaponCatalog) -> WeaponId {
+    if curse_of_axe_active(player) {
+        for (idx, weapon) in weapon_catalog.entries().iter().enumerate() {
+            if weapon.name == CURSE_OF_AXE_WEAPON_NAME {
+                if let Some(id) = weapon_catalog.id_from_index(idx) {
+                    return id;
+                }
+            }
+        }
+    }
+    player.weapon_id
+}
+
+fn weapon_material_tier_for_player(player: &PlayerConfig, weapon: &WeaponPreset) -> i32 {
+    if curse_of_axe_active(player) && weapon.name == CURSE_OF_AXE_WEAPON_NAME {
+        player.weapon_material_tier.max(2)
+    } else {
+        player.weapon_material_tier
+    }
+}
+
+fn damage_expr_for_player_weapon(player: &PlayerConfig, weapon: &WeaponPreset) -> String {
+    if curse_of_axe_active(player) && weapon.name == CURSE_OF_AXE_WEAPON_NAME {
+        weapon.damage_expr.clone()
+    } else {
+        weapon.damage_expr.clone()
+    }
+}
+
+fn damage_expr_cache_for_player_weapon(
+    player: &PlayerConfig,
+    weapon: &WeaponPreset,
+) -> DamageExprCache {
+    if curse_of_axe_active(player) && weapon.name == CURSE_OF_AXE_WEAPON_NAME {
+        DamageExprCache::new_with_d6_penetration_triggers(
+            &weapon.damage_expr,
+            CURSE_OF_AXE_D6_TRIGGERS,
+        )
+    } else {
+        DamageExprCache::new(&weapon.damage_expr)
+    }
 }
 
 pub fn ability_set_from_player(player: &PlayerConfig) -> AbilitySet {
@@ -2179,6 +2279,7 @@ pub fn player_summary(
         armor_talent_adjustments(character.equipment.armor.as_ref(), &modifiers);
     let (defensive_dualwielding, offensive_dualwielding, perfect_two_weapon_fighting_active) =
         dualwield_mode_flags(player, weapon);
+    let weapon_id = weapon_id_for_player(player, weapon_catalog);
     let fight_defensively_attack_penalty = fight_defensively_attack_penalty_for_player(player);
     let fight_defensively_defense_bonus = fight_defensively_defense_bonus_for_player(player);
     let called_shot_defense_penalty = if player.called_shot {
@@ -2186,8 +2287,8 @@ pub fn player_summary(
     } else {
         0
     };
-    let defense_bonus_weapon = modifiers.defense_bonus_for_weapon(player.weapon_id)
-        * if defensive_dualwielding { 2 } else { 1 };
+    let defense_bonus_weapon =
+        modifiers.defense_bonus_for_weapon(weapon_id) * if defensive_dualwielding { 2 } else { 1 };
     let mut derived = character.derived();
     derived.attack_bonus += misc_modifiers.attack_bonus + misc_modifiers.all_roll_bonus;
     derived.speed_mod += armor_adjustments.speed_mod_bonus
@@ -2246,6 +2347,7 @@ pub fn player_summary(
     let roll = roll_summary(
         player,
         weapon,
+        weapon_catalog,
         &character,
         &derived,
         &modifiers,
@@ -2280,8 +2382,12 @@ fn defense_display_summary(
     let (defensive_dualwielding, offensive_dualwielding, perfect_two_weapon_fighting_active) =
         dualwield_mode_flags(player, weapon);
     let has_shield = character.equipment.shield.is_some();
-    let defense_mastery =
-        defense_mastery_bonus(player, has_shield, twelve_paths_active, defensive_dualwielding);
+    let defense_mastery = defense_mastery_bonus(
+        player,
+        has_shield,
+        twelve_paths_active,
+        defensive_dualwielding,
+    );
     let shield_bonus = character
         .equipment
         .shield
@@ -2368,6 +2474,7 @@ fn defense_display_summary(
 fn roll_summary(
     player: &PlayerConfig,
     weapon: &WeaponPreset,
+    weapon_catalog: &WeaponCatalog,
     character: &Character,
     derived: &DerivedStats,
     modifiers: &TalentModifiers,
@@ -2380,8 +2487,9 @@ fn roll_summary(
 ) -> RollSummary {
     let is_ranged_weapon = is_ranged_weapon(weapon);
     let uses_projectiles = uses_projectiles(&weapon.name, weapon.ammunition.is_some());
+    let weapon_id = weapon_id_for_player(player, weapon_catalog);
     let (material_attack_bonus, material_damage_bonus) = material_bonuses(
-        player.weapon_material_tier,
+        weapon_material_tier_for_player(player, weapon),
         player.projectile_material_tier,
         is_ranged_weapon,
         uses_projectiles,
@@ -2391,7 +2499,7 @@ fn roll_summary(
     let attack_bonus = derived.attack_bonus
         + material_attack_bonus
         + attack_mastery
-        + modifiers.attack_bonus_for_weapon(player.weapon_id)
+        + modifiers.attack_bonus_for_weapon(weapon_id)
         + style_attack_bonus
         - fight_defensively_attack_penalty;
     let two_hand_bonus = two_hand_damage_bonus(weapon, player.two_hand_grip);
@@ -2400,7 +2508,7 @@ fn roll_summary(
             + two_hand_bonus
             + material_damage_bonus
             + damage_mastery
-            + modifiers.damage_bonus_for_weapon(player.weapon_id)
+            + modifiers.damage_bonus_for_weapon(weapon_id)
             + modifiers.damage_bonus_for_group(weapon.group)
             + misc_modifiers.damage_bonus
             + misc_modifiers.all_roll_bonus;
@@ -2431,7 +2539,7 @@ pub fn build_character(
         name: weapon_preset.name.clone(),
         group: weapon_preset.group,
         speed: weapon_preset.speed,
-        damage_expr: weapon_preset.damage_expr.clone(),
+        damage_expr: damage_expr_for_player_weapon(player, weapon_preset),
         reach_ft: weapon_preset.reach_ft,
         armor_pen: weapon_preset.armor_pen,
         defense_bonus_always: weapon_preset.defense_bonus_always,
@@ -2520,6 +2628,7 @@ pub fn build_combatant(
     talent_catalog: &TalentCatalog,
 ) -> Combatant {
     let weapon_preset = weapon_for_player(player, weapon_catalog);
+    let weapon_id = weapon_id_for_player(player, weapon_catalog);
     let character = build_character(
         player,
         weapon_catalog,
@@ -2694,7 +2803,7 @@ pub fn build_combatant(
         - speed_mastery
         + free_hand_speed_bonus
         + armeroci_speed_penalty
-        + modifiers.weapon_speed_bonus_for_weapon(player.weapon_id) as f32)
+        + modifiers.weapon_speed_bonus_for_weapon(weapon_id) as f32)
         .max(min_speed);
     let jab_special_expr = if use_jab {
         weapon_preset.jab_special_expr.clone()
@@ -2721,7 +2830,7 @@ pub fn build_combatant(
     let primary_uses_projectiles =
         uses_projectiles(&weapon_preset.name, weapon_preset.ammunition.is_some());
     let (material_attack_bonus, material_damage_bonus) = material_bonuses(
-        player.weapon_material_tier,
+        weapon_material_tier_for_player(player, weapon_preset),
         player.projectile_material_tier,
         primary_is_ranged,
         primary_uses_projectiles,
@@ -2731,16 +2840,19 @@ pub fn build_combatant(
     if offensive_dualwielding && !perfect_two_weapon_fighting_active {
         derived.base_dv = 0;
     }
-    let defense_mastery =
-        defense_mastery_bonus(player, has_shield, twelve_paths_active, defensive_dualwielding);
-    let defense_bonus_weapon = modifiers.defense_bonus_for_weapon(player.weapon_id)
-        * if defensive_dualwielding { 2 } else { 1 };
+    let defense_mastery = defense_mastery_bonus(
+        player,
+        has_shield,
+        twelve_paths_active,
+        defensive_dualwielding,
+    );
+    let defense_bonus_weapon =
+        modifiers.defense_bonus_for_weapon(weapon_id) * if defensive_dualwielding { 2 } else { 1 };
     let defense_bonus =
         modifiers.defense_bonus + misc_modifiers.defense_bonus + misc_modifiers.all_roll_bonus;
     let damage_mastery = effective_damage_mastery(player);
-    let mut attack_bonus = attack_bonus_base
-        + material_attack_bonus
-        + modifiers.attack_bonus_for_weapon(player.weapon_id);
+    let mut attack_bonus =
+        attack_bonus_base + material_attack_bonus + modifiers.attack_bonus_for_weapon(weapon_id);
     if hobbler_active {
         attack_bonus -= HOBBLER_ATTACK_PENALTY;
         attack_bonus_base -= HOBBLER_ATTACK_PENALTY;
@@ -2758,7 +2870,7 @@ pub fn build_combatant(
         + two_hand_damage_bonus
         + material_damage_bonus
         + damage_mastery
-        + modifiers.damage_bonus_for_weapon(player.weapon_id)
+        + modifiers.damage_bonus_for_weapon(weapon_id)
         + modifiers.damage_bonus_for_group(weapon_preset.group)
         + misc_modifiers.damage_bonus
         + misc_modifiers.all_roll_bonus;
@@ -2844,10 +2956,10 @@ pub fn build_combatant(
         (base_weapon_speed + two_hand_speed_penalty + speed_mod - speed_mastery
             + free_hand_speed_bonus
             + armeroci_speed_penalty
-            + modifiers.weapon_speed_bonus_for_weapon(player.weapon_id) as f32)
+            + modifiers.weapon_speed_bonus_for_weapon(weapon_id) as f32)
             .max(min_speed)
     };
-    let damage_expr_cache = DamageExprCache::new(&weapon_damage);
+    let damage_expr_cache = damage_expr_cache_for_player_weapon(player, weapon_preset);
     let shield_damage_expr_cache = shield_damage_expr.as_deref().map(DamageExprCache::new);
     let jab_special_expr_cache = jab_special_expr.as_deref().map(DamageExprCache::new);
     let is_unarmed_weapon = weapon_preset.group == WeaponGroup::Unarmed;
@@ -6496,6 +6608,37 @@ mod tests {
         let combatant =
             build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
         assert_eq!(combatant.sheet.offense.weapon.crit_severity_bonus, 3);
+    }
+
+    #[test]
+    fn curse_of_axe_forces_steel_greataxe_with_custom_penetration() {
+        let (weapons, armor, shields) =
+            crate::data::load_catalogs().expect("Failed to load catalogs");
+        let talents =
+            crate::data::load_talents(crate::data::TALENTS_PATH).expect("Failed to load talents");
+        let npc_presets = Catalog::new(Vec::new());
+        let mut player = base_player(weapons.first_id().expect("weapon catalog empty"));
+        player.weapon_material_tier = 0;
+        add_talent(&mut player, TALENT_ID_CURSE_OF_AXE, None);
+
+        let combatant =
+            build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
+
+        assert_eq!(
+            combatant.sheet.offense.weapon.name,
+            CURSE_OF_AXE_WEAPON_NAME
+        );
+        assert_eq!(combatant.sheet.offense.weapon.damage_expr, "3d6p+3^2");
+        assert_eq!(
+            combatant
+                .sheet
+                .offense
+                .weapon
+                .damage_expr_cache
+                .d6_penetration_triggers(),
+            Some(CURSE_OF_AXE_D6_TRIGGERS)
+        );
+        assert!(combatant.sheet.offense.attack_bonus >= 2);
     }
 
     #[test]

@@ -7,6 +7,7 @@ pub struct DamageExprCache {
     cleaned: String,
     cleaned_nonpenetrating: String,
     is_lower_of: bool,
+    d6_penetration_triggers: Option<Vec<i32>>,
 }
 
 impl DamageExprCache {
@@ -19,15 +20,40 @@ impl DamageExprCache {
             cleaned,
             cleaned_nonpenetrating,
             is_lower_of,
+            d6_penetration_triggers: None,
         }
+    }
+
+    pub fn new_with_d6_penetration_triggers(expr: &str, triggers: &[i32]) -> Self {
+        let mut cache = Self::new(expr);
+        let mut triggers = triggers
+            .iter()
+            .copied()
+            .filter(|roll| (1..=6).contains(roll))
+            .collect::<Vec<_>>();
+        triggers.sort_unstable();
+        triggers.dedup();
+        if !triggers.is_empty() {
+            cache.d6_penetration_triggers = Some(triggers);
+        }
+        cache
     }
 
     pub fn roll(&self, rng: &mut impl Rng, nonpenetrating: bool) -> i32 {
         if nonpenetrating {
-            roll_damage_expr_cached(&self.cleaned_nonpenetrating, self.is_lower_of, rng)
+            roll_damage_expr_cached(&self.cleaned_nonpenetrating, self.is_lower_of, None, rng)
         } else {
-            roll_damage_expr_cached(&self.cleaned, self.is_lower_of, rng)
+            roll_damage_expr_cached(
+                &self.cleaned,
+                self.is_lower_of,
+                self.d6_penetration_triggers.as_deref(),
+                rng,
+            )
         }
+    }
+
+    pub fn d6_penetration_triggers(&self) -> Option<&[i32]> {
+        self.d6_penetration_triggers.as_deref()
     }
 }
 
@@ -77,21 +103,26 @@ pub fn roll_damage_expr(expr: &str, rng: &mut impl Rng, nonpenetrating: bool) ->
         cleaned
     };
     if is_lower_of {
-        let a_total = evaluate_expression(&cleaned, rng);
-        let b_total = evaluate_expression(&cleaned, rng);
+        let a_total = evaluate_expression(&cleaned, None, rng);
+        let b_total = evaluate_expression(&cleaned, None, rng);
         a_total.min(b_total)
     } else {
-        evaluate_expression(&cleaned, rng)
+        evaluate_expression(&cleaned, None, rng)
     }
 }
 
-fn roll_damage_expr_cached(cleaned: &str, is_lower_of: bool, rng: &mut impl Rng) -> i32 {
+fn roll_damage_expr_cached(
+    cleaned: &str,
+    is_lower_of: bool,
+    d6_penetration_triggers: Option<&[i32]>,
+    rng: &mut impl Rng,
+) -> i32 {
     if is_lower_of {
-        let a_total = evaluate_expression(cleaned, rng);
-        let b_total = evaluate_expression(cleaned, rng);
+        let a_total = evaluate_expression(cleaned, d6_penetration_triggers, rng);
+        let b_total = evaluate_expression(cleaned, d6_penetration_triggers, rng);
         a_total.min(b_total)
     } else {
-        evaluate_expression(cleaned, rng)
+        evaluate_expression(cleaned, d6_penetration_triggers, rng)
     }
 }
 
@@ -136,7 +167,11 @@ pub fn clean_damage_expr(expr: &str) -> String {
     }
 }
 
-fn evaluate_expression(expr: &str, rng: &mut impl Rng) -> i32 {
+fn evaluate_expression(
+    expr: &str,
+    d6_penetration_triggers: Option<&[i32]>,
+    rng: &mut impl Rng,
+) -> i32 {
     let mut total = 0;
     let mut idx = 0;
     let chars: Vec<char> = expr.chars().collect();
@@ -172,7 +207,7 @@ fn evaluate_expression(expr: &str, rng: &mut impl Rng) -> i32 {
 
         let term = &expr[start..idx];
         if !term.is_empty() {
-            let term_value = evaluate_term(term, rng);
+            let term_value = evaluate_term(term, d6_penetration_triggers, rng);
             total += sign * term_value;
         }
     }
@@ -224,11 +259,11 @@ fn expected_expression(expr: &str) -> f64 {
     total
 }
 
-fn evaluate_term(term: &str, rng: &mut impl Rng) -> i32 {
+fn evaluate_term(term: &str, d6_penetration_triggers: Option<&[i32]>, rng: &mut impl Rng) -> i32 {
     let trimmed = strip_outer_parens(term);
 
     if has_top_level_operator(trimmed) {
-        return evaluate_expression(trimmed, rng);
+        return evaluate_expression(trimmed, d6_penetration_triggers, rng);
     }
 
     if let Some(d_pos) = trimmed.find('d') {
@@ -250,14 +285,14 @@ fn evaluate_term(term: &str, rng: &mut impl Rng) -> i32 {
 
         let (sides_str, rest) = after_d.split_at(digits_end);
         let sides = sides_str.parse::<i32>().unwrap_or(0);
-        let penetrating = rest.starts_with('p');
+        let penetration = parse_penetration(rest, sides);
 
         let mut subtotal = 0;
         for _ in 0..count {
-            let roll = if penetrating {
-                penetrating_roll(sides, rng)
+            let roll = if penetration.is_some() && sides == 6 && d6_penetration_triggers.is_some() {
+                penetrating_roll_trigger_set(sides, d6_penetration_triggers.unwrap(), rng)
             } else {
-                standard_roll(sides, rng)
+                roll_die_with_penetration(sides, penetration, rng)
             };
             subtotal += roll;
         }
@@ -293,13 +328,9 @@ fn expected_term(term: &str) -> f64 {
 
         let (sides_str, rest) = after_d.split_at(digits_end);
         let sides = sides_str.parse::<f64>().unwrap_or(0.0);
-        let penetrating = rest.starts_with('p');
+        let penetration = parse_penetration(rest, sides as i32);
 
-        let single = if penetrating {
-            (sides + 2.0) / 2.0
-        } else {
-            (sides + 1.0) / 2.0
-        };
+        let single = expected_die_with_penetration(sides, penetration);
 
         count * single
     } else {
@@ -387,20 +418,16 @@ fn evaluate_term_with_detail(term: &str, rng: &mut impl Rng) -> (i32, String) {
 
         let (sides_str, rest) = after_d.split_at(digits_end);
         let sides = sides_str.parse::<i32>().unwrap_or(0);
-        let penetrating = rest.starts_with('p');
+        let penetration = parse_penetration(rest, sides);
 
         let mut subtotal = 0;
         let mut rolls = Vec::new();
         for _ in 0..count {
-            let roll = if penetrating {
-                penetrating_roll(sides, rng)
-            } else {
-                standard_roll(sides, rng)
-            };
+            let roll = roll_die_with_penetration(sides, penetration, rng);
             rolls.push(roll);
             subtotal += roll;
         }
-        let kind = if penetrating { "d" } else { "d" };
+        let kind = "d";
         let detail = format!(
             "{}{}{}={}",
             count,
@@ -424,6 +451,80 @@ pub fn penetrating_roll(sides: i32, rng: &mut impl Rng) -> i32 {
         return sides.max(0);
     }
     penetrating_roll_with(sides, || rng.gen_range(1..=sides))
+}
+
+fn roll_die_with_penetration(sides: i32, penetration: Option<i32>, rng: &mut impl Rng) -> i32 {
+    if penetration.is_some() {
+        penetrating_roll(sides, rng)
+    } else {
+        standard_roll(sides, rng)
+    }
+}
+
+fn parse_penetration(rest: &str, sides: i32) -> Option<i32> {
+    if rest.starts_with('p') {
+        Some(sides)
+    } else {
+        None
+    }
+}
+
+fn expected_die_with_penetration(sides: f64, penetration: Option<i32>) -> f64 {
+    if sides <= 0.0 {
+        return 0.0;
+    }
+    let standard = (sides + 1.0) / 2.0;
+    let Some(minimum) = penetration else {
+        return standard;
+    };
+    let minimum = (minimum as f64).clamp(1.0, sides);
+    let penetrate_count = sides - minimum + 1.0;
+    let penetrate_chance = penetrate_count / sides;
+    let extra_base = (sides - 1.0) / 2.0;
+    if penetrate_chance >= 1.0 {
+        return standard;
+    }
+    standard + penetrate_chance * (extra_base / (1.0 - penetrate_chance))
+}
+
+pub fn penetrating_roll_trigger_set(sides: i32, triggers: &[i32], rng: &mut impl Rng) -> i32 {
+    if sides <= 1 {
+        return sides.max(0);
+    }
+    penetrating_roll_trigger_set_with(sides, triggers, || rng.gen_range(1..=sides))
+}
+
+pub fn penetrating_roll_trigger_set_with(
+    mut sides: i32,
+    triggers: &[i32],
+    mut next_roll: impl FnMut() -> i32,
+) -> i32 {
+    if sides <= 1 {
+        return sides.max(0);
+    }
+    if sides < 0 {
+        sides = 0;
+    }
+    let triggers = triggers
+        .iter()
+        .copied()
+        .filter(|roll| (1..=sides).contains(roll))
+        .collect::<Vec<_>>();
+    let mut total = 0;
+    let mut first = true;
+    loop {
+        let roll = next_roll().clamp(1, sides);
+        if first {
+            total += roll;
+            first = false;
+        } else {
+            total += roll - 1;
+        }
+        if !triggers.contains(&roll) {
+            break;
+        }
+    }
+    total
 }
 
 pub fn penetrating_roll_with(mut sides: i32, mut next_roll: impl FnMut() -> i32) -> i32 {
@@ -499,4 +600,24 @@ fn has_top_level_operator(s: &str) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn penetrating_trigger_set_uses_exact_rolls() {
+        let mut rolls = vec![5, 2].into_iter();
+        let total = penetrating_roll_trigger_set_with(6, &[4, 5, 6], || rolls.next().unwrap_or(1));
+        assert_eq!(total, 6);
+
+        let mut rolls = vec![3, 6].into_iter();
+        let total = penetrating_roll_trigger_set_with(6, &[4, 5, 6], || rolls.next().unwrap_or(1));
+        assert_eq!(total, 3);
+
+        let mut rolls = vec![6, 4, 1].into_iter();
+        let total = penetrating_roll_trigger_set_with(6, &[4, 5, 6], || rolls.next().unwrap_or(1));
+        assert_eq!(total, 9);
+    }
 }

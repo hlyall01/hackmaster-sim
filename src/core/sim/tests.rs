@@ -304,6 +304,58 @@ fn arthur_duel_sim_with_distance(
     sim
 }
 
+#[test]
+fn arthur_with_curse_of_axe_bulk_sim_does_not_panic() {
+    let (weapon_catalog, armor_catalog, shield_catalog) =
+        data::load_catalogs().expect("failed to load catalogs");
+    let npc_presets =
+        data::load_npc_presets("data/npc_presets.json").expect("failed to load npc presets");
+    let fighter_presets = data::load_fighter_presets("data/fighter_presets.json")
+        .expect("failed to load fighter presets");
+    let talent_catalog = data::load_talents(data::TALENTS_PATH).expect("failed to load talents");
+    let race_catalog = data::load_races("data/races.json").expect("failed to load races");
+    let arthur_preset = find_fighter_preset(&fighter_presets, "Arthur Du Randt")
+        .expect("missing Arthur Du Randt preset");
+    let zorya_preset = find_fighter_preset(&fighter_presets, "Zorya").expect("missing Zorya");
+    let mut arthur = player_config_from_preset(
+        arthur_preset,
+        &weapon_catalog,
+        &armor_catalog,
+        &shield_catalog,
+        &race_catalog,
+    );
+    arthur.talents.push(TalentSelection {
+        id: "curse_of_axe".to_string(),
+        rank: 1,
+        weapon: None,
+    });
+    let zorya = player_config_from_preset(
+        zorya_preset,
+        &weapon_catalog,
+        &armor_catalog,
+        &shield_catalog,
+        &race_catalog,
+    );
+    let players = [arthur, zorya];
+    let stop_distance =
+        game_logic::stop_distance_for_players(&players, &weapon_catalog, &talent_catalog);
+    let combatants = game_logic::build_combatants(
+        &players,
+        &weapon_catalog,
+        &armor_catalog,
+        &shield_catalog,
+        &npc_presets,
+        &talent_catalog,
+    );
+    let result = bulk_simulate(
+        SimConfig::new(200.0, stop_distance),
+        combatants,
+        1000,
+        u32::MAX,
+    );
+    assert_eq!(result.wins.iter().sum::<u32>() + result.ties, 1000);
+}
+
 fn first_attack_by(sim: &SimState, attacker_idx: usize, min_time: u32) -> Option<&AttackEvent> {
     sim.combat_events
         .iter()
@@ -1156,19 +1208,23 @@ fn extra_damage_dice_cycles_low_to_high() {
         vec![
             DamageDie {
                 sides: 3,
-                penetrating: false
+                penetrating: false,
+                penetration_triggers: None
             },
             DamageDie {
                 sides: 3,
-                penetrating: false
+                penetrating: false,
+                penetration_triggers: None
             },
             DamageDie {
                 sides: 6,
-                penetrating: false
+                penetrating: false,
+                penetration_triggers: None
             },
             DamageDie {
                 sides: 3,
-                penetrating: false
+                penetrating: false,
+                penetration_triggers: None
             },
         ]
     );
@@ -1182,15 +1238,18 @@ fn extra_damage_dice_respects_penetration_flags() {
         vec![
             DamageDie {
                 sides: 4,
-                penetrating: true
+                penetrating: true,
+                penetration_triggers: None
             },
             DamageDie {
                 sides: 6,
-                penetrating: false
+                penetrating: false,
+                penetration_triggers: None
             },
             DamageDie {
                 sides: 4,
-                penetrating: true
+                penetrating: true,
+                penetration_triggers: None
             },
         ]
     );
@@ -1200,11 +1259,13 @@ fn extra_damage_dice_respects_penetration_flags() {
         vec![
             DamageDie {
                 sides: 4,
-                penetrating: false
+                penetrating: false,
+                penetration_triggers: None
             },
             DamageDie {
                 sides: 6,
-                penetrating: false
+                penetrating: false,
+                penetration_triggers: None
             },
         ]
     );
