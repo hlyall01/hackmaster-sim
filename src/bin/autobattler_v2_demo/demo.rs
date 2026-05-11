@@ -1,0 +1,1698 @@
+use hackmaster_sim::character::{
+    AbilityScore, AbilitySet, AbilitySetFull, Progression, ProgressionTier,
+};
+use hackmaster_sim::core::gameplay::{
+    CombatantBuilder, EnemySpawnEntry, EnemySpawner, EncounterTier, EventCatalog,
+    EventSpec, LootItemEntry, LootTable, RunState, Wound, XpCurve, apply_downtime,
+    apply_xp, choose_event, resolve_event_choice, run_next_fight,
+};
+use hackmaster_sim::core::ids::NpcPresetId;
+use hackmaster_sim::core::rng::{SimRng, derive_seed};
+use hackmaster_sim::core::sim::{CombatEvent, CombatEventKind, SimConfig};
+use hackmaster_sim::core::types::{EnemyProfile, Inventory, PlayerProfile, PointPools, RaceSpec};
+use hackmaster_sim::data;
+use hackmaster_sim::game_logic::{
+    self, ArmorCatalog, ArmorId, FighterPreset, FighterPresetCatalog, NpcPresetCatalog,
+    PlayerConfig, ShieldCatalog, ShieldId, TalentCatalog, WeaponCatalog, WeaponId,
+};
+use hackmaster_sim::sim;
+use rand::Rng;
+use serde::{Deserialize, Serialize};
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::sync::{Arc, Mutex};
+
+const QUICK_STARTS_PATH: &str = "data/autobattler/autobattler_quick_starts.json";
+const NPC_PRESETS_PATH: &str = "data/sim/npc_presets.json";
+const EVENTS_PATH: &str = "data/autobattler/events_v1_handcrafted.json";
+const DEFAULT_PORT: u16 = 8787;
+
+pub(crate) fn run() {
+    hackmaster_sim::console::maybe_enable_console();
+    let port = std::env::args()
+        .skip_while(|arg| arg != "--port")
+        .nth(1)
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(DEFAULT_PORT);
+
+    let demo = Arc::new(Mutex::new(
+        DemoApp::new().unwrap_or_else(|err| panic!("Failed to start v2 demo: {err}")),
+    ));
+    let listener = TcpListener::bind(("127.0.0.1", port))
+        .unwrap_or_else(|err| panic!("Failed to bind 127.0.0.1:{port}: {err}"));
+
+    println!("HackMaster Autobattler v2 demo running at http://127.0.0.1:{port}");
+    for stream in listener.incoming() {
+        match stream {
+            Ok(stream) => {
+                let demo = Arc::clone(&demo);
+                std::thread::spawn(move || handle_connection(stream, demo));
+            }
+            Err(err) => eprintln!("Connection failed: {err}"),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct DemoApp {
+    weapon_catalog: WeaponCatalog,
+    armor_catalog: ArmorCatalog,
+    shield_catalog: ShieldCatalog,
+    npc_presets: NpcPresetCatalog,
+    quick_starts: FighterPresetCatalog,
+    race_catalog: Vec<RaceSpec>,
+    talent_catalog: TalentCatalog,
+    event_catalog: EventCatalog,
+    spawner: EnemySpawner,
+    loot_table: LootTable,
+    xp_curve: XpCurve,
+    enemy_weapon_id: WeaponId,
+    session: Option<DemoSession>,
+}
+
+impl DemoApp {
+    fn new() -> Result<Self, String> {
+        let (weapon_catalog, armor_catalog, shield_catalog) = data::load_catalogs()?;
+        let npc_presets = data::load_npc_presets(NPC_PRESETS_PATH)?;
+        let quick_starts = data::load_fighter_presets(QUICK_STARTS_PATH)?;
+        let race_catalog = data::load_races("data/sim/races.json")?;
+        let talent_catalog = data::load_talents(data::TALENTS_PATH)?;
+        let event_catalog = data::load_autobattler_events(EVENTS_PATH)?;
+        let enemy_weapon_id = find_weapon_id_by_name(&weapon_catalog, "Battle axe")
+            .or_else(|| weapon_catalog.first_id())
+            .unwrap_or_else(|| WeaponId::new(0));
+        let spawner = hobgoblin_spawner(&npc_presets);
+        let loot_table = LootTable {
+            gold_range: 10..=24,
+            xp_per_level: 22,
+            item_table: vec![
+                LootItemEntry {
+                    name: "field dressing".to_string(),
+                    weight: 4,
+                },
+                LootItemEntry {
+                    name: "sharpening stone".to_string(),
+                    weight: 3,
+                },
+                LootItemEntry {
+                    name: "minor trade good".to_string(),
+                    weight: 2,
+                },
+                LootItemEntry {
+                    name: "lucky charm".to_string(),
+                    weight: 1,
+                },
+            ],
+        };
+        Ok(Self {
+            weapon_catalog,
+            armor_catalog,
+            shield_catalog,
+            npc_presets,
+            quick_starts,
+            race_catalog,
+            talent_catalog,
+            event_catalog,
+            spawner,
+            loot_table,
+            xp_curve: XpCurve {
+                base: 45,
+                per_level: 55,
+            },
+            enemy_weapon_id,
+            session: None,
+        })
+    }
+
+    fn new_run(&mut self, request: NewRunRequest) -> Result<DemoView, String> {
+        let seed = request.seed.unwrap_or_else(|| {
+            let mut rng = rand::thread_rng();
+            rng.gen_range(1..=u64::MAX)
+        });
+        let preset = self
+            .find_preset(request.preset.as_deref())
+            .ok_or_else(|| "No quick-start presets found.".to_string())?
+            .clone();
+        let mut player_config = player_config_from_preset(
+            &preset,
+            &self.weapon_catalog,
+            &self.armor_catalog,
+            &self.shield_catalog,
+            &self.race_catalog,
+        );
+        player_config.name = request
+            .name
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| preset.name.clone());
+        let player_profile = player_profile_from_config(&player_config);
+        let mut run_state = RunState::new(player_profile, Inventory::default(), seed);
+        run_state.inventory.gold = 20;
+
+        let session = DemoSession {
+            run_state,
+            player_config,
+            map: generate_map(seed),
+            current_floor: 0,
+            phase: DemoPhase::ChoosingNode,
+            pending_event: None,
+            pending_fight: None,
+            selected_node: None,
+            last_log: vec!["Run started. Pick a route.".to_string()],
+            last_reward: None,
+            last_fight: None,
+            terminal: None,
+        };
+        self.session = Some(session);
+        Ok(self.view())
+    }
+
+    fn choose_node(&mut self, node_id: usize) -> Result<DemoView, String> {
+        let spawner = self.spawner.clone();
+        let npc_presets = self.npc_presets.clone();
+        let Some(session) = self.session.as_mut() else {
+            return Err("Start a run first.".to_string());
+        };
+        if session.phase != DemoPhase::ChoosingNode {
+            return Err("Resolve the current node before choosing another.".to_string());
+        }
+        let Some(node) = session.map.iter().find(|node| node.id == node_id).cloned() else {
+            return Err("Node does not exist.".to_string());
+        };
+        if node.floor != session.current_floor || node.completed {
+            return Err("That node is not currently available.".to_string());
+        }
+        session.selected_node = Some(node.id);
+        session.last_reward = None;
+        session.last_fight = None;
+
+        match node.kind {
+            NodeKind::Fight | NodeKind::Elite | NodeKind::Boss => {
+                let tier = encounter_tier_for_node(node.kind);
+                let enemy_name = preview_enemy_name(&spawner, &npc_presets, &session.run_state, tier);
+                session.pending_fight = Some(PendingDemoFight {
+                    kind: node.kind,
+                    enemy_name,
+                    tier,
+                });
+                session.phase = DemoPhase::FightPreview;
+                session.last_log = vec![format!("Fight scouted: {}.", node.kind.label())];
+            }
+            NodeKind::Rest => {
+                apply_downtime(&mut session.run_state, 8, true);
+                session.last_log = vec![
+                    "You spend eight days in guarded rest.".to_string(),
+                    format_wound_line(&session.run_state.wounds),
+                ];
+                session.last_reward = Some(DemoReward {
+                    gold: 0,
+                    xp: 0,
+                    items: Vec::new(),
+                    level_gained: false,
+                });
+                self.complete_selected_node();
+            }
+            NodeKind::Event => {
+                let encounter_index = session.run_state.encounter_index as u64;
+                let event_seed = derive_seed(session.run_state.run_seed, "v2-event-kind", encounter_index);
+                let mut rng = SimRng::from_seed(event_seed);
+                let event = choose_event(
+                    &self.event_catalog,
+                    &session.run_state,
+                    EncounterTier::Normal,
+                    &mut rng,
+                )
+                .or_else(|| self.event_catalog.events.first().cloned())
+                .ok_or_else(|| "No events available.".to_string())?;
+                session.last_log = vec![format!("Event discovered: {}", event.name)];
+                session.pending_event = Some(PendingDemoEvent {
+                    event,
+                    resolve_seed: derive_seed(
+                        session.run_state.run_seed,
+                        "v2-event-resolve",
+                        encounter_index,
+                    ),
+                });
+                session.phase = DemoPhase::ResolvingEvent;
+            }
+        }
+        Ok(self.view())
+    }
+
+    fn resolve_event_choice(&mut self, choice_id: String) -> Result<DemoView, String> {
+        let spawner = self.spawner.clone();
+        let npc_presets = self.npc_presets.clone();
+        let Some(session) = self.session.as_mut() else {
+            return Err("Start a run first.".to_string());
+        };
+        if session.phase != DemoPhase::ResolvingEvent {
+            return Err("There is no pending event choice.".to_string());
+        }
+        let Some(pending) = session.pending_event.take() else {
+            return Err("There is no pending event.".to_string());
+        };
+        let previous_level = session.run_state.player.level;
+        let mut rng = SimRng::from_seed(pending.resolve_seed);
+        let resolution = resolve_event_choice(
+            &mut session.run_state,
+            &pending.event,
+            Some(&choice_id),
+            &mut rng,
+        );
+        let _ = apply_xp(&mut session.run_state.player, &self.xp_curve, 0);
+        let level_gained = session.run_state.player.level > previous_level;
+        if level_gained {
+            grant_demo_level_points(&mut session.run_state.player);
+        }
+        session.run_state.encounter_index = session.run_state.encounter_index.saturating_add(1);
+        session.last_log = resolution.lines.clone();
+        session.last_reward = Some(DemoReward {
+            gold: 0,
+            xp: 0,
+            items: Vec::new(),
+            level_gained,
+        });
+        if resolution.trigger_fight {
+            session.last_log.push("The event spills into a fight.".to_string());
+            let kind = NodeKind::Elite;
+            let tier = EncounterTier::Elite;
+            let enemy_name = preview_enemy_name(&spawner, &npc_presets, &session.run_state, tier);
+            session.pending_fight = Some(PendingDemoFight {
+                kind,
+                enemy_name,
+                tier,
+            });
+            session.phase = DemoPhase::FightPreview;
+        } else {
+            self.complete_selected_node();
+        }
+        Ok(self.view())
+    }
+
+    fn start_pending_fight(&mut self) -> Result<DemoView, String> {
+        let Some(session) = self.session.as_mut() else {
+            return Err("Start a run first.".to_string());
+        };
+        if session.phase != DemoPhase::FightPreview {
+            return Err("There is no pending fight.".to_string());
+        }
+        let Some(pending) = session.pending_fight.take() else {
+            return Err("There is no pending fight.".to_string());
+        };
+        self.resolve_fight_node(pending.kind);
+        Ok(self.view())
+    }
+
+    fn resolve_fight_node(&mut self, kind: NodeKind) {
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        let previous_level = session.run_state.player.level;
+        let previous_gold = session.run_state.inventory.gold;
+        let state_before_fight = session.run_state.clone();
+        let tier = match kind {
+            NodeKind::Elite => EncounterTier::Elite,
+            NodeKind::Boss => EncounterTier::Boss,
+            _ => EncounterTier::Normal,
+        };
+        let builder = DemoCombatantBuilder {
+            player_base: session.player_config.clone(),
+            enemy_weapon_id: self.enemy_weapon_id,
+            weapon_catalog: &self.weapon_catalog,
+            armor_catalog: &self.armor_catalog,
+            shield_catalog: &self.shield_catalog,
+            npc_presets: &self.npc_presets,
+            talent_catalog: &self.talent_catalog,
+        };
+        let outcome = run_next_fight(
+            session.run_state.clone(),
+            &self.spawner,
+            &self.loot_table,
+            Some(&self.xp_curve),
+            SimConfig::new(20.0, 1.0),
+            120,
+            0,
+            false,
+            tier,
+            &builder,
+        );
+        let enemy_profile = outcome.enemy;
+        let enemy_name = enemy_profile
+            .and_then(|enemy| self.npc_presets.get(enemy.preset_id))
+            .map(|preset| preset.name.clone())
+            .unwrap_or_else(|| "Unknown foe".to_string());
+        let combatants_for_log = enemy_profile
+            .map(|enemy| {
+                let mut player = builder.build_player(&state_before_fight);
+                let mut foe = builder.build_enemy(&enemy);
+                player.team_id = 0;
+                foe.team_id = 1;
+                vec![player, foe]
+            })
+            .unwrap_or_default();
+        let level_gained = outcome.state.player.level > previous_level;
+        let mut next_state = outcome.state.clone();
+        if level_gained {
+            grant_demo_level_points(&mut next_state.player);
+        }
+        let gold = next_state.inventory.gold.saturating_sub(previous_gold);
+        let reward = outcome.reward.clone();
+        let won = outcome.fight.won;
+        let fight_view = DemoFightSummary {
+            enemy: enemy_name.clone(),
+            won,
+            turns: outcome.fight.turns,
+            remaining_hp: outcome.fight.remaining_hp,
+            hits_dealt: format_hit_list(&outcome.fight.events, 0, 1),
+            hits_taken: format_hit_list(&outcome.fight.events, 1, 0),
+            combat_log: outcome
+                .fight
+                .events
+                .iter()
+                .take(18)
+                .map(|event| sim::format_combat_event_line(event, &combatants_for_log))
+                .collect(),
+        };
+        session.run_state = next_state;
+        session.last_fight = Some(fight_view);
+        session.last_reward = Some(DemoReward {
+            gold,
+            xp: reward.as_ref().map(|reward| reward.xp).unwrap_or(0),
+            items: reward
+                .map(|reward| reward.items)
+                .unwrap_or_default(),
+            level_gained,
+        });
+        session.last_log = vec![
+            format!(
+                "{} against {enemy_name}.",
+                if won { "Victory" } else { "Defeat" }
+            ),
+            format_wound_line(&session.run_state.wounds),
+        ];
+        if won {
+            self.complete_selected_node();
+        } else {
+            session.phase = DemoPhase::RunOver;
+            session.terminal = Some("You were defeated in the field.".to_string());
+        }
+    }
+
+    fn complete_selected_node(&mut self) {
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        let Some(node_id) = session.selected_node.take() else {
+            return;
+        };
+        if let Some(node) = session.map.iter_mut().find(|node| node.id == node_id) {
+            node.completed = true;
+            if node.kind == NodeKind::Boss {
+                session.phase = DemoPhase::RunOver;
+                session.terminal = Some("Demo boss defeated. Run complete.".to_string());
+                return;
+            }
+        }
+        session.current_floor = session.current_floor.saturating_add(1);
+        session.phase = DemoPhase::ChoosingNode;
+    }
+
+    fn find_preset(&self, name: Option<&str>) -> Option<&FighterPreset> {
+        name.and_then(|name| {
+            self.quick_starts
+                .entries()
+                .iter()
+                .find(|preset| preset.name.eq_ignore_ascii_case(name))
+        })
+        .or_else(|| self.quick_starts.entries().first())
+    }
+
+    fn view(&self) -> DemoView {
+        let preset_names = self
+            .quick_starts
+            .entries()
+            .iter()
+            .map(|preset| preset.name.clone())
+            .collect::<Vec<_>>();
+        let Some(session) = self.session.as_ref() else {
+            return DemoView {
+                has_run: false,
+                presets: preset_names,
+                player: None,
+                map: Vec::new(),
+                available_nodes: Vec::new(),
+                phase: "start".to_string(),
+                pending_event: None,
+                pending_fight: None,
+                last_log: vec!["Roll a character to start.".to_string()],
+                last_reward: None,
+                last_fight: None,
+                terminal: None,
+            };
+        };
+        let available_nodes = if session.phase == DemoPhase::ChoosingNode {
+            session
+                .map
+                .iter()
+                .filter(|node| node.floor == session.current_floor && !node.completed)
+                .map(|node| node.id)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        DemoView {
+            has_run: true,
+            presets: preset_names,
+            player: Some(DemoPlayerView::from_state(&session.run_state)),
+            map: session.map.clone(),
+            available_nodes,
+            phase: session.phase.label().to_string(),
+            pending_event: session.pending_event.as_ref().map(DemoEventView::from_pending),
+            pending_fight: session.pending_fight.clone().map(DemoFightPreview::from_pending),
+            last_log: session.last_log.clone(),
+            last_reward: session.last_reward.clone(),
+            last_fight: session.last_fight.clone(),
+            terminal: session.terminal.clone(),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct DemoSession {
+    run_state: RunState,
+    player_config: PlayerConfig,
+    map: Vec<DemoNode>,
+    current_floor: u32,
+    phase: DemoPhase,
+    pending_event: Option<PendingDemoEvent>,
+    pending_fight: Option<PendingDemoFight>,
+    selected_node: Option<usize>,
+    last_log: Vec<String>,
+    last_reward: Option<DemoReward>,
+    last_fight: Option<DemoFightSummary>,
+    terminal: Option<String>,
+}
+
+#[derive(Clone)]
+struct PendingDemoEvent {
+    event: EventSpec,
+    resolve_seed: u64,
+}
+
+#[derive(Clone)]
+struct PendingDemoFight {
+    kind: NodeKind,
+    enemy_name: String,
+    tier: EncounterTier,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DemoPhase {
+    ChoosingNode,
+    ResolvingEvent,
+    FightPreview,
+    RunOver,
+}
+
+impl DemoPhase {
+    fn label(self) -> &'static str {
+        match self {
+            DemoPhase::ChoosingNode => "choose_node",
+            DemoPhase::ResolvingEvent => "event_choice",
+            DemoPhase::FightPreview => "fight_preview",
+            DemoPhase::RunOver => "run_over",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct DemoView {
+    has_run: bool,
+    presets: Vec<String>,
+    player: Option<DemoPlayerView>,
+    map: Vec<DemoNode>,
+    available_nodes: Vec<usize>,
+    phase: String,
+    pending_event: Option<DemoEventView>,
+    pending_fight: Option<DemoFightPreview>,
+    last_log: Vec<String>,
+    last_reward: Option<DemoReward>,
+    last_fight: Option<DemoFightSummary>,
+    terminal: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct DemoFightPreview {
+    kind: NodeKind,
+    enemy_name: String,
+    tier: String,
+}
+
+impl DemoFightPreview {
+    fn from_pending(pending: PendingDemoFight) -> Self {
+        Self {
+            kind: pending.kind,
+            enemy_name: pending.enemy_name,
+            tier: match pending.tier {
+                EncounterTier::Normal => "Normal",
+                EncounterTier::Elite => "Elite",
+                EncounterTier::Boss => "Boss",
+            }
+            .to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct DemoPlayerView {
+    name: String,
+    level: u8,
+    xp: u32,
+    next_level_xp: u32,
+    gold: u32,
+    depth: u32,
+    seed: u64,
+    wounds: Vec<u32>,
+    wound_total: u32,
+    bp: i32,
+    lp: i32,
+    ap: i32,
+    rp: i32,
+    stats: Vec<String>,
+}
+
+impl DemoPlayerView {
+    fn from_state(state: &RunState) -> Self {
+        let scores = state.player.ability_scores_full;
+        Self {
+            name: state.player.name.clone(),
+            level: state.player.level,
+            xp: state.player.xp,
+            next_level_xp: XpCurve {
+                base: 45,
+                per_level: 55,
+            }
+            .xp_for_next_level(state.player.level),
+            gold: state.inventory.gold,
+            depth: state.run_depth,
+            seed: state.run_seed,
+            wounds: state.wounds.iter().map(|wound| wound.damage).collect(),
+            wound_total: state.total_wound_damage(),
+            bp: state.player.points.bp,
+            lp: state.player.points.lp,
+            ap: state.player.points.ap,
+            rp: state.player.points.rp,
+            stats: vec![
+                format!("STR {}", format_score(scores.strength)),
+                format!("DEX {}", format_score(scores.dexterity)),
+                format!("CON {}", scores.constitution.base),
+                format!("INT {}", scores.intelligence.base),
+                format!("WIS {}", scores.wisdom.base),
+                format!("CHA {}", scores.charisma.base),
+            ],
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct DemoEventView {
+    name: String,
+    description: String,
+    choices: Vec<DemoChoiceView>,
+}
+
+impl DemoEventView {
+    fn from_pending(pending: &PendingDemoEvent) -> Self {
+        Self {
+            name: pending.event.name.clone(),
+            description: pending.event.description.clone(),
+            choices: pending
+                .event
+                .choices
+                .iter()
+                .map(|choice| DemoChoiceView {
+                    id: choice.id.clone(),
+                    text: choice.text.clone(),
+                })
+                .collect(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct DemoChoiceView {
+    id: String,
+    text: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct DemoReward {
+    gold: u32,
+    xp: u32,
+    items: Vec<String>,
+    level_gained: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct DemoFightSummary {
+    enemy: String,
+    won: bool,
+    turns: u32,
+    remaining_hp: i32,
+    hits_dealt: String,
+    hits_taken: String,
+    combat_log: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct DemoNode {
+    id: usize,
+    floor: u32,
+    lane: u32,
+    kind: NodeKind,
+    completed: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum NodeKind {
+    Fight,
+    Event,
+    Rest,
+    Elite,
+    Boss,
+}
+
+impl NodeKind {
+    fn label(self) -> &'static str {
+        match self {
+            NodeKind::Fight => "Fight",
+            NodeKind::Event => "Event",
+            NodeKind::Rest => "Rest",
+            NodeKind::Elite => "Elite",
+            NodeKind::Boss => "Boss",
+        }
+    }
+}
+
+impl From<EncounterTier> for NodeKind {
+    fn from(tier: EncounterTier) -> Self {
+        match tier {
+            EncounterTier::Normal => NodeKind::Fight,
+            EncounterTier::Elite => NodeKind::Elite,
+            EncounterTier::Boss => NodeKind::Boss,
+        }
+    }
+}
+
+fn encounter_tier_for_node(kind: NodeKind) -> EncounterTier {
+    match kind {
+        NodeKind::Elite => EncounterTier::Elite,
+        NodeKind::Boss => EncounterTier::Boss,
+        _ => EncounterTier::Normal,
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct NewRunRequest {
+    seed: Option<u64>,
+    preset: Option<String>,
+    name: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct ChooseNodeRequest {
+    node_id: usize,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct EventChoiceRequest {
+    choice_id: String,
+}
+
+struct DemoCombatantBuilder<'a> {
+    player_base: PlayerConfig,
+    enemy_weapon_id: WeaponId,
+    weapon_catalog: &'a WeaponCatalog,
+    armor_catalog: &'a ArmorCatalog,
+    shield_catalog: &'a ShieldCatalog,
+    npc_presets: &'a NpcPresetCatalog,
+    talent_catalog: &'a TalentCatalog,
+}
+
+impl CombatantBuilder for DemoCombatantBuilder<'_> {
+    fn build_player(&self, state: &RunState) -> hackmaster_sim::core::sim::Combatant {
+        let mut player = self.player_base.clone();
+        player.name = state.player.name.clone();
+        player.level = state.player.level;
+        player.progression = state.player.progression;
+        player.strength_base = state.player.base_stats.strength.base;
+        player.strength_pct = state.player.base_stats.strength.percentile;
+        player.dex_base = state.player.base_stats.dexterity.base;
+        player.dex_pct = state.player.base_stats.dexterity.percentile;
+        player.intelligence = state.player.base_stats.intelligence;
+        player.wisdom = state.player.base_stats.wisdom;
+        player.constitution = state.player.base_stats.constitution;
+        player.looks = state.player.base_stats.looks;
+        player.charisma = state.player.base_stats.charisma;
+        player.race_id = state.player.race_id.clone();
+        player.race_applied = player.race_id.is_some();
+        player.proficiencies = state.player.proficiencies.clone();
+        player.talents = state.player.talents.clone();
+        let mut combatant = game_logic::build_combatant(
+            &player,
+            self.weapon_catalog,
+            self.armor_catalog,
+            self.shield_catalog,
+            self.npc_presets,
+            self.talent_catalog,
+        );
+        let wound_total = state.total_wound_damage();
+        if wound_total > 0 {
+            let wound_total = i32::try_from(wound_total).unwrap_or(i32::MAX);
+            combatant.state.hp = (combatant.sheet.vitals.max_hp - wound_total).max(0);
+        }
+        combatant
+    }
+
+    fn build_enemy(&self, enemy: &EnemyProfile) -> hackmaster_sim::core::sim::Combatant {
+        let mut npc = PlayerConfig::new("Hobgoblin", self.enemy_weapon_id);
+        npc.level = enemy.level;
+        npc.npc_preset = Some(enemy.preset_id);
+        game_logic::build_combatant(
+            &npc,
+            self.weapon_catalog,
+            self.armor_catalog,
+            self.shield_catalog,
+            self.npc_presets,
+            self.talent_catalog,
+        )
+    }
+}
+
+fn handle_connection(mut stream: TcpStream, demo: Arc<Mutex<DemoApp>>) {
+    let Ok(request) = read_request(&mut stream) else {
+        return;
+    };
+    let response = route_request(request, demo);
+    let _ = stream.write_all(response.as_bytes());
+}
+
+fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
+    let mut buffer = [0_u8; 64 * 1024];
+    let size = stream.read(&mut buffer).map_err(|err| err.to_string())?;
+    let raw = String::from_utf8_lossy(&buffer[..size]).to_string();
+    let mut parts = raw.split("\r\n\r\n");
+    let head = parts.next().unwrap_or_default();
+    let body = parts.next().unwrap_or_default().to_string();
+    let mut lines = head.lines();
+    let first = lines.next().ok_or_else(|| "empty request".to_string())?;
+    let mut first_parts = first.split_whitespace();
+    let method = first_parts.next().unwrap_or_default().to_string();
+    let path = first_parts.next().unwrap_or_default().to_string();
+    Ok(HttpRequest { method, path, body })
+}
+
+struct HttpRequest {
+    method: String,
+    path: String,
+    body: String,
+}
+
+fn route_request(request: HttpRequest, demo: Arc<Mutex<DemoApp>>) -> String {
+    match (request.method.as_str(), request.path.as_str()) {
+        ("GET", "/") => html_response(INDEX_HTML),
+        ("GET", "/api/state") => {
+            let demo = demo.lock().expect("demo lock poisoned");
+            json_response(200, &demo.view())
+        }
+        ("POST", "/api/new-run") => {
+            let parsed = serde_json::from_str::<NewRunRequest>(&request.body)
+                .unwrap_or(NewRunRequest {
+                    seed: None,
+                    preset: None,
+                    name: None,
+                });
+            let mut demo = demo.lock().expect("demo lock poisoned");
+            match demo.new_run(parsed) {
+                Ok(view) => json_response(200, &view),
+                Err(err) => error_response(400, err),
+            }
+        }
+        ("POST", "/api/choose-node") => {
+            let parsed = serde_json::from_str::<ChooseNodeRequest>(&request.body);
+            match parsed {
+                Ok(request) => {
+                    let mut demo = demo.lock().expect("demo lock poisoned");
+                    match demo.choose_node(request.node_id) {
+                        Ok(view) => json_response(200, &view),
+                        Err(err) => error_response(400, err),
+                    }
+                }
+                Err(err) => error_response(400, format!("Bad request: {err}")),
+            }
+        }
+        ("POST", "/api/event-choice") => {
+            let parsed = serde_json::from_str::<EventChoiceRequest>(&request.body);
+            match parsed {
+                Ok(request) => {
+                    let mut demo = demo.lock().expect("demo lock poisoned");
+                    match demo.resolve_event_choice(request.choice_id) {
+                        Ok(view) => json_response(200, &view),
+                        Err(err) => error_response(400, err),
+                    }
+                }
+                Err(err) => error_response(400, format!("Bad request: {err}")),
+            }
+        }
+        ("POST", "/api/start-fight") => {
+            let mut demo = demo.lock().expect("demo lock poisoned");
+            match demo.start_pending_fight() {
+                Ok(view) => json_response(200, &view),
+                Err(err) => error_response(400, err),
+            }
+        }
+        _ => error_response(404, "Not found".to_string()),
+    }
+}
+
+fn html_response(body: &str) -> String {
+    http_response(200, "text/html; charset=utf-8", body.to_string())
+}
+
+fn json_response<T: Serialize>(status: u16, body: &T) -> String {
+    match serde_json::to_string(body) {
+        Ok(json) => http_response(status, "application/json", json),
+        Err(err) => error_response(500, err.to_string()),
+    }
+}
+
+fn error_response(status: u16, message: String) -> String {
+    let body = serde_json::json!({ "error": message }).to_string();
+    http_response(status, "application/json", body)
+}
+
+fn http_response(status: u16, content_type: &str, body: String) -> String {
+    let reason = match status {
+        200 => "OK",
+        400 => "Bad Request",
+        404 => "Not Found",
+        _ => "Error",
+    };
+    format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+
+fn generate_map(seed: u64) -> Vec<DemoNode> {
+    let mut rng = SimRng::from_seed(derive_seed(seed, "v2-map", 0));
+    let mut id = 0;
+    let mut nodes = Vec::new();
+    let rows = [
+        [NodeKind::Fight, NodeKind::Event, NodeKind::Fight],
+        [NodeKind::Event, NodeKind::Fight, NodeKind::Rest],
+        [NodeKind::Elite, NodeKind::Event, NodeKind::Fight],
+    ];
+    for (floor, kinds) in rows.iter().enumerate() {
+        for (lane, kind) in kinds.iter().enumerate() {
+            let mut kind = *kind;
+            if floor == 1 && rng.gen_range(0..100) < 35 {
+                kind = NodeKind::Fight;
+            }
+            nodes.push(DemoNode {
+                id,
+                floor: floor as u32,
+                lane: lane as u32,
+                kind,
+                completed: false,
+            });
+            id += 1;
+        }
+    }
+    nodes.push(DemoNode {
+        id,
+        floor: 3,
+        lane: 1,
+        kind: NodeKind::Boss,
+        completed: false,
+    });
+    nodes
+}
+
+fn preview_enemy_name(
+    spawner: &EnemySpawner,
+    npc_presets: &NpcPresetCatalog,
+    state: &RunState,
+    tier: EncounterTier,
+) -> String {
+    let effective_level = state
+        .player
+        .level
+        .saturating_add((state.run_depth / 2) as u8)
+        .saturating_add(match tier {
+            EncounterTier::Normal => 0,
+            EncounterTier::Elite => 1,
+            EncounterTier::Boss => 2,
+        });
+    let mut rng = SimRng::from_seed(derive_seed(
+        state.run_seed,
+        "v2-fight-preview",
+        state.encounter_index as u64,
+    ));
+    spawner
+        .spawn_for_level(effective_level, &mut rng)
+        .and_then(|enemy| npc_presets.get(enemy.preset_id))
+        .map(|preset| preset.name.clone())
+        .unwrap_or_else(|| "Unknown foe".to_string())
+}
+
+fn grant_demo_level_points(player: &mut PlayerProfile) {
+    player.points.bp = player.points.bp.saturating_add(5);
+    player.points.lp = player.points.lp.saturating_add(1);
+    player.points.ap = player.points.ap.saturating_add(1);
+}
+
+fn player_config_from_preset(
+    preset: &FighterPreset,
+    weapon_catalog: &WeaponCatalog,
+    armor_catalog: &ArmorCatalog,
+    shield_catalog: &ShieldCatalog,
+    race_catalog: &[RaceSpec],
+) -> PlayerConfig {
+    let mut player = PlayerConfig::new(
+        &preset.name,
+        weapon_catalog
+            .first_id()
+            .unwrap_or_else(|| WeaponId::new(0)),
+    );
+    player.level = preset.level;
+    player.progression = Progression::new(
+        tier_from_label(&preset.progression.attack).unwrap_or(ProgressionTier::I),
+        tier_from_label(&preset.progression.speed).unwrap_or(ProgressionTier::I),
+        tier_from_label(&preset.progression.initiative).unwrap_or(ProgressionTier::I),
+        tier_from_label(&preset.progression.health).unwrap_or(ProgressionTier::I),
+    );
+    player.mastery_attack = game_logic::clamp_mastery(preset.masteries.attack);
+    player.mastery_defense = game_logic::clamp_mastery(preset.masteries.defense);
+    player.mastery_damage = game_logic::clamp_mastery(preset.masteries.damage);
+    player.mastery_speed = game_logic::clamp_mastery(preset.masteries.speed);
+    player.shield_mastery_defense = game_logic::clamp_mastery(preset.masteries.shield_defense);
+    player.shield_mastery_speed = game_logic::clamp_mastery(preset.masteries.shield_speed);
+    player.base_hp = preset.base_hp;
+    player.move_speed = preset.move_speed;
+    player.strength_base = preset.strength_base;
+    player.strength_pct = game_logic::normalize_percentile(preset.strength_pct);
+    player.dex_base = preset.dex_base;
+    player.dex_pct = game_logic::normalize_percentile(preset.dex_pct);
+    player.intelligence = preset.intelligence;
+    player.wisdom = preset.wisdom;
+    player.constitution = preset.constitution;
+    player.looks = preset.looks;
+    player.charisma = preset.charisma;
+    player.weapon_material_tier = preset.weapon_material_tier;
+    player.offhand_weapon_material_tier = preset.offhand_weapon_material_tier;
+    player.armor_material_tier = preset.armor_material_tier;
+    player.projectile_material_tier = preset.projectile_material_tier;
+    player.offhand_projectile_material_tier = preset.offhand_projectile_material_tier;
+    player.shield_material_tier = preset.shield_material_tier;
+    player.two_hand_grip = preset.two_hand_grip;
+    player.use_jab = preset.maneuvers.use_jab;
+    player.hold_at_bay = preset.maneuvers.hold_at_bay;
+    player.called_shot = preset.maneuvers.called_shot;
+    player.aggressive_attack = preset.maneuvers.aggressive_attack;
+    player.charge = preset.maneuvers.charge;
+    player.ready_against_charge = preset.maneuvers.ready_against_charge;
+    player.tactical_move = preset.maneuvers.tactical_move;
+    player.fight_defensively = preset.maneuvers.fight_defensively;
+    player.fight_defensively_penalty = preset.maneuvers.fight_defensively_penalty;
+    player.full_parry = preset.maneuvers.full_parry;
+    player.give_ground = preset.maneuvers.give_ground;
+    player.scamper_back = preset.maneuvers.scamper_back;
+    player.fighting_withdrawal = preset.maneuvers.fighting_withdrawal;
+    player.flee = preset.maneuvers.flee;
+    player.mounted = preset.maneuvers.mounted;
+    player.defensive_dualwielding = preset.defensive_dualwielding;
+    player.offensive_dualwielding = preset.offensive_dualwielding;
+    player.proficiencies = preset.proficiencies.clone();
+    player.talents = preset.talents.clone();
+    player.race_id = preset.race_id.clone();
+    player.race_applied = player.race_id.is_some();
+    player.knockback_step =
+        game_logic::knockback_step_for_race_id(player.race_id.as_deref(), race_catalog);
+    player.weapon_id = find_weapon_id_by_name(weapon_catalog, &preset.weapon)
+        .or_else(|| weapon_catalog.first_id())
+        .unwrap_or_else(|| WeaponId::new(0));
+    player.offhand_weapon_id = preset
+        .offhand_weapon
+        .as_deref()
+        .and_then(|name| find_weapon_id_by_name(weapon_catalog, name));
+    player.armor_id = find_armor_id_by_name(armor_catalog, &preset.armor)
+        .or_else(|| armor_catalog.first_id())
+        .unwrap_or_else(|| ArmorId::new(0));
+    player.shield_id = find_shield_id_by_name(shield_catalog, &preset.shield)
+        .or_else(|| shield_catalog.first_id())
+        .unwrap_or_else(|| ShieldId::new(0));
+    if let Some(weapon) = weapon_catalog.get(player.weapon_id) {
+        game_logic::sanitize_projectile_tier(&mut player, weapon);
+    }
+    player
+}
+
+fn player_profile_from_config(config: &PlayerConfig) -> PlayerProfile {
+    let ability_scores_full = AbilitySetFull {
+        strength: AbilityScore::new(config.strength_base, config.strength_pct),
+        intelligence: AbilityScore::new(config.intelligence, 1),
+        wisdom: AbilityScore::new(config.wisdom, 1),
+        dexterity: AbilityScore::new(config.dex_base, config.dex_pct),
+        constitution: AbilityScore::new(config.constitution, 1),
+        looks: AbilityScore::new(config.looks, 1),
+        charisma: AbilityScore::new(config.charisma, 1),
+    };
+    PlayerProfile {
+        name: config.name.clone(),
+        level: config.level,
+        xp: 0,
+        base_stats: AbilitySet::from(ability_scores_full),
+        ability_scores_full,
+        progression: config.progression,
+        points: PointPools::default(),
+        banked_points: PointPools::default(),
+        honor: 0,
+        alignment: None,
+        race_id: config.race_id.clone(),
+        background: None,
+        quirks: Vec::new(),
+        flaws: Vec::new(),
+        skills: Vec::new(),
+        skill_levels: Vec::new(),
+        proficiencies: config.proficiencies.clone(),
+        talents: config.talents.clone(),
+        weapon_masteries: Vec::new(),
+    }
+}
+
+fn hobgoblin_spawner(npc_presets: &NpcPresetCatalog) -> EnemySpawner {
+    let mut spawner = EnemySpawner::default();
+    for (index, preset) in npc_presets.entries().iter().enumerate() {
+        if let Some(level) = hobgoblin_level(&preset.name) {
+            spawner.push(EnemySpawnEntry {
+                preset_id: NpcPresetId::new(index),
+                min_level: level,
+                max_level: u8::MAX,
+                weight: 1,
+            });
+        }
+    }
+    spawner
+}
+
+fn hobgoblin_level(name: &str) -> Option<u8> {
+    let lower = name.to_ascii_lowercase();
+    if lower == "hobgoblin" {
+        Some(1)
+    } else if let Some(rest) = lower.strip_prefix("hobgoblin ") {
+        rest.trim().parse::<u8>().ok()
+    } else {
+        None
+    }
+}
+
+fn tier_from_label(label: &str) -> Option<ProgressionTier> {
+    match label.trim() {
+        "I" | "1" => Some(ProgressionTier::I),
+        "II" | "2" => Some(ProgressionTier::II),
+        "III" | "3" => Some(ProgressionTier::III),
+        "IV" | "4" => Some(ProgressionTier::IV),
+        "V" | "5" => Some(ProgressionTier::V),
+        "VI" | "6" => Some(ProgressionTier::VI),
+        _ => None,
+    }
+}
+
+fn find_weapon_id_by_name(catalog: &WeaponCatalog, name: &str) -> Option<WeaponId> {
+    catalog
+        .entries()
+        .iter()
+        .position(|weapon| weapon.name.eq_ignore_ascii_case(name))
+        .and_then(|idx| catalog.id_from_index(idx))
+}
+
+fn find_armor_id_by_name(catalog: &ArmorCatalog, name: &str) -> Option<ArmorId> {
+    if name.eq_ignore_ascii_case("None") {
+        return catalog.first_id();
+    }
+    catalog
+        .entries()
+        .iter()
+        .position(|entry| {
+            entry
+                .armor
+                .as_ref()
+                .map(|armor| armor.name.eq_ignore_ascii_case(name))
+                .unwrap_or(false)
+        })
+        .and_then(|idx| catalog.id_from_index(idx))
+}
+
+fn find_shield_id_by_name(catalog: &ShieldCatalog, name: &str) -> Option<ShieldId> {
+    if name.eq_ignore_ascii_case("None") {
+        return catalog.first_id();
+    }
+    catalog
+        .entries()
+        .iter()
+        .position(|entry| {
+            entry
+                .shield
+                .as_ref()
+                .map(|shield| shield.name.eq_ignore_ascii_case(name))
+                .unwrap_or(false)
+        })
+        .and_then(|idx| catalog.id_from_index(idx))
+}
+
+fn format_score(score: AbilityScore) -> String {
+    format!("{}/{:02}", score.base, score.percentile)
+}
+
+fn format_wound_line(wounds: &[Wound]) -> String {
+    if wounds.is_empty() {
+        "No lasting wounds.".to_string()
+    } else {
+        format!(
+            "Wounds: {}",
+            wounds
+                .iter()
+                .map(|wound| wound.damage.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
+}
+
+fn format_hit_list(events: &[CombatEvent], attacker_idx: usize, defender_idx: usize) -> String {
+    let hits = events
+        .iter()
+        .filter_map(|event| {
+            if event.attacker_idx != attacker_idx || event.defender_idx != defender_idx {
+                return None;
+            }
+            let CombatEventKind::Attack(attack) = &event.kind else {
+                return None;
+            };
+            if attack.damage <= 0 {
+                return None;
+            }
+            Some(attack.damage.to_string())
+        })
+        .collect::<Vec<_>>();
+    if hits.is_empty() {
+        "none".to_string()
+    } else {
+        hits.join(", ")
+    }
+}
+
+const INDEX_HTML: &str = r#"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>HackMaster Autobattler v2 Demo</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #141615;
+      --panel: #20231f;
+      --panel-2: #29271f;
+      --line: #4b4435;
+      --text: #ede6d1;
+      --muted: #a89f8b;
+      --gold: #d5a84a;
+      --red: #a94338;
+      --green: #7fa26a;
+      --blue: #6d8fa3;
+      --steel: #778089;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: radial-gradient(circle at 50% -20%, #34301f 0, var(--bg) 42%, #0f1110 100%);
+      color: var(--text);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+    button, input, select {
+      font: inherit;
+    }
+    button {
+      border: 1px solid #6f603d;
+      background: linear-gradient(#3a3325, #251f18);
+      color: var(--text);
+      padding: 9px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 700;
+    }
+    button:hover { border-color: var(--gold); color: #fff5cf; }
+    button:disabled { opacity: .45; cursor: default; }
+    input, select {
+      width: 100%;
+      border: 1px solid var(--line);
+      background: #171916;
+      color: var(--text);
+      padding: 9px 10px;
+      border-radius: 6px;
+    }
+    .app {
+      display: grid;
+      grid-template-columns: 285px minmax(460px, 1fr) 370px;
+      gap: 14px;
+      height: 100vh;
+      padding: 14px;
+    }
+    .panel {
+      background: linear-gradient(180deg, rgba(41,39,31,.98), rgba(28,31,28,.98));
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 18px 48px rgba(0,0,0,.28);
+      overflow: hidden;
+      min-height: 0;
+    }
+    .panel-inner { padding: 16px; }
+    h1, h2, h3 { margin: 0; line-height: 1.05; }
+    h1 { font-size: 20px; }
+    h2 { font-size: 16px; color: var(--gold); }
+    h3 { font-size: 14px; color: #d9ceb7; }
+    .sub { color: var(--muted); font-size: 13px; line-height: 1.45; }
+    .stack { display: grid; gap: 12px; }
+    .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .stat {
+      border: 1px solid rgba(213,168,74,.28);
+      background: rgba(20,22,21,.58);
+      border-radius: 6px;
+      padding: 8px;
+      font-size: 13px;
+      color: #e8dfc6;
+    }
+    .metric {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+      border-bottom: 1px solid rgba(255,255,255,.06);
+      padding: 7px 0;
+      font-size: 13px;
+    }
+    .metric strong { color: #fff1c8; }
+    .map {
+      position: relative;
+      height: calc(100vh - 28px);
+      padding: 18px;
+    }
+    .map-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+    .map-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      height: calc(100% - 62px);
+      align-items: center;
+    }
+    .node-scene {
+      grid-column: 1 / -1;
+      align-self: stretch;
+      display: grid;
+      align-content: center;
+      justify-items: center;
+      gap: 18px;
+      min-height: 540px;
+      padding: 48px;
+      text-align: center;
+      border: 1px solid rgba(213,168,74,.32);
+      border-radius: 8px;
+      background:
+        linear-gradient(rgba(20,22,21,.72), rgba(20,22,21,.86)),
+        radial-gradient(circle at 50% 30%, rgba(213,168,74,.16), transparent 45%);
+    }
+    .node-scene h2 {
+      color: #f0dfb1;
+      font-size: 32px;
+      max-width: 720px;
+    }
+    .node-scene p {
+      max-width: 720px;
+      margin: 0;
+      color: #c9bea5;
+      line-height: 1.55;
+      font-size: 17px;
+    }
+    .scene-mark {
+      display: grid;
+      place-items: center;
+      width: 86px;
+      height: 86px;
+      border: 1px solid var(--gold);
+      border-radius: 8px;
+      background: rgba(0,0,0,.22);
+      color: var(--gold);
+      font-size: 44px;
+      box-shadow: inset 0 0 24px rgba(213,168,74,.16);
+    }
+    .floor {
+      display: grid;
+      gap: 18px;
+      align-content: center;
+      min-height: 360px;
+    }
+    .node {
+      display: grid;
+      place-items: center;
+      width: 112px;
+      min-height: 76px;
+      border: 1px solid var(--line);
+      background: #191b18;
+      border-radius: 8px;
+      color: var(--muted);
+      margin: 0 auto;
+      position: relative;
+      transition: transform .15s ease, border-color .15s ease, background .15s ease;
+    }
+    .node.available {
+      color: #fff5cf;
+      border-color: var(--gold);
+      background: linear-gradient(180deg, #423622, #211f19);
+      transform: translateY(-2px);
+    }
+    .node.completed {
+      color: var(--green);
+      border-color: rgba(127,162,106,.75);
+      background: rgba(33,48,34,.72);
+    }
+    .node .icon { font-size: 25px; line-height: 1; }
+    .node .label { font-size: 12px; font-weight: 800; text-transform: uppercase; margin-top: 6px; }
+    .node button {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+    }
+    .right-scroll {
+      height: 100vh;
+      overflow: auto;
+      padding-right: 2px;
+    }
+    .choice-list { display: grid; gap: 8px; }
+    .log {
+      display: grid;
+      gap: 6px;
+      max-height: 220px;
+      overflow: auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      color: #d7d0bc;
+      background: rgba(0,0,0,.18);
+      border: 1px solid rgba(255,255,255,.07);
+      border-radius: 6px;
+      padding: 10px;
+    }
+    .reward {
+      border: 1px solid rgba(213,168,74,.35);
+      background: rgba(213,168,74,.08);
+      border-radius: 6px;
+      padding: 10px;
+      display: grid;
+      gap: 5px;
+      font-size: 13px;
+    }
+    .fight {
+      border: 1px solid rgba(169,67,56,.45);
+      background: rgba(169,67,56,.08);
+      border-radius: 6px;
+      padding: 10px;
+      display: grid;
+      gap: 6px;
+      font-size: 13px;
+    }
+    .pill {
+      display: inline-flex;
+      border: 1px solid var(--line);
+      background: rgba(0,0,0,.16);
+      border-radius: 999px;
+      padding: 5px 8px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+    .danger { color: #f0a096; }
+    .ok { color: #a9d48e; }
+    @media (max-width: 1050px) {
+      .app { grid-template-columns: 1fr; height: auto; }
+      .map { height: auto; min-height: 560px; }
+      .right-scroll { height: auto; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <aside class="panel"><div class="panel-inner stack">
+      <div class="stack">
+        <h1>HackMaster Autobattler v2</h1>
+        <div class="sub">Playable vertical slice: quick-start character, branching route, events, fights, loot, wounds, XP, and level points.</div>
+      </div>
+      <div class="stack">
+        <h2>Roll Character</h2>
+        <select id="preset"></select>
+        <input id="name" placeholder="Name override" />
+        <input id="seed" placeholder="Seed, blank for random" />
+        <button onclick="newRun()">Roll Character</button>
+      </div>
+      <div id="character" class="stack"></div>
+    </div></aside>
+    <section class="panel map">
+      <div class="map-header">
+        <div>
+          <h2>Route</h2>
+          <div id="phase" class="sub">Roll a character to begin.</div>
+        </div>
+        <span id="runStatus" class="pill">No run</span>
+      </div>
+      <div id="map" class="map-grid"></div>
+    </section>
+    <aside class="right-scroll stack">
+      <section class="panel"><div class="panel-inner stack" id="encounter"></div></section>
+      <section class="panel"><div class="panel-inner stack">
+        <h2>Latest Reward</h2>
+        <div id="reward"></div>
+      </div></section>
+      <section class="panel"><div class="panel-inner stack">
+        <h2>Fight Summary</h2>
+        <div id="fight"></div>
+      </div></section>
+      <section class="panel"><div class="panel-inner stack">
+        <h2>Log</h2>
+        <div id="log" class="log"></div>
+      </div></section>
+    </aside>
+  </main>
+  <script>
+    let state = null;
+    const nodeIcons = { fight: "⚔", event: "?", rest: "✚", elite: "!", boss: "♛" };
+    const nodeLabels = { fight: "Fight", event: "Event", rest: "Rest", elite: "Elite", boss: "Boss" };
+
+    async function api(path, body) {
+      const options = body === undefined ? {} : {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      };
+      const response = await fetch(path, options);
+      const json = await response.json();
+      if (!response.ok) throw new Error(json.error || "Request failed");
+      state = json;
+      render();
+    }
+
+    async function loadState() { await api("/api/state"); }
+    async function newRun() {
+      const seedRaw = document.getElementById("seed").value.trim();
+      await api("/api/new-run", {
+        preset: document.getElementById("preset").value,
+        name: document.getElementById("name").value.trim() || null,
+        seed: seedRaw ? Number(seedRaw) : null
+      });
+    }
+    async function chooseNode(id) { await api("/api/choose-node", { node_id: id }); }
+    async function eventChoice(id) { await api("/api/event-choice", { choice_id: id }); }
+    async function startFight() { await api("/api/start-fight", {}); }
+
+    function render() {
+      renderPresets();
+      renderCharacter();
+      renderMap();
+      renderEncounter();
+      renderReward();
+      renderFight();
+      renderLog();
+    }
+
+    function renderPresets() {
+      const select = document.getElementById("preset");
+      const previous = select.value;
+      select.innerHTML = (state.presets || []).map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("");
+      if (previous) select.value = previous;
+    }
+
+    function renderCharacter() {
+      const el = document.getElementById("character");
+      if (!state.player) {
+        el.innerHTML = `<div class="sub">No character rolled.</div>`;
+        return;
+      }
+      const p = state.player;
+      el.innerHTML = `
+        <div class="stack">
+          <h2>${escapeHtml(p.name)}</h2>
+          <div class="metric"><span>Level</span><strong>${p.level}</strong></div>
+          <div class="metric"><span>XP</span><strong>${p.xp} / ${p.next_level_xp}</strong></div>
+          <div class="metric"><span>Gold</span><strong>${p.gold}</strong></div>
+          <div class="metric"><span>Depth</span><strong>${p.depth}</strong></div>
+          <div class="metric"><span>Wounds</span><strong class="${p.wound_total ? "danger" : "ok"}">${p.wound_total || "none"}</strong></div>
+          <div class="metric"><span>Seed</span><strong>${p.seed}</strong></div>
+          <div class="stat-grid">${p.stats.map(s => `<div class="stat">${escapeHtml(s)}</div>`).join("")}</div>
+          <div class="sub">Points: BP ${p.bp}, LP ${p.lp}, AP ${p.ap}, RP ${p.rp}</div>
+        </div>`;
+    }
+
+    function renderMap() {
+      document.getElementById("phase").textContent = state.terminal || phaseText(state.phase);
+      document.getElementById("runStatus").textContent = state.has_run ? state.phase.replace("_", " ") : "No run";
+      const map = document.getElementById("map");
+      if (state.pending_event) {
+        const event = state.pending_event;
+        map.innerHTML = `<div class="node-scene event-scene">
+          <div class="scene-mark">?</div>
+          <h2>${escapeHtml(event.name)}</h2>
+          <p>${escapeHtml(event.description)}</p>
+          <div class="choice-list">${event.choices.map(c => `<button onclick="eventChoice('${escapeJs(c.id)}')">${escapeHtml(c.text)}</button>`).join("")}</div>
+        </div>`;
+        return;
+      }
+      if (state.pending_fight) {
+        const fight = state.pending_fight;
+        map.innerHTML = `<div class="node-scene fight-scene">
+          <div class="scene-mark">⚔</div>
+          <h2>${escapeHtml(fight.tier)} Fight</h2>
+          <p>You have committed to a route and are sizing up ${escapeHtml(fight.enemy_name)}. Combat will move to a timeline from here.</p>
+          <button onclick="startFight()">Fight</button>
+        </div>`;
+        return;
+      }
+      const floors = [0,1,2,3];
+      map.innerHTML = floors.map(floor => {
+        const nodes = (state.map || []).filter(n => n.floor === floor);
+        return `<div class="floor">${nodes.map(nodeHtml).join("")}</div>`;
+      }).join("");
+    }
+
+    function nodeHtml(node) {
+      const available = (state.available_nodes || []).includes(node.id);
+      const classes = ["node", available ? "available" : "", node.completed ? "completed" : ""].join(" ");
+      const disabled = available ? "" : "disabled";
+      return `<div class="${classes}">
+        <div class="icon">${nodeIcons[node.kind]}</div>
+        <div class="label">${nodeLabels[node.kind]}</div>
+        <button ${disabled} onclick="chooseNode(${node.id})">Choose ${nodeLabels[node.kind]}</button>
+      </div>`;
+    }
+
+    function renderEncounter() {
+      const el = document.getElementById("encounter");
+      if (state.terminal) {
+        el.innerHTML = `<h2>Run Complete</h2><div class="sub">${escapeHtml(state.terminal)}</div><button onclick="newRun()">Roll Again</button>`;
+        return;
+      }
+      if (state.pending_event) {
+        const event = state.pending_event;
+        el.innerHTML = `<h2>${escapeHtml(event.name)}</h2>
+          <div class="sub">${escapeHtml(event.description)}</div>
+          <div class="choice-list">${event.choices.map(c => `<button onclick="eventChoice('${escapeJs(c.id)}')">${escapeHtml(c.text)}</button>`).join("")}</div>`;
+        return;
+      }
+      if (state.pending_fight) {
+        const fight = state.pending_fight;
+        el.innerHTML = `<h2>${escapeHtml(fight.tier)} Fight</h2>
+          <div class="sub">Enemy scouted: ${escapeHtml(fight.enemy_name)}. This is now a fight scene, not an instant node resolution.</div>
+          <button onclick="startFight()">Fight</button>`;
+        return;
+      }
+      if (state.phase === "choose_node") {
+        el.innerHTML = `<h2>Choose Node</h2><div class="sub">Pick an available route node on the map. Fights resolve through the existing HackMaster combat engine.</div>`;
+      } else {
+        el.innerHTML = `<h2>Encounter</h2><div class="sub">Roll a character or resolve the pending choice.</div>`;
+      }
+    }
+
+    function renderReward() {
+      const el = document.getElementById("reward");
+      if (!state.last_reward) {
+        el.innerHTML = `<div class="sub">No reward yet.</div>`;
+        return;
+      }
+      const r = state.last_reward;
+      el.innerHTML = `<div class="reward">
+        <div>Gold +${r.gold}</div>
+        <div>XP +${r.xp}</div>
+        <div>Items: ${r.items.length ? r.items.map(escapeHtml).join(", ") : "none"}</div>
+        <div>${r.level_gained ? "Level gained. Points granted." : "No level-up."}</div>
+      </div>`;
+    }
+
+    function renderFight() {
+      const el = document.getElementById("fight");
+      if (!state.last_fight) {
+        el.innerHTML = `<div class="sub">No fight resolved yet.</div>`;
+        return;
+      }
+      const f = state.last_fight;
+      el.innerHTML = `<div class="fight">
+        <div><strong class="${f.won ? "ok" : "danger"}">${f.won ? "Victory" : "Defeat"}</strong> vs ${escapeHtml(f.enemy)}</div>
+        <div>Turns: ${f.turns}s | HP left: ${f.remaining_hp}</div>
+        <div>Hits dealt: ${escapeHtml(f.hits_dealt)}</div>
+        <div>Hits taken: ${escapeHtml(f.hits_taken)}</div>
+        <div class="log">${f.combat_log.map(escapeHtml).join("<br>")}</div>
+      </div>`;
+    }
+
+    function renderLog() {
+      const el = document.getElementById("log");
+      el.innerHTML = (state.last_log || []).map(escapeHtml).join("<br>") || "No log.";
+    }
+
+    function phaseText(phase) {
+      if (phase === "choose_node") return "Choose a route node.";
+      if (phase === "event_choice") return "Resolve the event choice.";
+      if (phase === "fight_preview") return "Fight scene selected.";
+      if (phase === "run_over") return "Run over.";
+      return "Roll a character to begin.";
+    }
+
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    }
+    function escapeJs(value) {
+      return String(value).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+    }
+    loadState().catch(err => {
+      document.getElementById("log").textContent = err.message;
+    });
+  </script>
+</body>
+</html>"#;
