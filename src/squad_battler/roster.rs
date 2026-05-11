@@ -9,6 +9,7 @@ use crate::game_logic::{
 };
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 pub const MAX_ACTIVE_SQUAD: usize = 6;
 pub const MAX_BENCH: usize = 4;
@@ -46,6 +47,109 @@ pub struct SquadMember {
     pub current_hp: i32,
     pub max_hp: i32,
     pub status: SquadMemberStatus,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RosterError {
+    ActiveFull,
+    BenchFull,
+    MemberNotFound,
+}
+
+impl fmt::Display for RosterError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RosterError::ActiveFull => write!(f, "active squad is full"),
+            RosterError::BenchFull => write!(f, "bench is full"),
+            RosterError::MemberNotFound => write!(f, "squad member not found"),
+        }
+    }
+}
+
+impl std::error::Error for RosterError {}
+
+#[derive(Clone)]
+pub struct SquadRoster {
+    active: Vec<SquadMember>,
+    bench: Vec<SquadMember>,
+}
+
+impl SquadRoster {
+    pub fn new(active: Vec<SquadMember>) -> Result<Self, RosterError> {
+        if active.len() > MAX_ACTIVE_SQUAD {
+            return Err(RosterError::ActiveFull);
+        }
+        Ok(Self {
+            active,
+            bench: Vec::new(),
+        })
+    }
+
+    pub fn active(&self) -> &[SquadMember] {
+        &self.active
+    }
+
+    pub fn active_mut(&mut self) -> &mut [SquadMember] {
+        &mut self.active
+    }
+
+    pub fn bench(&self) -> &[SquadMember] {
+        &self.bench
+    }
+
+    pub fn add_active(&mut self, member: SquadMember) -> Result<(), RosterError> {
+        if self.active.len() >= MAX_ACTIVE_SQUAD {
+            return Err(RosterError::ActiveFull);
+        }
+        self.active.push(member);
+        Ok(())
+    }
+
+    pub fn add_bench(&mut self, member: SquadMember) -> Result<(), RosterError> {
+        if self.bench.len() >= MAX_BENCH {
+            return Err(RosterError::BenchFull);
+        }
+        self.bench.push(member);
+        Ok(())
+    }
+
+    pub fn replace_active(
+        &mut self,
+        replace_member_id: &str,
+        member: SquadMember,
+    ) -> Result<SquadMember, RosterError> {
+        let Some(index) = self
+            .active
+            .iter()
+            .position(|current| current.id == replace_member_id)
+        else {
+            return Err(RosterError::MemberNotFound);
+        };
+        Ok(std::mem::replace(&mut self.active[index], member))
+    }
+
+    pub fn remove_dead_active(&mut self) -> Vec<SquadMember> {
+        let mut removed = Vec::new();
+        let mut kept = Vec::new();
+        for member in self.active.drain(..) {
+            if member.status == SquadMemberStatus::Dead {
+                removed.push(member);
+            } else {
+                kept.push(member);
+            }
+        }
+        self.active = kept;
+        removed
+    }
+
+    pub fn view(&self) -> SquadView {
+        SquadView {
+            active: self.active.iter().map(SquadMember::view).collect(),
+            bench: self.bench.iter().map(SquadMember::view).collect(),
+            max_active: MAX_ACTIVE_SQUAD,
+            max_bench: MAX_BENCH,
+        }
+    }
 }
 
 impl SquadMember {
@@ -89,6 +193,14 @@ pub struct SquadMemberView {
     pub weapon: String,
     pub status: SquadMemberStatus,
     pub stats: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SquadView {
+    pub active: Vec<SquadMemberView>,
+    pub bench: Vec<SquadMemberView>,
+    pub max_active: usize,
+    pub max_bench: usize,
 }
 
 pub fn roll_starting_squad(

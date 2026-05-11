@@ -8,9 +8,7 @@ use serde::Serialize;
 
 use super::combat::{DEFAULT_GRID_HEIGHT, DEFAULT_GRID_WIDTH, TILE_SIZE_FT};
 use super::encounters::{SquadRouteNode, placeholder_route};
-use super::roster::{
-    MAX_ACTIVE_SQUAD, MAX_BENCH, SquadMember, SquadMemberView, roll_starting_squad,
-};
+use super::roster::{MAX_ACTIVE_SQUAD, MAX_BENCH, SquadRoster, SquadView, roll_starting_squad};
 
 const QUICK_STARTS_PATH: &str = "data/autobattler/autobattler_quick_starts.json";
 const NPC_PRESETS_PATH: &str = "data/sim/npc_presets.json";
@@ -47,14 +45,14 @@ impl SquadBattlerApp {
             &self.armor_catalog,
             &self.shield_catalog,
         );
+        let roster = SquadRoster::new(active).expect("starting roster exceeds active squad limit");
         self.session = Some(SquadRun {
             seed,
             depth: 0,
             gold: 20,
             inventory: Inventory::default(),
             route: placeholder_route(),
-            active,
-            bench: Vec::new(),
+            roster,
             log: vec!["The company assembles at the edge of the first route.".to_string()],
         });
         self.view()
@@ -99,12 +97,7 @@ impl SquadBattlerApp {
                 gold: session.inventory.gold,
                 items: session.inventory.items.clone(),
             },
-            squad: SquadView {
-                active: session.active.iter().map(SquadMember::view).collect(),
-                bench: session.bench.iter().map(SquadMember::view).collect(),
-                max_active: MAX_ACTIVE_SQUAD,
-                max_bench: MAX_BENCH,
-            },
+            squad: session.roster.view(),
             grid: GridView {
                 width: DEFAULT_GRID_WIDTH,
                 height: DEFAULT_GRID_HEIGHT,
@@ -123,8 +116,7 @@ struct SquadRun {
     gold: u32,
     inventory: Inventory,
     route: Vec<SquadRouteNode>,
-    active: Vec<SquadMember>,
-    bench: Vec<SquadMember>,
+    roster: SquadRoster,
     log: Vec<String>,
 }
 
@@ -141,14 +133,6 @@ pub struct SquadBattlerView {
     pub grid: GridView,
     pub route: Vec<SquadRouteNode>,
     pub log: Vec<String>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct SquadView {
-    pub active: Vec<SquadMemberView>,
-    pub bench: Vec<SquadMemberView>,
-    pub max_active: usize,
-    pub max_bench: usize,
 }
 
 #[derive(Clone, Debug, Serialize)]
