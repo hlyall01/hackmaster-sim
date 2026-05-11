@@ -3,7 +3,7 @@
 use crate::core::rng::SimRng;
 use crate::core::sim::{Combatant, resolve_basic_attack};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 pub const DEFAULT_GRID_WIDTH: i32 = 12;
 pub const DEFAULT_GRID_HEIGHT: i32 = 8;
@@ -61,6 +61,36 @@ impl BattleGrid {
 pub enum BattleUnitStatus {
     Alive,
     Downed,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SquadCombatEventKind {
+    Move,
+    Attack,
+    Miss,
+    Hit,
+    Death,
+    Knockback,
+    Skip,
+    Timeout,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SquadCombatEvent {
+    pub time: u32,
+    pub kind: SquadCombatEventKind,
+    pub actor_id: String,
+    pub actor_name: String,
+    pub target_id: Option<String>,
+    pub target_name: Option<String>,
+    pub from: Option<GridPos>,
+    pub to: Option<GridPos>,
+    pub damage: Option<i32>,
+    pub hit: Option<bool>,
+    pub remaining_hp: Option<i32>,
+    pub knockback_ft: Option<f32>,
+    pub message: String,
 }
 
 #[derive(Clone, Debug)]
@@ -143,7 +173,15 @@ pub struct SquadCombat {
     pub done: bool,
     pub winner_team: Option<u8>,
     pub log: Vec<String>,
+    events: Vec<SquadCombatEvent>,
     rng: SimRng,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct AttackIntent {
+    attacker_idx: usize,
+    defender_idx: usize,
+    distance_ft: f32,
 }
 
 impl SquadCombat {
@@ -170,6 +208,7 @@ impl SquadCombat {
             done: false,
             winner_team: None,
             log: vec!["Squads take their marks on the battle mat.".to_string()],
+            events: Vec::new(),
             rng: SimRng::from_seed(seed),
         }
     }
@@ -179,12 +218,93 @@ impl SquadCombat {
             return;
         }
         self.elapsed_seconds = self.elapsed_seconds.saturating_add(1);
-        for idx in self.living_indices() {
-            if let Some(target_idx) = self.nearest_enemy(idx) {
-                self.resolve_unit_ai(idx, target_idx);
+        let skipped = self.tick_incapacitation();
+        let order = self.action_order();
+        let now = self.elapsed_seconds as f32;
+        let mut intents = Vec::new();
+
+        let ready_indices = order
+            .iter()
+            .copied()
+            .filter(|idx| !skipped.contains(idx) && self.units[*idx].initiative_ready_at <= now)
+            .collect::<Vec<_>>();
+        let waiting_indices = order
+            .iter()
+            .copied()
+            .filter(|idx| !skipped.contains(idx) && self.units[*idx].initiative_ready_at > now)
+            .collect::<Vec<_>>();
+
+        for idx in ready_indices {
+            if let Some(target_idx) = self.select_target(idx) {
+                if let Some(intent) = self.resolve_unit_ai(idx, target_idx, true) {
+                    intents.push(intent);
+                }
+            }
+        }
+
+        for intent in intents {
+            self.resolve_attack_intent(intent);
+        }
+
+        for idx in waiting_indices {
+            if let Some(target_idx) = self.select_target(idx) {
+                self.resolve_unit_ai(idx, target_idx, false);
             }
         }
         self.refresh_done();
+    }
+
+    fn action_order(&self) -> Vec<usize> {
+        let now = self.elapsed_seconds as f32;
+        let mut indices = self.living_indices();
+        indices.sort_by(|&a, &b| {
+            let a_ready = self.units[a].initiative_ready_at <= now;
+            let b_ready = self.units[b].initiative_ready_at <= now;
+            b_ready
+                .cmp(&a_ready)
+                .then_with(|| {
+                    self.units[a]
+                        .initiative_ready_at
+                        .total_cmp(&self.units[b].initiative_ready_at)
+                })
+                .then_with(|| self.units[a].team_id.cmp(&self.units[b].team_id))
+                .then_with(|| self.units[a].id.cmp(&self.units[b].id))
+                .then_with(|| a.cmp(&b))
+        });
+        indices
+    }
+
+    fn tick_incapacitation(&mut self) -> HashSet<usize> {
+        let mut skipped = HashSet::new();
+        for idx in self.living_indices() {
+            let Some(combatant) = self.units[idx].combatant.as_ref() else {
+                continue;
+            };
+            let trauma = combatant.state.trauma_remaining_seconds;
+            let knockback = combatant.state.knockback_immobile_seconds;
+            if trauma > 0 || knockback > 0 {
+                skipped.insert(idx);
+                let reason = if trauma > 0 { "trauma" } else { "stun" };
+                self.emit_simple_event(
+                    SquadCombatEventKind::Skip,
+                    idx,
+                    None,
+                    format!(
+                        "t={}s: {} loses the moment to {}.",
+                        self.elapsed_seconds, self.units[idx].name, reason
+                    ),
+                );
+            }
+            if let Some(combatant) = self.units[idx].combatant.as_mut() {
+                if combatant.state.trauma_remaining_seconds > 0 {
+                    combatant.state.trauma_remaining_seconds -= 1;
+                }
+                if combatant.state.knockback_immobile_seconds > 0 {
+                    combatant.state.knockback_immobile_seconds -= 1;
+                }
+            }
+        }
+        skipped
     }
 
     pub fn living_indices(&self) -> Vec<usize> {
@@ -201,7 +321,36 @@ impl SquadCombat {
             .iter()
             .enumerate()
             .filter(|(_, other)| other.is_alive() && other.team_id != unit.team_id)
-            .min_by_key(|(_, other)| unit.pos.manhattan_distance(other.pos))
+            .min_by_key(|(other_idx, other)| {
+                (
+                    unit.pos.manhattan_distance(other.pos),
+                    other.team_id,
+                    other.id.as_str(),
+                    *other_idx,
+                )
+            })
+            .map(|(other_idx, _)| other_idx)
+    }
+
+    fn select_target(&self, idx: usize) -> Option<usize> {
+        self.engaged_enemy(idx).or_else(|| self.nearest_enemy(idx))
+    }
+
+    fn engaged_enemy(&self, idx: usize) -> Option<usize> {
+        let unit = self.units.get(idx)?;
+        self.units
+            .iter()
+            .enumerate()
+            .filter(|(_, other)| other.is_alive() && other.team_id != unit.team_id)
+            .filter(|(_, other)| self.can_attack_from(unit, unit.pos, other.pos))
+            .min_by_key(|(other_idx, other)| {
+                (
+                    unit.pos.manhattan_distance(other.pos),
+                    other.team_id,
+                    other.id.as_str(),
+                    *other_idx,
+                )
+            })
             .map(|(other_idx, _)| other_idx)
     }
 
@@ -213,83 +362,161 @@ impl SquadCombat {
             .collect()
     }
 
-    fn resolve_unit_ai(&mut self, idx: usize, target_idx: usize) {
+    fn resolve_unit_ai(
+        &mut self,
+        idx: usize,
+        target_idx: usize,
+        allow_attack: bool,
+    ) -> Option<AttackIntent> {
         if !self.units[idx].is_alive() || !self.units[target_idx].is_alive() {
-            return;
+            return None;
         }
-        let distance = self
+        let mut distance = self
             .grid
             .distance_ft(self.units[idx].pos, self.units[target_idx].pos);
-        if let Some(max_range) = self.units[idx].max_range_ft {
-            if distance <= max_range && distance > self.units[idx].reach_ft {
-                if self.try_move_away(idx, target_idx) {
-                    self.log.push(format!(
-                        "t={}s: {} keeps distance from {}.",
-                        self.elapsed_seconds, self.units[idx].name, self.units[target_idx].name
-                    ));
-                }
-                return;
+
+        if self.units[idx].max_range_ft.is_some()
+            && distance <= self.melee_reach_ft(&self.units[idx])
+            && self.try_move_away(idx, target_idx)
+        {
+            distance = self
+                .grid
+                .distance_ft(self.units[idx].pos, self.units[target_idx].pos);
+            self.log.push(format!(
+                "t={}s: {} keeps distance from {}.",
+                self.elapsed_seconds, self.units[idx].name, self.units[target_idx].name
+            ));
+            if self.can_attack_from(
+                &self.units[idx],
+                self.units[idx].pos,
+                self.units[target_idx].pos,
+            ) {
+                return allow_attack.then_some(AttackIntent {
+                    attacker_idx: idx,
+                    defender_idx: target_idx,
+                    distance_ft: distance,
+                });
             }
+            return None;
         }
 
         let desired_range = self.units[idx]
             .max_range_ft
-            .unwrap_or(self.units[idx].reach_ft)
-            .max(self.units[idx].reach_ft);
-        if distance > desired_range {
-            let before = self.units[idx].pos;
+            .unwrap_or_else(|| self.melee_reach_ft(&self.units[idx]))
+            .max(self.melee_reach_ft(&self.units[idx]));
+
+        if !self.can_attack_from(
+            &self.units[idx],
+            self.units[idx].pos,
+            self.units[target_idx].pos,
+        ) {
             self.move_toward(idx, target_idx, desired_range);
-            if self.units[idx].pos != before {
-                let after_distance = self
-                    .grid
-                    .distance_ft(self.units[idx].pos, self.units[target_idx].pos);
-                self.log.push(format!(
-                    "t={}s: {} advances on {} ({:.0} ft).",
-                    self.elapsed_seconds,
-                    self.units[idx].name,
-                    self.units[target_idx].name,
-                    after_distance
-                ));
-            }
         }
-        let distance = self
+        distance = self
             .grid
             .distance_ft(self.units[idx].pos, self.units[target_idx].pos);
-        if distance <= desired_range {
-            self.try_attack(idx, target_idx, distance);
+
+        if allow_attack
+            && self.can_attack_from(
+                &self.units[idx],
+                self.units[idx].pos,
+                self.units[target_idx].pos,
+            )
+        {
+            return Some(AttackIntent {
+                attacker_idx: idx,
+                defender_idx: target_idx,
+                distance_ft: distance,
+            });
         }
+        None
     }
 
     fn move_toward(&mut self, mover_idx: usize, target_idx: usize, stop_distance_ft: f32) {
-        let steps = self.units[mover_idx].move_tiles.max(0);
-        for _ in 0..steps {
-            let distance = self
+        let before = self.units[mover_idx].pos;
+        let steps = self.units[mover_idx].move_tiles.max(0) as usize;
+        let Some(path) = self.path_toward_range(mover_idx, target_idx, stop_distance_ft) else {
+            return;
+        };
+        for next in path.into_iter().take(steps) {
+            self.units[mover_idx].pos = next;
+        }
+        if self.units[mover_idx].pos != before {
+            let after_distance = self
                 .grid
                 .distance_ft(self.units[mover_idx].pos, self.units[target_idx].pos);
-            if distance <= stop_distance_ft {
-                break;
-            }
-            let Some(next) = self.best_step_toward(mover_idx, self.units[target_idx].pos) else {
-                break;
-            };
-            self.units[mover_idx].pos = next;
+            let message = format!(
+                "t={}s: {} advances on {} ({:.0} ft).",
+                self.elapsed_seconds,
+                self.units[mover_idx].name,
+                self.units[target_idx].name,
+                after_distance
+            );
+            self.emit_move_event(
+                mover_idx,
+                Some(target_idx),
+                before,
+                self.units[mover_idx].pos,
+                message,
+            );
         }
     }
 
     fn try_move_away(&mut self, mover_idx: usize, target_idx: usize) -> bool {
+        let before = self.units[mover_idx].pos;
         let Some(next) = self.best_step_away(mover_idx, self.units[target_idx].pos) else {
             return false;
         };
         self.units[mover_idx].pos = next;
+        self.emit_move_event(
+            mover_idx,
+            Some(target_idx),
+            before,
+            next,
+            format!(
+                "t={}s: {} shifts away from {}.",
+                self.elapsed_seconds, self.units[mover_idx].name, self.units[target_idx].name
+            ),
+        );
         true
     }
 
-    fn best_step_toward(&self, mover_idx: usize, target: GridPos) -> Option<GridPos> {
-        let from = self.units.get(mover_idx)?.pos;
-        self.legal_neighbors(mover_idx)
-            .into_iter()
-            .min_by_key(|pos| pos.manhattan_distance(target))
-            .filter(|pos| pos.manhattan_distance(target) < from.manhattan_distance(target))
+    fn path_toward_range(
+        &self,
+        mover_idx: usize,
+        target_idx: usize,
+        stop_distance_ft: f32,
+    ) -> Option<Vec<GridPos>> {
+        let mover = self.units.get(mover_idx)?;
+        let target = self.units.get(target_idx)?;
+        let stop_tiles = self.tiles_for_distance(stop_distance_ft).max(1);
+        let start = mover.pos;
+        let target_pos = target.pos;
+        if start.manhattan_distance(target_pos) <= stop_tiles {
+            return Some(Vec::new());
+        }
+
+        let mut occupied = self.occupied_positions();
+        occupied.remove(&start);
+        let mut frontier = VecDeque::from([start]);
+        let mut came_from: HashMap<GridPos, GridPos> = HashMap::new();
+        let mut seen = HashSet::from([start]);
+
+        while let Some(current) = frontier.pop_front() {
+            let mut neighbors = self.legal_neighbors_from(current, &occupied);
+            neighbors.sort_by_key(|pos| (pos.manhattan_distance(target_pos), pos.y, pos.x));
+            for next in neighbors {
+                if !seen.insert(next) {
+                    continue;
+                }
+                came_from.insert(next, current);
+                if next.manhattan_distance(target_pos) <= stop_tiles {
+                    return Some(reconstruct_path(start, next, &came_from));
+                }
+                frontier.push_back(next);
+            }
+        }
+        None
     }
 
     fn best_step_away(&self, mover_idx: usize, target: GridPos) -> Option<GridPos> {
@@ -305,11 +532,15 @@ impl SquadCombat {
             return Vec::new();
         };
         let occupied = self.occupied_positions();
+        self.legal_neighbors_from(unit.pos, &occupied)
+    }
+
+    fn legal_neighbors_from(&self, from: GridPos, occupied: &HashSet<GridPos>) -> Vec<GridPos> {
         [
-            GridPos::new(unit.pos.x + 1, unit.pos.y),
-            GridPos::new(unit.pos.x - 1, unit.pos.y),
-            GridPos::new(unit.pos.x, unit.pos.y + 1),
-            GridPos::new(unit.pos.x, unit.pos.y - 1),
+            GridPos::new(from.x + 1, from.y),
+            GridPos::new(from.x, from.y + 1),
+            GridPos::new(from.x, from.y - 1),
+            GridPos::new(from.x - 1, from.y),
         ]
         .into_iter()
         .filter(|pos| {
@@ -322,13 +553,39 @@ impl SquadCombat {
         .collect()
     }
 
-    fn try_attack(&mut self, attacker_idx: usize, defender_idx: usize, distance_ft: f32) {
+    fn can_attack_from(
+        &self,
+        attacker: &BattleUnit,
+        attacker_pos: GridPos,
+        target_pos: GridPos,
+    ) -> bool {
+        let distance = self.grid.distance_ft(attacker_pos, target_pos);
+        if distance <= self.melee_reach_ft(attacker) {
+            return true;
+        }
+        attacker
+            .max_range_ft
+            .is_some_and(|max_range| distance <= max_range)
+    }
+
+    fn melee_reach_ft(&self, unit: &BattleUnit) -> f32 {
+        unit.reach_ft.max(self.grid.tile_size_ft)
+    }
+
+    fn tiles_for_distance(&self, distance_ft: f32) -> i32 {
+        (distance_ft / self.grid.tile_size_ft.max(0.01)).ceil() as i32
+    }
+
+    fn resolve_attack_intent(&mut self, intent: AttackIntent) {
+        let attacker_idx = intent.attacker_idx;
+        let defender_idx = intent.defender_idx;
+        let distance_ft = intent.distance_ft;
         let now = self.elapsed_seconds as f32;
-        if self.units[attacker_idx].initiative_ready_at > now {
+        if !self.units[defender_idx].is_alive() {
             return;
         }
         let is_ranged = self.units[attacker_idx].max_range_ft.is_some()
-            && distance_ft > self.units[attacker_idx].reach_ft;
+            && distance_ft > self.melee_reach_ft(&self.units[attacker_idx]);
         let speed = self
             .units
             .get(attacker_idx)
@@ -357,25 +614,113 @@ impl SquadCombat {
                 unit.combatant = Some(combatant);
             }
             self.units[attacker_idx].initiative_ready_at = now + speed;
-            self.log_attack(
+            self.emit_attack_event(
                 attacker_idx,
                 defender_idx,
                 result.event.damage,
                 result.event.hit,
+                result.event.knockback_ft,
+                result.event.trauma_seconds,
             );
+            self.apply_knockback(attacker_idx, defender_idx, result.event.knockback_ft);
+            self.emit_death_if_needed(defender_idx, Some(attacker_idx));
             if let Some(counter) = result.counter_attack {
-                self.log_attack(defender_idx, attacker_idx, counter.damage, counter.hit);
+                self.emit_attack_event(
+                    defender_idx,
+                    attacker_idx,
+                    counter.damage,
+                    counter.hit,
+                    counter.knockback_ft,
+                    counter.trauma_seconds,
+                );
+                self.apply_knockback(defender_idx, attacker_idx, counter.knockback_ft);
+                self.emit_death_if_needed(attacker_idx, Some(defender_idx));
             }
         } else {
             let damage = 2;
             self.units[defender_idx].hp = self.units[defender_idx].hp.saturating_sub(damage);
             self.units[attacker_idx].initiative_ready_at = now + speed;
-            self.log_attack(attacker_idx, defender_idx, damage, true);
+            self.emit_attack_event(attacker_idx, defender_idx, damage, true, 0.0, None);
+            self.emit_death_if_needed(defender_idx, Some(attacker_idx));
         }
     }
 
-    fn log_attack(&mut self, attacker_idx: usize, defender_idx: usize, damage: i32, hit: bool) {
-        let line = if hit {
+    fn apply_knockback(&mut self, attacker_idx: usize, defender_idx: usize, knockback_ft: f32) {
+        if knockback_ft <= 0.0 || !self.units[defender_idx].is_alive() {
+            return;
+        }
+        let tiles = self.tiles_for_distance(knockback_ft).max(0);
+        let before = self.units[defender_idx].pos;
+        for _ in 0..tiles {
+            let next = self.step_away(self.units[defender_idx].pos, self.units[attacker_idx].pos);
+            if next == self.units[defender_idx].pos || !self.is_open_for(defender_idx, next) {
+                break;
+            }
+            self.units[defender_idx].pos = next;
+        }
+        let after = self.units[defender_idx].pos;
+        if after != before {
+            let message = format!(
+                "t={}s: {} is knocked back {:.0} ft by {}.",
+                self.elapsed_seconds,
+                self.units[defender_idx].name,
+                self.grid.distance_ft(before, after),
+                self.units[attacker_idx].name
+            );
+            self.log.push(message.clone());
+            self.events.push(SquadCombatEvent {
+                time: self.elapsed_seconds,
+                kind: SquadCombatEventKind::Knockback,
+                actor_id: self.units[defender_idx].id.clone(),
+                actor_name: self.units[defender_idx].name.clone(),
+                target_id: Some(self.units[attacker_idx].id.clone()),
+                target_name: Some(self.units[attacker_idx].name.clone()),
+                from: Some(before),
+                to: Some(after),
+                damage: None,
+                hit: None,
+                remaining_hp: Some(self.units[defender_idx].hp),
+                knockback_ft: Some(self.grid.distance_ft(before, after)),
+                message,
+            });
+        }
+    }
+
+    fn step_away(&self, from: GridPos, away_from: GridPos) -> GridPos {
+        let dx = from.x - away_from.x;
+        let dy = from.y - away_from.y;
+        let next = if dx.abs() >= dy.abs() && dx != 0 {
+            GridPos::new(from.x + dx.signum(), from.y)
+        } else if dy != 0 {
+            GridPos::new(from.x, from.y + dy.signum())
+        } else {
+            from
+        };
+        next.clamp(self.grid)
+    }
+
+    fn is_open_for(&self, mover_idx: usize, pos: GridPos) -> bool {
+        pos.x >= 0
+            && pos.y >= 0
+            && pos.x < self.grid.width
+            && pos.y < self.grid.height
+            && self
+                .units
+                .iter()
+                .enumerate()
+                .all(|(idx, unit)| idx == mover_idx || !unit.is_alive() || unit.pos != pos)
+    }
+
+    fn emit_attack_event(
+        &mut self,
+        attacker_idx: usize,
+        defender_idx: usize,
+        damage: i32,
+        hit: bool,
+        knockback_ft: f32,
+        trauma_seconds: Option<i32>,
+    ) {
+        let message = if hit {
             format!(
                 "t={}s: {} hits {} for {}.",
                 self.elapsed_seconds,
@@ -389,7 +734,106 @@ impl SquadCombat {
                 self.elapsed_seconds, self.units[attacker_idx].name, self.units[defender_idx].name
             )
         };
-        self.log.push(line);
+        self.log.push(message.clone());
+        if let Some(seconds) = trauma_seconds {
+            self.log.push(format!(
+                "t={}s: {} is staggered for {}s.",
+                self.elapsed_seconds, self.units[defender_idx].name, seconds
+            ));
+        }
+        self.events.push(SquadCombatEvent {
+            time: self.elapsed_seconds,
+            kind: if hit {
+                SquadCombatEventKind::Hit
+            } else {
+                SquadCombatEventKind::Miss
+            },
+            actor_id: self.units[attacker_idx].id.clone(),
+            actor_name: self.units[attacker_idx].name.clone(),
+            target_id: Some(self.units[defender_idx].id.clone()),
+            target_name: Some(self.units[defender_idx].name.clone()),
+            from: None,
+            to: None,
+            damage: Some(damage.max(0)),
+            hit: Some(hit),
+            remaining_hp: Some(self.units[defender_idx].hp.max(0)),
+            knockback_ft: (knockback_ft > 0.0).then_some(knockback_ft),
+            message,
+        });
+    }
+
+    fn emit_move_event(
+        &mut self,
+        actor_idx: usize,
+        target_idx: Option<usize>,
+        from: GridPos,
+        to: GridPos,
+        message: String,
+    ) {
+        self.log.push(message.clone());
+        self.events.push(SquadCombatEvent {
+            time: self.elapsed_seconds,
+            kind: SquadCombatEventKind::Move,
+            actor_id: self.units[actor_idx].id.clone(),
+            actor_name: self.units[actor_idx].name.clone(),
+            target_id: target_idx.map(|idx| self.units[idx].id.clone()),
+            target_name: target_idx.map(|idx| self.units[idx].name.clone()),
+            from: Some(from),
+            to: Some(to),
+            damage: None,
+            hit: None,
+            remaining_hp: Some(self.units[actor_idx].hp.max(0)),
+            knockback_ft: None,
+            message,
+        });
+    }
+
+    fn emit_simple_event(
+        &mut self,
+        kind: SquadCombatEventKind,
+        actor_idx: usize,
+        target_idx: Option<usize>,
+        message: String,
+    ) {
+        self.log.push(message.clone());
+        self.events.push(SquadCombatEvent {
+            time: self.elapsed_seconds,
+            kind,
+            actor_id: self.units[actor_idx].id.clone(),
+            actor_name: self.units[actor_idx].name.clone(),
+            target_id: target_idx.map(|idx| self.units[idx].id.clone()),
+            target_name: target_idx.map(|idx| self.units[idx].name.clone()),
+            from: None,
+            to: None,
+            damage: None,
+            hit: None,
+            remaining_hp: Some(self.units[actor_idx].hp.max(0)),
+            knockback_ft: None,
+            message,
+        });
+    }
+
+    fn emit_death_if_needed(&mut self, unit_idx: usize, source_idx: Option<usize>) {
+        if self.units[unit_idx].hp > 0 {
+            return;
+        }
+        let already_logged = self.events.iter().any(|event| {
+            event.time == self.elapsed_seconds
+                && matches!(event.kind, SquadCombatEventKind::Death)
+                && event.actor_id == self.units[unit_idx].id
+        });
+        if already_logged {
+            return;
+        }
+        self.emit_simple_event(
+            SquadCombatEventKind::Death,
+            unit_idx,
+            source_idx,
+            format!(
+                "t={}s: {} drops.",
+                self.elapsed_seconds, self.units[unit_idx].name
+            ),
+        );
     }
 
     pub fn view(&self) -> SquadCombatView {
@@ -416,6 +860,7 @@ impl SquadCombat {
                 })
                 .collect(),
             log_tail: self.log.iter().rev().take(20).cloned().collect(),
+            events_tail: self.events.iter().rev().take(20).cloned().collect(),
         }
     }
 
@@ -433,7 +878,41 @@ impl SquadCombat {
             self.winner_team = living_teams.first().copied();
         } else if self.elapsed_seconds >= self.max_seconds {
             self.done = true;
-            self.winner_team = None;
+            self.winner_team = self.timeout_winner();
+            let message = match self.winner_team {
+                Some(team) => format!(
+                    "t={}s: time expires; team {} holds the stronger field.",
+                    self.elapsed_seconds, team
+                ),
+                None => format!(
+                    "t={}s: time expires with neither squad ahead.",
+                    self.elapsed_seconds
+                ),
+            };
+            if let Some(actor_idx) = self.living_indices().first().copied() {
+                self.emit_simple_event(SquadCombatEventKind::Timeout, actor_idx, None, message);
+            } else {
+                self.log.push(message);
+            }
+        }
+    }
+
+    fn timeout_winner(&self) -> Option<u8> {
+        let mut strengths: HashMap<u8, (i32, i32, i32)> = HashMap::new();
+        for unit in self.units.iter().filter(|unit| unit.is_alive()) {
+            let entry = strengths.entry(unit.team_id).or_default();
+            entry.0 += 1;
+            entry.1 += unit.hp.max(0);
+            entry.2 += unit.max_hp.max(0);
+        }
+        let mut ranked = strengths.into_iter().collect::<Vec<_>>();
+        ranked.sort_by(|(team_a, score_a), (team_b, score_b)| {
+            score_b.cmp(score_a).then_with(|| team_a.cmp(team_b))
+        });
+        match ranked.as_slice() {
+            [(_, best), (_, second), ..] if best == second => None,
+            [(team, _), ..] => Some(*team),
+            [] => None,
         }
     }
 }
@@ -449,6 +928,7 @@ pub struct SquadCombatView {
     pub combatants: Vec<BattleUnitView>,
     pub initiative: Vec<InitiativeView>,
     pub log_tail: Vec<String>,
+    pub events_tail: Vec<SquadCombatEvent>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -499,6 +979,26 @@ pub struct InitiativeView {
     pub team_id: u8,
     pub next_action_in_seconds: f32,
     pub ready: bool,
+}
+
+fn reconstruct_path(
+    start: GridPos,
+    goal: GridPos,
+    came_from: &HashMap<GridPos, GridPos>,
+) -> Vec<GridPos> {
+    let mut path = vec![goal];
+    let mut current = goal;
+    while current != start {
+        let Some(previous) = came_from.get(&current).copied() else {
+            return Vec::new();
+        };
+        current = previous;
+        if current != start {
+            path.push(current);
+        }
+    }
+    path.reverse();
+    path
 }
 
 fn spawn_team(units: &mut [BattleUnit], grid: BattleGrid, team_id: u8) {
@@ -580,5 +1080,99 @@ mod tests {
         combat.units[2].pos = GridPos::new(5, 4);
         combat.tick();
         assert!(combat.units[2].hp <= 8, "expected two fallback hits");
+    }
+
+    #[test]
+    fn movement_paths_around_blocking_units() {
+        let mut combat = SquadCombat::new(vec![unit("a", 0), unit("b", 0)], vec![unit("x", 1)]);
+        combat.units[0].pos = GridPos::new(1, 1);
+        combat.units[1].pos = GridPos::new(2, 1);
+        combat.units[1].move_tiles = 0;
+        combat.units[2].pos = GridPos::new(4, 1);
+
+        combat.move_toward(0, 2, TILE_SIZE_FT);
+
+        assert_eq!(combat.units[0].pos, GridPos::new(4, 0));
+        assert_eq!(combat.occupied_positions().len(), combat.units.len());
+    }
+
+    #[test]
+    fn reach_weapon_attacks_without_adjacent_step() {
+        let mut reach = unit("reach", 0);
+        reach.reach_ft = TILE_SIZE_FT * 2.0;
+        let mut enemy = unit("x", 1);
+        enemy.initiative_ready_at = 99.0;
+        let mut combat = SquadCombat::new(vec![reach], vec![enemy]);
+        combat.units[0].pos = GridPos::new(2, 2);
+        combat.units[1].pos = GridPos::new(4, 2);
+        let start = combat.units[0].pos;
+
+        combat.tick();
+
+        assert_eq!(combat.units[0].pos, start);
+        assert_eq!(combat.units[1].hp, 10);
+    }
+
+    #[test]
+    fn knockback_stops_before_occupied_cells() {
+        let mut combat = SquadCombat::new(
+            vec![unit("attacker", 0)],
+            vec![unit("defender", 1), unit("blocker", 1)],
+        );
+        combat.units[0].pos = GridPos::new(2, 2);
+        combat.units[1].pos = GridPos::new(3, 2);
+        combat.units[2].pos = GridPos::new(5, 2);
+
+        combat.apply_knockback(0, 1, TILE_SIZE_FT * 3.0);
+
+        assert_eq!(combat.units[1].pos, GridPos::new(4, 2));
+        assert_eq!(combat.occupied_positions().len(), combat.units.len());
+    }
+
+    #[test]
+    fn ready_units_act_in_deterministic_id_order() {
+        let mut unit_b = unit("b", 0);
+        let unit_a = unit("a", 0);
+        unit_b.hp = 20;
+        unit_b.max_hp = 20;
+        let mut enemy = unit("x", 1);
+        enemy.hp = 20;
+        enemy.max_hp = 20;
+        enemy.initiative_ready_at = 99.0;
+        let mut combat = SquadCombat::new(vec![unit_b, unit_a], vec![enemy]);
+        combat.units[0].pos = GridPos::new(4, 4);
+        combat.units[1].pos = GridPos::new(5, 5);
+        combat.units[2].pos = GridPos::new(5, 4);
+
+        combat.tick();
+
+        let attackers = combat
+            .events
+            .iter()
+            .filter(|event| matches!(event.kind, SquadCombatEventKind::Hit))
+            .map(|event| event.actor_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(attackers, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn timeout_awards_stronger_surviving_team() {
+        let mut strong = unit("strong", 0);
+        strong.hp = 12;
+        strong.max_hp = 12;
+        strong.move_tiles = 0;
+        strong.initiative_ready_at = 99.0;
+        let mut weak = unit("weak", 1);
+        weak.hp = 6;
+        weak.max_hp = 12;
+        weak.move_tiles = 0;
+        weak.initiative_ready_at = 99.0;
+        let mut combat = SquadCombat::new(vec![strong], vec![weak]);
+        combat.max_seconds = 1;
+
+        combat.tick();
+
+        assert!(combat.done);
+        assert_eq!(combat.winner_team, Some(0));
     }
 }

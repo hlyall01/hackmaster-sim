@@ -4,6 +4,7 @@
 //! duel-oriented browser demo. It can reuse shared HackMaster catalogs and
 //! combat helpers, but owns squad roster, route, and tactical battle state.
 
+pub mod ai;
 pub mod combat;
 pub mod encounters;
 pub mod rewards;

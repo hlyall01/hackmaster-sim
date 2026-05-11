@@ -23,28 +23,52 @@
       </div>
     </header>
     <section class="layout">
-      <aside class="panel">
-        <h2>Squad</h2>
+      <aside class="panel roster-panel">
+        <div class="panel-heading">
+          <h2>Company</h2>
+          <span id="rosterStatus" class="tag">No roster</span>
+        </div>
         <div id="playerSquad" class="list muted">No active squad.</div>
-        <h2 class="bench-title">Bench</h2>
+        <div class="panel-heading bench-title">
+          <h2>Bench</h2>
+          <span id="benchStatus" class="tag">Reserve</span>
+        </div>
         <div id="benchSquad" class="list muted">No bench.</div>
       </aside>
-      <section class="battle-panel">
-        <div class="battle-header">
-          <h2>Battle Mat</h2>
-          <span id="gridLabel">5 ft grid</span>
-        </div>
-        <div id="battleGrid" class="battle-grid"></div>
+      <section class="center-stack">
+        <section class="battle-panel">
+          <div class="battle-header">
+            <h2>Battle Mat</h2>
+            <span id="gridLabel">5 ft grid</span>
+          </div>
+          <div id="battleGrid" class="battle-grid" aria-label="Tactical battle grid"></div>
+        </section>
+        <section class="panel route-panel">
+          <div class="panel-heading">
+            <h2>Route Map</h2>
+            <span id="routeDepth" class="tag">Depth 0</span>
+          </div>
+          <div id="routeMap" class="route-map muted">Roll a squad to reveal the route.</div>
+        </section>
       </section>
-      <aside class="panel">
-        <h2>Enemy Squad</h2>
+      <aside class="panel encounter-panel">
+        <div class="panel-heading">
+          <h2>Encounter</h2>
+          <span id="encounterStatus" class="tag">Idle</span>
+        </div>
         <div id="enemySquad" class="list muted">No enemy squad.</div>
+        <div id="recruitPanel" class="recruit-panel"></div>
+        <div id="playbackControls" class="combat-controls"></div>
       </aside>
     </section>
     <footer class="footer">
       <section class="panel">
         <h2>Initiative</h2>
         <div id="initiative" class="list muted">No combat timeline.</div>
+      </section>
+      <section class="panel">
+        <h2>Reward</h2>
+        <div id="reward" class="reward-panel muted">No reward yet.</div>
       </section>
       <section class="panel">
         <h2>Log</h2>
