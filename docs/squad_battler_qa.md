@@ -30,10 +30,15 @@ The script checks:
 
 - `GET /`, `/static/styles.css`, `/static/js/main.js`, and a missing static asset.
 - JSON shapes for `/api/state`, `/api/new-run`, `/api/choose-node`,
-  `/api/start-fight`, `/api/fight-command`, and `/api/recruit-choice`.
+  `/api/start-fight`, `/api/fight-command`, `/api/recruit-choice`, and the
+  roster management endpoints.
 - Fixed-seed `/api/new-run` determinism by comparing two full responses.
 - No overlapping living combatant positions after combat start, ticks, and finish.
+- `skip_to_next_initiative` combat playback.
 - Recruit-choice handling through a deterministic recruit route.
+- Roster bench, swap, dismiss, and promote flows.
+- A deterministic route walk across floors through recruit/rest/event/fight
+  resolution until the boss floor or a terminal run state.
 
 Representative output:
 
@@ -46,9 +51,14 @@ ok POST /api/choose-node node=0 kind=fight enemies=2
 ok POST /api/start-fight
 ok POST /api/fight-command tick seconds=1
 ok POST /api/fight-command tick seconds=5
-ok POST /api/fight-command finish phase=choose_node
-ok POST /api/recruit-choice candidate=recruit-0-1 remaining=2
-ok smoke complete phase=choose_node depth=1
+ok POST /api/fight-command skip_to_next_initiative
+ok POST /api/fight-command finish phase=run_over
+ok POST /api/recruit-choice candidate=recruit-1-1 destination=bench remaining=2
+ok POST /api/roster-swap
+ok POST /api/roster-dismiss
+ok POST /api/roster-promote
+ok route progression depth=5 phase=run_over
+ok smoke complete phase=run_over depth=1
 ```
 
 The exact combat outcome can change as balance and AI evolve. Keep the script

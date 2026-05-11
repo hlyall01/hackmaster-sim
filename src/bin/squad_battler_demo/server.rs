@@ -145,6 +145,45 @@ fn route_request(request: HttpRequest, app: Arc<Mutex<SquadBattlerApp>>) -> Stri
                 Err(err) => error_response(400, format!("Bad request: {err}")),
             }
         }
+        ("POST", "/api/roster-swap") => {
+            let parsed = serde_json::from_str::<RosterSwapRequest>(&request.body);
+            match parsed {
+                Ok(request) => {
+                    let mut app = app.lock().expect("squad battler lock poisoned");
+                    match app.roster_swap(request.active_member_id, request.bench_member_id) {
+                        Ok(view) => json_response(200, &view),
+                        Err(err) => error_response(400, err),
+                    }
+                }
+                Err(err) => error_response(400, format!("Bad request: {err}")),
+            }
+        }
+        ("POST", "/api/roster-promote") => {
+            let parsed = serde_json::from_str::<RosterPromoteRequest>(&request.body);
+            match parsed {
+                Ok(request) => {
+                    let mut app = app.lock().expect("squad battler lock poisoned");
+                    match app.roster_promote(request.bench_member_id) {
+                        Ok(view) => json_response(200, &view),
+                        Err(err) => error_response(400, err),
+                    }
+                }
+                Err(err) => error_response(400, format!("Bad request: {err}")),
+            }
+        }
+        ("POST", "/api/roster-dismiss") => {
+            let parsed = serde_json::from_str::<RosterDismissRequest>(&request.body);
+            match parsed {
+                Ok(request) => {
+                    let mut app = app.lock().expect("squad battler lock poisoned");
+                    match app.roster_dismiss(request.bench_member_id) {
+                        Ok(view) => json_response(200, &view),
+                        Err(err) => error_response(400, err),
+                    }
+                }
+                Err(err) => error_response(400, format!("Bad request: {err}")),
+            }
+        }
         _ => error_response(404, "Not found".to_string()),
     }
 }
@@ -170,6 +209,22 @@ struct RecruitChoiceRequest {
     candidate_id: String,
     destination: RecruitDestination,
     replace_member_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct RosterSwapRequest {
+    active_member_id: String,
+    bench_member_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct RosterPromoteRequest {
+    bench_member_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct RosterDismissRequest {
+    bench_member_id: String,
 }
 
 fn html_response(body: &str) -> String {

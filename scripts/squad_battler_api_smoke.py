@@ -116,6 +116,7 @@ def run_smoke(client: Client, seed: int) -> None:
 
     state = exercise_fight_flow(client, state)
     exercise_recruit_flow(client, seed + 1)
+    exercise_route_progression(client, seed + 2)
     print(f"ok smoke complete phase={state['phase']} depth={state['depth']}")
 
 
@@ -144,7 +145,7 @@ def check_static_assets(client: Client) -> None:
 
 
 def exercise_fight_flow(client: Client, state: dict[str, Any]) -> dict[str, Any]:
-    fight_node = first_available_node(state, {"fight", "elite", "boss", "event", "rest"})
+    fight_node = first_available_node(state, {"fight", "elite", "boss"})
     state = client.post_json("/api/choose-node", {"node_id": fight_node["id"]})
     assert_state_shape(state, "choose-node(fight)")
     assert_optional_object(state, "pending_fight", "choose-node(fight)")
@@ -168,6 +169,13 @@ def exercise_fight_flow(client: Client, state: dict[str, Any]) -> dict[str, Any]
         assert_state_shape(state, f"fight-command(tick {seconds})")
         assert_no_living_position_overlap(state, f"fight-command(tick {seconds})")
         print(f"ok POST /api/fight-command tick seconds={seconds}")
+
+    state = client.post_json(
+        "/api/fight-command", {"command": "skip_to_next_initiative", "seconds": 1}
+    )
+    assert_state_shape(state, "fight-command(skip_to_next_initiative)")
+    assert_no_living_position_overlap(state, "fight-command(skip_to_next_initiative)")
+    print("ok POST /api/fight-command skip_to_next_initiative")
 
     state = client.post_json("/api/fight-command", {"command": "finish", "seconds": 1})
     assert_state_shape(state, "fight-command(finish)")
@@ -196,15 +204,136 @@ def exercise_recruit_flow(client: Client, seed: int) -> None:
         "/api/recruit-choice",
         {
             "candidate_id": candidate_id,
-            "destination": "decline",
+            "destination": "bench",
             "replace_member_id": None,
         },
     )
     assert_state_shape(state, "recruit-choice")
+    if len(state["squad"]["bench"]) != 1:
+        raise SmokeFailure("bench recruit did not add exactly one reserve")
     print(
         "ok POST /api/recruit-choice "
-        f"candidate={candidate_id} remaining={len(state['recruit_offer'])}"
+        f"candidate={candidate_id} destination=bench remaining={len(state['recruit_offer'])}"
     )
+
+    active_member_id = state["squad"]["active"][0]["id"]
+    bench_member_id = state["squad"]["bench"][0]["id"]
+    state = client.post_json(
+        "/api/roster-swap",
+        {"active_member_id": active_member_id, "bench_member_id": bench_member_id},
+    )
+    assert_state_shape(state, "roster-swap")
+    if state["squad"]["active"][0]["id"] != bench_member_id:
+        raise SmokeFailure("roster swap did not move bench member into active slot")
+    print("ok POST /api/roster-swap")
+
+    state = client.post_json(
+        "/api/roster-dismiss", {"bench_member_id": active_member_id}
+    )
+    assert_state_shape(state, "roster-dismiss")
+    if any(member["id"] == active_member_id for member in state["squad"]["bench"]):
+        raise SmokeFailure("dismissed bench member still present")
+    print("ok POST /api/roster-dismiss")
+
+    if state["recruit_offer"]:
+        promote_candidate_id = state["recruit_offer"][0]["id"]
+        state = client.post_json(
+            "/api/recruit-choice",
+            {
+                "candidate_id": promote_candidate_id,
+                "destination": "bench",
+                "replace_member_id": None,
+            },
+        )
+        assert_state_shape(state, "recruit-choice(promote candidate)")
+        bench_promote_id = state["squad"]["bench"][0]["id"]
+        state = client.post_json(
+            "/api/roster-promote", {"bench_member_id": bench_promote_id}
+        )
+        assert_state_shape(state, "roster-promote")
+        if not any(member["id"] == bench_promote_id for member in state["squad"]["active"]):
+            raise SmokeFailure("promoted bench member not found in active squad")
+        print("ok POST /api/roster-promote")
+
+    while state["recruit_offer"]:
+        decline_id = state["recruit_offer"][0]["id"]
+        state = client.post_json(
+            "/api/recruit-choice",
+            {
+                "candidate_id": decline_id,
+                "destination": "decline",
+                "replace_member_id": None,
+            },
+        )
+        assert_state_shape(state, "recruit-choice(decline remainder)")
+
+
+def exercise_route_progression(client: Client, seed: int) -> None:
+    state = client.post_json("/api/new-run", {"seed": seed})
+    assert_state_shape(state, "route new-run")
+    max_depth = state["depth"]
+    saw_boss = False
+
+    for step in range(12):
+        if state["phase"] == "choose_node":
+            node = preferred_available_node(
+                state, ["recruit", "rest", "event", "fight", "elite", "boss"]
+            )
+            saw_boss = saw_boss or node["kind"] == "boss"
+            state = client.post_json("/api/choose-node", {"node_id": node["id"]})
+            assert_state_shape(state, f"route choose-node step={step}")
+            max_depth = max(max_depth, state["depth"])
+
+        if state["phase"] == "fight_preview":
+            state = client.post_json("/api/start-fight", {})
+            assert_state_shape(state, f"route start-fight step={step}")
+            assert_no_living_position_overlap(state, f"route start-fight step={step}")
+
+        if state["phase"] == "combat_playback":
+            state = client.post_json(
+                "/api/fight-command", {"command": "finish", "seconds": 1}
+            )
+            assert_state_shape(state, f"route finish fight step={step}")
+            assert_no_living_position_overlap(state, f"route finish fight step={step}")
+            max_depth = max(max_depth, state["depth"])
+
+        if state["phase"] == "reward_review":
+            state = resolve_recruit_rewards(client, state, f"route rewards step={step}")
+            max_depth = max(max_depth, state["depth"])
+
+        if state["phase"] == "run_over":
+            break
+
+    if max_depth < 4 and not saw_boss:
+        raise SmokeFailure(
+            f"route progression stalled before boss floor: max_depth={max_depth}, phase={state['phase']}"
+        )
+    print(f"ok route progression depth={max_depth} phase={state['phase']}")
+
+
+def resolve_recruit_rewards(
+    client: Client, state: dict[str, Any], label: str
+) -> dict[str, Any]:
+    while state["phase"] == "reward_review" and state["recruit_offer"]:
+        candidate_id = state["recruit_offer"][0]["id"]
+        active_count = len(state["squad"]["active"])
+        bench_count = len(state["squad"]["bench"])
+        if active_count < state["squad"]["max_active"]:
+            destination = "active"
+        elif bench_count < state["squad"]["max_bench"]:
+            destination = "bench"
+        else:
+            destination = "decline"
+        state = client.post_json(
+            "/api/recruit-choice",
+            {
+                "candidate_id": candidate_id,
+                "destination": destination,
+                "replace_member_id": None,
+            },
+        )
+        assert_state_shape(state, f"{label} recruit-choice")
+    return state
 
 
 def assert_state_shape(state: Any, label: str) -> None:
@@ -239,6 +368,8 @@ def assert_state_shape(state: Any, label: str) -> None:
     require_type(state["depth"], int, f"{label}.depth")
     require_type(state["gold"], int, f"{label}.gold")
     assert_inventory_shape(state["inventory"], f"{label}.inventory")
+    if state["gold"] != state["inventory"]["gold"]:
+        raise SmokeFailure(f"{label}.gold does not match inventory.gold")
     assert_squad_shape(state["squad"], f"{label}.squad")
     assert_grid_shape(state["grid"], f"{label}.grid")
     require_type(state["route"], list, f"{label}.route")
@@ -296,10 +427,15 @@ def assert_member_shape(value: Any, label: str) -> None:
             "level",
             "xp",
             "next_level_xp",
+            "role",
+            "rarity",
             "hp",
             "max_hp",
             "weapon",
             "status",
+            "wounds",
+            "wound_total",
+            "level_up_available",
             "stats",
         ],
     )
@@ -308,10 +444,15 @@ def assert_member_shape(value: Any, label: str) -> None:
     require_type(value["level"], int, f"{label}.level")
     require_type(value["xp"], int, f"{label}.xp")
     require_type(value["next_level_xp"], int, f"{label}.next_level_xp")
+    require_type(value["role"], str, f"{label}.role")
+    require_type(value["rarity"], str, f"{label}.rarity")
     require_type(value["hp"], int, f"{label}.hp")
     require_type(value["max_hp"], int, f"{label}.max_hp")
     require_type(value["weapon"], str, f"{label}.weapon")
     require_type(value["status"], str, f"{label}.status")
+    require_type(value["wounds"], list, f"{label}.wounds")
+    require_type(value["wound_total"], int, f"{label}.wound_total")
+    require_type(value["level_up_available"], bool, f"{label}.level_up_available")
     require_type(value["stats"], list, f"{label}.stats")
 
 
@@ -327,12 +468,30 @@ def assert_grid_shape(value: Any, label: str) -> None:
 
 def assert_route_node_shape(value: Any, label: str) -> None:
     require_type(value, dict, label)
-    require_keys(value, label, ["id", "floor", "lane", "kind", "completed"])
+    require_keys(
+        value,
+        label,
+        [
+            "id",
+            "floor",
+            "lane",
+            "kind",
+            "completed",
+            "required_depth",
+            "tier",
+            "difficulty",
+            "reward",
+        ],
+    )
     require_type(value["id"], int, f"{label}.id")
     require_type(value["floor"], int, f"{label}.floor")
     require_type(value["lane"], int, f"{label}.lane")
     require_type(value["kind"], str, f"{label}.kind")
     require_type(value["completed"], bool, f"{label}.completed")
+    require_type(value["required_depth"], int, f"{label}.required_depth")
+    require_type(value["tier"], str, f"{label}.tier")
+    require_type(value["difficulty"], int, f"{label}.difficulty")
+    assert_reward_node_shape(value["reward"], f"{label}.reward")
 
 
 def assert_pending_fight_shape(value: Any, label: str) -> None:
@@ -365,6 +524,7 @@ def assert_live_fight_shape(value: Any, label: str) -> None:
             "combatants",
             "initiative",
             "log_tail",
+            "events_tail",
         ],
     )
     assert_grid_shape(value["grid"], f"{label}.grid")
@@ -378,6 +538,7 @@ def assert_live_fight_shape(value: Any, label: str) -> None:
         assert_battle_unit_shape(unit, f"{label}.combatants[{idx}]")
     require_type(value["initiative"], list, f"{label}.initiative")
     require_type(value["log_tail"], list, f"{label}.log_tail")
+    require_type(value["events_tail"], list, f"{label}.events_tail")
 
 
 def assert_battle_unit_shape(value: Any, label: str) -> None:
@@ -399,6 +560,7 @@ def assert_battle_unit_shape(value: Any, label: str) -> None:
             "max_range_ft",
             "move_tiles",
             "initiative",
+            "intent",
         ],
     )
     require_type(value["id"], str, f"{label}.id")
@@ -414,6 +576,32 @@ def assert_battle_unit_shape(value: Any, label: str) -> None:
     require_optional_number(value["max_range_ft"], f"{label}.max_range_ft")
     require_type(value["move_tiles"], int, f"{label}.move_tiles")
     require_number(value["initiative"], f"{label}.initiative")
+    require_type(value["intent"], str, f"{label}.intent")
+
+
+def assert_reward_node_shape(value: Any, label: str) -> None:
+    require_type(value, dict, label)
+    require_keys(
+        value,
+        label,
+        [
+            "gold_min",
+            "gold_max",
+            "xp_per_survivor",
+            "recruit_chance_percent",
+            "item_chance_percent",
+            "reward_multiplier_percent",
+        ],
+    )
+    for key in (
+        "gold_min",
+        "gold_max",
+        "xp_per_survivor",
+        "recruit_chance_percent",
+        "item_chance_percent",
+        "reward_multiplier_percent",
+    ):
+        require_type(value[key], int, f"{label}.{key}")
 
 
 def assert_reward_shape(value: Any, label: str) -> None:
@@ -454,6 +642,18 @@ def first_available_node(state: dict[str, Any], kinds: set[str]) -> dict[str, An
         if node["id"] in available and node["kind"] in kinds:
             return node
     raise SmokeFailure(f"no available route node found for kinds {sorted(kinds)}")
+
+
+def preferred_available_node(state: dict[str, Any], preferred_kinds: list[str]) -> dict[str, Any]:
+    available = set(state["available_nodes"])
+    candidates = [node for node in state["route"] if node["id"] in available]
+    for kind in preferred_kinds:
+        for node in candidates:
+            if node["kind"] == kind:
+                return node
+    if candidates:
+        return candidates[0]
+    raise SmokeFailure("no available route node found")
 
 
 def assert_optional_object(state: dict[str, Any], key: str, label: str) -> None:

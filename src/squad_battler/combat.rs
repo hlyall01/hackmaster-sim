@@ -5,6 +5,11 @@ use crate::core::sim::{Combatant, resolve_basic_attack};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use super::ai::{
+    AiGrid, AiPosition, AiUnitInput, TieBreakMode, assign_default_role, choose_movement_intent,
+    choose_target,
+};
+
 pub const DEFAULT_GRID_WIDTH: i32 = 12;
 pub const DEFAULT_GRID_HEIGHT: i32 = 8;
 pub const TILE_SIZE_FT: f32 = 5.0;
@@ -106,6 +111,8 @@ pub struct BattleUnit {
     pub max_range_ft: Option<f32>,
     pub move_tiles: i32,
     pub initiative_ready_at: f32,
+    pub intent: String,
+    pub intent_target_id: Option<String>,
     pub combatant: Option<Combatant>,
 }
 
@@ -131,6 +138,8 @@ impl BattleUnit {
             max_range_ft: None,
             move_tiles: 4,
             initiative_ready_at: 0.0,
+            intent: "Forming up".to_string(),
+            intent_target_id: None,
             combatant: None,
         }
     }
@@ -154,6 +163,8 @@ impl BattleUnit {
             max_range_ft,
             move_tiles,
             initiative_ready_at: 0.0,
+            intent: "Forming up".to_string(),
+            intent_target_id: None,
             combatant: Some(combatant),
         }
     }
@@ -333,7 +344,9 @@ impl SquadCombat {
     }
 
     fn select_target(&self, idx: usize) -> Option<usize> {
-        self.engaged_enemy(idx).or_else(|| self.nearest_enemy(idx))
+        self.engaged_enemy(idx)
+            .or_else(|| self.ai_target(idx))
+            .or_else(|| self.nearest_enemy(idx))
     }
 
     fn engaged_enemy(&self, idx: usize) -> Option<usize> {
@@ -374,6 +387,21 @@ impl SquadCombat {
         let mut distance = self
             .grid
             .distance_ft(self.units[idx].pos, self.units[target_idx].pos);
+        let path_blocked = !self.can_attack_from(
+            &self.units[idx],
+            self.units[idx].pos,
+            self.units[target_idx].pos,
+        ) && self
+            .path_toward_range(
+                idx,
+                target_idx,
+                self.units[idx]
+                    .max_range_ft
+                    .unwrap_or_else(|| self.melee_reach_ft(&self.units[idx]))
+                    .max(self.melee_reach_ft(&self.units[idx])),
+            )
+            .is_none();
+        self.update_ai_intent(idx, Some(target_idx), path_blocked);
 
         if self.units[idx].max_range_ft.is_some()
             && distance <= self.melee_reach_ft(&self.units[idx])
@@ -391,6 +419,8 @@ impl SquadCombat {
                 self.units[idx].pos,
                 self.units[target_idx].pos,
             ) {
+                self.units[idx].intent = "Take ranged shot".to_string();
+                self.units[idx].intent_target_id = Some(self.units[target_idx].id.clone());
                 return allow_attack.then_some(AttackIntent {
                     attacker_idx: idx,
                     defender_idx: target_idx,
@@ -423,6 +453,7 @@ impl SquadCombat {
                 self.units[target_idx].pos,
             )
         {
+            self.update_ai_intent(idx, Some(target_idx), false);
             return Some(AttackIntent {
                 attacker_idx: idx,
                 defender_idx: target_idx,
@@ -566,6 +597,111 @@ impl SquadCombat {
         attacker
             .max_range_ft
             .is_some_and(|max_range| distance <= max_range)
+    }
+
+    fn ai_target(&self, idx: usize) -> Option<usize> {
+        let actor = self.ai_unit_input(idx)?;
+        let role = assign_default_role(actor.role_input());
+        let enemies = self
+            .units
+            .iter()
+            .enumerate()
+            .filter(|(_, unit)| unit.is_alive() && unit.team_id != actor.team_id)
+            .map(|(unit_idx, _)| self.ai_unit_input(unit_idx))
+            .collect::<Option<Vec<_>>>()?;
+        let allies = self
+            .units
+            .iter()
+            .enumerate()
+            .filter(|(unit_idx, unit)| {
+                *unit_idx != idx && unit.is_alive() && unit.team_id == actor.team_id
+            })
+            .map(|(unit_idx, _)| self.ai_unit_input(unit_idx))
+            .collect::<Option<Vec<_>>>()?;
+        let ally_target_ids = self
+            .units
+            .iter()
+            .filter(|unit| unit.is_alive() && unit.team_id == actor.team_id)
+            .filter_map(|unit| unit.intent_target_id.clone())
+            .collect::<Vec<_>>();
+        let score = choose_target(
+            &actor,
+            &enemies,
+            &allies,
+            &ally_target_ids,
+            role,
+            TieBreakMode::StableId,
+            self.grid.tile_size_ft,
+        )?;
+        self.units
+            .iter()
+            .position(|unit| unit.id == score.target_id && unit.is_alive())
+    }
+
+    fn update_ai_intent(&mut self, idx: usize, target_idx: Option<usize>, path_blocked: bool) {
+        let Some(actor) = self.ai_unit_input(idx) else {
+            return;
+        };
+        let role = assign_default_role(actor.role_input());
+        let allies = self
+            .units
+            .iter()
+            .enumerate()
+            .filter(|(unit_idx, unit)| {
+                *unit_idx != idx && unit.is_alive() && unit.team_id == actor.team_id
+            })
+            .filter_map(|(unit_idx, _)| self.ai_unit_input(unit_idx))
+            .collect::<Vec<_>>();
+        let enemies = self
+            .units
+            .iter()
+            .enumerate()
+            .filter(|(_, unit)| unit.is_alive() && unit.team_id != actor.team_id)
+            .filter_map(|(unit_idx, _)| self.ai_unit_input(unit_idx))
+            .collect::<Vec<_>>();
+        let target = target_idx
+            .and_then(|target_idx| self.ai_unit_input(target_idx))
+            .or_else(|| {
+                choose_target(
+                    &actor,
+                    &enemies,
+                    &allies,
+                    &[],
+                    role,
+                    TieBreakMode::StableId,
+                    self.grid.tile_size_ft,
+                )
+                .map(|score| score.target_id)
+                .and_then(|target_id| enemies.iter().find(|unit| unit.id == target_id).cloned())
+            });
+        let intent = choose_movement_intent(
+            &actor,
+            target.as_ref(),
+            &allies,
+            &enemies,
+            role,
+            path_blocked,
+            AiGrid::new(self.grid.width, self.grid.height),
+            self.grid.tile_size_ft,
+        );
+        self.units[idx].intent = intent.label;
+        self.units[idx].intent_target_id = intent.target_id;
+    }
+
+    fn ai_unit_input(&self, idx: usize) -> Option<AiUnitInput> {
+        let unit = self.units.get(idx)?;
+        Some(AiUnitInput {
+            id: unit.id.clone(),
+            team_id: unit.team_id,
+            pos: AiPosition::new(unit.pos.x, unit.pos.y),
+            hp: unit.hp,
+            max_hp: unit.max_hp,
+            reach_ft: self.melee_reach_ft(unit),
+            max_range_ft: unit.max_range_ft,
+            armor_score: armor_score(unit),
+            move_tiles: unit.move_tiles,
+            claimed_target_id: unit.intent_target_id.clone(),
+        })
     }
 
     fn melee_reach_ft(&self, unit: &BattleUnit) -> f32 {
@@ -946,6 +1082,7 @@ pub struct BattleUnitView {
     pub max_range_ft: Option<f32>,
     pub move_tiles: i32,
     pub initiative: f32,
+    pub intent: String,
 }
 
 impl From<&BattleUnit> for BattleUnitView {
@@ -968,8 +1105,22 @@ impl From<&BattleUnit> for BattleUnitView {
             max_range_ft: unit.max_range_ft,
             move_tiles: unit.move_tiles,
             initiative: unit.initiative_ready_at,
+            intent: unit.intent.clone(),
         }
     }
+}
+
+fn armor_score(unit: &BattleUnit) -> i32 {
+    unit.combatant
+        .as_ref()
+        .map(|combatant| {
+            combatant
+                .sheet
+                .defense
+                .armor_dr
+                .saturating_add(combatant.sheet.defense.shield_defense_bonus)
+        })
+        .unwrap_or(0)
 }
 
 #[derive(Clone, Debug, Serialize)]

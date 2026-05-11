@@ -40,6 +40,25 @@ const Api = {
       replace_member_id: replaceMemberId,
     });
   },
+
+  rosterSwap(activeMemberId, benchMemberId) {
+    return this.postJson("/api/roster-swap", {
+      active_member_id: activeMemberId,
+      bench_member_id: benchMemberId,
+    });
+  },
+
+  rosterPromote(benchMemberId) {
+    return this.postJson("/api/roster-promote", {
+      bench_member_id: benchMemberId,
+    });
+  },
+
+  rosterDismiss(benchMemberId) {
+    return this.postJson("/api/roster-dismiss", {
+      bench_member_id: benchMemberId,
+    });
+  },
 };
 
 const Store = {
@@ -97,13 +116,7 @@ const Store = {
   },
 
   async skipToNextInitiative() {
-    const rows = asArray(this.state?.live_fight?.initiative);
-    const next = rows
-      .map((row) => toNumber(row.next_action_in_seconds, 0))
-      .filter((seconds) => seconds > 0)
-      .sort((a, b) => a - b)[0];
-    const seconds = Math.max(1, Math.min(30, Math.ceil(next || 1)));
-    await this.run(() => Api.fightCommand("tick", seconds));
+    await this.run(() => Api.fightCommand("skip_to_next_initiative", 1));
   },
 };
 
@@ -337,16 +350,27 @@ function renderMember(member, role) {
 }
 
 function renderMemberActions(member, role) {
+  const state = Store.state || {};
+  const active = asArray(state.squad?.active);
+  const bench = asArray(state.squad?.bench);
+  const rosterLocked = state.phase === "combat_playback" || state.phase === "fight_preview";
+  const activeFull = active.length >= toNumber(state.squad?.max_active, 0);
+
   if (role === "active") {
+    const selectId = `swap-${safeId(member.id)}`;
     return `<div class="member-actions">
       <button disabled>Active</button>
-      <button disabled title="Current API does not expose active-to-bench swaps.">Bench</button>
+      <select id="${attr(selectId)}" data-swap-active="${attr(member.id)}" ${bench.length && !rosterLocked ? "" : "disabled"}>
+        ${bench.map((benchMember) => `<option value="${attr(benchMember.id)}">${escapeHtml(benchMember.name)}</option>`).join("")}
+      </select>
+      <button data-action="roster-swap" data-active-member-id="${attr(member.id)}" ${bench.length && !rosterLocked ? "" : "disabled"}>Swap</button>
     </div>`;
   }
   if (role === "bench") {
     return `<div class="member-actions">
       <button disabled>Bench</button>
-      <button disabled title="Current API does not expose bench promotion.">Promote</button>
+      <button data-action="roster-promote" data-bench-member-id="${attr(member.id)}" ${activeFull || rosterLocked ? "disabled" : ""}>Promote</button>
+      <button data-action="roster-dismiss" data-bench-member-id="${attr(member.id)}" ${rosterLocked ? "disabled" : ""}>Dismiss</button>
     </div>`;
   }
   if (role === "enemy") {
@@ -499,9 +523,10 @@ function unitTooltip(unit, state) {
 function unitIntent(unit, state) {
   const row = asArray(state?.live_fight?.initiative).find((entry) => entry.combatant_id === unit.id);
   if (toNumber(unit.hp, 0) <= 0) return "downed";
+  if (unit.intent && row?.ready) return `${unit.intent}; ready`;
+  if (unit.intent) return String(unit.intent);
   if (row?.ready) return "ready to act";
   if (row) return `acts in ${formatSeconds(row.next_action_in_seconds)}`;
-  if (unit.intent) return String(unit.intent);
   return "advancing on nearest foe";
 }
 
@@ -588,6 +613,12 @@ function handleAction(event) {
     Store.skipToNextInitiative();
   } else if (action === "recruit-choice") {
     handleRecruitChoice(button);
+  } else if (action === "roster-swap") {
+    handleRosterSwap(button);
+  } else if (action === "roster-promote") {
+    Store.run(() => Api.rosterPromote(button.dataset.benchMemberId));
+  } else if (action === "roster-dismiss") {
+    Store.run(() => Api.rosterDismiss(button.dataset.benchMemberId));
   }
 }
 
@@ -617,6 +648,15 @@ function handleRecruitChoice(button) {
     replaceMemberId = select?.value || null;
   }
   Store.run(() => Api.recruitChoice(candidateId, destination, replaceMemberId));
+}
+
+function handleRosterSwap(button) {
+  const activeMemberId = button.dataset.activeMemberId;
+  const select = [...document.querySelectorAll("select[data-swap-active]")]
+    .find((current) => current.dataset.swapActive === activeMemberId);
+  const benchMemberId = select?.value || null;
+  if (!benchMemberId) return;
+  Store.run(() => Api.rosterSwap(activeMemberId, benchMemberId));
 }
 
 $("newRun").addEventListener("click", () => {

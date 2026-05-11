@@ -234,6 +234,22 @@ impl SquadRoster {
         Ok(())
     }
 
+    pub fn promote_bench_to_active(&mut self, bench_member_id: &str) -> Result<(), RosterError> {
+        if self.active.len() >= MAX_ACTIVE_SQUAD {
+            return Err(RosterError::ActiveFull);
+        }
+        let Some(bench_index) = self
+            .bench
+            .iter()
+            .position(|member| member.id == bench_member_id)
+        else {
+            return Err(RosterError::MemberNotFound);
+        };
+        let member = self.bench.remove(bench_index);
+        self.active.push(member);
+        Ok(())
+    }
+
     pub fn dismiss_bench(&mut self, bench_member_id: &str) -> Result<SquadMember, RosterError> {
         let Some(index) = self
             .bench
@@ -966,6 +982,19 @@ mod tests {
         assert_eq!(roster.active()[0].id, "active-a");
         assert_eq!(roster.active()[1].id, "bench-a");
         assert_eq!(roster.bench()[0].id, "active-b");
+    }
+
+    #[test]
+    fn bench_member_can_promote_when_active_has_room() {
+        let mut roster = SquadRoster::new(vec![member("active-a")]).expect("valid roster");
+        roster.add_bench(member("bench-a")).expect("bench room");
+
+        roster
+            .promote_bench_to_active("bench-a")
+            .expect("promotion should succeed");
+
+        assert_eq!(roster.active()[1].id, "bench-a");
+        assert!(roster.bench().is_empty());
     }
 
     #[test]
