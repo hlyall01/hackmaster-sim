@@ -1,5 +1,7 @@
 //! Tactical squad combat engine.
 
+use crate::core::rng::SimRng;
+use crate::core::sim::{Combatant, resolve_basic_attack};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -74,6 +76,7 @@ pub struct BattleUnit {
     pub max_range_ft: Option<f32>,
     pub move_tiles: i32,
     pub initiative_ready_at: f32,
+    pub combatant: Option<Combatant>,
 }
 
 impl BattleUnit {
@@ -98,6 +101,30 @@ impl BattleUnit {
             max_range_ft: None,
             move_tiles: 4,
             initiative_ready_at: 0.0,
+            combatant: None,
+        }
+    }
+
+    pub fn from_combatant(id: impl Into<String>, team_id: u8, mut combatant: Combatant) -> Self {
+        combatant.team_id = team_id;
+        let weapon = combatant.sheet.offense.weapon.clone();
+        let max_range_ft = weapon.range_bands_feet.map(|bands| bands[3]);
+        let move_tiles = (combatant.sheet.mobility.move_speed / TILE_SIZE_FT)
+            .round()
+            .max(1.0) as i32;
+        Self {
+            id: id.into(),
+            name: combatant.sheet.name.clone(),
+            team_id,
+            pos: GridPos::new(0, 0),
+            hp: combatant.state.hp,
+            max_hp: combatant.sheet.vitals.max_hp,
+            weapon: weapon.name.clone(),
+            reach_ft: weapon.reach_ft.max(1.0),
+            max_range_ft,
+            move_tiles,
+            initiative_ready_at: 0.0,
+            combatant: Some(combatant),
         }
     }
 
@@ -116,10 +143,19 @@ pub struct SquadCombat {
     pub done: bool,
     pub winner_team: Option<u8>,
     pub log: Vec<String>,
+    rng: SimRng,
 }
 
 impl SquadCombat {
-    pub fn new(mut player_units: Vec<BattleUnit>, mut enemy_units: Vec<BattleUnit>) -> Self {
+    pub fn new(player_units: Vec<BattleUnit>, enemy_units: Vec<BattleUnit>) -> Self {
+        Self::new_with_seed(player_units, enemy_units, 1)
+    }
+
+    pub fn new_with_seed(
+        mut player_units: Vec<BattleUnit>,
+        mut enemy_units: Vec<BattleUnit>,
+        seed: u64,
+    ) -> Self {
         let grid = BattleGrid::default();
         spawn_team(&mut player_units, grid, 0);
         spawn_team(&mut enemy_units, grid, 1);
@@ -134,6 +170,7 @@ impl SquadCombat {
             done: false,
             winner_team: None,
             log: vec!["Squads take their marks on the battle mat.".to_string()],
+            rng: SimRng::from_seed(seed),
         }
     }
 
@@ -215,6 +252,12 @@ impl SquadCombat {
                 ));
             }
         }
+        let distance = self
+            .grid
+            .distance_ft(self.units[idx].pos, self.units[target_idx].pos);
+        if distance <= desired_range {
+            self.try_attack(idx, target_idx, distance);
+        }
     }
 
     fn move_toward(&mut self, mover_idx: usize, target_idx: usize, stop_distance_ft: f32) {
@@ -277,6 +320,76 @@ impl SquadCombat {
                 && !occupied.contains(pos)
         })
         .collect()
+    }
+
+    fn try_attack(&mut self, attacker_idx: usize, defender_idx: usize, distance_ft: f32) {
+        let now = self.elapsed_seconds as f32;
+        if self.units[attacker_idx].initiative_ready_at > now {
+            return;
+        }
+        let is_ranged = self.units[attacker_idx].max_range_ft.is_some()
+            && distance_ft > self.units[attacker_idx].reach_ft;
+        let speed = self
+            .units
+            .get(attacker_idx)
+            .and_then(|unit| unit.combatant.as_ref())
+            .map(|combatant| combatant.sheet.offense.weapon.speed.max(1.0))
+            .unwrap_or(6.0);
+
+        if self.units.iter().all(|unit| unit.combatant.is_some()) {
+            let mut combatants = self
+                .units
+                .iter()
+                .map(|unit| unit.combatant.clone().expect("checked combatant"))
+                .collect::<Vec<_>>();
+            let result = resolve_basic_attack(
+                &mut combatants,
+                attacker_idx,
+                defender_idx,
+                0,
+                is_ranged,
+                distance_ft,
+                now,
+                &mut self.rng,
+            );
+            for (unit, combatant) in self.units.iter_mut().zip(combatants) {
+                unit.hp = combatant.state.hp;
+                unit.combatant = Some(combatant);
+            }
+            self.units[attacker_idx].initiative_ready_at = now + speed;
+            self.log_attack(
+                attacker_idx,
+                defender_idx,
+                result.event.damage,
+                result.event.hit,
+            );
+            if let Some(counter) = result.counter_attack {
+                self.log_attack(defender_idx, attacker_idx, counter.damage, counter.hit);
+            }
+        } else {
+            let damage = 2;
+            self.units[defender_idx].hp = self.units[defender_idx].hp.saturating_sub(damage);
+            self.units[attacker_idx].initiative_ready_at = now + speed;
+            self.log_attack(attacker_idx, defender_idx, damage, true);
+        }
+    }
+
+    fn log_attack(&mut self, attacker_idx: usize, defender_idx: usize, damage: i32, hit: bool) {
+        let line = if hit {
+            format!(
+                "t={}s: {} hits {} for {}.",
+                self.elapsed_seconds,
+                self.units[attacker_idx].name,
+                self.units[defender_idx].name,
+                damage.max(0)
+            )
+        } else {
+            format!(
+                "t={}s: {} misses {}.",
+                self.elapsed_seconds, self.units[attacker_idx].name, self.units[defender_idx].name
+            )
+        };
+        self.log.push(line);
     }
 
     pub fn view(&self) -> SquadCombatView {
