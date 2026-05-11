@@ -367,3 +367,48 @@ fn player_profile_from_config(config: &PlayerConfig) -> PlayerProfile {
     profile.race_id = config.race_id.clone();
     profile
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::game_logic::{ArmorCatalog, ShieldCatalog, WeaponCatalog};
+
+    fn empty_catalogs() -> (WeaponCatalog, ArmorCatalog, ShieldCatalog) {
+        (
+            WeaponCatalog::new(Vec::new()),
+            ArmorCatalog::new(Vec::new()),
+            ShieldCatalog::new(Vec::new()),
+        )
+    }
+
+    fn member(id: &str) -> SquadMember {
+        let (weapons, armor, shields) = empty_catalogs();
+        roll_member(id.to_string(), 10, &weapons, &armor, &shields)
+    }
+
+    #[test]
+    fn active_squad_limit_is_enforced() {
+        let active = (0..MAX_ACTIVE_SQUAD)
+            .map(|idx| member(&format!("hero-{idx}")))
+            .collect();
+        let mut roster = SquadRoster::new(active).expect("valid roster");
+        assert_eq!(
+            roster.add_active(member("overflow")),
+            Err(RosterError::ActiveFull)
+        );
+    }
+
+    #[test]
+    fn bench_limit_is_enforced() {
+        let mut roster = SquadRoster::new(Vec::new()).expect("valid roster");
+        for idx in 0..MAX_BENCH {
+            roster
+                .add_bench(member(&format!("bench-{idx}")))
+                .expect("bench room");
+        }
+        assert_eq!(
+            roster.add_bench(member("overflow")),
+            Err(RosterError::BenchFull)
+        );
+    }
+}

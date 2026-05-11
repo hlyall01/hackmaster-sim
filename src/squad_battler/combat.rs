@@ -511,3 +511,74 @@ fn spawn_team(units: &mut [BattleUnit], grid: BattleGrid, team_id: u8) {
         unit.pos = GridPos::new(start_x, center_y + offset).clamp(grid);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unit(id: &str, team_id: u8) -> BattleUnit {
+        BattleUnit::new(id, id, team_id, 12, "Test blade", TILE_SIZE_FT)
+    }
+
+    #[test]
+    fn five_foot_grid_distance_is_manhattan() {
+        let grid = BattleGrid::default();
+        assert_eq!(
+            grid.distance_ft(GridPos::new(1, 1), GridPos::new(2, 1)),
+            5.0
+        );
+        assert_eq!(
+            grid.distance_ft(GridPos::new(1, 1), GridPos::new(4, 3)),
+            25.0
+        );
+    }
+
+    #[test]
+    fn spawn_positions_do_not_overlap() {
+        let combat = SquadCombat::new(
+            vec![unit("a", 0), unit("b", 0), unit("c", 0)],
+            vec![unit("x", 1), unit("y", 1), unit("z", 1)],
+        );
+        assert_eq!(combat.occupied_positions().len(), combat.units.len());
+    }
+
+    #[test]
+    fn units_move_toward_nearest_enemy_on_grid() {
+        let mut combat = SquadCombat::new(vec![unit("a", 0)], vec![unit("x", 1)]);
+        let start = combat.units[0].pos;
+        combat.tick();
+        assert!(
+            combat.units[0].pos.manhattan_distance(combat.units[1].pos)
+                < start.manhattan_distance(combat.units[1].pos)
+        );
+    }
+
+    #[test]
+    fn blocked_movement_never_overlaps_units() {
+        let mut combat = SquadCombat::new(
+            vec![unit("a", 0), unit("b", 0), unit("c", 0)],
+            vec![unit("x", 1), unit("y", 1), unit("z", 1)],
+        );
+        combat.tick();
+        assert_eq!(combat.occupied_positions().len(), combat.units.len());
+    }
+
+    #[test]
+    fn nearest_enemy_targeting_uses_grid_distance() {
+        let mut combat = SquadCombat::new(vec![unit("a", 0)], vec![unit("x", 1), unit("y", 1)]);
+        combat.units[0].pos = GridPos::new(2, 2);
+        combat.units[1].pos = GridPos::new(8, 2);
+        combat.units[2].pos = GridPos::new(3, 2);
+        assert_eq!(combat.nearest_enemy(0), Some(2));
+    }
+
+    #[test]
+    fn multiple_units_can_attack_in_one_tick() {
+        let mut combat = SquadCombat::new(vec![unit("a", 0), unit("b", 0)], vec![unit("x", 1)]);
+        combat.units[0].pos = GridPos::new(4, 4);
+        combat.units[1].pos = GridPos::new(5, 5);
+        combat.units[2].pos = GridPos::new(5, 4);
+        combat.tick();
+        assert!(combat.units[2].hp <= 8, "expected two fallback hits");
+    }
+}

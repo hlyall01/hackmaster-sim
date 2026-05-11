@@ -106,6 +106,26 @@ impl SquadBattlerApp {
             .find(|node| node.id == node_id && !node.completed)
             .cloned()
             .ok_or_else(|| "Node is not available.".to_string())?;
+        if node.kind == SquadNodeKind::Recruit {
+            if let Some(route_node) = session
+                .route
+                .iter_mut()
+                .find(|current| current.id == node_id)
+            {
+                route_node.completed = true;
+            }
+            session.selected_node = Some(node_id);
+            session.recruit_offer = generate_recruit_offer(
+                session.seed,
+                session.depth,
+                &self.weapon_catalog,
+                &self.armor_catalog,
+                &self.shield_catalog,
+            );
+            session.phase = SquadPhase::RewardReview;
+            session.log = vec!["A band of mercenaries offers to join the company.".to_string()];
+            return Ok(self.view());
+        }
         let tier = match node.kind {
             SquadNodeKind::Elite => EncounterTier::Elite,
             SquadNodeKind::Boss => EncounterTier::Boss,
