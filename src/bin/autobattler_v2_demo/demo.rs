@@ -4,11 +4,11 @@ use hackmaster_sim::character::{
 use hackmaster_sim::core::gameplay::{
     CombatantBuilder, EnemySpawnEntry, EnemySpawner, EncounterTier, EventCatalog,
     EventSpec, LootItemEntry, LootTable, RunState, Wound, XpCurve, apply_downtime,
-    apply_xp, choose_event, resolve_event_choice, run_next_fight,
+    apply_fight_result, apply_xp, choose_event, resolve_event_choice,
 };
 use hackmaster_sim::core::ids::NpcPresetId;
 use hackmaster_sim::core::rng::{SimRng, derive_seed};
-use hackmaster_sim::core::sim::{CombatEvent, CombatEventKind, SimConfig};
+use hackmaster_sim::core::sim::{CombatEvent, CombatEventKind, SimConfig, SimState};
 use hackmaster_sim::core::types::{EnemyProfile, Inventory, PlayerProfile, PointPools, RaceSpec};
 use hackmaster_sim::data;
 use hackmaster_sim::game_logic::{
@@ -156,6 +156,7 @@ impl DemoApp {
             phase: DemoPhase::ChoosingNode,
             pending_event: None,
             pending_fight: None,
+            live_fight: None,
             selected_node: None,
             last_log: vec!["Run started. Pick a route.".to_string()],
             last_reward: None,
@@ -298,21 +299,15 @@ impl DemoApp {
         let Some(pending) = session.pending_fight.take() else {
             return Err("There is no pending fight.".to_string());
         };
-        self.resolve_fight_node(pending.kind);
-        Ok(self.view())
-    }
-
-    fn resolve_fight_node(&mut self, kind: NodeKind) {
-        let Some(session) = self.session.as_mut() else {
-            return;
-        };
-        let previous_level = session.run_state.player.level;
-        let previous_gold = session.run_state.inventory.gold;
-        let state_before_fight = session.run_state.clone();
-        let tier = match kind {
-            NodeKind::Elite => EncounterTier::Elite,
-            NodeKind::Boss => EncounterTier::Boss,
-            _ => EncounterTier::Normal,
+        let encounter_index = session.run_state.encounter_index as u64;
+        let spawn_seed = derive_seed(session.run_state.run_seed, "spawn", encounter_index);
+        let combat_seed = derive_seed(session.run_state.run_seed, "combat", encounter_index);
+        let mut spawn_rng = SimRng::from_seed(spawn_seed);
+        let Some(enemy) = self
+            .spawner
+            .spawn_for_level(effective_enemy_level(&session.run_state, pending.tier), &mut spawn_rng)
+        else {
+            return Err("No enemy available for this fight.".to_string());
         };
         let builder = DemoCombatantBuilder {
             player_base: session.player_config.clone(),
@@ -323,32 +318,110 @@ impl DemoApp {
             npc_presets: &self.npc_presets,
             talent_catalog: &self.talent_catalog,
         };
-        let outcome = run_next_fight(
+        let mut player_combatant = builder.build_player(&session.run_state);
+        let mut enemy_combatant = builder.build_enemy(&enemy);
+        player_combatant.team_id = 0;
+        enemy_combatant.team_id = 1;
+        let mut sim =
+            SimState::with_rng(SimConfig::new(20.0, 1.0), SimRng::from_seed(combat_seed));
+        sim.reset_with_combatants(vec![player_combatant, enemy_combatant]);
+        session.live_fight = Some(DemoLiveFight {
+            sim,
+            enemy,
+            enemy_name: pending.enemy_name,
+            kind: pending.kind,
+            tier: pending.tier,
+            max_seconds: 120,
+            seen_events: 0,
+            log_lines: Vec::new(),
+            running: false,
+            decision_count: 0,
+        });
+        session.phase = DemoPhase::CombatPlayback;
+        session.last_log = vec![
+            "Combat started. Step one second at a time or enable auto-play.".to_string(),
+        ];
+        Ok(self.view())
+    }
+
+    fn fight_command(&mut self, request: FightCommandRequest) -> Result<DemoView, String> {
+        let Some(session) = self.session.as_mut() else {
+            return Err("Start a run first.".to_string());
+        };
+        if session.phase != DemoPhase::CombatPlayback {
+            return Err("There is no live fight.".to_string());
+        }
+        match request.command.as_str() {
+            "play" => {
+                if let Some(live) = session.live_fight.as_mut() {
+                    live.running = true;
+                }
+            }
+            "pause" => {
+                if let Some(live) = session.live_fight.as_mut() {
+                    live.running = false;
+                }
+            }
+            "step" | "tick" => {
+                let seconds = request.seconds.unwrap_or(1).clamp(1, 30);
+                self.advance_live_fight(seconds);
+            }
+            "skip" => {
+                self.advance_live_fight(120);
+            }
+            _ => return Err("Unknown fight command.".to_string()),
+        }
+        Ok(self.view())
+    }
+
+    fn advance_live_fight(&mut self, seconds: u32) {
+        for _ in 0..seconds {
+            let done = {
+                let Some(session) = self.session.as_mut() else {
+                    return;
+                };
+                let Some(live) = session.live_fight.as_mut() else {
+                    return;
+                };
+                live.sim.update(1.0);
+                ingest_live_fight_events(live);
+                live.sim.done || live.sim.elapsed_seconds >= live.max_seconds
+            };
+            if done {
+                self.finalize_live_fight();
+                break;
+            }
+        }
+    }
+
+    fn finalize_live_fight(&mut self) {
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        let Some(live) = session.live_fight.take() else {
+            return;
+        };
+        let previous_level = session.run_state.player.level;
+        let previous_gold = session.run_state.inventory.gold;
+        let player_hp = live.sim.combatants[0].state.hp;
+        let enemy_hp = live.sim.combatants[1].state.hp;
+        let won = live.sim.done && player_hp > 0 && enemy_hp <= 0;
+        let fight = hackmaster_sim::core::gameplay::FightResult {
+            won,
+            remaining_hp: player_hp,
+            turns: live.sim.elapsed_seconds,
+            events: live.sim.combat_events.clone(),
+        };
+        let outcome = apply_fight_result(
             session.run_state.clone(),
-            &self.spawner,
+            Some(live.enemy),
+            fight,
             &self.loot_table,
             Some(&self.xp_curve),
-            SimConfig::new(20.0, 1.0),
-            120,
             0,
             false,
-            tier,
-            &builder,
+            live.tier,
         );
-        let enemy_profile = outcome.enemy;
-        let enemy_name = enemy_profile
-            .and_then(|enemy| self.npc_presets.get(enemy.preset_id))
-            .map(|preset| preset.name.clone())
-            .unwrap_or_else(|| "Unknown foe".to_string());
-        let combatants_for_log = enemy_profile
-            .map(|enemy| {
-                let mut player = builder.build_player(&state_before_fight);
-                let mut foe = builder.build_enemy(&enemy);
-                player.team_id = 0;
-                foe.team_id = 1;
-                vec![player, foe]
-            })
-            .unwrap_or_default();
         let level_gained = outcome.state.player.level > previous_level;
         let mut next_state = outcome.state.clone();
         if level_gained {
@@ -356,21 +429,14 @@ impl DemoApp {
         }
         let gold = next_state.inventory.gold.saturating_sub(previous_gold);
         let reward = outcome.reward.clone();
-        let won = outcome.fight.won;
         let fight_view = DemoFightSummary {
-            enemy: enemy_name.clone(),
+            enemy: live.enemy_name.clone(),
             won,
-            turns: outcome.fight.turns,
-            remaining_hp: outcome.fight.remaining_hp,
-            hits_dealt: format_hit_list(&outcome.fight.events, 0, 1),
-            hits_taken: format_hit_list(&outcome.fight.events, 1, 0),
-            combat_log: outcome
-                .fight
-                .events
-                .iter()
-                .take(18)
-                .map(|event| sim::format_combat_event_line(event, &combatants_for_log))
-                .collect(),
+            turns: live.sim.elapsed_seconds,
+            remaining_hp: player_hp,
+            hits_dealt: format_hit_list(&live.sim.combat_events, 0, 1),
+            hits_taken: format_hit_list(&live.sim.combat_events, 1, 0),
+            combat_log: live.log_lines.clone(),
         };
         session.run_state = next_state;
         session.last_fight = Some(fight_view);
@@ -384,9 +450,16 @@ impl DemoApp {
         });
         session.last_log = vec![
             format!(
-                "{} against {enemy_name}.",
-                if won { "Victory" } else { "Defeat" }
+                "{} against {}.",
+                if won { "Victory" } else { "Defeat" },
+                live.enemy_name
             ),
+            format!(
+                "Fight lasted {}s as a {} node.",
+                live.sim.elapsed_seconds,
+                live.kind.label()
+            ),
+            format!("Combat decisions recorded: {}.", live.decision_count),
             format_wound_line(&session.run_state.wounds),
         ];
         if won {
@@ -443,6 +516,7 @@ impl DemoApp {
                 phase: "start".to_string(),
                 pending_event: None,
                 pending_fight: None,
+                live_fight: None,
                 last_log: vec!["Roll a character to start.".to_string()],
                 last_reward: None,
                 last_fight: None,
@@ -468,6 +542,10 @@ impl DemoApp {
             phase: session.phase.label().to_string(),
             pending_event: session.pending_event.as_ref().map(DemoEventView::from_pending),
             pending_fight: session.pending_fight.clone().map(DemoFightPreview::from_pending),
+            live_fight: session
+                .live_fight
+                .as_ref()
+                .map(DemoFightPlaybackView::from_live),
             last_log: session.last_log.clone(),
             last_reward: session.last_reward.clone(),
             last_fight: session.last_fight.clone(),
@@ -485,6 +563,7 @@ struct DemoSession {
     phase: DemoPhase,
     pending_event: Option<PendingDemoEvent>,
     pending_fight: Option<PendingDemoFight>,
+    live_fight: Option<DemoLiveFight>,
     selected_node: Option<usize>,
     last_log: Vec<String>,
     last_reward: Option<DemoReward>,
@@ -505,11 +584,26 @@ struct PendingDemoFight {
     tier: EncounterTier,
 }
 
+#[derive(Clone)]
+struct DemoLiveFight {
+    sim: SimState,
+    enemy: EnemyProfile,
+    enemy_name: String,
+    kind: NodeKind,
+    tier: EncounterTier,
+    max_seconds: u32,
+    seen_events: usize,
+    log_lines: Vec<String>,
+    running: bool,
+    decision_count: u32,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DemoPhase {
     ChoosingNode,
     ResolvingEvent,
     FightPreview,
+    CombatPlayback,
     RunOver,
 }
 
@@ -519,6 +613,7 @@ impl DemoPhase {
             DemoPhase::ChoosingNode => "choose_node",
             DemoPhase::ResolvingEvent => "event_choice",
             DemoPhase::FightPreview => "fight_preview",
+            DemoPhase::CombatPlayback => "combat_playback",
             DemoPhase::RunOver => "run_over",
         }
     }
@@ -534,6 +629,7 @@ struct DemoView {
     phase: String,
     pending_event: Option<DemoEventView>,
     pending_fight: Option<DemoFightPreview>,
+    live_fight: Option<DemoFightPlaybackView>,
     last_log: Vec<String>,
     last_reward: Option<DemoReward>,
     last_fight: Option<DemoFightSummary>,
@@ -560,6 +656,109 @@ impl DemoFightPreview {
             .to_string(),
         }
     }
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct DemoFightPlaybackView {
+    status: String,
+    enemy_name: String,
+    tier: String,
+    elapsed_seconds: u32,
+    max_seconds: u32,
+    distance_ft: f32,
+    running: bool,
+    combatants: Vec<DemoCombatantView>,
+    log_tail: Vec<String>,
+    pending_decision: Option<DemoDecisionPromptView>,
+}
+
+impl DemoFightPlaybackView {
+    fn from_live(live: &DemoLiveFight) -> Self {
+        let status = if live.sim.done {
+            "complete"
+        } else if live.running {
+            "running"
+        } else {
+            "paused"
+        };
+        Self {
+            status: status.to_string(),
+            enemy_name: live.enemy_name.clone(),
+            tier: match live.tier {
+                EncounterTier::Normal => "Normal",
+                EncounterTier::Elite => "Elite",
+                EncounterTier::Boss => "Boss",
+            }
+            .to_string(),
+            elapsed_seconds: live.sim.elapsed_seconds,
+            max_seconds: live.max_seconds,
+            distance_ft: live.sim.distance(),
+            running: live.running,
+            combatants: live
+                .sim
+                .combatants
+                .iter()
+                .enumerate()
+                .map(|(idx, combatant)| DemoCombatantView {
+                    idx,
+                    name: combatant.sheet.name.clone(),
+                    team_id: combatant.team_id,
+                    hp: combatant.state.hp,
+                    max_hp: combatant.sheet.vitals.max_hp,
+                    weapon: combatant.sheet.offense.weapon.name.clone(),
+                    x: live
+                        .sim
+                        .actors
+                        .get(idx)
+                        .map(|actor| actor.position.x)
+                        .unwrap_or_default(),
+                    y: live
+                        .sim
+                        .actors
+                        .get(idx)
+                        .map(|actor| actor.position.y)
+                        .unwrap_or_default(),
+                    trauma_seconds: combatant.state.trauma_remaining_seconds,
+                    knocked_seconds: combatant.state.knockback_immobile_seconds,
+                    shield_intact: combatant.state.shield_intact,
+                })
+                .collect(),
+            log_tail: live
+                .log_lines
+                .iter()
+                .rev()
+                .take(18)
+                .cloned()
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect(),
+            pending_decision: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct DemoCombatantView {
+    idx: usize,
+    name: String,
+    team_id: u8,
+    hp: i32,
+    max_hp: i32,
+    weapon: String,
+    x: i32,
+    y: i32,
+    trauma_seconds: i32,
+    knocked_seconds: i32,
+    shield_intact: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct DemoDecisionPromptView {
+    id: String,
+    time: u32,
+    actor_idx: usize,
+    options: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -729,6 +928,12 @@ struct EventChoiceRequest {
     choice_id: String,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+struct FightCommandRequest {
+    command: String,
+    seconds: Option<u32>,
+}
+
 struct DemoCombatantBuilder<'a> {
     player_base: PlayerConfig,
     enemy_weapon_id: WeaponId,
@@ -871,6 +1076,19 @@ fn route_request(request: HttpRequest, demo: Arc<Mutex<DemoApp>>) -> String {
                 Err(err) => error_response(400, err),
             }
         }
+        ("POST", "/api/fight-command") => {
+            let parsed = serde_json::from_str::<FightCommandRequest>(&request.body);
+            match parsed {
+                Ok(request) => {
+                    let mut demo = demo.lock().expect("demo lock poisoned");
+                    match demo.fight_command(request) {
+                        Ok(view) => json_response(200, &view),
+                        Err(err) => error_response(400, err),
+                    }
+                }
+                Err(err) => error_response(400, format!("Bad request: {err}")),
+            }
+        }
         _ => error_response(404, "Not found".to_string()),
     }
 }
@@ -945,15 +1163,7 @@ fn preview_enemy_name(
     state: &RunState,
     tier: EncounterTier,
 ) -> String {
-    let effective_level = state
-        .player
-        .level
-        .saturating_add((state.run_depth / 2) as u8)
-        .saturating_add(match tier {
-            EncounterTier::Normal => 0,
-            EncounterTier::Elite => 1,
-            EncounterTier::Boss => 2,
-        });
+    let effective_level = effective_enemy_level(state, tier);
     let mut rng = SimRng::from_seed(derive_seed(
         state.run_seed,
         "v2-fight-preview",
@@ -964,6 +1174,39 @@ fn preview_enemy_name(
         .and_then(|enemy| npc_presets.get(enemy.preset_id))
         .map(|preset| preset.name.clone())
         .unwrap_or_else(|| "Unknown foe".to_string())
+}
+
+fn effective_enemy_level(state: &RunState, tier: EncounterTier) -> u8 {
+    state
+        .player
+        .level
+        .saturating_add((state.run_depth / 2) as u8)
+        .saturating_add(depth_band_bonus(state.run_depth))
+        .saturating_add(match tier {
+            EncounterTier::Normal => 0,
+            EncounterTier::Elite => 1,
+            EncounterTier::Boss => 2,
+        })
+}
+
+fn depth_band_bonus(depth: u32) -> u8 {
+    match depth {
+        0..=4 => 0,
+        5..=11 => 1,
+        12..=23 => 2,
+        _ => 3,
+    }
+}
+
+fn ingest_live_fight_events(live: &mut DemoLiveFight) {
+    if live.seen_events >= live.sim.combat_events.len() {
+        return;
+    }
+    for event in &live.sim.combat_events[live.seen_events..] {
+        live.log_lines
+            .push(sim::format_combat_event_line(event, &live.sim.combatants));
+    }
+    live.seen_events = live.sim.combat_events.len();
 }
 
 fn grant_demo_level_points(player: &mut PlayerProfile) {
@@ -1440,6 +1683,98 @@ const INDEX_HTML: &str = r#"<!doctype html>
       gap: 6px;
       font-size: 13px;
     }
+    .combat-scene {
+      width: min(860px, 100%);
+      display: grid;
+      gap: 18px;
+      text-align: left;
+    }
+    .combat-title {
+      display: flex;
+      justify-content: space-between;
+      align-items: start;
+      gap: 12px;
+    }
+    .combat-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    .combatant {
+      border: 1px solid rgba(213,168,74,.28);
+      background: rgba(12,13,12,.42);
+      border-radius: 8px;
+      padding: 12px;
+      display: grid;
+      gap: 8px;
+    }
+    .combatant.enemy {
+      border-color: rgba(169,67,56,.45);
+      background: rgba(45,18,16,.34);
+    }
+    .hpbar {
+      height: 12px;
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 999px;
+      background: #151614;
+      overflow: hidden;
+    }
+    .hpbar span {
+      display: block;
+      height: 100%;
+      background: linear-gradient(90deg, #7fa26a, #d5a84a);
+      width: var(--hp, 0%);
+    }
+    .enemy .hpbar span {
+      background: linear-gradient(90deg, #a94338, #d5a84a);
+    }
+    .arena-track {
+      position: relative;
+      height: 86px;
+      border: 1px solid rgba(213,168,74,.24);
+      border-radius: 8px;
+      background:
+        linear-gradient(90deg, rgba(127,162,106,.11), transparent 36%, transparent 64%, rgba(169,67,56,.11)),
+        repeating-linear-gradient(90deg, rgba(255,255,255,.055) 0 1px, transparent 1px 12.5%);
+      overflow: hidden;
+    }
+    .fighter-token {
+      position: absolute;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: 58px;
+      height: 58px;
+      display: grid;
+      place-items: center;
+      border-radius: 8px;
+      border: 1px solid var(--gold);
+      background: #171916;
+      color: #fff1c8;
+      font-weight: 900;
+      box-shadow: 0 8px 24px rgba(0,0,0,.35);
+    }
+    .fighter-token.enemy {
+      border-color: #b95b4f;
+      color: #ffd0c9;
+    }
+    .combat-controls {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .combat-log {
+      min-height: 142px;
+      max-height: 210px;
+    }
+    .decision-slot {
+      border: 1px dashed rgba(213,168,74,.36);
+      border-radius: 8px;
+      padding: 10px;
+      color: var(--muted);
+      background: rgba(0,0,0,.14);
+      font-size: 13px;
+    }
     .pill {
       display: inline-flex;
       border: 1px solid var(--line);
@@ -1457,6 +1792,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
       .app { grid-template-columns: 1fr; height: auto; }
       .map { height: auto; min-height: 560px; }
       .right-scroll { height: auto; }
+      .combat-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -1504,6 +1840,8 @@ const INDEX_HTML: &str = r#"<!doctype html>
   </main>
   <script>
     let state = null;
+    let autoTimer = null;
+    let autoBusy = false;
     const nodeIcons = { fight: "⚔", event: "?", rest: "✚", elite: "!", boss: "♛" };
     const nodeLabels = { fight: "Fight", event: "Event", rest: "Rest", elite: "Elite", boss: "Boss" };
 
@@ -1532,6 +1870,34 @@ const INDEX_HTML: &str = r#"<!doctype html>
     async function chooseNode(id) { await api("/api/choose-node", { node_id: id }); }
     async function eventChoice(id) { await api("/api/event-choice", { choice_id: id }); }
     async function startFight() { await api("/api/start-fight", {}); }
+    async function fightCommand(command, seconds = 1) {
+      await api("/api/fight-command", { command, seconds });
+    }
+    async function autoTick() {
+      if (autoBusy) return;
+      autoBusy = true;
+      try {
+        await fightCommand("tick", 1);
+      } catch (err) {
+        stopAutoTimer();
+        renderError(err);
+      } finally {
+        autoBusy = false;
+      }
+    }
+    function syncAutoTimer() {
+      const shouldRun = Boolean(state && state.live_fight && state.live_fight.running);
+      if (shouldRun && !autoTimer) {
+        autoTimer = setInterval(autoTick, 1000);
+      }
+      if (!shouldRun) stopAutoTimer();
+    }
+    function stopAutoTimer() {
+      if (autoTimer) {
+        clearInterval(autoTimer);
+        autoTimer = null;
+      }
+    }
 
     function render() {
       renderPresets();
@@ -1541,6 +1907,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
       renderReward();
       renderFight();
       renderLog();
+      syncAutoTimer();
     }
 
     function renderPresets() {
@@ -1575,6 +1942,10 @@ const INDEX_HTML: &str = r#"<!doctype html>
       document.getElementById("phase").textContent = state.terminal || phaseText(state.phase);
       document.getElementById("runStatus").textContent = state.has_run ? state.phase.replace("_", " ") : "No run";
       const map = document.getElementById("map");
+      if (state.live_fight) {
+        map.innerHTML = renderLiveFightScene(state.live_fight);
+        return;
+      }
       if (state.pending_event) {
         const event = state.pending_event;
         map.innerHTML = `<div class="node-scene event-scene">
@@ -1613,10 +1984,83 @@ const INDEX_HTML: &str = r#"<!doctype html>
       </div>`;
     }
 
+    function renderLiveFightScene(fight) {
+      const player = fight.combatants.find(c => c.team_id === 0) || fight.combatants[0];
+      const enemy = fight.combatants.find(c => c.team_id === 1) || fight.combatants[1];
+      const distance = Number(fight.distance_ft || 0).toFixed(1);
+      const enemyPosition = clamp(82 - Math.min(fight.distance_ft || 0, 20) * 1.25, 50, 82);
+      return `<div class="node-scene fight-scene">
+        <div class="combat-scene">
+          <div class="combat-title">
+            <div>
+              <h2>${escapeHtml(fight.tier)} Fight: ${escapeHtml(fight.enemy_name)}</h2>
+              <p>${fight.elapsed_seconds}s elapsed of ${fight.max_seconds}s. Range ${distance} ft. Status: ${escapeHtml(fight.status)}.</p>
+            </div>
+            <span class="pill">${fight.running ? "Auto" : "Paused"}</span>
+          </div>
+          <div class="arena-track">
+            <div class="fighter-token" style="left: 18%">${initials(player && player.name)}</div>
+            <div class="fighter-token enemy" style="left: ${enemyPosition}%">${initials(enemy && enemy.name)}</div>
+          </div>
+          <div class="combat-grid">
+            ${combatantCard(player, false)}
+            ${combatantCard(enemy, true)}
+          </div>
+          <div class="combat-controls">
+            <button onclick="fightCommand('step', 1)">Step 1s</button>
+            <button onclick="fightCommand('play', 1)" ${fight.running ? "disabled" : ""}>Auto</button>
+            <button onclick="fightCommand('pause', 1)" ${fight.running ? "" : "disabled"}>Pause</button>
+            <button onclick="fightCommand('skip', 1)">Finish</button>
+          </div>
+          ${decisionHtml(fight.pending_decision)}
+          <div class="log combat-log">${(fight.log_tail || []).map(escapeHtml).join("<br>") || "Combat is about to begin."}</div>
+        </div>
+      </div>`;
+    }
+
+    function combatantCard(combatant, enemy) {
+      if (!combatant) return `<div class="combatant"><div class="sub">No combatant.</div></div>`;
+      const hp = `${combatant.hp} / ${combatant.max_hp}`;
+      const hpPct = clamp((combatant.hp / Math.max(1, combatant.max_hp)) * 100, 0, 100);
+      const tags = [
+        combatant.weapon,
+        combatant.shield_intact ? "shield" : "shield broken",
+        combatant.trauma_seconds > 0 ? `${combatant.trauma_seconds}s trauma` : null,
+        combatant.knocked_seconds > 0 ? `${combatant.knocked_seconds}s knocked` : null
+      ].filter(Boolean);
+      return `<div class="combatant ${enemy ? "enemy" : ""}">
+        <div class="row"><h3>${escapeHtml(combatant.name)}</h3><strong>${hp}</strong></div>
+        <div class="hpbar" style="--hp:${hpPct}%"><span></span></div>
+        <div class="sub">${tags.map(escapeHtml).join(" | ")}</div>
+      </div>`;
+    }
+
+    function decisionHtml(decision) {
+      if (!decision) {
+        return `<div class="decision-slot">No tactical prompt this second.</div>`;
+      }
+      return `<div class="decision-slot">
+        <strong>Decision for actor ${decision.actor_idx}</strong>
+        <div class="combat-controls">${decision.options.map(option => `<button>${escapeHtml(option)}</button>`).join("")}</div>
+      </div>`;
+    }
+
     function renderEncounter() {
       const el = document.getElementById("encounter");
       if (state.terminal) {
         el.innerHTML = `<h2>Run Complete</h2><div class="sub">${escapeHtml(state.terminal)}</div><button onclick="newRun()">Roll Again</button>`;
+        return;
+      }
+      if (state.live_fight) {
+        const fight = state.live_fight;
+        el.innerHTML = `<h2>Live Combat</h2>
+          <div class="sub">${escapeHtml(fight.enemy_name)} is active at ${fight.elapsed_seconds}s. Watch the log, step time forward, or let auto-play tick.</div>
+          <div class="combat-controls">
+            <button onclick="fightCommand('step', 1)">Step 1s</button>
+            <button onclick="fightCommand('play', 1)" ${fight.running ? "disabled" : ""}>Auto</button>
+            <button onclick="fightCommand('pause', 1)" ${fight.running ? "" : "disabled"}>Pause</button>
+            <button onclick="fightCommand('skip', 1)">Finish</button>
+          </div>`;
         return;
       }
       if (state.pending_event) {
@@ -1657,6 +2101,15 @@ const INDEX_HTML: &str = r#"<!doctype html>
 
     function renderFight() {
       const el = document.getElementById("fight");
+      if (state.live_fight) {
+        const fight = state.live_fight;
+        el.innerHTML = `<div class="fight">
+          <div><strong>${escapeHtml(fight.status)}</strong> vs ${escapeHtml(fight.enemy_name)}</div>
+          <div>${fight.elapsed_seconds}s elapsed | ${Number(fight.distance_ft || 0).toFixed(1)} ft range</div>
+          <div class="log">${(fight.log_tail || []).map(escapeHtml).join("<br>") || "No strikes yet."}</div>
+        </div>`;
+        return;
+      }
       if (!state.last_fight) {
         el.innerHTML = `<div class="sub">No fight resolved yet.</div>`;
         return;
@@ -1680,8 +2133,24 @@ const INDEX_HTML: &str = r#"<!doctype html>
       if (phase === "choose_node") return "Choose a route node.";
       if (phase === "event_choice") return "Resolve the event choice.";
       if (phase === "fight_preview") return "Fight scene selected.";
+      if (phase === "combat_playback") return "Combat is running second by second.";
       if (phase === "run_over") return "Run over.";
       return "Roll a character to begin.";
+    }
+    function clamp(value, min, max) {
+      return Math.max(min, Math.min(max, Number.isFinite(value) ? value : min));
+    }
+    function initials(value) {
+      return String(value || "?")
+        .split(/\s+/)
+        .filter(Boolean)
+        .slice(0, 2)
+        .map(part => part[0].toUpperCase())
+        .join("") || "?";
+    }
+    function renderError(err) {
+      const el = document.getElementById("log");
+      if (el) el.textContent = err.message;
     }
 
     function escapeHtml(value) {
