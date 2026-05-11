@@ -369,12 +369,41 @@ impl DemoApp {
                 let seconds = request.seconds.unwrap_or(1).clamp(1, 30);
                 self.advance_live_fight(seconds);
             }
+            "next_attack" | "next" => {
+                self.advance_to_next_attack();
+            }
             "skip" => {
                 self.advance_live_fight(120);
             }
             _ => return Err("Unknown fight command.".to_string()),
         }
         Ok(self.view())
+    }
+
+    fn advance_to_next_attack(&mut self) {
+        let Some(initial_events) = self
+            .session
+            .as_ref()
+            .and_then(|session| session.live_fight.as_ref())
+            .map(|live| live.sim.combat_events.len())
+        else {
+            return;
+        };
+        for _ in 0..DEMO_FIGHT_MAX_SECONDS {
+            self.advance_live_fight(1);
+            let Some(live) = self
+                .session
+                .as_ref()
+                .and_then(|session| session.live_fight.as_ref())
+            else {
+                break;
+            };
+            if live.sim.combat_events.len() > initial_events
+                || live.sim.elapsed_seconds >= live.max_seconds
+            {
+                break;
+            }
+        }
     }
 
     fn claim_reward(&mut self) -> Result<DemoView, String> {
@@ -2335,6 +2364,101 @@ const INDEX_HTML: &str = r#"<!doctype html>
     .combat-controls {
       justify-content: center;
     }
+    .timeline {
+      display: grid;
+      gap: 10px;
+      border: 3px solid #2d160c;
+      border-radius: 10px;
+      background:
+        linear-gradient(180deg, rgba(245,205,125,.16), rgba(48,24,13,.52)),
+        #311b11;
+      padding: 12px;
+      box-shadow: inset 0 0 0 2px rgba(255,231,159,.13);
+    }
+    .timeline-header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 10px;
+      color: #ffe5a2;
+    }
+    .timeline-header span {
+      color: #d7b982;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .timeline-row {
+      display: grid;
+      grid-template-columns: minmax(120px, 170px) minmax(160px, 1fr) 82px;
+      gap: 10px;
+      align-items: center;
+    }
+    .timeline-name {
+      min-width: 0;
+      display: grid;
+      gap: 2px;
+    }
+    .timeline-name strong,
+    .timeline-name span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .timeline-name span {
+      color: #d7b982;
+      font-size: 12px;
+    }
+    .timeline-track {
+      position: relative;
+      height: 18px;
+      border: 2px solid #241107;
+      border-radius: 999px;
+      background:
+        linear-gradient(90deg, rgba(255,232,160,.1), rgba(255,232,160,.03)),
+        #1d0e08;
+      overflow: hidden;
+      box-shadow: inset 0 2px 5px rgba(0,0,0,.58);
+    }
+    .timeline-fill {
+      display: block;
+      height: 100%;
+      width: var(--progress, 0%);
+      background: linear-gradient(90deg, #476f4a, #e6a84b);
+    }
+    .timeline-row.enemy .timeline-fill {
+      background: linear-gradient(90deg, #7d3227, #e6a84b);
+    }
+    .timeline-tick {
+      position: absolute;
+      top: -3px;
+      bottom: -3px;
+      left: var(--progress, 0%);
+      width: 4px;
+      border-radius: 999px;
+      background: #fff0b7;
+      box-shadow: 0 0 10px rgba(255,230,151,.7);
+      transform: translateX(-50%);
+    }
+    .timeline-time {
+      justify-self: end;
+      min-width: 72px;
+      border: 2px solid #4a2817;
+      border-radius: 8px;
+      background: rgba(25,12,7,.48);
+      color: #ffe5a2;
+      padding: 5px 7px;
+      text-align: center;
+      font-weight: 900;
+      font-size: 13px;
+    }
+    .timeline-time.ready {
+      color: #fff5c8;
+      border-color: #f0bd55;
+      box-shadow: 0 0 12px rgba(240,189,85,.32);
+    }
+    .timeline-time.waiting {
+      color: #c9ad82;
+    }
     .log {
       border: 2px solid #30180d;
       background: rgba(28,14,8,.74);
@@ -2360,6 +2484,8 @@ const INDEX_HTML: &str = r#"<!doctype html>
       .right-scroll { height: auto; }
       .combat-grid { grid-template-columns: 1fr; }
       .loot-grid { grid-template-columns: 1fr; }
+      .timeline-row { grid-template-columns: 1fr; }
+      .timeline-time { justify-self: stretch; }
       .floor:not(:last-child)::after { display: none; }
     }
   </style>
@@ -2650,12 +2776,14 @@ const INDEX_HTML: &str = r#"<!doctype html>
             <div class="fighter-token" style="left: 18%">${initials(player && player.name)}</div>
             <div class="fighter-token enemy" style="left: ${enemyPosition}%">${initials(enemy && enemy.name)}</div>
           </div>
+          ${swingTimeline(fight)}
           <div class="combat-grid">
             ${combatantCard(player, false)}
             ${combatantCard(enemy, true)}
           </div>
           <div class="combat-controls">
             <button onclick="fightCommand('step', 1)">Step 1s</button>
+            <button onclick="fightCommand('next_attack', 1)">Skip to Next Attack</button>
             <button onclick="fightCommand('play', 1)" ${fight.running ? "disabled" : ""}>Auto</button>
             <button onclick="fightCommand('pause', 1)" ${fight.running ? "" : "disabled"}>Pause</button>
             <button onclick="fightCommand('skip', 1)">Finish</button>
@@ -2663,6 +2791,36 @@ const INDEX_HTML: &str = r#"<!doctype html>
           ${decisionHtml(fight.pending_decision)}
           <div class="log combat-log">${(fight.log_tail || []).map(escapeHtml).join("<br>") || "Combat is about to begin."}</div>
         </div>
+      </div>`;
+    }
+
+    function swingTimeline(fight) {
+      const rows = (fight.combatants || []).map(combatant => {
+        const speed = Math.max(1, Number(combatant.weapon_speed_seconds || 1));
+        const next = combatant.next_attack_in_seconds;
+        const queued = next !== null && next !== undefined;
+        const remaining = queued ? Math.max(0, Number(next || 0)) : null;
+        const progress = queued ? clamp(((speed - remaining) / speed) * 100, 0, 100) : 0;
+        const ready = queued && remaining <= 0.05;
+        const timeLabel = queued
+          ? (ready ? "ready" : `${formatSeconds(remaining)}s`)
+          : "closing";
+        const side = combatant.team_id === 1 ? "enemy" : "player";
+        return `<div class="timeline-row ${side}">
+          <div class="timeline-name">
+            <strong>${escapeHtml(combatant.name)}</strong>
+            <span>${escapeHtml(combatant.weapon)} / ${formatSeconds(speed)}s</span>
+          </div>
+          <div class="timeline-track" style="--progress:${progress}%">
+            <span class="timeline-fill"></span>
+            <span class="timeline-tick"></span>
+          </div>
+          <div class="timeline-time ${ready ? "ready" : queued ? "" : "waiting"}">${escapeHtml(timeLabel)}</div>
+        </div>`;
+      }).join("");
+      return `<div class="timeline">
+        <div class="timeline-header"><strong>Swing Timeline</strong><span>${fight.elapsed_seconds}s</span></div>
+        ${rows}
       </div>`;
     }
 
@@ -2717,10 +2875,12 @@ const INDEX_HTML: &str = r#"<!doctype html>
           <div class="sub">${escapeHtml(fight.enemy_name)} is active at ${fight.elapsed_seconds}s. Watch the log, step time forward, or let auto-play tick.</div>
           <div class="combat-controls">
             <button onclick="fightCommand('step', 1)">Step 1s</button>
+            <button onclick="fightCommand('next_attack', 1)">Skip to Next Attack</button>
             <button onclick="fightCommand('play', 1)" ${fight.running ? "disabled" : ""}>Auto</button>
             <button onclick="fightCommand('pause', 1)" ${fight.running ? "" : "disabled"}>Pause</button>
             <button onclick="fightCommand('skip', 1)">Finish</button>
-          </div>`;
+          </div>
+          ${swingTimeline(fight)}`;
         return;
       }
       if (state.pending_event) {
