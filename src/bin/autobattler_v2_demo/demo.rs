@@ -374,6 +374,17 @@ impl DemoApp {
         Ok(self.view())
     }
 
+    fn claim_reward(&mut self) -> Result<DemoView, String> {
+        let Some(session) = self.session.as_ref() else {
+            return Err("Start a run first.".to_string());
+        };
+        if session.phase != DemoPhase::RewardReview {
+            return Err("There is no reward to claim.".to_string());
+        }
+        self.complete_selected_node();
+        Ok(self.view())
+    }
+
     fn advance_live_fight(&mut self, seconds: u32) {
         for _ in 0..seconds {
             let done = {
@@ -463,7 +474,7 @@ impl DemoApp {
             format_wound_line(&session.run_state.wounds),
         ];
         if won {
-            self.complete_selected_node();
+            session.phase = DemoPhase::RewardReview;
         } else {
             session.phase = DemoPhase::RunOver;
             session.terminal = Some("You were defeated in the field.".to_string());
@@ -604,6 +615,7 @@ enum DemoPhase {
     ResolvingEvent,
     FightPreview,
     CombatPlayback,
+    RewardReview,
     RunOver,
 }
 
@@ -614,6 +626,7 @@ impl DemoPhase {
             DemoPhase::ResolvingEvent => "event_choice",
             DemoPhase::FightPreview => "fight_preview",
             DemoPhase::CombatPlayback => "combat_playback",
+            DemoPhase::RewardReview => "reward_review",
             DemoPhase::RunOver => "run_over",
         }
     }
@@ -1087,6 +1100,13 @@ fn route_request(request: HttpRequest, demo: Arc<Mutex<DemoApp>>) -> String {
                     }
                 }
                 Err(err) => error_response(400, format!("Bad request: {err}")),
+            }
+        }
+        ("POST", "/api/claim-reward") => {
+            let mut demo = demo.lock().expect("demo lock poisoned");
+            match demo.claim_reward() {
+                Ok(view) => json_response(200, &view),
+                Err(err) => error_response(400, err),
             }
         }
         _ => error_response(404, "Not found".to_string()),
@@ -1799,6 +1819,31 @@ const INDEX_HTML: &str = r#"<!doctype html>
       gap: 5px;
       font-size: 13px;
     }
+    .reward-scene {
+      width: min(760px, 100%);
+      display: grid;
+      gap: 16px;
+      text-align: left;
+    }
+    .loot-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .loot-token {
+      border: 1px solid rgba(213,168,74,.3);
+      border-radius: 8px;
+      background: rgba(0,0,0,.18);
+      padding: 12px;
+      min-height: 82px;
+      display: grid;
+      align-content: center;
+      gap: 4px;
+    }
+    .loot-token strong {
+      color: #fff1c8;
+      font-size: 19px;
+    }
     .fight {
       border: 1px solid rgba(169,67,56,.45);
       background: rgba(169,67,56,.08);
@@ -1923,6 +1968,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
       .map { height: auto; min-height: 560px; }
       .right-scroll { height: auto; }
       .combat-grid { grid-template-columns: 1fr; }
+      .loot-grid { grid-template-columns: 1fr; }
       .floor:not(:last-child)::after { display: none; }
     }
   </style>
@@ -2017,6 +2063,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
     async function chooseNode(id) { await api("/api/choose-node", { node_id: id }); }
     async function eventChoice(id) { await api("/api/event-choice", { choice_id: id }); }
     async function startFight() { await api("/api/start-fight", {}); }
+    async function claimReward() { await api("/api/claim-reward", {}); }
     async function fightCommand(command, seconds = 1) {
       await api("/api/fight-command", { command, seconds });
     }
@@ -2129,6 +2176,10 @@ const INDEX_HTML: &str = r#"<!doctype html>
         map.innerHTML = renderLiveFightScene(state.live_fight);
         return;
       }
+      if (state.phase === "reward_review" && state.last_reward) {
+        map.innerHTML = renderRewardScene();
+        return;
+      }
       if (state.pending_event) {
         const event = state.pending_event;
         map.innerHTML = `<div class="node-scene event-scene">
@@ -2164,6 +2215,29 @@ const INDEX_HTML: &str = r#"<!doctype html>
         <div class="icon">${nodeIcons[node.kind]}</div>
         <div class="label">${nodeLabels[node.kind]}</div>
         <button ${disabled} onclick="chooseNode(${node.id})">Choose ${nodeLabels[node.kind]}</button>
+      </div>`;
+    }
+
+    function renderRewardScene() {
+      const reward = state.last_reward;
+      const fight = state.last_fight;
+      return `<div class="node-scene">
+        <div class="reward-scene">
+          <div class="combat-title">
+            <div>
+              <h2>${fight && fight.won ? "Victory Spoils" : "Encounter Reward"}</h2>
+              <p>${fight ? `Defeated ${escapeHtml(fight.enemy)} in ${fight.turns}s.` : "Resolve the reward before choosing the next route."}</p>
+            </div>
+            <span class="pill">Reward</span>
+          </div>
+          <div class="loot-grid">
+            <div class="loot-token"><span class="sub">Gold</span><strong>+${reward.gold}</strong></div>
+            <div class="loot-token"><span class="sub">XP</span><strong>+${reward.xp}</strong></div>
+            <div class="loot-token"><span class="sub">Level</span><strong>${reward.level_gained ? "Gained" : "Held"}</strong></div>
+          </div>
+          <div class="reward">${rewardDetails(reward)}</div>
+          <div class="combat-controls"><button onclick="claimReward()">Continue Route</button></div>
+        </div>
       </div>`;
     }
 
@@ -2260,6 +2334,12 @@ const INDEX_HTML: &str = r#"<!doctype html>
           <button onclick="startFight()">Fight</button>`;
         return;
       }
+      if (state.phase === "reward_review" && state.last_reward) {
+        el.innerHTML = `<div class="section-title"><h2>Reward Review</h2><span class="pill">Claim</span></div>
+          <div class="reward">${rewardDetails(state.last_reward)}</div>
+          <button onclick="claimReward()">Continue Route</button>`;
+        return;
+      }
       if (state.phase === "choose_node") {
         el.innerHTML = `<h2>Choose Node</h2><div class="sub">Pick an available route node on the map. Fights resolve through the existing HackMaster combat engine.</div>`;
       } else {
@@ -2275,11 +2355,16 @@ const INDEX_HTML: &str = r#"<!doctype html>
       }
       const r = state.last_reward;
       el.innerHTML = `<div class="reward">
-        <div>Gold +${r.gold}</div>
+        ${rewardDetails(r)}
+        ${state.phase === "reward_review" ? `<button onclick="claimReward()">Continue Route</button>` : ""}
+      </div>`;
+    }
+
+    function rewardDetails(r) {
+      return `<div>Gold +${r.gold}</div>
         <div>XP +${r.xp}</div>
         <div>Items: ${r.items.length ? r.items.map(escapeHtml).join(", ") : "none"}</div>
-        <div>${r.level_gained ? "Level gained. Points granted." : "No level-up."}</div>
-      </div>`;
+        <div>${r.level_gained ? "Level gained. Points granted." : "No level-up."}</div>`;
     }
 
     function renderFight() {
@@ -2317,6 +2402,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
       if (phase === "event_choice") return "Resolve the event choice.";
       if (phase === "fight_preview") return "Fight scene selected.";
       if (phase === "combat_playback") return "Combat is running second by second.";
+      if (phase === "reward_review") return "Claim rewards and progression.";
       if (phase === "run_over") return "Run over.";
       return "Roll a character to begin.";
     }
