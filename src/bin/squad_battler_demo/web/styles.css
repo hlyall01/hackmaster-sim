@@ -154,6 +154,13 @@ h2 { font-size: 20px; color: #4a210f; }
   gap: 8px;
 }
 
+.combat-controls {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .footer {
   display: grid;
   grid-template-columns: minmax(280px, 420px) 1fr;

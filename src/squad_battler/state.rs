@@ -1,6 +1,6 @@
 //! High-level squad battler application state.
 
-use crate::core::gameplay::EncounterTier;
+use crate::core::gameplay::{EncounterTier, XpCurve, apply_xp};
 use crate::core::ids::NpcPresetId;
 use crate::core::rng::derive_seed;
 use crate::core::types::Inventory;
@@ -17,7 +17,11 @@ use super::combat::{
     TILE_SIZE_FT,
 };
 use super::encounters::{SquadNodeKind, SquadRouteNode, placeholder_route};
-use super::roster::{MAX_ACTIVE_SQUAD, MAX_BENCH, SquadRoster, SquadView, roll_starting_squad};
+use super::rewards::{DEFAULT_RECRUIT_OFFER_SIZE, RecruitDestination, SquadReward};
+use super::roster::{
+    MAX_ACTIVE_SQUAD, MAX_BENCH, SquadMember, SquadMemberStatus, SquadRoster, SquadView,
+    roll_member, roll_starting_squad,
+};
 
 const QUICK_STARTS_PATH: &str = "data/autobattler/autobattler_quick_starts.json";
 const NPC_PRESETS_PATH: &str = "data/sim/npc_presets.json";
@@ -30,6 +34,7 @@ pub struct SquadBattlerApp {
     npc_presets: NpcPresetCatalog,
     talent_catalog: TalentCatalog,
     enemy_weapon_id: WeaponId,
+    xp_curve: XpCurve,
     session: Option<SquadRun>,
 }
 
@@ -49,6 +54,10 @@ impl SquadBattlerApp {
             npc_presets,
             talent_catalog,
             enemy_weapon_id,
+            xp_curve: XpCurve {
+                base: 45,
+                per_level: 55,
+            },
             session: None,
         })
     }
@@ -76,6 +85,9 @@ impl SquadBattlerApp {
             pending_fight: None,
             live_fight: None,
             selected_node: None,
+            last_reward: None,
+            recruit_offer: Vec::new(),
+            terminal: None,
             log: vec!["The company assembles at the edge of the first route.".to_string()],
         });
         self.view()
@@ -207,7 +219,153 @@ impl SquadBattlerApp {
                 }
             }
         }
+        if session
+            .live_fight
+            .as_ref()
+            .map(|fight| fight.done)
+            .unwrap_or(false)
+            && session.phase == SquadPhase::CombatPlayback
+        {
+            self.finalize_completed_fight();
+        }
         Ok(self.view())
+    }
+
+    pub fn recruit_choice(
+        &mut self,
+        candidate_id: String,
+        destination: RecruitDestination,
+        replace_member_id: Option<String>,
+    ) -> Result<SquadBattlerView, String> {
+        let Some(session) = self.session.as_mut() else {
+            return Err("Start a run first.".to_string());
+        };
+        let Some(candidate_index) = session
+            .recruit_offer
+            .iter()
+            .position(|candidate| candidate.id == candidate_id)
+        else {
+            return Err("Recruit candidate not found.".to_string());
+        };
+        let candidate = session.recruit_offer.remove(candidate_index);
+        match destination {
+            RecruitDestination::Active => session
+                .roster
+                .add_active(candidate)
+                .map_err(|err| err.to_string())?,
+            RecruitDestination::Bench => session
+                .roster
+                .add_bench(candidate)
+                .map_err(|err| err.to_string())?,
+            RecruitDestination::Replace => {
+                let replace_member_id = replace_member_id
+                    .ok_or_else(|| "replace_member_id is required.".to_string())?;
+                let replaced = session
+                    .roster
+                    .replace_active(&replace_member_id, candidate)
+                    .map_err(|err| err.to_string())?;
+                let _ = session.roster.add_bench(replaced);
+            }
+            RecruitDestination::Decline => {}
+        }
+        if session.recruit_offer.is_empty() {
+            session.phase = SquadPhase::ChoosingNode;
+            session.live_fight = None;
+            session.selected_node = None;
+            session
+                .log
+                .push("Recruit decisions complete. Choose the next route.".to_string());
+        }
+        Ok(self.view())
+    }
+
+    fn finalize_completed_fight(&mut self) {
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        let Some(fight) = session.live_fight.as_ref() else {
+            return;
+        };
+        if !fight.done {
+            return;
+        }
+        let won = fight.winner_team == Some(0);
+        let xp = if won { 22 + session.depth * 4 } else { 0 };
+        let gold = if won { 12 + session.depth * 3 } else { 0 };
+        let mut level_ups = Vec::new();
+        for member in session.roster.active_mut() {
+            if let Some(unit) = fight.units.iter().find(|unit| unit.id == member.id) {
+                if unit.hp <= 0 {
+                    member.status = SquadMemberStatus::Dead;
+                    member.current_hp = 0;
+                } else {
+                    member.current_hp = unit.hp.min(member.max_hp);
+                    if xp > 0 {
+                        let before = member.profile.level;
+                        let result = apply_xp(&mut member.profile, &self.xp_curve, xp);
+                        member.config.level = member.profile.level;
+                        if result.levels_gained > 0 {
+                            member.max_hp +=
+                                i32::from(member.profile.level.saturating_sub(before)) * 4;
+                            member.current_hp = member.max_hp;
+                            level_ups.push(member.profile.name.clone());
+                        }
+                    }
+                }
+            }
+        }
+        let dead = session
+            .roster
+            .remove_dead_active()
+            .into_iter()
+            .map(|member| member.profile.name)
+            .collect::<Vec<_>>();
+        if let Some(node_id) = session.selected_node {
+            if let Some(node) = session.route.iter_mut().find(|node| node.id == node_id) {
+                node.completed = true;
+            }
+        }
+        session.depth = session.depth.saturating_add(1);
+        session.gold = session.gold.saturating_add(gold);
+        session.inventory.add_gold(gold);
+        session.last_reward = Some(SquadReward {
+            gold,
+            xp_per_survivor: xp,
+            deaths: dead.clone(),
+            level_ups: level_ups.clone(),
+        });
+        session.log = vec![if won {
+            format!("Victory. Survivors gain {xp} XP and recover {gold} gold.")
+        } else {
+            "Defeat. The company is broken.".to_string()
+        }];
+        if !dead.is_empty() {
+            session.log.push(format!("Lost: {}.", dead.join(", ")));
+        }
+        if !level_ups.is_empty() {
+            session
+                .log
+                .push(format!("Level up: {}.", level_ups.join(", ")));
+        }
+        if session.roster.active().is_empty() {
+            session.phase = SquadPhase::RunOver;
+            session.terminal = Some("All active heroes are dead.".to_string());
+            return;
+        }
+        if won {
+            session.recruit_offer = generate_recruit_offer(
+                session.seed,
+                session.depth,
+                &self.weapon_catalog,
+                &self.armor_catalog,
+                &self.shield_catalog,
+            );
+            session.phase = SquadPhase::RewardReview;
+        } else {
+            session.phase = SquadPhase::ChoosingNode;
+            session.live_fight = None;
+            session.selected_node = None;
+        }
     }
 
     pub fn view(&self) -> SquadBattlerView {
@@ -238,6 +396,9 @@ impl SquadBattlerApp {
                 available_nodes: Vec::new(),
                 pending_fight: None,
                 live_fight: None,
+                last_reward: None,
+                recruit_offer: Vec::new(),
+                terminal: None,
                 log: vec!["Roll a squad to begin.".to_string()],
             };
         };
@@ -272,6 +433,13 @@ impl SquadBattlerApp {
             available_nodes,
             pending_fight: session.pending_fight.as_ref().map(PendingFightView::from),
             live_fight: session.live_fight.as_ref().map(SquadCombat::view),
+            last_reward: session.last_reward.clone(),
+            recruit_offer: session
+                .recruit_offer
+                .iter()
+                .map(SquadMember::view)
+                .collect(),
+            terminal: session.terminal.clone(),
             log: session.log.clone(),
         }
     }
@@ -289,6 +457,9 @@ struct SquadRun {
     pending_fight: Option<PendingSquadFight>,
     live_fight: Option<SquadCombat>,
     selected_node: Option<usize>,
+    last_reward: Option<SquadReward>,
+    recruit_offer: Vec<SquadMember>,
+    terminal: Option<String>,
     log: Vec<String>,
 }
 
@@ -297,6 +468,8 @@ enum SquadPhase {
     ChoosingNode,
     FightPreview,
     CombatPlayback,
+    RewardReview,
+    RunOver,
 }
 
 impl SquadPhase {
@@ -305,6 +478,8 @@ impl SquadPhase {
             SquadPhase::ChoosingNode => "choose_node",
             SquadPhase::FightPreview => "fight_preview",
             SquadPhase::CombatPlayback => "combat_playback",
+            SquadPhase::RewardReview => "reward_review",
+            SquadPhase::RunOver => "run_over",
         }
     }
 }
@@ -378,6 +553,9 @@ pub struct SquadBattlerView {
     pub available_nodes: Vec<usize>,
     pub pending_fight: Option<PendingFightView>,
     pub live_fight: Option<SquadCombatView>,
+    pub last_reward: Option<SquadReward>,
+    pub recruit_offer: Vec<super::roster::SquadMemberView>,
+    pub terminal: Option<String>,
     pub log: Vec<String>,
 }
 
@@ -429,6 +607,26 @@ fn generate_enemy_squad(
                 level: base_level,
                 preset_id: NpcPresetId::new(preset_index),
             }
+        })
+        .collect()
+}
+
+fn generate_recruit_offer(
+    seed: u64,
+    depth: u32,
+    weapon_catalog: &WeaponCatalog,
+    armor_catalog: &ArmorCatalog,
+    shield_catalog: &ShieldCatalog,
+) -> Vec<SquadMember> {
+    (0..DEFAULT_RECRUIT_OFFER_SIZE)
+        .map(|idx| {
+            roll_member(
+                format!("recruit-{}-{}", depth, idx + 1),
+                derive_seed(seed, "recruit-offer", depth as u64 * 10 + idx as u64),
+                weapon_catalog,
+                armor_catalog,
+                shield_catalog,
+            )
         })
         .collect()
 }

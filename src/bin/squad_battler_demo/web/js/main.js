@@ -66,7 +66,8 @@ function render(state) {
   document.getElementById("enemySquad").innerHTML = renderEnemies(state);
   renderCombatants(state);
   document.getElementById("initiative").innerHTML = renderInitiative(state.live_fight?.initiative || []);
-  document.getElementById("log").textContent = (state.log || []).join("\n");
+  const fightLog = state.live_fight?.log_tail || [];
+  document.getElementById("log").textContent = [...(state.log || []), ...fightLog].join("\n");
 }
 
 function renderMembers(members, empty) {
@@ -79,7 +80,24 @@ function renderMembers(members, empty) {
 }
 
 function renderEnemies(state) {
+  if (state.terminal) {
+    return `<div class="member"><strong>${escapeHtml(state.terminal)}</strong></div>`;
+  }
+  if (state.recruit_offer && state.recruit_offer.length) {
+    return `<h2>Recruit Offer</h2>${state.recruit_offer.map(candidate => `<div class="member">
+      <strong><span>${escapeHtml(candidate.name)}</span><span>${candidate.hp}/${candidate.max_hp}</span></strong>
+      <div class="detail">Lv ${candidate.level} · ${escapeHtml(candidate.weapon)}</div>
+      <button onclick="recruitChoice('${escapeJs(candidate.id)}', 'active')">Active</button>
+      <button onclick="recruitChoice('${escapeJs(candidate.id)}', 'bench')">Bench</button>
+      <button onclick="recruitChoice('${escapeJs(candidate.id)}', 'decline')">Decline</button>
+    </div>`).join("")}`;
+  }
   if (state.live_fight) {
+    const controls = `<div class="combat-controls">
+      <button onclick="fightCommand('step', 1)">Step 1s</button>
+      <button onclick="fightCommand('tick', 5)">Step 5s</button>
+      <button onclick="fightCommand('finish', 1)">Finish</button>
+    </div>`;
     return renderMembers(
       state.live_fight.combatants.filter(unit => unit.team_id === 1).map(unit => ({
         id: unit.id,
@@ -92,7 +110,7 @@ function renderEnemies(state) {
         stats: [`${unit.x},${unit.y}`],
       })),
       "No enemies."
-    );
+    ) + controls;
   }
   if (state.pending_fight) {
     const enemies = state.pending_fight.enemies.map(enemy => `<div class="member">
@@ -141,6 +159,18 @@ function initials(name) {
     .join("");
 }
 
+async function recruitChoice(candidateId, destination, replaceMemberId = null) {
+  render(await postJson("/api/recruit-choice", {
+    candidate_id: candidateId,
+    destination,
+    replace_member_id: replaceMemberId,
+  }));
+}
+
+function escapeJs(value) {
+  return String(value ?? "").replaceAll("\\", "\\\\").replaceAll("'", "\\'");
+}
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -156,7 +186,7 @@ document.getElementById("newRun").addEventListener("click", () => {
   });
 });
 
-Object.assign(window, { chooseNode, startFight, fightCommand });
+Object.assign(window, { chooseNode, startFight, fightCommand, recruitChoice });
 
 requestState()
   .then(render)

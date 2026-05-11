@@ -1,4 +1,5 @@
 use super::web_assets;
+use hackmaster_sim::squad_battler::rewards::RecruitDestination;
 use hackmaster_sim::squad_battler::state::{FightCommand, SquadBattlerApp};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
@@ -127,6 +128,23 @@ fn route_request(request: HttpRequest, app: Arc<Mutex<SquadBattlerApp>>) -> Stri
                 Err(err) => error_response(400, format!("Bad request: {err}")),
             }
         }
+        ("POST", "/api/recruit-choice") => {
+            let parsed = serde_json::from_str::<RecruitChoiceRequest>(&request.body);
+            match parsed {
+                Ok(request) => {
+                    let mut app = app.lock().expect("squad battler lock poisoned");
+                    match app.recruit_choice(
+                        request.candidate_id,
+                        request.destination,
+                        request.replace_member_id,
+                    ) {
+                        Ok(view) => json_response(200, &view),
+                        Err(err) => error_response(400, err),
+                    }
+                }
+                Err(err) => error_response(400, format!("Bad request: {err}")),
+            }
+        }
         _ => error_response(404, "Not found".to_string()),
     }
 }
@@ -145,6 +163,13 @@ struct ChooseNodeRequest {
 struct FightCommandRequest {
     command: FightCommand,
     seconds: Option<u32>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct RecruitChoiceRequest {
+    candidate_id: String,
+    destination: RecruitDestination,
+    replace_member_id: Option<String>,
 }
 
 fn html_response(body: &str) -> String {
