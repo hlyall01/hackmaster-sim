@@ -1508,15 +1508,89 @@ const INDEX_HTML: &str = r#"<!doctype html>
       padding: 9px 10px;
       border-radius: 6px;
     }
-    .app {
-      display: grid;
-      grid-template-columns: 285px minmax(460px, 1fr) 370px;
-      gap: 14px;
+    .game-shell {
       height: 100vh;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      gap: 12px;
       padding: 14px;
     }
+    .hud {
+      display: grid;
+      grid-template-columns: minmax(260px, 360px) minmax(420px, 1fr) auto;
+      gap: 14px;
+      align-items: stretch;
+      border: 1px solid #584a35;
+      border-radius: 8px;
+      background:
+        linear-gradient(180deg, rgba(56,47,33,.98), rgba(24,26,23,.98)),
+        repeating-linear-gradient(90deg, rgba(255,255,255,.04) 0 1px, transparent 1px 22px);
+      box-shadow: 0 16px 42px rgba(0,0,0,.32);
+      padding: 10px;
+    }
+    .hud-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+    .sigil {
+      display: grid;
+      place-items: center;
+      width: 46px;
+      height: 46px;
+      border: 1px solid var(--gold);
+      border-radius: 8px;
+      color: #fff1c8;
+      background: #181612;
+      font-weight: 900;
+      box-shadow: inset 0 0 18px rgba(213,168,74,.2);
+    }
+    .hud h1 { font-size: 18px; }
+    .hud-metrics {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(92px, 1fr));
+      gap: 8px;
+      align-content: stretch;
+    }
+    .hud-card {
+      border: 1px solid rgba(213,168,74,.22);
+      border-radius: 6px;
+      background: rgba(0,0,0,.18);
+      padding: 7px 9px;
+      min-width: 0;
+    }
+    .hud-card span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+    .hud-card strong {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: #fff1c8;
+      font-size: 14px;
+    }
+    .hud-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      justify-content: end;
+    }
+    .app {
+      display: grid;
+      grid-template-columns: 300px minmax(500px, 1fr) 390px;
+      gap: 14px;
+      min-height: 0;
+    }
     .panel {
-      background: linear-gradient(180deg, rgba(41,39,31,.98), rgba(28,31,28,.98));
+      background:
+        linear-gradient(180deg, rgba(41,39,31,.98), rgba(28,31,28,.98)),
+        repeating-linear-gradient(180deg, rgba(255,255,255,.025) 0 1px, transparent 1px 18px);
       border: 1px solid var(--line);
       border-radius: 8px;
       box-shadow: 0 18px 48px rgba(0,0,0,.28);
@@ -1531,6 +1605,42 @@ const INDEX_HTML: &str = r#"<!doctype html>
     .sub { color: var(--muted); font-size: 13px; line-height: 1.45; }
     .stack { display: grid; gap: 12px; }
     .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .section-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding-bottom: 9px;
+      border-bottom: 1px solid rgba(213,168,74,.2);
+    }
+    .roll-box {
+      border: 1px solid rgba(169,67,56,.48);
+      background:
+        linear-gradient(180deg, rgba(82,34,29,.46), rgba(19,20,18,.35));
+      border-radius: 8px;
+      padding: 12px;
+    }
+    .sheet-name {
+      display: grid;
+      gap: 4px;
+      padding: 12px;
+      border: 1px solid rgba(213,168,74,.28);
+      border-radius: 8px;
+      background: rgba(0,0,0,.18);
+    }
+    .xpbar {
+      height: 8px;
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 999px;
+      background: #151614;
+      overflow: hidden;
+    }
+    .xpbar span {
+      display: block;
+      width: var(--xp, 0%);
+      height: 100%;
+      background: linear-gradient(90deg, #6d8fa3, #d5a84a);
+    }
     .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
     .stat {
       border: 1px solid rgba(213,168,74,.28);
@@ -1552,7 +1662,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
     .metric strong { color: #fff1c8; }
     .map {
       position: relative;
-      height: calc(100vh - 28px);
+      height: 100%;
       padding: 18px;
     }
     .map-header {
@@ -1566,8 +1676,14 @@ const INDEX_HTML: &str = r#"<!doctype html>
       display: grid;
       grid-template-columns: repeat(4, 1fr);
       gap: 16px;
-      height: calc(100% - 62px);
+      height: calc(100% - 66px);
       align-items: center;
+      border: 1px solid rgba(213,168,74,.16);
+      border-radius: 8px;
+      background:
+        radial-gradient(circle at 50% 45%, rgba(213,168,74,.08), transparent 42%),
+        linear-gradient(180deg, rgba(0,0,0,.14), rgba(0,0,0,.22));
+      padding: 14px;
     }
     .node-scene {
       grid-column: 1 / -1;
@@ -1614,6 +1730,15 @@ const INDEX_HTML: &str = r#"<!doctype html>
       gap: 18px;
       align-content: center;
       min-height: 360px;
+      position: relative;
+    }
+    .floor:not(:last-child)::after {
+      content: "";
+      position: absolute;
+      top: 50%;
+      right: -16px;
+      width: 16px;
+      border-top: 1px dashed rgba(213,168,74,.36);
     }
     .node {
       display: grid;
@@ -1647,7 +1772,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
       opacity: 0;
     }
     .right-scroll {
-      height: 100vh;
+      height: 100%;
       overflow: auto;
       padding-right: 2px;
     }
@@ -1789,54 +1914,76 @@ const INDEX_HTML: &str = r#"<!doctype html>
     .danger { color: #f0a096; }
     .ok { color: #a9d48e; }
     @media (max-width: 1050px) {
-      .app { grid-template-columns: 1fr; height: auto; }
+      .game-shell { height: auto; min-height: 100vh; }
+      .hud { grid-template-columns: 1fr; }
+      .hud-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .hud-actions { justify-content: stretch; }
+      .hud-actions button { width: 100%; }
+      .app { grid-template-columns: 1fr; }
       .map { height: auto; min-height: 560px; }
       .right-scroll { height: auto; }
       .combat-grid { grid-template-columns: 1fr; }
+      .floor:not(:last-child)::after { display: none; }
     }
   </style>
 </head>
 <body>
-  <main class="app">
-    <aside class="panel"><div class="panel-inner stack">
-      <div class="stack">
-        <h1>HackMaster Autobattler v2</h1>
-        <div class="sub">Playable vertical slice: quick-start character, branching route, events, fights, loot, wounds, XP, and level points.</div>
-      </div>
-      <div class="stack">
-        <h2>Roll Character</h2>
-        <select id="preset"></select>
-        <input id="name" placeholder="Name override" />
-        <input id="seed" placeholder="Seed, blank for random" />
-        <button onclick="newRun()">Roll Character</button>
-      </div>
-      <div id="character" class="stack"></div>
-    </div></aside>
-    <section class="panel map">
-      <div class="map-header">
+  <main class="game-shell">
+    <header class="hud">
+      <div class="hud-brand">
+        <span class="sigil">HM</span>
         <div>
-          <h2>Route</h2>
+          <h1>HackMaster Autobattler v2</h1>
           <div id="phase" class="sub">Roll a character to begin.</div>
         </div>
-        <span id="runStatus" class="pill">No run</span>
       </div>
-      <div id="map" class="map-grid"></div>
-    </section>
-    <aside class="right-scroll stack">
-      <section class="panel"><div class="panel-inner stack" id="encounter"></div></section>
-      <section class="panel"><div class="panel-inner stack">
-        <h2>Latest Reward</h2>
-        <div id="reward"></div>
-      </div></section>
-      <section class="panel"><div class="panel-inner stack">
-        <h2>Fight Summary</h2>
-        <div id="fight"></div>
-      </div></section>
-      <section class="panel"><div class="panel-inner stack">
-        <h2>Log</h2>
-        <div id="log" class="log"></div>
-      </div></section>
-    </aside>
+      <div id="hudMetrics" class="hud-metrics"></div>
+      <div class="hud-actions">
+        <span id="runStatus" class="pill">No run</span>
+        <button onclick="newRun()">New Run</button>
+      </div>
+    </header>
+    <div class="app">
+      <aside class="panel"><div class="panel-inner stack">
+        <div class="section-title">
+          <h2>Character Sheet</h2>
+          <span class="pill">Run</span>
+        </div>
+        <div class="roll-box stack">
+          <h2>Roll Character</h2>
+          <select id="preset"></select>
+          <input id="name" placeholder="Name override" />
+          <input id="seed" placeholder="Seed, blank for random" />
+          <button onclick="newRun()">Roll Character</button>
+        </div>
+        <div id="character" class="stack"></div>
+      </div></aside>
+      <section class="panel map">
+        <div class="map-header">
+          <div>
+            <h2>Route</h2>
+            <div class="sub">Branching run map and active encounter scene.</div>
+          </div>
+          <span id="routeStatus" class="pill">Route</span>
+        </div>
+        <div id="map" class="map-grid"></div>
+      </section>
+      <aside class="right-scroll stack">
+        <section class="panel"><div class="panel-inner stack" id="encounter"></div></section>
+        <section class="panel"><div class="panel-inner stack">
+          <div class="section-title"><h2>Latest Reward</h2><span class="pill">Loot</span></div>
+          <div id="reward"></div>
+        </div></section>
+        <section class="panel"><div class="panel-inner stack">
+          <div class="section-title"><h2>Fight Summary</h2><span class="pill">Combat</span></div>
+          <div id="fight"></div>
+        </div></section>
+        <section class="panel"><div class="panel-inner stack">
+          <div class="section-title"><h2>Log</h2><span class="pill">History</span></div>
+          <div id="log" class="log"></div>
+        </div></section>
+      </aside>
+    </div>
   </main>
   <script>
     let state = null;
@@ -1901,6 +2048,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
 
     function render() {
       renderPresets();
+      renderHud();
       renderCharacter();
       renderMap();
       renderEncounter();
@@ -1917,6 +2065,34 @@ const INDEX_HTML: &str = r#"<!doctype html>
       if (previous) select.value = previous;
     }
 
+    function renderHud() {
+      document.getElementById("phase").textContent = state.terminal || phaseText(state.phase);
+      document.getElementById("runStatus").textContent = state.has_run ? phaseLabel(state.phase) : "No run";
+      const metrics = document.getElementById("hudMetrics");
+      if (!state.player) {
+        metrics.innerHTML = [
+          hudCard("Level", "-"),
+          hudCard("XP", "-"),
+          hudCard("Gold", "-"),
+          hudCard("Depth", "-"),
+          hudCard("Wounds", "-")
+        ].join("");
+        return;
+      }
+      const p = state.player;
+      metrics.innerHTML = [
+        hudCard("Level", p.level),
+        hudCard("XP", `${p.xp}/${p.next_level_xp}`),
+        hudCard("Gold", p.gold),
+        hudCard("Depth", p.depth),
+        hudCard("Wounds", p.wound_total || "none")
+      ].join("");
+    }
+
+    function hudCard(label, value) {
+      return `<div class="hud-card"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`;
+    }
+
     function renderCharacter() {
       const el = document.getElementById("character");
       if (!state.player) {
@@ -1924,23 +2100,30 @@ const INDEX_HTML: &str = r#"<!doctype html>
         return;
       }
       const p = state.player;
+      const xpPct = clamp((p.xp / Math.max(1, p.next_level_xp)) * 100, 0, 100);
       el.innerHTML = `
         <div class="stack">
-          <h2>${escapeHtml(p.name)}</h2>
-          <div class="metric"><span>Level</span><strong>${p.level}</strong></div>
-          <div class="metric"><span>XP</span><strong>${p.xp} / ${p.next_level_xp}</strong></div>
-          <div class="metric"><span>Gold</span><strong>${p.gold}</strong></div>
-          <div class="metric"><span>Depth</span><strong>${p.depth}</strong></div>
-          <div class="metric"><span>Wounds</span><strong class="${p.wound_total ? "danger" : "ok"}">${p.wound_total || "none"}</strong></div>
-          <div class="metric"><span>Seed</span><strong>${p.seed}</strong></div>
+          <div class="sheet-name">
+            <div class="row"><h2>${escapeHtml(p.name)}</h2><span class="pill">Level ${p.level}</span></div>
+            <div class="xpbar" style="--xp:${xpPct}%"><span></span></div>
+            <div class="sub">XP ${p.xp} / ${p.next_level_xp}</div>
+          </div>
+          ${metricRow("Gold", p.gold)}
+          ${metricRow("Depth", p.depth)}
+          ${metricRow("Wounds", `<strong class="${p.wound_total ? "danger" : "ok"}">${p.wound_total || "none"}</strong>`)}
+          ${metricRow("Seed", p.seed)}
           <div class="stat-grid">${p.stats.map(s => `<div class="stat">${escapeHtml(s)}</div>`).join("")}</div>
           <div class="sub">Points: BP ${p.bp}, LP ${p.lp}, AP ${p.ap}, RP ${p.rp}</div>
         </div>`;
     }
 
+    function metricRow(label, value) {
+      const rendered = typeof value === "string" && value.includes("<strong") ? value : `<strong>${escapeHtml(value)}</strong>`;
+      return `<div class="metric"><span>${escapeHtml(label)}</span>${rendered}</div>`;
+    }
+
     function renderMap() {
-      document.getElementById("phase").textContent = state.terminal || phaseText(state.phase);
-      document.getElementById("runStatus").textContent = state.has_run ? state.phase.replace("_", " ") : "No run";
+      document.getElementById("routeStatus").textContent = state.has_run ? phaseLabel(state.phase) : "Route";
       const map = document.getElementById("map");
       if (state.live_fight) {
         map.innerHTML = renderLiveFightScene(state.live_fight);
@@ -2136,6 +2319,9 @@ const INDEX_HTML: &str = r#"<!doctype html>
       if (phase === "combat_playback") return "Combat is running second by second.";
       if (phase === "run_over") return "Run over.";
       return "Roll a character to begin.";
+    }
+    function phaseLabel(phase) {
+      return String(phase || "No run").replace(/_/g, " ");
     }
     function clamp(value, min, max) {
       return Math.max(min, Math.min(max, Number.isFinite(value) ? value : min));
