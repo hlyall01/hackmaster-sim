@@ -1,5 +1,5 @@
 use super::web_assets;
-use hackmaster_sim::squad_battler::state::SquadBattlerApp;
+use hackmaster_sim::squad_battler::state::{FightCommand, SquadBattlerApp};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -94,6 +94,39 @@ fn route_request(request: HttpRequest, app: Arc<Mutex<SquadBattlerApp>>) -> Stri
             let view = app.new_run(parsed.seed);
             json_response(200, &view)
         }
+        ("POST", "/api/choose-node") => {
+            let parsed = serde_json::from_str::<ChooseNodeRequest>(&request.body);
+            match parsed {
+                Ok(request) => {
+                    let mut app = app.lock().expect("squad battler lock poisoned");
+                    match app.choose_node(request.node_id) {
+                        Ok(view) => json_response(200, &view),
+                        Err(err) => error_response(400, err),
+                    }
+                }
+                Err(err) => error_response(400, format!("Bad request: {err}")),
+            }
+        }
+        ("POST", "/api/start-fight") => {
+            let mut app = app.lock().expect("squad battler lock poisoned");
+            match app.start_fight() {
+                Ok(view) => json_response(200, &view),
+                Err(err) => error_response(400, err),
+            }
+        }
+        ("POST", "/api/fight-command") => {
+            let parsed = serde_json::from_str::<FightCommandRequest>(&request.body);
+            match parsed {
+                Ok(request) => {
+                    let mut app = app.lock().expect("squad battler lock poisoned");
+                    match app.fight_command(request.command, request.seconds) {
+                        Ok(view) => json_response(200, &view),
+                        Err(err) => error_response(400, err),
+                    }
+                }
+                Err(err) => error_response(400, format!("Bad request: {err}")),
+            }
+        }
         _ => error_response(404, "Not found".to_string()),
     }
 }
@@ -101,6 +134,17 @@ fn route_request(request: HttpRequest, app: Arc<Mutex<SquadBattlerApp>>) -> Stri
 #[derive(Clone, Debug, Deserialize)]
 struct NewRunRequest {
     seed: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct ChooseNodeRequest {
+    node_id: usize,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct FightCommandRequest {
+    command: FightCommand,
+    seconds: Option<u32>,
 }
 
 fn html_response(body: &str) -> String {

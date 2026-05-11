@@ -22,6 +22,18 @@ async function newRun() {
   render(state);
 }
 
+async function chooseNode(id) {
+  render(await postJson("/api/choose-node", { node_id: id }));
+}
+
+async function startFight() {
+  render(await postJson("/api/start-fight", {}));
+}
+
+async function fightCommand(command, seconds = 1) {
+  render(await postJson("/api/fight-command", { command, seconds }));
+}
+
 function renderGrid(grid) {
   const el = document.getElementById("battleGrid");
   el.style.gridTemplateColumns = `repeat(${grid.width}, 1fr)`;
@@ -51,6 +63,9 @@ function render(state) {
   renderGrid(state.grid);
   document.getElementById("playerSquad").innerHTML = renderMembers(state.squad.active, "No active squad.");
   document.getElementById("benchSquad").innerHTML = renderMembers(state.squad.bench, "No bench.");
+  document.getElementById("enemySquad").innerHTML = renderEnemies(state);
+  renderCombatants(state);
+  document.getElementById("initiative").innerHTML = renderInitiative(state.live_fight?.initiative || []);
   document.getElementById("log").textContent = (state.log || []).join("\n");
 }
 
@@ -61,6 +76,69 @@ function renderMembers(members, empty) {
     <div class="detail">Lv ${member.level} · ${escapeHtml(member.weapon)} · ${escapeHtml(member.status)}</div>
     <div class="detail">${(member.stats || []).map(escapeHtml).join(" · ")}</div>
   </div>`).join("");
+}
+
+function renderEnemies(state) {
+  if (state.live_fight) {
+    return renderMembers(
+      state.live_fight.combatants.filter(unit => unit.team_id === 1).map(unit => ({
+        id: unit.id,
+        name: unit.name,
+        hp: unit.hp,
+        max_hp: unit.max_hp,
+        level: 1,
+        weapon: unit.weapon,
+        status: unit.status,
+        stats: [`${unit.x},${unit.y}`],
+      })),
+      "No enemies."
+    );
+  }
+  if (state.pending_fight) {
+    const enemies = state.pending_fight.enemies.map(enemy => `<div class="member">
+      <strong><span>${escapeHtml(enemy.name)}</span><span>Lv ${enemy.level}</span></strong>
+      <div class="detail">${escapeHtml(state.pending_fight.tier)} squad</div>
+    </div>`).join("");
+    return `${enemies}<button onclick="startFight()">Start Fight</button>`;
+  }
+  if (state.has_run) {
+    return `<div class="route-list">${state.route.map(node => {
+      const available = state.available_nodes.includes(node.id);
+      return `<button ${available ? "" : "disabled"} onclick="chooseNode(${node.id})">${escapeHtml(node.kind)} ${node.id + 1}</button>`;
+    }).join("")}</div>`;
+  }
+  return `<div class="muted">No enemy squad.</div>`;
+}
+
+function renderCombatants(state) {
+  const grid = document.getElementById("battleGrid");
+  if (!state.live_fight) return;
+  for (const unit of state.live_fight.combatants) {
+    const token = document.createElement("div");
+    token.className = `unit-token team-${unit.team_id}`;
+    token.style.gridColumn = `${unit.x + 1}`;
+    token.style.gridRow = `${unit.y + 1}`;
+    token.textContent = initials(unit.name);
+    token.title = `${unit.name} ${unit.hp}/${unit.max_hp}`;
+    grid.appendChild(token);
+  }
+}
+
+function renderInitiative(rows) {
+  if (!rows.length) return `<div class="muted">No combat timeline.</div>`;
+  return rows.map(row => `<div class="member">
+    <strong><span>${escapeHtml(row.name)}</span><span>${row.ready ? "ready" : `${row.next_action_in_seconds.toFixed(0)}s`}</span></strong>
+    <div class="detail">Team ${row.team_id}</div>
+  </div>`).join("");
+}
+
+function initials(name) {
+  return String(name || "?")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map(part => part[0].toUpperCase())
+    .join("");
 }
 
 function escapeHtml(value) {
@@ -77,6 +155,8 @@ document.getElementById("newRun").addEventListener("click", () => {
     document.getElementById("log").textContent = err.message;
   });
 });
+
+Object.assign(window, { chooseNode, startFight, fightCommand });
 
 requestState()
   .then(render)
