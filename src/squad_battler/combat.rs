@@ -71,6 +71,8 @@ pub struct BattleUnit {
     pub max_hp: i32,
     pub weapon: String,
     pub reach_ft: f32,
+    pub max_range_ft: Option<f32>,
+    pub move_tiles: i32,
     pub initiative_ready_at: f32,
 }
 
@@ -93,6 +95,8 @@ impl BattleUnit {
             max_hp: hp,
             weapon: weapon.into(),
             reach_ft,
+            max_range_ft: None,
+            move_tiles: 4,
             initiative_ready_at: 0.0,
         }
     }
@@ -140,16 +144,7 @@ impl SquadCombat {
         self.elapsed_seconds = self.elapsed_seconds.saturating_add(1);
         for idx in self.living_indices() {
             if let Some(target_idx) = self.nearest_enemy(idx) {
-                let distance = self
-                    .grid
-                    .distance_ft(self.units[idx].pos, self.units[target_idx].pos);
-                self.log.push(format!(
-                    "t={}s: {} marks {} at {:.0} ft.",
-                    self.elapsed_seconds,
-                    self.units[idx].name,
-                    self.units[target_idx].name,
-                    distance
-                ));
+                self.resolve_unit_ai(idx, target_idx);
             }
         }
         self.refresh_done();
@@ -179,6 +174,109 @@ impl SquadCombat {
             .filter(|unit| unit.is_alive())
             .map(|unit| unit.pos)
             .collect()
+    }
+
+    fn resolve_unit_ai(&mut self, idx: usize, target_idx: usize) {
+        if !self.units[idx].is_alive() || !self.units[target_idx].is_alive() {
+            return;
+        }
+        let distance = self
+            .grid
+            .distance_ft(self.units[idx].pos, self.units[target_idx].pos);
+        if let Some(max_range) = self.units[idx].max_range_ft {
+            if distance <= max_range && distance > self.units[idx].reach_ft {
+                if self.try_move_away(idx, target_idx) {
+                    self.log.push(format!(
+                        "t={}s: {} keeps distance from {}.",
+                        self.elapsed_seconds, self.units[idx].name, self.units[target_idx].name
+                    ));
+                }
+                return;
+            }
+        }
+
+        let desired_range = self.units[idx]
+            .max_range_ft
+            .unwrap_or(self.units[idx].reach_ft)
+            .max(self.units[idx].reach_ft);
+        if distance > desired_range {
+            let before = self.units[idx].pos;
+            self.move_toward(idx, target_idx, desired_range);
+            if self.units[idx].pos != before {
+                let after_distance = self
+                    .grid
+                    .distance_ft(self.units[idx].pos, self.units[target_idx].pos);
+                self.log.push(format!(
+                    "t={}s: {} advances on {} ({:.0} ft).",
+                    self.elapsed_seconds,
+                    self.units[idx].name,
+                    self.units[target_idx].name,
+                    after_distance
+                ));
+            }
+        }
+    }
+
+    fn move_toward(&mut self, mover_idx: usize, target_idx: usize, stop_distance_ft: f32) {
+        let steps = self.units[mover_idx].move_tiles.max(0);
+        for _ in 0..steps {
+            let distance = self
+                .grid
+                .distance_ft(self.units[mover_idx].pos, self.units[target_idx].pos);
+            if distance <= stop_distance_ft {
+                break;
+            }
+            let Some(next) = self.best_step_toward(mover_idx, self.units[target_idx].pos) else {
+                break;
+            };
+            self.units[mover_idx].pos = next;
+        }
+    }
+
+    fn try_move_away(&mut self, mover_idx: usize, target_idx: usize) -> bool {
+        let Some(next) = self.best_step_away(mover_idx, self.units[target_idx].pos) else {
+            return false;
+        };
+        self.units[mover_idx].pos = next;
+        true
+    }
+
+    fn best_step_toward(&self, mover_idx: usize, target: GridPos) -> Option<GridPos> {
+        let from = self.units.get(mover_idx)?.pos;
+        self.legal_neighbors(mover_idx)
+            .into_iter()
+            .min_by_key(|pos| pos.manhattan_distance(target))
+            .filter(|pos| pos.manhattan_distance(target) < from.manhattan_distance(target))
+    }
+
+    fn best_step_away(&self, mover_idx: usize, target: GridPos) -> Option<GridPos> {
+        let from = self.units.get(mover_idx)?.pos;
+        self.legal_neighbors(mover_idx)
+            .into_iter()
+            .max_by_key(|pos| pos.manhattan_distance(target))
+            .filter(|pos| pos.manhattan_distance(target) > from.manhattan_distance(target))
+    }
+
+    fn legal_neighbors(&self, mover_idx: usize) -> Vec<GridPos> {
+        let Some(unit) = self.units.get(mover_idx) else {
+            return Vec::new();
+        };
+        let occupied = self.occupied_positions();
+        [
+            GridPos::new(unit.pos.x + 1, unit.pos.y),
+            GridPos::new(unit.pos.x - 1, unit.pos.y),
+            GridPos::new(unit.pos.x, unit.pos.y + 1),
+            GridPos::new(unit.pos.x, unit.pos.y - 1),
+        ]
+        .into_iter()
+        .filter(|pos| {
+            pos.x >= 0
+                && pos.y >= 0
+                && pos.x < self.grid.width
+                && pos.y < self.grid.height
+                && !occupied.contains(pos)
+        })
+        .collect()
     }
 
     pub fn view(&self) -> SquadCombatView {
@@ -252,6 +350,8 @@ pub struct BattleUnitView {
     pub status: BattleUnitStatus,
     pub weapon: String,
     pub reach_ft: f32,
+    pub max_range_ft: Option<f32>,
+    pub move_tiles: i32,
     pub initiative: f32,
 }
 
@@ -272,6 +372,8 @@ impl From<&BattleUnit> for BattleUnitView {
             },
             weapon: unit.weapon.clone(),
             reach_ft: unit.reach_ft,
+            max_range_ft: unit.max_range_ft,
+            move_tiles: unit.move_tiles,
             initiative: unit.initiative_ready_at,
         }
     }
