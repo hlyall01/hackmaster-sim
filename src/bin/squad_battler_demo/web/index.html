@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>HackMaster Squad Battler</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <h1>HackMaster Squad Battler</h1>
+        <p id="phase">Roll a squad to begin.</p>
+      </div>
+      <div id="metrics" class="metrics"></div>
+    </header>
+    <section class="layout">
+      <aside class="panel">
+        <h2>Squad</h2>
+        <div id="playerSquad" class="list muted">No active squad.</div>
+      </aside>
+      <section class="battle-panel">
+        <div class="battle-header">
+          <h2>Battle Mat</h2>
+          <span>5 ft grid</span>
+        </div>
+        <div id="battleGrid" class="battle-grid"></div>
+      </section>
+      <aside class="panel">
+        <h2>Enemies</h2>
+        <div id="enemySquad" class="list muted">No enemy squad.</div>
+      </aside>
+    </section>
+    <footer class="footer">
+      <section class="panel">
+        <h2>Initiative</h2>
+        <div id="initiative" class="list muted">No combat timeline.</div>
+      </section>
+      <section class="panel">
+        <h2>Log</h2>
+        <div id="log" class="log"></div>
+      </section>
+    </footer>
+  </main>
+  <script type="module" src="/static/js/main.js"></script>
+</body>
+</html>
