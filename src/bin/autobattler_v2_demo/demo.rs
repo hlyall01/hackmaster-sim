@@ -554,6 +554,7 @@ impl DemoApp {
                 has_run: false,
                 presets: preset_names,
                 player: None,
+                inventory: None,
                 map: Vec::new(),
                 available_nodes: Vec::new(),
                 phase: "start".to_string(),
@@ -580,6 +581,7 @@ impl DemoApp {
             has_run: true,
             presets: preset_names,
             player: Some(DemoPlayerView::from_state(&session.run_state)),
+            inventory: Some(DemoInventoryView::from_inventory(&session.run_state.inventory)),
             map: session.map.clone(),
             available_nodes,
             phase: session.phase.label().to_string(),
@@ -673,6 +675,7 @@ struct DemoView {
     has_run: bool,
     presets: Vec<String>,
     player: Option<DemoPlayerView>,
+    inventory: Option<DemoInventoryView>,
     map: Vec<DemoNode>,
     available_nodes: Vec<usize>,
     phase: String,
@@ -868,6 +871,21 @@ impl DemoPlayerView {
                 format!("WIS {}", scores.wisdom.base),
                 format!("CHA {}", scores.charisma.base),
             ],
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct DemoInventoryView {
+    gold: u32,
+    items: Vec<String>,
+}
+
+impl DemoInventoryView {
+    fn from_inventory(inventory: &Inventory) -> Self {
+        Self {
+            gold: inventory.gold,
+            items: inventory.items.clone(),
         }
     }
 }
@@ -2472,6 +2490,188 @@ const INDEX_HTML: &str = r#"<!doctype html>
       color: #f4d98d;
       font-size: 11px;
     }
+    .app {
+      grid-template-columns: minmax(250px, 300px) minmax(420px, 1fr) minmax(320px, 390px);
+      overflow: hidden;
+    }
+    .right-scroll {
+      min-height: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
+      align-content: start;
+      grid-auto-rows: max-content;
+      padding-right: 6px;
+      padding-bottom: 18px;
+      scrollbar-gutter: stable;
+    }
+    .right-scroll .panel {
+      min-height: auto;
+    }
+    .right-scroll .panel-inner {
+      padding: 12px;
+    }
+    .right-scroll button {
+      width: 100%;
+    }
+    .inventory-panel {
+      display: grid;
+      gap: 10px;
+    }
+    .inventory-gold {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border: 2px solid #4a2817;
+      border-radius: 8px;
+      background: rgba(25,12,7,.42);
+      padding: 9px 10px;
+    }
+    .inventory-gold span,
+    .summary-grid span {
+      color: #d7b982;
+      font-size: 12px;
+      font-weight: 900;
+      text-transform: uppercase;
+    }
+    .inventory-gold strong {
+      color: #ffe5a2;
+      font-size: 18px;
+    }
+    .inventory-list {
+      display: grid;
+      gap: 6px;
+      max-height: clamp(86px, 16vh, 150px);
+      overflow-y: auto;
+      padding-right: 2px;
+    }
+    .inventory-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      border: 1px solid rgba(240,189,85,.26);
+      border-radius: 7px;
+      background: rgba(25,12,7,.34);
+      padding: 7px 9px;
+    }
+    .inventory-item span {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+    .inventory-item strong {
+      color: #ffe5a2;
+      min-width: 28px;
+      text-align: right;
+    }
+    .fight-summary {
+      gap: 10px;
+    }
+    .fight-result-line {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .fight-result-line strong {
+      font-size: 16px;
+    }
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .summary-grid div {
+      min-width: 0;
+      border: 1px solid rgba(240,189,85,.24);
+      border-radius: 7px;
+      background: rgba(25,12,7,.34);
+      padding: 7px 9px;
+    }
+    .summary-grid strong {
+      display: block;
+      color: #ffe5a2;
+      overflow-wrap: anywhere;
+    }
+    .combat-log-mini {
+      display: grid;
+      gap: 6px;
+      max-height: clamp(120px, 24vh, 260px);
+      overflow-y: auto;
+      overflow-x: hidden;
+      border: 2px solid #30180d;
+      border-radius: 8px;
+      background: rgba(28,14,8,.74);
+      padding: 9px;
+    }
+    .log-line {
+      color: #efd49b;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.35;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+    .right-scroll > .panel:nth-child(1) .panel-inner,
+    .right-scroll > .panel:nth-child(2) .panel-inner,
+    .right-scroll > .panel:nth-child(3) .panel-inner {
+      gap: 10px;
+    }
+    .node-scene {
+      min-height: min(540px, calc(100vh - 220px));
+      padding: clamp(18px, 3vw, 48px);
+    }
+    @media (max-height: 850px) and (min-width: 1051px) {
+      .game-shell {
+        gap: 8px;
+        padding: 8px;
+      }
+      .hud {
+        padding: 8px;
+      }
+      .hud h1 {
+        font-size: 21px;
+      }
+      .hud-card {
+        padding: 5px 7px;
+      }
+      .app {
+        gap: 10px;
+      }
+      .panel-inner {
+        padding: 11px;
+      }
+      .map {
+        padding: 10px;
+      }
+      .map-header {
+        margin-bottom: 10px;
+      }
+      .map-grid {
+        height: calc(100% - 54px);
+      }
+      .node-scene {
+        min-height: 390px;
+      }
+      .arena-track {
+        height: 118px;
+      }
+      .fighter-token {
+        width: 62px;
+        height: 76px;
+      }
+      .combat-scene {
+        gap: 10px;
+      }
+      .timeline {
+        padding: 9px;
+      }
+      .combat-grid {
+        gap: 8px;
+      }
+      .combatant {
+        padding: 9px;
+      }
+    }
     @media (max-width: 1050px) {
       body { overflow: auto; }
       .game-shell { height: auto; min-height: 100vh; }
@@ -2533,6 +2733,10 @@ const INDEX_HTML: &str = r#"<!doctype html>
       </section>
       <aside class="right-scroll stack">
         <section class="panel"><div class="panel-inner stack" id="encounter"></div></section>
+        <section class="panel"><div class="panel-inner stack">
+          <div class="section-title"><h2>Inventory</h2><span class="pill">Pack</span></div>
+          <div id="inventory"></div>
+        </div></section>
         <section class="panel"><div class="panel-inner stack">
           <div class="section-title"><h2>Latest Reward</h2><span class="pill">Loot</span></div>
           <div id="reward"></div>
@@ -2616,6 +2820,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
       renderCharacter();
       renderMap();
       renderEncounter();
+      renderInventory();
       renderReward();
       renderFight();
       renderLog();
@@ -2910,6 +3115,32 @@ const INDEX_HTML: &str = r#"<!doctype html>
       }
     }
 
+    function renderInventory() {
+      const el = document.getElementById("inventory");
+      const inventory = state.inventory;
+      if (!inventory) {
+        el.innerHTML = `<div class="sub">No run inventory yet.</div>`;
+        return;
+      }
+      const items = countedItems(inventory.items || []);
+      el.innerHTML = `<div class="inventory-panel">
+        <div class="inventory-gold"><span>Gold</span><strong>${inventory.gold}</strong></div>
+        <div class="inventory-list">
+          ${items.length
+            ? items.map(item => `<div class="inventory-item"><span>${escapeHtml(item.name)}</span><strong>${item.count > 1 ? `x${item.count}` : ""}</strong></div>`).join("")
+            : `<div class="sub">Pack is empty.</div>`}
+        </div>
+      </div>`;
+    }
+
+    function countedItems(items) {
+      const counts = new Map();
+      for (const item of items) counts.set(item, (counts.get(item) || 0) + 1);
+      return Array.from(counts.entries())
+        .map(([name, count]) => ({ name, count }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    }
+
     function renderReward() {
       const el = document.getElementById("reward");
       if (!state.last_reward) {
@@ -2919,7 +3150,6 @@ const INDEX_HTML: &str = r#"<!doctype html>
       const r = state.last_reward;
       el.innerHTML = `<div class="reward">
         ${rewardDetails(r)}
-        ${state.phase === "reward_review" ? `<button onclick="claimReward()">Continue Route</button>` : ""}
       </div>`;
     }
 
@@ -2934,10 +3164,13 @@ const INDEX_HTML: &str = r#"<!doctype html>
       const el = document.getElementById("fight");
       if (state.live_fight) {
         const fight = state.live_fight;
-        el.innerHTML = `<div class="fight">
-          <div><strong>${escapeHtml(fight.status)}</strong> vs ${escapeHtml(fight.enemy_name)}</div>
-          <div>${fight.elapsed_seconds}s elapsed | ${Number(fight.distance_ft || 0).toFixed(1)} ft range</div>
-          <div class="log">${(fight.log_tail || []).map(escapeHtml).join("<br>") || "No strikes yet."}</div>
+        el.innerHTML = `<div class="fight fight-summary">
+          <div class="fight-result-line"><strong>${escapeHtml(fight.status)}</strong><span>vs ${escapeHtml(fight.enemy_name)}</span></div>
+          <div class="summary-grid">
+            <div><span>Time</span><strong>${fight.elapsed_seconds}s</strong></div>
+            <div><span>Range</span><strong>${Number(fight.distance_ft || 0).toFixed(1)} ft</strong></div>
+          </div>
+          <div class="combat-log-mini">${logLines(fight.log_tail, "No strikes yet.")}</div>
         </div>`;
         return;
       }
@@ -2946,13 +3179,22 @@ const INDEX_HTML: &str = r#"<!doctype html>
         return;
       }
       const f = state.last_fight;
-      el.innerHTML = `<div class="fight">
-        <div><strong class="${f.won ? "ok" : "danger"}">${f.won ? "Victory" : "Defeat"}</strong> vs ${escapeHtml(f.enemy)}</div>
-        <div>Turns: ${f.turns}s | HP left: ${f.remaining_hp}</div>
-        <div>Hits dealt: ${escapeHtml(f.hits_dealt)}</div>
-        <div>Hits taken: ${escapeHtml(f.hits_taken)}</div>
-        <div class="log">${f.combat_log.map(escapeHtml).join("<br>")}</div>
+      el.innerHTML = `<div class="fight fight-summary">
+        <div class="fight-result-line"><strong class="${f.won ? "ok" : "danger"}">${f.won ? "Victory" : "Defeat"}</strong><span>vs ${escapeHtml(f.enemy)}</span></div>
+        <div class="summary-grid">
+          <div><span>Turns</span><strong>${f.turns}s</strong></div>
+          <div><span>HP left</span><strong>${f.remaining_hp}</strong></div>
+          <div><span>Dealt</span><strong>${escapeHtml(f.hits_dealt)}</strong></div>
+          <div><span>Taken</span><strong>${escapeHtml(f.hits_taken)}</strong></div>
+        </div>
+        <div class="combat-log-mini">${logLines(f.combat_log, "No combat log.")}</div>
       </div>`;
+    }
+
+    function logLines(lines, emptyText) {
+      const list = lines || [];
+      if (!list.length) return `<div class="sub">${escapeHtml(emptyText)}</div>`;
+      return list.map(line => `<div class="log-line">${escapeHtml(line)}</div>`).join("");
     }
 
     function renderLog() {
