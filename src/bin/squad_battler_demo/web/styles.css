@@ -10,6 +10,7 @@
   --red: #8f3328;
   --blue: #265f85;
   --muted: #6f4a2d;
+  --shadow: rgba(33, 13, 5, .55);
 }
 
 * { box-sizing: border-box; }
@@ -46,7 +47,7 @@ input {
 }
 
 .shell {
-  min-height: 100vh;
+  height: 100vh;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 12px;
@@ -64,16 +65,35 @@ input {
 }
 
 .topbar {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) auto auto;
   gap: 16px;
   align-items: center;
   padding: 12px 16px;
 }
 
 h1, h2, p { margin: 0; }
-h1 { font-size: 30px; }
+h1 { font-size: clamp(23px, 3vw, 34px); }
 h2 { font-size: 20px; color: #4a210f; }
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.seal {
+  width: 48px;
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  border: 2px solid #3b1b0d;
+  border-radius: 50%;
+  color: #f6d98e;
+  background: radial-gradient(circle at 35% 25%, #9a4b2a, #33150a);
+  box-shadow: 0 3px 0 var(--shadow);
+  font-weight: 900;
+}
 
 .layout {
   min-height: 0;
@@ -117,11 +137,13 @@ h2 { font-size: 20px; color: #4a210f; }
     linear-gradient(to right, rgba(67, 34, 15, .32) 1px, transparent 1px),
     linear-gradient(to bottom, rgba(67, 34, 15, .32) 1px, transparent 1px);
   background-size: calc(100% / 12) calc(100% / 8);
+  position: relative;
 }
 
 .grid-cell {
   min-width: 0;
   min-height: 0;
+  border: 1px solid rgba(75, 37, 15, .16);
 }
 
 .unit-token {
@@ -138,6 +160,11 @@ h2 { font-size: 20px; color: #4a210f; }
   font-family: Georgia, "Times New Roman", serif;
   box-shadow: 0 2px 0 rgba(0,0,0,.55);
   z-index: 2;
+}
+
+.unit-token[aria-disabled="true"] {
+  filter: grayscale(.75);
+  opacity: .55;
 }
 
 .team-0 {
@@ -163,8 +190,10 @@ h2 { font-size: 20px; color: #4a210f; }
 
 .footer {
   display: grid;
-  grid-template-columns: minmax(280px, 420px) 1fr;
+  grid-template-columns: minmax(320px, 520px) 1fr;
   gap: 12px;
+  min-height: 150px;
+  max-height: 230px;
 }
 
 .list {
@@ -176,7 +205,7 @@ h2 { font-size: 20px; color: #4a210f; }
 .log {
   margin-top: 10px;
   min-height: 60px;
-  max-height: 110px;
+  max-height: 155px;
   overflow: auto;
   color: #2d1409;
   white-space: pre-wrap;
@@ -184,9 +213,16 @@ h2 { font-size: 20px; color: #4a210f; }
 
 .metrics {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   align-items: center;
   font-weight: 700;
+}
+
+.metrics span {
+  border: 1px solid rgba(74, 33, 15, .45);
+  background: rgba(255, 231, 170, .28);
+  padding: 5px 8px;
 }
 
 .actions {
@@ -199,6 +235,7 @@ h2 { font-size: 20px; color: #4a210f; }
   border: 1px solid rgba(74, 33, 15, .5);
   background: rgba(255, 231, 170, .34);
   padding: 8px;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.15);
 }
 
 .member strong {
@@ -211,6 +248,26 @@ h2 { font-size: 20px; color: #4a210f; }
   color: var(--muted);
   font-size: 14px;
   margin-top: 4px;
+}
+
+.hpbar {
+  margin-top: 6px;
+  height: 7px;
+  border: 1px solid rgba(54, 22, 9, .55);
+  background: rgba(52, 20, 8, .35);
+}
+
+.hpbar span {
+  display: block;
+  height: 100%;
+  width: var(--hp, 0%);
+  background: linear-gradient(90deg, #6f9e55, #e5c65d);
+}
+
+.team-tag {
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  font-size: 12px;
 }
 
 .bench-title {
@@ -228,6 +285,10 @@ h2 { font-size: 20px; color: #4a210f; }
   }
 
   .shell {
-    min-height: auto;
+    height: auto;
+  }
+
+  .topbar {
+    grid-template-columns: 1fr;
   }
 }

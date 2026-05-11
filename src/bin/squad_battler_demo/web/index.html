@@ -9,9 +9,12 @@
 <body>
   <main class="shell">
     <header class="topbar">
-      <div>
+      <div class="brand">
+        <span class="seal">HM</span>
+        <div>
         <h1>HackMaster Squad Battler</h1>
         <p id="phase">Roll a squad to begin.</p>
+        </div>
       </div>
       <div id="metrics" class="metrics"></div>
       <div class="actions">
@@ -29,12 +32,12 @@
       <section class="battle-panel">
         <div class="battle-header">
           <h2>Battle Mat</h2>
-          <span>5 ft grid</span>
+          <span id="gridLabel">5 ft grid</span>
         </div>
         <div id="battleGrid" class="battle-grid"></div>
       </section>
       <aside class="panel">
-        <h2>Enemies</h2>
+        <h2>Enemy Squad</h2>
         <div id="enemySquad" class="list muted">No enemy squad.</div>
       </aside>
     </section>

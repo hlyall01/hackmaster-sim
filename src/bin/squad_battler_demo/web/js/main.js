@@ -60,8 +60,9 @@ function render(state) {
     <span>Bench ${state.squad.bench.length}/${state.squad.max_bench}</span>
     <span>${state.grid.tile_size_ft} ft squares</span>
   `;
+  document.getElementById("gridLabel").textContent = `${state.grid.width} x ${state.grid.height} · ${state.grid.tile_size_ft} ft`;
   renderGrid(state.grid);
-  document.getElementById("playerSquad").innerHTML = renderMembers(state.squad.active, "No active squad.");
+  document.getElementById("playerSquad").innerHTML = renderPlayerSquad(state);
   document.getElementById("benchSquad").innerHTML = renderMembers(state.squad.bench, "No bench.");
   document.getElementById("enemySquad").innerHTML = renderEnemies(state);
   renderCombatants(state);
@@ -74,9 +75,27 @@ function renderMembers(members, empty) {
   if (!members.length) return `<div class="muted">${empty}</div>`;
   return members.map(member => `<div class="member">
     <strong><span>${escapeHtml(member.name)}</span><span>${member.hp}/${member.max_hp}</span></strong>
+    <div class="hpbar" style="--hp:${hpPct(member)}%"><span></span></div>
     <div class="detail">Lv ${member.level} · ${escapeHtml(member.weapon)} · ${escapeHtml(member.status)}</div>
     <div class="detail">${(member.stats || []).map(escapeHtml).join(" · ")}</div>
   </div>`).join("");
+}
+
+function renderPlayerSquad(state) {
+  if (!state.live_fight) return renderMembers(state.squad.active, "No active squad.");
+  const live = state.live_fight.combatants
+    .filter(unit => unit.team_id === 0)
+    .map(unit => ({
+      id: unit.id,
+      name: unit.name,
+      hp: unit.hp,
+      max_hp: unit.max_hp,
+      level: state.squad.active.find(member => member.id === unit.id)?.level || 1,
+      weapon: unit.weapon,
+      status: unit.status,
+      stats: [`cell ${unit.x + 1},${unit.y + 1}`, `${unit.reach_ft} ft reach`],
+    }));
+  return renderMembers(live, "No active squad.");
 }
 
 function renderEnemies(state) {
@@ -86,6 +105,7 @@ function renderEnemies(state) {
   if (state.recruit_offer && state.recruit_offer.length) {
     return `<h2>Recruit Offer</h2>${state.recruit_offer.map(candidate => `<div class="member">
       <strong><span>${escapeHtml(candidate.name)}</span><span>${candidate.hp}/${candidate.max_hp}</span></strong>
+      <div class="hpbar" style="--hp:${hpPct(candidate)}%"><span></span></div>
       <div class="detail">Lv ${candidate.level} · ${escapeHtml(candidate.weapon)}</div>
       <button onclick="recruitChoice('${escapeJs(candidate.id)}', 'active')">Active</button>
       <button onclick="recruitChoice('${escapeJs(candidate.id)}', 'bench')">Bench</button>
@@ -136,6 +156,7 @@ function renderCombatants(state) {
     token.className = `unit-token team-${unit.team_id}`;
     token.style.gridColumn = `${unit.x + 1}`;
     token.style.gridRow = `${unit.y + 1}`;
+    token.setAttribute("aria-disabled", unit.hp <= 0 ? "true" : "false");
     token.textContent = initials(unit.name);
     token.title = `${unit.name} ${unit.hp}/${unit.max_hp}`;
     grid.appendChild(token);
@@ -146,8 +167,12 @@ function renderInitiative(rows) {
   if (!rows.length) return `<div class="muted">No combat timeline.</div>`;
   return rows.map(row => `<div class="member">
     <strong><span>${escapeHtml(row.name)}</span><span>${row.ready ? "ready" : `${row.next_action_in_seconds.toFixed(0)}s`}</span></strong>
-    <div class="detail">Team ${row.team_id}</div>
+    <div class="detail"><span class="team-tag">Team ${row.team_id === 0 ? "Squad" : "Enemy"}</span></div>
   </div>`).join("");
+}
+
+function hpPct(member) {
+  return Math.max(0, Math.min(100, (Number(member.hp || 0) / Math.max(1, Number(member.max_hp || 1))) * 100));
 }
 
 function initials(name) {
