@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>HackMaster Ascent Demo</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <main class="game-shell">
+    <header class="hud">
+      <div class="hud-brand">
+        <span class="sigil">HM</span>
+        <div>
+          <h1>HackMaster Ascent</h1>
+          <div id="phase" class="sub">Roll a character to begin.</div>
+        </div>
+      </div>
+      <div id="hudMetrics" class="hud-metrics"></div>
+      <div class="hud-actions">
+        <span id="runStatus" class="pill">No run</span>
+        <button onclick="newRun()">New Run</button>
+      </div>
+    </header>
+    <div class="app">
+      <aside class="panel"><div class="panel-inner stack">
+        <div class="section-title">
+          <h2>Character Sheet</h2>
+          <span class="pill">Run</span>
+        </div>
+        <div class="roll-box stack">
+          <h2>Roll Character</h2>
+          <select id="preset"></select>
+          <input id="name" placeholder="Name override" />
+          <input id="seed" placeholder="Seed, blank for random" />
+          <button onclick="newRun()">Embark</button>
+        </div>
+        <div id="character" class="stack"></div>
+      </div></aside>
+      <section class="panel map">
+        <div class="map-header">
+          <div>
+            <h2>Route</h2>
+            <div class="sub">Branching run map and active encounter scene.</div>
+          </div>
+          <span id="routeStatus" class="pill">Route</span>
+        </div>
+        <div id="map" class="map-grid"></div>
+      </section>
+      <aside class="right-scroll stack">
+        <section class="panel"><div class="panel-inner stack" id="encounter"></div></section>
+        <section class="panel"><div class="panel-inner stack">
+          <div class="section-title"><h2>Inventory</h2><span class="pill">Pack</span></div>
+          <div id="inventory"></div>
+        </div></section>
+        <section class="panel"><div class="panel-inner stack">
+          <div class="section-title"><h2>Latest Reward</h2><span class="pill">Loot</span></div>
+          <div id="reward"></div>
+        </div></section>
+        <section class="panel"><div class="panel-inner stack">
+          <div class="section-title"><h2>Fight Summary</h2><span class="pill">Combat</span></div>
+          <div id="fight"></div>
+        </div></section>
+        <section class="panel"><div class="panel-inner stack">
+          <div class="section-title"><h2>Log</h2><span class="pill">History</span></div>
+          <div id="log" class="log"></div>
+        </div></section>
+      </aside>
+    </div>
+  </main>
+  <script type="module" src="/static/js/main.js"></script>
+</body>
+</html>

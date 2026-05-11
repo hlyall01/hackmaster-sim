@@ -1,10 +1,15 @@
+#[path = "server.rs"]
+mod server;
+#[path = "web_assets.rs"]
+mod web_assets;
+
 use hackmaster_sim::character::{
     AbilityScore, AbilitySet, AbilitySetFull, Progression, ProgressionTier,
 };
 use hackmaster_sim::core::gameplay::{
-    CombatantBuilder, EnemySpawnEntry, EnemySpawner, EncounterTier, EventCatalog,
-    EventSpec, LootItemEntry, LootTable, RunState, Wound, XpCurve, apply_downtime,
-    apply_fight_result, apply_xp, choose_event, resolve_event_choice,
+    CombatantBuilder, EncounterTier, EnemySpawnEntry, EnemySpawner, EventCatalog, EventSpec,
+    LootItemEntry, LootTable, RunState, Wound, XpCurve, apply_downtime, apply_fight_result,
+    apply_xp, choose_event, resolve_event_choice,
 };
 use hackmaster_sim::core::ids::NpcPresetId;
 use hackmaster_sim::core::rng::{SimRng, derive_seed};
@@ -18,8 +23,7 @@ use hackmaster_sim::game_logic::{
 use hackmaster_sim::sim;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 
 const QUICK_STARTS_PATH: &str = "data/autobattler/autobattler_quick_starts.json";
@@ -50,7 +54,7 @@ pub(crate) fn run() {
         match stream {
             Ok(stream) => {
                 let demo = Arc::clone(&demo);
-                std::thread::spawn(move || handle_connection(stream, demo));
+                std::thread::spawn(move || server::handle_connection(stream, demo));
             }
             Err(err) => eprintln!("Connection failed: {err}"),
         }
@@ -58,7 +62,7 @@ pub(crate) fn run() {
 }
 
 #[derive(Clone)]
-struct DemoApp {
+pub(crate) struct DemoApp {
     weapon_catalog: WeaponCatalog,
     armor_catalog: ArmorCatalog,
     shield_catalog: ShieldCatalog,
@@ -75,7 +79,7 @@ struct DemoApp {
 }
 
 impl DemoApp {
-    fn new() -> Result<Self, String> {
+    pub(crate) fn new() -> Result<Self, String> {
         let (weapon_catalog, armor_catalog, shield_catalog) = data::load_catalogs()?;
         let npc_presets = data::load_npc_presets(NPC_PRESETS_PATH)?;
         let quick_starts = data::load_fighter_presets(QUICK_STARTS_PATH)?;
@@ -128,7 +132,7 @@ impl DemoApp {
         })
     }
 
-    fn new_run(&mut self, request: NewRunRequest) -> Result<DemoView, String> {
+    pub(crate) fn new_run(&mut self, request: NewRunRequest) -> Result<DemoView, String> {
         let seed = request.seed.unwrap_or_else(|| {
             let mut rng = rand::thread_rng();
             rng.gen_range(1..=u64::MAX)
@@ -171,7 +175,7 @@ impl DemoApp {
         Ok(self.view())
     }
 
-    fn choose_node(&mut self, node_id: usize) -> Result<DemoView, String> {
+    pub(crate) fn choose_node(&mut self, node_id: usize) -> Result<DemoView, String> {
         let spawner = self.spawner.clone();
         let npc_presets = self.npc_presets.clone();
         let Some(session) = self.session.as_mut() else {
@@ -193,7 +197,8 @@ impl DemoApp {
         match node.kind {
             NodeKind::Fight | NodeKind::Elite | NodeKind::Boss => {
                 let tier = encounter_tier_for_node(node.kind);
-                let enemy_name = preview_enemy_name(&spawner, &npc_presets, &session.run_state, tier);
+                let enemy_name =
+                    preview_enemy_name(&spawner, &npc_presets, &session.run_state, tier);
                 session.pending_fight = Some(PendingDemoFight {
                     kind: node.kind,
                     enemy_name,
@@ -218,7 +223,8 @@ impl DemoApp {
             }
             NodeKind::Event => {
                 let encounter_index = session.run_state.encounter_index as u64;
-                let event_seed = derive_seed(session.run_state.run_seed, "v2-event-kind", encounter_index);
+                let event_seed =
+                    derive_seed(session.run_state.run_seed, "v2-event-kind", encounter_index);
                 let mut rng = SimRng::from_seed(event_seed);
                 let event = choose_event(
                     &self.event_catalog,
@@ -243,7 +249,7 @@ impl DemoApp {
         Ok(self.view())
     }
 
-    fn resolve_event_choice(&mut self, choice_id: String) -> Result<DemoView, String> {
+    pub(crate) fn resolve_event_choice(&mut self, choice_id: String) -> Result<DemoView, String> {
         let spawner = self.spawner.clone();
         let npc_presets = self.npc_presets.clone();
         let Some(session) = self.session.as_mut() else {
@@ -277,7 +283,9 @@ impl DemoApp {
             level_gained,
         });
         if resolution.trigger_fight {
-            session.last_log.push("The event spills into a fight.".to_string());
+            session
+                .last_log
+                .push("The event spills into a fight.".to_string());
             let kind = NodeKind::Elite;
             let tier = EncounterTier::Elite;
             let enemy_name = preview_enemy_name(&spawner, &npc_presets, &session.run_state, tier);
@@ -293,7 +301,7 @@ impl DemoApp {
         Ok(self.view())
     }
 
-    fn start_pending_fight(&mut self) -> Result<DemoView, String> {
+    pub(crate) fn start_pending_fight(&mut self) -> Result<DemoView, String> {
         let Some(session) = self.session.as_mut() else {
             return Err("Start a run first.".to_string());
         };
@@ -307,10 +315,10 @@ impl DemoApp {
         let spawn_seed = derive_seed(session.run_state.run_seed, "spawn", encounter_index);
         let combat_seed = derive_seed(session.run_state.run_seed, "combat", encounter_index);
         let mut spawn_rng = SimRng::from_seed(spawn_seed);
-        let Some(enemy) = self
-            .spawner
-            .spawn_for_level(effective_enemy_level(&session.run_state, pending.tier), &mut spawn_rng)
-        else {
+        let Some(enemy) = self.spawner.spawn_for_level(
+            effective_enemy_level(&session.run_state, pending.tier),
+            &mut spawn_rng,
+        ) else {
             return Err("No enemy available for this fight.".to_string());
         };
         let builder = DemoCombatantBuilder {
@@ -341,13 +349,15 @@ impl DemoApp {
             decision_count: 0,
         });
         session.phase = DemoPhase::CombatPlayback;
-        session.last_log = vec![
-            "Combat started. Step one second at a time or enable auto-play.".to_string(),
-        ];
+        session.last_log =
+            vec!["Combat started. Step one second at a time or enable auto-play.".to_string()];
         Ok(self.view())
     }
 
-    fn fight_command(&mut self, request: FightCommandRequest) -> Result<DemoView, String> {
+    pub(crate) fn fight_command(
+        &mut self,
+        request: FightCommandRequest,
+    ) -> Result<DemoView, String> {
         let Some(session) = self.session.as_mut() else {
             return Err("Start a run first.".to_string());
         };
@@ -406,7 +416,7 @@ impl DemoApp {
         }
     }
 
-    fn claim_reward(&mut self) -> Result<DemoView, String> {
+    pub(crate) fn claim_reward(&mut self) -> Result<DemoView, String> {
         let Some(session) = self.session.as_ref() else {
             return Err("Start a run first.".to_string());
         };
@@ -486,9 +496,7 @@ impl DemoApp {
         session.last_reward = Some(DemoReward {
             gold,
             xp: reward.as_ref().map(|reward| reward.xp).unwrap_or(0),
-            items: reward
-                .map(|reward| reward.items)
-                .unwrap_or_default(),
+            items: reward.map(|reward| reward.items).unwrap_or_default(),
             level_gained,
         });
         session.last_log = vec![
@@ -542,7 +550,7 @@ impl DemoApp {
         .or_else(|| self.quick_starts.entries().first())
     }
 
-    fn view(&self) -> DemoView {
+    pub(crate) fn view(&self) -> DemoView {
         let preset_names = self
             .quick_starts
             .entries()
@@ -581,12 +589,20 @@ impl DemoApp {
             has_run: true,
             presets: preset_names,
             player: Some(DemoPlayerView::from_state(&session.run_state)),
-            inventory: Some(DemoInventoryView::from_inventory(&session.run_state.inventory)),
+            inventory: Some(DemoInventoryView::from_inventory(
+                &session.run_state.inventory,
+            )),
             map: session.map.clone(),
             available_nodes,
             phase: session.phase.label().to_string(),
-            pending_event: session.pending_event.as_ref().map(DemoEventView::from_pending),
-            pending_fight: session.pending_fight.clone().map(DemoFightPreview::from_pending),
+            pending_event: session
+                .pending_event
+                .as_ref()
+                .map(DemoEventView::from_pending),
+            pending_fight: session
+                .pending_fight
+                .clone()
+                .map(DemoFightPreview::from_pending),
             live_fight: session
                 .live_fight
                 .as_ref()
@@ -671,7 +687,7 @@ impl DemoPhase {
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct DemoView {
+pub(crate) struct DemoView {
     has_run: bool,
     presets: Vec<String>,
     player: Option<DemoPlayerView>,
@@ -990,26 +1006,26 @@ fn encounter_tier_for_node(kind: NodeKind) -> EncounterTier {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-struct NewRunRequest {
-    seed: Option<u64>,
-    preset: Option<String>,
-    name: Option<String>,
+pub(crate) struct NewRunRequest {
+    pub(crate) seed: Option<u64>,
+    pub(crate) preset: Option<String>,
+    pub(crate) name: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
-struct ChooseNodeRequest {
-    node_id: usize,
+pub(crate) struct ChooseNodeRequest {
+    pub(crate) node_id: usize,
 }
 
 #[derive(Clone, Debug, Deserialize)]
-struct EventChoiceRequest {
-    choice_id: String,
+pub(crate) struct EventChoiceRequest {
+    pub(crate) choice_id: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
-struct FightCommandRequest {
-    command: String,
-    seconds: Option<u32>,
+pub(crate) struct FightCommandRequest {
+    pub(crate) command: String,
+    pub(crate) seconds: Option<u32>,
 }
 
 struct DemoCombatantBuilder<'a> {
@@ -1070,141 +1086,6 @@ impl CombatantBuilder for DemoCombatantBuilder<'_> {
             self.talent_catalog,
         )
     }
-}
-
-fn handle_connection(mut stream: TcpStream, demo: Arc<Mutex<DemoApp>>) {
-    let Ok(request) = read_request(&mut stream) else {
-        return;
-    };
-    let response = route_request(request, demo);
-    let _ = stream.write_all(response.as_bytes());
-}
-
-fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
-    let mut buffer = [0_u8; 64 * 1024];
-    let size = stream.read(&mut buffer).map_err(|err| err.to_string())?;
-    let raw = String::from_utf8_lossy(&buffer[..size]).to_string();
-    let mut parts = raw.split("\r\n\r\n");
-    let head = parts.next().unwrap_or_default();
-    let body = parts.next().unwrap_or_default().to_string();
-    let mut lines = head.lines();
-    let first = lines.next().ok_or_else(|| "empty request".to_string())?;
-    let mut first_parts = first.split_whitespace();
-    let method = first_parts.next().unwrap_or_default().to_string();
-    let path = first_parts.next().unwrap_or_default().to_string();
-    Ok(HttpRequest { method, path, body })
-}
-
-struct HttpRequest {
-    method: String,
-    path: String,
-    body: String,
-}
-
-fn route_request(request: HttpRequest, demo: Arc<Mutex<DemoApp>>) -> String {
-    match (request.method.as_str(), request.path.as_str()) {
-        ("GET", "/") => html_response(INDEX_HTML),
-        ("GET", "/api/state") => {
-            let demo = demo.lock().expect("demo lock poisoned");
-            json_response(200, &demo.view())
-        }
-        ("POST", "/api/new-run") => {
-            let parsed = serde_json::from_str::<NewRunRequest>(&request.body)
-                .unwrap_or(NewRunRequest {
-                    seed: None,
-                    preset: None,
-                    name: None,
-                });
-            let mut demo = demo.lock().expect("demo lock poisoned");
-            match demo.new_run(parsed) {
-                Ok(view) => json_response(200, &view),
-                Err(err) => error_response(400, err),
-            }
-        }
-        ("POST", "/api/choose-node") => {
-            let parsed = serde_json::from_str::<ChooseNodeRequest>(&request.body);
-            match parsed {
-                Ok(request) => {
-                    let mut demo = demo.lock().expect("demo lock poisoned");
-                    match demo.choose_node(request.node_id) {
-                        Ok(view) => json_response(200, &view),
-                        Err(err) => error_response(400, err),
-                    }
-                }
-                Err(err) => error_response(400, format!("Bad request: {err}")),
-            }
-        }
-        ("POST", "/api/event-choice") => {
-            let parsed = serde_json::from_str::<EventChoiceRequest>(&request.body);
-            match parsed {
-                Ok(request) => {
-                    let mut demo = demo.lock().expect("demo lock poisoned");
-                    match demo.resolve_event_choice(request.choice_id) {
-                        Ok(view) => json_response(200, &view),
-                        Err(err) => error_response(400, err),
-                    }
-                }
-                Err(err) => error_response(400, format!("Bad request: {err}")),
-            }
-        }
-        ("POST", "/api/start-fight") => {
-            let mut demo = demo.lock().expect("demo lock poisoned");
-            match demo.start_pending_fight() {
-                Ok(view) => json_response(200, &view),
-                Err(err) => error_response(400, err),
-            }
-        }
-        ("POST", "/api/fight-command") => {
-            let parsed = serde_json::from_str::<FightCommandRequest>(&request.body);
-            match parsed {
-                Ok(request) => {
-                    let mut demo = demo.lock().expect("demo lock poisoned");
-                    match demo.fight_command(request) {
-                        Ok(view) => json_response(200, &view),
-                        Err(err) => error_response(400, err),
-                    }
-                }
-                Err(err) => error_response(400, format!("Bad request: {err}")),
-            }
-        }
-        ("POST", "/api/claim-reward") => {
-            let mut demo = demo.lock().expect("demo lock poisoned");
-            match demo.claim_reward() {
-                Ok(view) => json_response(200, &view),
-                Err(err) => error_response(400, err),
-            }
-        }
-        _ => error_response(404, "Not found".to_string()),
-    }
-}
-
-fn html_response(body: &str) -> String {
-    http_response(200, "text/html; charset=utf-8", body.to_string())
-}
-
-fn json_response<T: Serialize>(status: u16, body: &T) -> String {
-    match serde_json::to_string(body) {
-        Ok(json) => http_response(status, "application/json", json),
-        Err(err) => error_response(500, err.to_string()),
-    }
-}
-
-fn error_response(status: u16, message: String) -> String {
-    let body = serde_json::json!({ "error": message }).to_string();
-    http_response(status, "application/json", body)
-}
-
-fn http_response(status: u16, content_type: &str, body: String) -> String {
-    let reason = match status {
-        200 => "OK",
-        400 => "Bad Request",
-        404 => "Not Found",
-        _ => "Error",
-    };
-    format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    )
 }
 
 fn generate_map(seed: u64) -> Vec<DemoNode> {
@@ -1540,1723 +1421,3 @@ fn format_hit_list(events: &[CombatEvent], attacker_idx: usize, defender_idx: us
         hits.join(", ")
     }
 }
-
-const INDEX_HTML: &str = r#"<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>HackMaster Ascent Demo</title>
-  <style>
-    :root {
-      color-scheme: dark;
-      --bg: #141615;
-      --panel: #20231f;
-      --panel-2: #29271f;
-      --line: #4b4435;
-      --text: #ede6d1;
-      --muted: #a89f8b;
-      --gold: #d5a84a;
-      --red: #a94338;
-      --green: #7fa26a;
-      --blue: #6d8fa3;
-      --steel: #778089;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      min-height: 100vh;
-      background: radial-gradient(circle at 50% -20%, #34301f 0, var(--bg) 42%, #0f1110 100%);
-      color: var(--text);
-      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      letter-spacing: 0;
-    }
-    button, input, select {
-      font: inherit;
-    }
-    button {
-      border: 1px solid #6f603d;
-      background: linear-gradient(#3a3325, #251f18);
-      color: var(--text);
-      padding: 9px 12px;
-      border-radius: 6px;
-      cursor: pointer;
-      font-weight: 700;
-    }
-    button:hover { border-color: var(--gold); color: #fff5cf; }
-    button:disabled { opacity: .45; cursor: default; }
-    input, select {
-      width: 100%;
-      border: 1px solid var(--line);
-      background: #171916;
-      color: var(--text);
-      padding: 9px 10px;
-      border-radius: 6px;
-    }
-    .game-shell {
-      height: 100vh;
-      display: grid;
-      grid-template-rows: auto minmax(0, 1fr);
-      gap: 12px;
-      padding: 14px;
-    }
-    .hud {
-      display: grid;
-      grid-template-columns: minmax(260px, 360px) minmax(420px, 1fr) auto;
-      gap: 14px;
-      align-items: stretch;
-      border: 1px solid #584a35;
-      border-radius: 8px;
-      background:
-        linear-gradient(180deg, rgba(56,47,33,.98), rgba(24,26,23,.98)),
-        repeating-linear-gradient(90deg, rgba(255,255,255,.04) 0 1px, transparent 1px 22px);
-      box-shadow: 0 16px 42px rgba(0,0,0,.32);
-      padding: 10px;
-    }
-    .hud-brand {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      min-width: 0;
-    }
-    .sigil {
-      display: grid;
-      place-items: center;
-      width: 46px;
-      height: 46px;
-      border: 1px solid var(--gold);
-      border-radius: 8px;
-      color: #fff1c8;
-      background: #181612;
-      font-weight: 900;
-      box-shadow: inset 0 0 18px rgba(213,168,74,.2);
-    }
-    .hud h1 { font-size: 18px; }
-    .hud-metrics {
-      display: grid;
-      grid-template-columns: repeat(5, minmax(92px, 1fr));
-      gap: 8px;
-      align-content: stretch;
-    }
-    .hud-card {
-      border: 1px solid rgba(213,168,74,.22);
-      border-radius: 6px;
-      background: rgba(0,0,0,.18);
-      padding: 7px 9px;
-      min-width: 0;
-    }
-    .hud-card span {
-      display: block;
-      color: var(--muted);
-      font-size: 11px;
-      font-weight: 800;
-      text-transform: uppercase;
-    }
-    .hud-card strong {
-      display: block;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      color: #fff1c8;
-      font-size: 14px;
-    }
-    .hud-actions {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      justify-content: end;
-    }
-    .app {
-      display: grid;
-      grid-template-columns: 300px minmax(500px, 1fr) 390px;
-      gap: 14px;
-      min-height: 0;
-    }
-    .panel {
-      background:
-        linear-gradient(180deg, rgba(41,39,31,.98), rgba(28,31,28,.98)),
-        repeating-linear-gradient(180deg, rgba(255,255,255,.025) 0 1px, transparent 1px 18px);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      box-shadow: 0 18px 48px rgba(0,0,0,.28);
-      overflow: hidden;
-      min-height: 0;
-    }
-    .panel-inner { padding: 16px; }
-    h1, h2, h3 { margin: 0; line-height: 1.05; }
-    h1 { font-size: 20px; }
-    h2 { font-size: 16px; color: var(--gold); }
-    h3 { font-size: 14px; color: #d9ceb7; }
-    .sub { color: var(--muted); font-size: 13px; line-height: 1.45; }
-    .stack { display: grid; gap: 12px; }
-    .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-    .section-title {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      padding-bottom: 9px;
-      border-bottom: 1px solid rgba(213,168,74,.2);
-    }
-    .roll-box {
-      border: 1px solid rgba(169,67,56,.48);
-      background:
-        linear-gradient(180deg, rgba(82,34,29,.46), rgba(19,20,18,.35));
-      border-radius: 8px;
-      padding: 12px;
-    }
-    .sheet-name {
-      display: grid;
-      gap: 4px;
-      padding: 12px;
-      border: 1px solid rgba(213,168,74,.28);
-      border-radius: 8px;
-      background: rgba(0,0,0,.18);
-    }
-    .xpbar {
-      height: 8px;
-      border: 1px solid rgba(255,255,255,.12);
-      border-radius: 999px;
-      background: #151614;
-      overflow: hidden;
-    }
-    .xpbar span {
-      display: block;
-      width: var(--xp, 0%);
-      height: 100%;
-      background: linear-gradient(90deg, #6d8fa3, #d5a84a);
-    }
-    .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-    .stat {
-      border: 1px solid rgba(213,168,74,.28);
-      background: rgba(20,22,21,.58);
-      border-radius: 6px;
-      padding: 8px;
-      font-size: 13px;
-      color: #e8dfc6;
-    }
-    .metric {
-      display: flex;
-      align-items: baseline;
-      justify-content: space-between;
-      gap: 8px;
-      border-bottom: 1px solid rgba(255,255,255,.06);
-      padding: 7px 0;
-      font-size: 13px;
-    }
-    .metric strong { color: #fff1c8; }
-    .map {
-      position: relative;
-      height: 100%;
-      padding: 18px;
-    }
-    .map-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      margin-bottom: 18px;
-    }
-    .map-grid {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 16px;
-      height: calc(100% - 66px);
-      align-items: center;
-      border: 1px solid rgba(213,168,74,.16);
-      border-radius: 8px;
-      background:
-        radial-gradient(circle at 50% 45%, rgba(213,168,74,.08), transparent 42%),
-        linear-gradient(180deg, rgba(0,0,0,.14), rgba(0,0,0,.22));
-      padding: 14px;
-    }
-    .node-scene {
-      grid-column: 1 / -1;
-      align-self: stretch;
-      display: grid;
-      align-content: center;
-      justify-items: center;
-      gap: 18px;
-      min-height: 540px;
-      padding: 48px;
-      text-align: center;
-      border: 1px solid rgba(213,168,74,.32);
-      border-radius: 8px;
-      background:
-        linear-gradient(rgba(20,22,21,.72), rgba(20,22,21,.86)),
-        radial-gradient(circle at 50% 30%, rgba(213,168,74,.16), transparent 45%);
-    }
-    .node-scene h2 {
-      color: #f0dfb1;
-      font-size: 32px;
-      max-width: 720px;
-    }
-    .node-scene p {
-      max-width: 720px;
-      margin: 0;
-      color: #c9bea5;
-      line-height: 1.55;
-      font-size: 17px;
-    }
-    .scene-mark {
-      display: grid;
-      place-items: center;
-      width: 86px;
-      height: 86px;
-      border: 1px solid var(--gold);
-      border-radius: 8px;
-      background: rgba(0,0,0,.22);
-      color: var(--gold);
-      font-size: 44px;
-      box-shadow: inset 0 0 24px rgba(213,168,74,.16);
-    }
-    .floor {
-      display: grid;
-      gap: 18px;
-      align-content: center;
-      min-height: 360px;
-      position: relative;
-    }
-    .floor:not(:last-child)::after {
-      content: "";
-      position: absolute;
-      top: 50%;
-      right: -16px;
-      width: 16px;
-      border-top: 1px dashed rgba(213,168,74,.36);
-    }
-    .node {
-      display: grid;
-      place-items: center;
-      width: 112px;
-      min-height: 76px;
-      border: 1px solid var(--line);
-      background: #191b18;
-      border-radius: 8px;
-      color: var(--muted);
-      margin: 0 auto;
-      position: relative;
-      transition: transform .15s ease, border-color .15s ease, background .15s ease;
-    }
-    .node.available {
-      color: #fff5cf;
-      border-color: var(--gold);
-      background: linear-gradient(180deg, #423622, #211f19);
-      transform: translateY(-2px);
-    }
-    .node.completed {
-      color: var(--green);
-      border-color: rgba(127,162,106,.75);
-      background: rgba(33,48,34,.72);
-    }
-    .node .icon { font-size: 25px; line-height: 1; }
-    .node .label { font-size: 12px; font-weight: 800; text-transform: uppercase; margin-top: 6px; }
-    .node button {
-      position: absolute;
-      inset: 0;
-      opacity: 0;
-    }
-    .right-scroll {
-      height: 100%;
-      overflow: auto;
-      padding-right: 2px;
-    }
-    .choice-list { display: grid; gap: 8px; }
-    .log {
-      display: grid;
-      gap: 6px;
-      max-height: 220px;
-      overflow: auto;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-size: 12px;
-      color: #d7d0bc;
-      background: rgba(0,0,0,.18);
-      border: 1px solid rgba(255,255,255,.07);
-      border-radius: 6px;
-      padding: 10px;
-    }
-    .reward {
-      border: 1px solid rgba(213,168,74,.35);
-      background: rgba(213,168,74,.08);
-      border-radius: 6px;
-      padding: 10px;
-      display: grid;
-      gap: 5px;
-      font-size: 13px;
-    }
-    .reward-scene {
-      width: min(760px, 100%);
-      display: grid;
-      gap: 16px;
-      text-align: left;
-    }
-    .loot-grid {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 10px;
-    }
-    .loot-token {
-      border: 1px solid rgba(213,168,74,.3);
-      border-radius: 8px;
-      background: rgba(0,0,0,.18);
-      padding: 12px;
-      min-height: 82px;
-      display: grid;
-      align-content: center;
-      gap: 4px;
-    }
-    .loot-token strong {
-      color: #fff1c8;
-      font-size: 19px;
-    }
-    .fight {
-      border: 1px solid rgba(169,67,56,.45);
-      background: rgba(169,67,56,.08);
-      border-radius: 6px;
-      padding: 10px;
-      display: grid;
-      gap: 6px;
-      font-size: 13px;
-    }
-    .combat-scene {
-      width: min(860px, 100%);
-      display: grid;
-      gap: 18px;
-      text-align: left;
-    }
-    .combat-title {
-      display: flex;
-      justify-content: space-between;
-      align-items: start;
-      gap: 12px;
-    }
-    .combat-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 12px;
-    }
-    .combatant {
-      border: 1px solid rgba(213,168,74,.28);
-      background: rgba(12,13,12,.42);
-      border-radius: 8px;
-      padding: 12px;
-      display: grid;
-      gap: 8px;
-    }
-    .combatant.enemy {
-      border-color: rgba(169,67,56,.45);
-      background: rgba(45,18,16,.34);
-    }
-    .hpbar {
-      height: 12px;
-      border: 1px solid rgba(255,255,255,.12);
-      border-radius: 999px;
-      background: #151614;
-      overflow: hidden;
-    }
-    .hpbar span {
-      display: block;
-      height: 100%;
-      background: linear-gradient(90deg, #7fa26a, #d5a84a);
-      width: var(--hp, 0%);
-    }
-    .enemy .hpbar span {
-      background: linear-gradient(90deg, #a94338, #d5a84a);
-    }
-    .arena-track {
-      position: relative;
-      height: 86px;
-      border: 1px solid rgba(213,168,74,.24);
-      border-radius: 8px;
-      background:
-        linear-gradient(90deg, rgba(127,162,106,.11), transparent 36%, transparent 64%, rgba(169,67,56,.11)),
-        repeating-linear-gradient(90deg, rgba(255,255,255,.055) 0 1px, transparent 1px 12.5%);
-      overflow: hidden;
-    }
-    .fighter-token {
-      position: absolute;
-      top: 50%;
-      transform: translate(-50%, -50%);
-      width: 58px;
-      height: 58px;
-      display: grid;
-      place-items: center;
-      border-radius: 8px;
-      border: 1px solid var(--gold);
-      background: #171916;
-      color: #fff1c8;
-      font-weight: 900;
-      box-shadow: 0 8px 24px rgba(0,0,0,.35);
-    }
-    .fighter-token.enemy {
-      border-color: #b95b4f;
-      color: #ffd0c9;
-    }
-    .combat-controls {
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-      align-items: center;
-    }
-    .combat-log {
-      min-height: 142px;
-      max-height: 210px;
-    }
-    .decision-slot {
-      border: 1px dashed rgba(213,168,74,.36);
-      border-radius: 8px;
-      padding: 10px;
-      color: var(--muted);
-      background: rgba(0,0,0,.14);
-      font-size: 13px;
-    }
-    .pill {
-      display: inline-flex;
-      border: 1px solid var(--line);
-      background: rgba(0,0,0,.16);
-      border-radius: 999px;
-      padding: 5px 8px;
-      color: var(--muted);
-      font-size: 12px;
-      font-weight: 800;
-      text-transform: uppercase;
-    }
-    .danger { color: #f0a096; }
-    .ok { color: #a9d48e; }
-
-    :root {
-      --bg: #20120d;
-      --panel: #2b1a12;
-      --panel-2: #3a2217;
-      --line: #7b4b2d;
-      --text: #f7e8c0;
-      --muted: #c9ad82;
-      --gold: #f0bd55;
-      --red: #b6402d;
-      --green: #628f55;
-      --blue: #356f86;
-      --steel: #7c6d5d;
-      --parchment: #c99152;
-      --parchment-dark: #7b4528;
-      --ink: #2b170f;
-    }
-    body {
-      background:
-        linear-gradient(180deg, rgba(32,18,13,.9), rgba(16,10,9,.96)),
-        radial-gradient(ellipse at 50% 18%, rgba(83,42,25,.58), transparent 54%),
-        linear-gradient(120deg, #21140f, #151412 46%, #251610);
-      font-family: Georgia, Cambria, "Times New Roman", serif;
-      color: var(--text);
-      overflow: hidden;
-    }
-    body::before {
-      content: "";
-      position: fixed;
-      inset: 0;
-      pointer-events: none;
-      opacity: .22;
-      background:
-        repeating-linear-gradient(0deg, transparent 0 10px, rgba(255,255,255,.035) 10px 11px),
-        repeating-linear-gradient(90deg, transparent 0 17px, rgba(0,0,0,.08) 17px 18px);
-      mix-blend-mode: soft-light;
-    }
-    button {
-      border: 2px solid #3a1b12;
-      border-radius: 10px 10px 14px 14px;
-      background:
-        linear-gradient(180deg, #d18a42 0%, #9d3d28 52%, #572113 100%);
-      color: #ffe9af;
-      padding: 10px 16px;
-      font-weight: 900;
-      text-shadow: 0 2px 0 rgba(0,0,0,.42);
-      box-shadow:
-        inset 0 2px 0 rgba(255,236,168,.36),
-        inset 0 -4px 0 rgba(53,18,11,.55),
-        0 6px 0 rgba(21,10,7,.82);
-    }
-    button:hover {
-      border-color: #f1c264;
-      color: #fff7d0;
-      transform: translateY(-1px);
-    }
-    button:active {
-      transform: translateY(3px);
-      box-shadow:
-        inset 0 2px 0 rgba(255,236,168,.3),
-        inset 0 -2px 0 rgba(53,18,11,.5),
-        0 2px 0 rgba(21,10,7,.82);
-    }
-    input, select {
-      border: 2px solid #5d341e;
-      background: #ead0a0;
-      color: var(--ink);
-      border-radius: 6px;
-      font-weight: 700;
-      box-shadow: inset 0 2px 4px rgba(58,27,12,.32);
-    }
-    .game-shell {
-      padding: 10px;
-      gap: 10px;
-      background:
-        linear-gradient(90deg, rgba(0,0,0,.28), transparent 18%, transparent 82%, rgba(0,0,0,.3));
-    }
-    .hud {
-      border: 3px solid #2a160e;
-      border-radius: 10px;
-      background:
-        linear-gradient(180deg, #402416, #20120c 65%, #130b08),
-        repeating-linear-gradient(90deg, rgba(255,255,255,.04) 0 1px, transparent 1px 18px);
-      box-shadow:
-        inset 0 0 0 2px rgba(241,194,100,.24),
-        0 10px 24px rgba(0,0,0,.46);
-    }
-    .sigil {
-      border-width: 2px;
-      border-radius: 50%;
-      background: radial-gradient(circle at 35% 25%, #f2c769, #8d3a24 62%, #321409);
-      color: #211008;
-      font-weight: 900;
-    }
-    .hud h1 {
-      color: #ffd77a;
-      font-size: 24px;
-      text-shadow: 0 3px 0 #3a160d;
-    }
-    .hud-card {
-      border: 2px solid #442515;
-      border-radius: 7px;
-      background: linear-gradient(180deg, #51301d, #21130d);
-      box-shadow: inset 0 0 0 1px rgba(255,219,134,.12);
-    }
-    .hud-card span,
-    .pill {
-      color: #d9bd88;
-      letter-spacing: 0;
-    }
-    .hud-card strong {
-      color: #fff0bc;
-      font-size: 16px;
-    }
-    .panel {
-      border: 3px solid #2b170e;
-      border-radius: 10px;
-      background:
-        linear-gradient(180deg, rgba(74,40,23,.98), rgba(31,18,13,.98)),
-        repeating-linear-gradient(45deg, rgba(255,255,255,.035) 0 1px, transparent 1px 12px);
-      box-shadow:
-        inset 0 0 0 2px rgba(240,189,85,.18),
-        inset 0 16px 24px rgba(255,213,121,.06),
-        0 16px 28px rgba(0,0,0,.44);
-    }
-    .panel-inner {
-      padding: 14px;
-    }
-    h1, h2, h3 {
-      font-weight: 900;
-      text-shadow: 0 2px 0 rgba(0,0,0,.45);
-    }
-    h2 {
-      color: #ffd77a;
-      font-size: 18px;
-    }
-    h3 {
-      color: #ffe8aa;
-      font-size: 15px;
-    }
-    .sub {
-      color: #ddc08d;
-      font-size: 14px;
-    }
-    .section-title {
-      border-bottom: 2px solid rgba(31,13,7,.55);
-      box-shadow: 0 2px 0 rgba(255,218,132,.12);
-    }
-    .roll-box,
-    .sheet-name,
-    .stat,
-    .metric,
-    .reward,
-    .fight,
-    .combatant,
-    .loot-token,
-    .decision-slot {
-      border: 2px solid #4a2817;
-      border-radius: 8px;
-      background:
-        linear-gradient(180deg, rgba(240,200,137,.16), rgba(35,19,12,.34)),
-        #2f1b12;
-      box-shadow: inset 0 0 0 1px rgba(255,229,161,.12);
-    }
-    .sheet-name {
-      background:
-        linear-gradient(180deg, #d69d5a, #7d4125 72%, #3b1c10);
-      color: #fff2c2;
-    }
-    .metric {
-      padding: 9px 10px;
-      border-bottom: 2px solid #4a2817;
-    }
-    .stat {
-      color: #ffe9b0;
-      text-align: center;
-      font-weight: 900;
-    }
-    .xpbar,
-    .hpbar {
-      height: 14px;
-      border: 2px solid #2a150c;
-      background: #26140d;
-      box-shadow: inset 0 2px 4px rgba(0,0,0,.55);
-    }
-    .xpbar span {
-      background: linear-gradient(90deg, #2789a0, #f0bd55);
-    }
-    .hpbar span {
-      background: linear-gradient(90deg, #63a85d, #f0bd55);
-    }
-    .enemy .hpbar span {
-      background: linear-gradient(90deg, #ba402d, #f0bd55);
-    }
-    .map {
-      padding: 14px;
-    }
-    .map-grid {
-      border: 4px solid #2d180f;
-      border-radius: 12px;
-      background:
-        linear-gradient(rgba(111,65,36,.12), rgba(111,65,36,.12)),
-        repeating-linear-gradient(35deg, rgba(56,31,16,.07) 0 2px, transparent 2px 16px),
-        radial-gradient(ellipse at 50% 52%, #d7a45f 0, #b9773c 52%, #71391f 100%);
-      box-shadow:
-        inset 0 0 0 3px rgba(255,221,136,.22),
-        inset 0 0 80px rgba(60,26,11,.65);
-    }
-    .node-scene {
-      border: 0;
-      border-radius: 0;
-      background:
-        radial-gradient(ellipse at 50% 45%, rgba(255,226,152,.22), transparent 48%),
-        linear-gradient(180deg, rgba(80,43,24,.15), rgba(43,22,13,.34));
-      box-shadow: none;
-    }
-    .node-scene h2 {
-      color: #ffe5a2;
-      font-size: 36px;
-      text-shadow: 0 4px 0 #35160b;
-    }
-    .node-scene p {
-      color: #ffe3ae;
-      font-size: 18px;
-      text-shadow: 0 2px 0 rgba(35,13,6,.55);
-    }
-    .scene-mark {
-      border: 4px solid #2b160d;
-      border-radius: 50%;
-      background: radial-gradient(circle at 35% 25%, #ffe08a, #b7402d 58%, #35140b);
-      color: #210e08;
-      font-size: 38px;
-      font-weight: 900;
-      box-shadow:
-        inset 0 0 0 2px rgba(255,237,177,.38),
-        0 9px 0 rgba(41,18,10,.8);
-    }
-    .floor {
-      gap: 24px;
-    }
-    .floor:not(:last-child)::after {
-      right: -18px;
-      width: 22px;
-      border-top: 4px dotted rgba(74,36,18,.58);
-      filter: drop-shadow(0 1px 0 rgba(255,223,145,.25));
-    }
-    .node {
-      width: 88px;
-      min-height: 88px;
-      border: 4px solid #2d160c;
-      border-radius: 50%;
-      background: radial-gradient(circle at 35% 25%, #f6d27d, #7a3b23 72%, #2b140b);
-      color: #fff0bd;
-      box-shadow:
-        inset 0 0 0 2px rgba(255,238,183,.32),
-        0 8px 0 rgba(40,18,10,.78),
-        0 14px 24px rgba(0,0,0,.35);
-    }
-    .node.kind-event {
-      background: radial-gradient(circle at 35% 25%, #f6e0a2, #7b5630 70%, #2b170d);
-    }
-    .node.kind-rest {
-      background: radial-gradient(circle at 35% 25%, #d7f08a, #466b33 70%, #172211);
-    }
-    .node.kind-elite {
-      background: radial-gradient(circle at 35% 25%, #ffd76f, #a15b19 66%, #301407);
-    }
-    .node.kind-boss {
-      background: radial-gradient(circle at 35% 25%, #e1b5ff, #56336d 68%, #201028);
-    }
-    .node.available {
-      color: #fff8d8;
-      border-color: #ffe18a;
-      background: radial-gradient(circle at 35% 25%, #fff0a8, #bd4930 66%, #43190d);
-      transform: translateY(-5px) scale(1.05);
-      box-shadow:
-        inset 0 0 0 2px rgba(255,247,207,.5),
-        0 10px 0 rgba(40,18,10,.78),
-        0 0 22px rgba(255,205,96,.42);
-    }
-    .node.completed {
-      color: #d7c7a1;
-      filter: saturate(.55);
-      opacity: .72;
-    }
-    .node .icon {
-      font-size: 28px;
-      font-weight: 900;
-    }
-    .node .label {
-      font-size: 11px;
-      color: #fff0bd;
-      text-shadow: 0 2px 0 rgba(0,0,0,.55);
-    }
-    .arena-track {
-      height: 146px;
-      border: 4px solid #2d160c;
-      border-radius: 12px;
-      background:
-        linear-gradient(180deg, rgba(36,62,70,.62), transparent 38%),
-        linear-gradient(180deg, #684326 0%, #8a522a 52%, #3b2114 100%);
-      box-shadow:
-        inset 0 0 0 2px rgba(255,224,146,.18),
-        inset 0 -34px 42px rgba(49,23,11,.65);
-    }
-    .arena-track::after {
-      content: "";
-      position: absolute;
-      left: 5%;
-      right: 5%;
-      bottom: 22px;
-      border-bottom: 5px dotted rgba(44,22,12,.48);
-    }
-    .fighter-token {
-      width: 70px;
-      height: 88px;
-      border: 4px solid #29150b;
-      border-radius: 36px 36px 18px 18px;
-      background: radial-gradient(circle at 42% 24%, #ffeab6, #b0412b 58%, #3b170c);
-      color: #fff5c8;
-      font-size: 19px;
-      text-shadow: 0 2px 0 rgba(0,0,0,.6);
-      box-shadow:
-        inset 0 0 0 2px rgba(255,236,172,.28),
-        0 10px 0 rgba(42,18,10,.8),
-        0 16px 26px rgba(0,0,0,.42);
-      z-index: 1;
-    }
-    .fighter-token.enemy {
-      background: radial-gradient(circle at 42% 24%, #ffd6bf, #6f3527 62%, #21100b);
-    }
-    .fighter-token::after {
-      content: "";
-      position: absolute;
-      left: 10%;
-      right: 10%;
-      bottom: -15px;
-      height: 10px;
-      border-radius: 50%;
-      background: rgba(26,11,6,.58);
-      filter: blur(2px);
-      z-index: -1;
-    }
-    .combat-scene,
-    .reward-scene {
-      width: min(900px, 100%);
-    }
-    .combat-title {
-      padding: 4px 0 8px;
-      border-bottom: 3px solid rgba(45,22,12,.42);
-    }
-    .combatant.enemy {
-      background:
-        linear-gradient(180deg, rgba(186,64,45,.18), rgba(35,18,13,.54)),
-        #2f1b12;
-    }
-    .combat-controls {
-      justify-content: center;
-    }
-    .timeline {
-      display: grid;
-      gap: 10px;
-      border: 3px solid #2d160c;
-      border-radius: 10px;
-      background:
-        linear-gradient(180deg, rgba(245,205,125,.16), rgba(48,24,13,.52)),
-        #311b11;
-      padding: 12px;
-      box-shadow: inset 0 0 0 2px rgba(255,231,159,.13);
-    }
-    .timeline-header {
-      display: flex;
-      align-items: baseline;
-      justify-content: space-between;
-      gap: 10px;
-      color: #ffe5a2;
-    }
-    .timeline-header span {
-      color: #d7b982;
-      font-size: 13px;
-      font-weight: 700;
-    }
-    .timeline-row {
-      display: grid;
-      grid-template-columns: minmax(120px, 170px) minmax(160px, 1fr) 82px;
-      gap: 10px;
-      align-items: center;
-    }
-    .timeline-name {
-      min-width: 0;
-      display: grid;
-      gap: 2px;
-    }
-    .timeline-name strong,
-    .timeline-name span {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .timeline-name span {
-      color: #d7b982;
-      font-size: 12px;
-    }
-    .timeline-track {
-      position: relative;
-      height: 18px;
-      border: 2px solid #241107;
-      border-radius: 999px;
-      background:
-        linear-gradient(90deg, rgba(255,232,160,.1), rgba(255,232,160,.03)),
-        #1d0e08;
-      overflow: hidden;
-      box-shadow: inset 0 2px 5px rgba(0,0,0,.58);
-    }
-    .timeline-fill {
-      display: block;
-      height: 100%;
-      width: var(--progress, 0%);
-      background: linear-gradient(90deg, #476f4a, #e6a84b);
-    }
-    .timeline-row.enemy .timeline-fill {
-      background: linear-gradient(90deg, #7d3227, #e6a84b);
-    }
-    .timeline-tick {
-      position: absolute;
-      top: -3px;
-      bottom: -3px;
-      left: var(--progress, 0%);
-      width: 4px;
-      border-radius: 999px;
-      background: #fff0b7;
-      box-shadow: 0 0 10px rgba(255,230,151,.7);
-      transform: translateX(-50%);
-    }
-    .timeline-time {
-      justify-self: end;
-      min-width: 72px;
-      border: 2px solid #4a2817;
-      border-radius: 8px;
-      background: rgba(25,12,7,.48);
-      color: #ffe5a2;
-      padding: 5px 7px;
-      text-align: center;
-      font-weight: 900;
-      font-size: 13px;
-    }
-    .timeline-time.ready {
-      color: #fff5c8;
-      border-color: #f0bd55;
-      box-shadow: 0 0 12px rgba(240,189,85,.32);
-    }
-    .timeline-time.waiting {
-      color: #c9ad82;
-    }
-    .log {
-      border: 2px solid #30180d;
-      background: rgba(28,14,8,.74);
-      color: #efd49b;
-      border-radius: 8px;
-    }
-    .pill {
-      border: 2px solid #4a2817;
-      border-radius: 7px;
-      background: linear-gradient(180deg, #4a2a19, #21120c);
-      color: #f4d98d;
-      font-size: 11px;
-    }
-    .app {
-      grid-template-columns: minmax(250px, 300px) minmax(420px, 1fr) minmax(320px, 390px);
-      overflow: hidden;
-    }
-    .right-scroll {
-      min-height: 0;
-      overflow-y: auto;
-      overflow-x: hidden;
-      align-content: start;
-      grid-auto-rows: max-content;
-      padding-right: 6px;
-      padding-bottom: 18px;
-      scrollbar-gutter: stable;
-    }
-    .right-scroll .panel {
-      min-height: auto;
-    }
-    .right-scroll .panel-inner {
-      padding: 12px;
-    }
-    .right-scroll button {
-      width: 100%;
-    }
-    .inventory-panel {
-      display: grid;
-      gap: 10px;
-    }
-    .inventory-gold {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      border: 2px solid #4a2817;
-      border-radius: 8px;
-      background: rgba(25,12,7,.42);
-      padding: 9px 10px;
-    }
-    .inventory-gold span,
-    .summary-grid span {
-      color: #d7b982;
-      font-size: 12px;
-      font-weight: 900;
-      text-transform: uppercase;
-    }
-    .inventory-gold strong {
-      color: #ffe5a2;
-      font-size: 18px;
-    }
-    .inventory-list {
-      display: grid;
-      gap: 6px;
-      max-height: clamp(86px, 16vh, 150px);
-      overflow-y: auto;
-      padding-right: 2px;
-    }
-    .inventory-item {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      border: 1px solid rgba(240,189,85,.26);
-      border-radius: 7px;
-      background: rgba(25,12,7,.34);
-      padding: 7px 9px;
-    }
-    .inventory-item span {
-      min-width: 0;
-      overflow-wrap: anywhere;
-    }
-    .inventory-item strong {
-      color: #ffe5a2;
-      min-width: 28px;
-      text-align: right;
-    }
-    .fight-summary {
-      gap: 10px;
-    }
-    .fight-result-line {
-      display: flex;
-      align-items: baseline;
-      gap: 6px;
-      flex-wrap: wrap;
-    }
-    .fight-result-line strong {
-      font-size: 16px;
-    }
-    .summary-grid {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 8px;
-    }
-    .summary-grid div {
-      min-width: 0;
-      border: 1px solid rgba(240,189,85,.24);
-      border-radius: 7px;
-      background: rgba(25,12,7,.34);
-      padding: 7px 9px;
-    }
-    .summary-grid strong {
-      display: block;
-      color: #ffe5a2;
-      overflow-wrap: anywhere;
-    }
-    .combat-log-mini {
-      display: grid;
-      gap: 6px;
-      max-height: clamp(120px, 24vh, 260px);
-      overflow-y: auto;
-      overflow-x: hidden;
-      border: 2px solid #30180d;
-      border-radius: 8px;
-      background: rgba(28,14,8,.74);
-      padding: 9px;
-    }
-    .log-line {
-      color: #efd49b;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-size: 12px;
-      line-height: 1.35;
-      white-space: normal;
-      overflow-wrap: anywhere;
-    }
-    .right-scroll > .panel:nth-child(1) .panel-inner,
-    .right-scroll > .panel:nth-child(2) .panel-inner,
-    .right-scroll > .panel:nth-child(3) .panel-inner {
-      gap: 10px;
-    }
-    .node-scene {
-      min-height: min(540px, calc(100vh - 220px));
-      padding: clamp(18px, 3vw, 48px);
-    }
-    @media (max-height: 850px) and (min-width: 1051px) {
-      .game-shell {
-        gap: 8px;
-        padding: 8px;
-      }
-      .hud {
-        padding: 8px;
-      }
-      .hud h1 {
-        font-size: 21px;
-      }
-      .hud-card {
-        padding: 5px 7px;
-      }
-      .app {
-        gap: 10px;
-      }
-      .panel-inner {
-        padding: 11px;
-      }
-      .map {
-        padding: 10px;
-      }
-      .map-header {
-        margin-bottom: 10px;
-      }
-      .map-grid {
-        height: calc(100% - 54px);
-      }
-      .node-scene {
-        min-height: 390px;
-      }
-      .arena-track {
-        height: 118px;
-      }
-      .fighter-token {
-        width: 62px;
-        height: 76px;
-      }
-      .combat-scene {
-        gap: 10px;
-      }
-      .timeline {
-        padding: 9px;
-      }
-      .combat-grid {
-        gap: 8px;
-      }
-      .combatant {
-        padding: 9px;
-      }
-    }
-    @media (max-width: 1050px) {
-      body { overflow: auto; }
-      .game-shell { height: auto; min-height: 100vh; }
-      .hud { grid-template-columns: 1fr; }
-      .hud-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .hud-actions { justify-content: stretch; }
-      .hud-actions button { width: 100%; }
-      .app { grid-template-columns: 1fr; }
-      .map { height: auto; min-height: 560px; }
-      .right-scroll { height: auto; }
-      .combat-grid { grid-template-columns: 1fr; }
-      .loot-grid { grid-template-columns: 1fr; }
-      .timeline-row { grid-template-columns: 1fr; }
-      .timeline-time { justify-self: stretch; }
-      .floor:not(:last-child)::after { display: none; }
-    }
-  </style>
-</head>
-<body>
-  <main class="game-shell">
-    <header class="hud">
-      <div class="hud-brand">
-        <span class="sigil">HM</span>
-        <div>
-          <h1>HackMaster Ascent</h1>
-          <div id="phase" class="sub">Roll a character to begin.</div>
-        </div>
-      </div>
-      <div id="hudMetrics" class="hud-metrics"></div>
-      <div class="hud-actions">
-        <span id="runStatus" class="pill">No run</span>
-        <button onclick="newRun()">New Run</button>
-      </div>
-    </header>
-    <div class="app">
-      <aside class="panel"><div class="panel-inner stack">
-        <div class="section-title">
-          <h2>Character Sheet</h2>
-          <span class="pill">Run</span>
-        </div>
-        <div class="roll-box stack">
-          <h2>Roll Character</h2>
-          <select id="preset"></select>
-          <input id="name" placeholder="Name override" />
-          <input id="seed" placeholder="Seed, blank for random" />
-          <button onclick="newRun()">Embark</button>
-        </div>
-        <div id="character" class="stack"></div>
-      </div></aside>
-      <section class="panel map">
-        <div class="map-header">
-          <div>
-            <h2>Route</h2>
-            <div class="sub">Branching run map and active encounter scene.</div>
-          </div>
-          <span id="routeStatus" class="pill">Route</span>
-        </div>
-        <div id="map" class="map-grid"></div>
-      </section>
-      <aside class="right-scroll stack">
-        <section class="panel"><div class="panel-inner stack" id="encounter"></div></section>
-        <section class="panel"><div class="panel-inner stack">
-          <div class="section-title"><h2>Inventory</h2><span class="pill">Pack</span></div>
-          <div id="inventory"></div>
-        </div></section>
-        <section class="panel"><div class="panel-inner stack">
-          <div class="section-title"><h2>Latest Reward</h2><span class="pill">Loot</span></div>
-          <div id="reward"></div>
-        </div></section>
-        <section class="panel"><div class="panel-inner stack">
-          <div class="section-title"><h2>Fight Summary</h2><span class="pill">Combat</span></div>
-          <div id="fight"></div>
-        </div></section>
-        <section class="panel"><div class="panel-inner stack">
-          <div class="section-title"><h2>Log</h2><span class="pill">History</span></div>
-          <div id="log" class="log"></div>
-        </div></section>
-      </aside>
-    </div>
-  </main>
-  <script>
-    let state = null;
-    let autoTimer = null;
-    let autoBusy = false;
-    const nodeIcons = { fight: "F", event: "?", rest: "R", elite: "E", boss: "B" };
-    const nodeLabels = { fight: "Fight", event: "Event", rest: "Rest", elite: "Elite", boss: "Boss" };
-
-    async function api(path, body) {
-      const options = body === undefined ? {} : {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body)
-      };
-      const response = await fetch(path, options);
-      const json = await response.json();
-      if (!response.ok) throw new Error(json.error || "Request failed");
-      state = json;
-      render();
-    }
-
-    async function loadState() { await api("/api/state"); }
-    async function newRun() {
-      const seedRaw = document.getElementById("seed").value.trim();
-      await api("/api/new-run", {
-        preset: document.getElementById("preset").value,
-        name: document.getElementById("name").value.trim() || null,
-        seed: seedRaw ? Number(seedRaw) : null
-      });
-    }
-    async function chooseNode(id) { await api("/api/choose-node", { node_id: id }); }
-    async function eventChoice(id) { await api("/api/event-choice", { choice_id: id }); }
-    async function startFight() { await api("/api/start-fight", {}); }
-    async function claimReward() { await api("/api/claim-reward", {}); }
-    async function fightCommand(command, seconds = 1) {
-      await api("/api/fight-command", { command, seconds });
-    }
-    async function autoTick() {
-      if (autoBusy) return;
-      autoBusy = true;
-      try {
-        await fightCommand("tick", 1);
-      } catch (err) {
-        stopAutoTimer();
-        renderError(err);
-      } finally {
-        autoBusy = false;
-      }
-    }
-    function syncAutoTimer() {
-      const shouldRun = Boolean(state && state.live_fight && state.live_fight.running);
-      if (shouldRun && !autoTimer) {
-        autoTimer = setInterval(autoTick, 1000);
-      }
-      if (!shouldRun) stopAutoTimer();
-    }
-    function stopAutoTimer() {
-      if (autoTimer) {
-        clearInterval(autoTimer);
-        autoTimer = null;
-      }
-    }
-
-    function render() {
-      renderPresets();
-      renderHud();
-      renderCharacter();
-      renderMap();
-      renderEncounter();
-      renderInventory();
-      renderReward();
-      renderFight();
-      renderLog();
-      syncAutoTimer();
-    }
-
-    function renderPresets() {
-      const select = document.getElementById("preset");
-      const previous = select.value;
-      select.innerHTML = (state.presets || []).map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("");
-      if (previous) select.value = previous;
-    }
-
-    function renderHud() {
-      document.getElementById("phase").textContent = state.terminal || phaseText(state.phase);
-      document.getElementById("runStatus").textContent = state.has_run ? phaseLabel(state.phase) : "No run";
-      const metrics = document.getElementById("hudMetrics");
-      if (!state.player) {
-        metrics.innerHTML = [
-          hudCard("Level", "-"),
-          hudCard("XP", "-"),
-          hudCard("Gold", "-"),
-          hudCard("Depth", "-"),
-          hudCard("Wounds", "-")
-        ].join("");
-        return;
-      }
-      const p = state.player;
-      metrics.innerHTML = [
-        hudCard("Level", p.level),
-        hudCard("XP", `${p.xp}/${p.next_level_xp}`),
-        hudCard("Gold", p.gold),
-        hudCard("Depth", p.depth),
-        hudCard("Wounds", p.wound_total || "none")
-      ].join("");
-    }
-
-    function hudCard(label, value) {
-      return `<div class="hud-card"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`;
-    }
-
-    function renderCharacter() {
-      const el = document.getElementById("character");
-      if (!state.player) {
-        el.innerHTML = `<div class="sub">No character rolled.</div>`;
-        return;
-      }
-      const p = state.player;
-      const xpPct = clamp((p.xp / Math.max(1, p.next_level_xp)) * 100, 0, 100);
-      el.innerHTML = `
-        <div class="stack">
-          <div class="sheet-name">
-            <div class="row"><h2>${escapeHtml(p.name)}</h2><span class="pill">Level ${p.level}</span></div>
-            <div class="xpbar" style="--xp:${xpPct}%"><span></span></div>
-            <div class="sub">XP ${p.xp} / ${p.next_level_xp}</div>
-          </div>
-          ${metricRow("Gold", p.gold)}
-          ${metricRow("Depth", p.depth)}
-          ${metricRow("Wounds", `<strong class="${p.wound_total ? "danger" : "ok"}">${p.wound_total || "none"}</strong>`)}
-          ${metricRow("Seed", p.seed)}
-          <div class="stat-grid">${p.stats.map(s => `<div class="stat">${escapeHtml(s)}</div>`).join("")}</div>
-          <div class="sub">Points: BP ${p.bp}, LP ${p.lp}, AP ${p.ap}, RP ${p.rp}</div>
-        </div>`;
-    }
-
-    function metricRow(label, value) {
-      const rendered = typeof value === "string" && value.includes("<strong") ? value : `<strong>${escapeHtml(value)}</strong>`;
-      return `<div class="metric"><span>${escapeHtml(label)}</span>${rendered}</div>`;
-    }
-
-    function renderMap() {
-      document.getElementById("routeStatus").textContent = state.has_run ? phaseLabel(state.phase) : "Route";
-      const map = document.getElementById("map");
-      if (state.live_fight) {
-        map.innerHTML = renderLiveFightScene(state.live_fight);
-        return;
-      }
-      if (state.phase === "reward_review" && state.last_reward) {
-        map.innerHTML = renderRewardScene();
-        return;
-      }
-      if (state.pending_event) {
-        const event = state.pending_event;
-        map.innerHTML = `<div class="node-scene event-scene">
-          <div class="scene-mark">?</div>
-          <h2>${escapeHtml(event.name)}</h2>
-          <p>${escapeHtml(event.description)}</p>
-          <div class="choice-list">${event.choices.map(c => `<button onclick="eventChoice('${escapeJs(c.id)}')">${escapeHtml(c.text)}</button>`).join("")}</div>
-        </div>`;
-        return;
-      }
-      if (state.pending_fight) {
-        const fight = state.pending_fight;
-        map.innerHTML = `<div class="node-scene fight-scene">
-          <div class="scene-mark">F</div>
-          <h2>${escapeHtml(fight.tier)} Fight</h2>
-          <p>You have committed to a route and are sizing up ${escapeHtml(fight.enemy_name)}. Combat will move to a timeline from here.</p>
-          <button onclick="startFight()">Fight</button>
-        </div>`;
-        return;
-      }
-      const floors = [0,1,2,3];
-      map.innerHTML = floors.map(floor => {
-        const nodes = (state.map || []).filter(n => n.floor === floor);
-        return `<div class="floor">${nodes.map(nodeHtml).join("")}</div>`;
-      }).join("");
-    }
-
-    function nodeHtml(node) {
-      const available = (state.available_nodes || []).includes(node.id);
-      const classes = ["node", `kind-${node.kind}`, available ? "available" : "", node.completed ? "completed" : ""].join(" ");
-      const disabled = available ? "" : "disabled";
-      return `<div class="${classes}">
-        <div class="icon">${nodeIcons[node.kind]}</div>
-        <div class="label">${nodeLabels[node.kind]}</div>
-        <button ${disabled} onclick="chooseNode(${node.id})">Choose ${nodeLabels[node.kind]}</button>
-      </div>`;
-    }
-
-    function renderRewardScene() {
-      const reward = state.last_reward;
-      const fight = state.last_fight;
-      return `<div class="node-scene">
-        <div class="reward-scene">
-          <div class="combat-title">
-            <div>
-              <h2>${fight && fight.won ? "Victory Spoils" : "Encounter Reward"}</h2>
-              <p>${fight ? `Defeated ${escapeHtml(fight.enemy)} in ${fight.turns}s.` : "Resolve the reward before choosing the next route."}</p>
-            </div>
-            <span class="pill">Reward</span>
-          </div>
-          <div class="loot-grid">
-            <div class="loot-token"><span class="sub">Gold</span><strong>+${reward.gold}</strong></div>
-            <div class="loot-token"><span class="sub">XP</span><strong>+${reward.xp}</strong></div>
-            <div class="loot-token"><span class="sub">Level</span><strong>${reward.level_gained ? "Gained" : "Held"}</strong></div>
-          </div>
-          <div class="reward">${rewardDetails(reward)}</div>
-          <div class="combat-controls"><button onclick="claimReward()">Continue Route</button></div>
-        </div>
-      </div>`;
-    }
-
-    function renderLiveFightScene(fight) {
-      const player = fight.combatants.find(c => c.team_id === 0) || fight.combatants[0];
-      const enemy = fight.combatants.find(c => c.team_id === 1) || fight.combatants[1];
-      const distance = Number(fight.distance_ft || 0).toFixed(1);
-      const enemyPosition = arenaEnemyPosition(fight.distance_ft);
-      return `<div class="node-scene fight-scene">
-        <div class="combat-scene">
-          <div class="combat-title">
-            <div>
-              <h2>${escapeHtml(fight.tier)} Fight: ${escapeHtml(fight.enemy_name)}</h2>
-              <p>${fight.elapsed_seconds}s elapsed of ${fight.max_seconds}s. Range ${distance} ft. Status: ${escapeHtml(fight.status)}.</p>
-            </div>
-            <span class="pill">${fight.running ? "Auto" : "Paused"}</span>
-          </div>
-          <div class="arena-track">
-            <div class="fighter-token" style="left: 18%">${initials(player && player.name)}</div>
-            <div class="fighter-token enemy" style="left: ${enemyPosition}%">${initials(enemy && enemy.name)}</div>
-          </div>
-          ${swingTimeline(fight)}
-          <div class="combat-grid">
-            ${combatantCard(player, false)}
-            ${combatantCard(enemy, true)}
-          </div>
-          <div class="combat-controls">
-            <button onclick="fightCommand('step', 1)">Step 1s</button>
-            <button onclick="fightCommand('next_attack', 1)">Skip to Next Attack</button>
-            <button onclick="fightCommand('play', 1)" ${fight.running ? "disabled" : ""}>Auto</button>
-            <button onclick="fightCommand('pause', 1)" ${fight.running ? "" : "disabled"}>Pause</button>
-            <button onclick="fightCommand('skip', 1)">Finish</button>
-          </div>
-          ${decisionHtml(fight.pending_decision)}
-          <div class="log combat-log">${(fight.log_tail || []).map(escapeHtml).join("<br>") || "Combat is about to begin."}</div>
-        </div>
-      </div>`;
-    }
-
-    function swingTimeline(fight) {
-      const rows = (fight.combatants || []).map(combatant => {
-        const speed = Math.max(1, Number(combatant.weapon_speed_seconds || 1));
-        const next = combatant.next_attack_in_seconds;
-        const queued = next !== null && next !== undefined;
-        const remaining = queued ? Math.max(0, Number(next || 0)) : null;
-        const progress = queued ? clamp(((speed - remaining) / speed) * 100, 0, 100) : 0;
-        const ready = queued && remaining <= 0.05;
-        const timeLabel = queued
-          ? (ready ? "ready" : `${formatSeconds(remaining)}s`)
-          : "closing";
-        const side = combatant.team_id === 1 ? "enemy" : "player";
-        return `<div class="timeline-row ${side}">
-          <div class="timeline-name">
-            <strong>${escapeHtml(combatant.name)}</strong>
-            <span>${escapeHtml(combatant.weapon)} / ${formatSeconds(speed)}s</span>
-          </div>
-          <div class="timeline-track" style="--progress:${progress}%">
-            <span class="timeline-fill"></span>
-            <span class="timeline-tick"></span>
-          </div>
-          <div class="timeline-time ${ready ? "ready" : queued ? "" : "waiting"}">${escapeHtml(timeLabel)}</div>
-        </div>`;
-      }).join("");
-      return `<div class="timeline">
-        <div class="timeline-header"><strong>Swing Timeline</strong><span>${fight.elapsed_seconds}s</span></div>
-        ${rows}
-      </div>`;
-    }
-
-    function combatantCard(combatant, enemy) {
-      if (!combatant) return `<div class="combatant"><div class="sub">No combatant.</div></div>`;
-      const hp = `${combatant.hp} / ${combatant.max_hp}`;
-      const hpPct = clamp((combatant.hp / Math.max(1, combatant.max_hp)) * 100, 0, 100);
-      const tags = [
-        combatant.weapon,
-        `${formatSeconds(combatant.weapon_speed_seconds)}s speed`,
-        `${formatFeet(combatant.reach_ft)} reach`,
-        combatant.next_attack_in_seconds === null || combatant.next_attack_in_seconds === undefined
-          ? null
-          : `next ${formatSeconds(combatant.next_attack_in_seconds)}s`,
-        shieldLabel(combatant),
-        combatant.trauma_seconds > 0 ? `${combatant.trauma_seconds}s trauma` : null,
-        combatant.knocked_seconds > 0 ? `${combatant.knocked_seconds}s knocked` : null
-      ].filter(Boolean);
-      return `<div class="combatant ${enemy ? "enemy" : ""}">
-        <div class="row"><h3>${escapeHtml(combatant.name)}</h3><strong>${hp}</strong></div>
-        <div class="hpbar" style="--hp:${hpPct}%"><span></span></div>
-        <div class="sub">${tags.map(escapeHtml).join(" | ")}</div>
-      </div>`;
-    }
-
-    function shieldLabel(combatant) {
-      if (!combatant || !combatant.shield_name) return null;
-      return combatant.shield_intact
-        ? `${combatant.shield_name} ready`
-        : `${combatant.shield_name} broken`;
-    }
-
-    function decisionHtml(decision) {
-      if (!decision) {
-        return `<div class="decision-slot">No tactical prompt this second.</div>`;
-      }
-      return `<div class="decision-slot">
-        <strong>Decision for actor ${decision.actor_idx}</strong>
-        <div class="combat-controls">${decision.options.map(option => `<button>${escapeHtml(option)}</button>`).join("")}</div>
-      </div>`;
-    }
-
-    function renderEncounter() {
-      const el = document.getElementById("encounter");
-      if (state.terminal) {
-        el.innerHTML = `<h2>Run Complete</h2><div class="sub">${escapeHtml(state.terminal)}</div><button onclick="newRun()">Roll Again</button>`;
-        return;
-      }
-      if (state.live_fight) {
-        const fight = state.live_fight;
-        el.innerHTML = `<h2>Live Combat</h2>
-          <div class="sub">${escapeHtml(fight.enemy_name)} is active at ${fight.elapsed_seconds}s. Watch the log, step time forward, or let auto-play tick.</div>
-          <div class="combat-controls">
-            <button onclick="fightCommand('step', 1)">Step 1s</button>
-            <button onclick="fightCommand('next_attack', 1)">Skip to Next Attack</button>
-            <button onclick="fightCommand('play', 1)" ${fight.running ? "disabled" : ""}>Auto</button>
-            <button onclick="fightCommand('pause', 1)" ${fight.running ? "" : "disabled"}>Pause</button>
-            <button onclick="fightCommand('skip', 1)">Finish</button>
-          </div>
-          ${swingTimeline(fight)}`;
-        return;
-      }
-      if (state.pending_event) {
-        const event = state.pending_event;
-        el.innerHTML = `<h2>${escapeHtml(event.name)}</h2>
-          <div class="sub">${escapeHtml(event.description)}</div>
-          <div class="choice-list">${event.choices.map(c => `<button onclick="eventChoice('${escapeJs(c.id)}')">${escapeHtml(c.text)}</button>`).join("")}</div>`;
-        return;
-      }
-      if (state.pending_fight) {
-        const fight = state.pending_fight;
-        el.innerHTML = `<h2>${escapeHtml(fight.tier)} Fight</h2>
-          <div class="sub">Enemy scouted: ${escapeHtml(fight.enemy_name)}. This is now a fight scene, not an instant node resolution.</div>
-          <button onclick="startFight()">Fight</button>`;
-        return;
-      }
-      if (state.phase === "reward_review" && state.last_reward) {
-        el.innerHTML = `<div class="section-title"><h2>Reward Review</h2><span class="pill">Claim</span></div>
-          <div class="reward">${rewardDetails(state.last_reward)}</div>
-          <button onclick="claimReward()">Continue Route</button>`;
-        return;
-      }
-      if (state.phase === "choose_node") {
-        el.innerHTML = `<h2>Choose Node</h2><div class="sub">Pick an available route node on the map. Fights resolve through the existing HackMaster combat engine.</div>`;
-      } else {
-        el.innerHTML = `<h2>Encounter</h2><div class="sub">Roll a character or resolve the pending choice.</div>`;
-      }
-    }
-
-    function renderInventory() {
-      const el = document.getElementById("inventory");
-      const inventory = state.inventory;
-      if (!inventory) {
-        el.innerHTML = `<div class="sub">No run inventory yet.</div>`;
-        return;
-      }
-      const items = countedItems(inventory.items || []);
-      el.innerHTML = `<div class="inventory-panel">
-        <div class="inventory-gold"><span>Gold</span><strong>${inventory.gold}</strong></div>
-        <div class="inventory-list">
-          ${items.length
-            ? items.map(item => `<div class="inventory-item"><span>${escapeHtml(item.name)}</span><strong>${item.count > 1 ? `x${item.count}` : ""}</strong></div>`).join("")
-            : `<div class="sub">Pack is empty.</div>`}
-        </div>
-      </div>`;
-    }
-
-    function countedItems(items) {
-      const counts = new Map();
-      for (const item of items) counts.set(item, (counts.get(item) || 0) + 1);
-      return Array.from(counts.entries())
-        .map(([name, count]) => ({ name, count }))
-        .sort((a, b) => a.name.localeCompare(b.name));
-    }
-
-    function renderReward() {
-      const el = document.getElementById("reward");
-      if (!state.last_reward) {
-        el.innerHTML = `<div class="sub">No reward yet.</div>`;
-        return;
-      }
-      const r = state.last_reward;
-      el.innerHTML = `<div class="reward">
-        ${rewardDetails(r)}
-      </div>`;
-    }
-
-    function rewardDetails(r) {
-      return `<div>Gold +${r.gold}</div>
-        <div>XP +${r.xp}</div>
-        <div>Items: ${r.items.length ? r.items.map(escapeHtml).join(", ") : "none"}</div>
-        <div>${r.level_gained ? "Level gained. Points granted." : "No level-up."}</div>`;
-    }
-
-    function renderFight() {
-      const el = document.getElementById("fight");
-      if (state.live_fight) {
-        const fight = state.live_fight;
-        el.innerHTML = `<div class="fight fight-summary">
-          <div class="fight-result-line"><strong>${escapeHtml(fight.status)}</strong><span>vs ${escapeHtml(fight.enemy_name)}</span></div>
-          <div class="summary-grid">
-            <div><span>Time</span><strong>${fight.elapsed_seconds}s</strong></div>
-            <div><span>Range</span><strong>${Number(fight.distance_ft || 0).toFixed(1)} ft</strong></div>
-          </div>
-          <div class="combat-log-mini">${logLines(fight.log_tail, "No strikes yet.")}</div>
-        </div>`;
-        return;
-      }
-      if (!state.last_fight) {
-        el.innerHTML = `<div class="sub">No fight resolved yet.</div>`;
-        return;
-      }
-      const f = state.last_fight;
-      el.innerHTML = `<div class="fight fight-summary">
-        <div class="fight-result-line"><strong class="${f.won ? "ok" : "danger"}">${f.won ? "Victory" : "Defeat"}</strong><span>vs ${escapeHtml(f.enemy)}</span></div>
-        <div class="summary-grid">
-          <div><span>Turns</span><strong>${f.turns}s</strong></div>
-          <div><span>HP left</span><strong>${f.remaining_hp}</strong></div>
-          <div><span>Dealt</span><strong>${escapeHtml(f.hits_dealt)}</strong></div>
-          <div><span>Taken</span><strong>${escapeHtml(f.hits_taken)}</strong></div>
-        </div>
-        <div class="combat-log-mini">${logLines(f.combat_log, "No combat log.")}</div>
-      </div>`;
-    }
-
-    function logLines(lines, emptyText) {
-      const list = lines || [];
-      if (!list.length) return `<div class="sub">${escapeHtml(emptyText)}</div>`;
-      return list.map(line => `<div class="log-line">${escapeHtml(line)}</div>`).join("");
-    }
-
-    function renderLog() {
-      const el = document.getElementById("log");
-      el.innerHTML = (state.last_log || []).map(escapeHtml).join("<br>") || "No log.";
-    }
-
-    function phaseText(phase) {
-      if (phase === "choose_node") return "Choose a route node.";
-      if (phase === "event_choice") return "Resolve the event choice.";
-      if (phase === "fight_preview") return "Fight scene selected.";
-      if (phase === "combat_playback") return "Combat is running second by second.";
-      if (phase === "reward_review") return "Claim rewards and progression.";
-      if (phase === "run_over") return "Run over.";
-      return "Roll a character to begin.";
-    }
-    function phaseLabel(phase) {
-      return String(phase || "No run").replace(/_/g, " ");
-    }
-    function arenaEnemyPosition(distanceFt) {
-      const playerPosition = 18;
-      const contactPosition = playerPosition + 7;
-      const farPosition = 82;
-      const maxVisualRange = 20;
-      const meleeRange = 1;
-      const distance = clamp(Number(distanceFt || 0), 0, maxVisualRange);
-      if (distance <= meleeRange) return contactPosition;
-      return contactPosition + ((distance - meleeRange) / (maxVisualRange - meleeRange)) * (farPosition - contactPosition);
-    }
-    function clamp(value, min, max) {
-      return Math.max(min, Math.min(max, Number.isFinite(value) ? value : min));
-    }
-    function initials(value) {
-      return String(value || "?")
-        .split(/\s+/)
-        .filter(Boolean)
-        .slice(0, 2)
-        .map(part => part[0].toUpperCase())
-        .join("") || "?";
-    }
-    function renderError(err) {
-      const el = document.getElementById("log");
-      if (el) el.textContent = err.message;
-    }
-    function formatSeconds(value) {
-      const number = Number(value || 0);
-      return Number.isInteger(number) ? String(number) : number.toFixed(1);
-    }
-    function formatFeet(value) {
-      const number = Number(value || 0);
-      return `${Number.isInteger(number) ? number : number.toFixed(1)}ft`;
-    }
-
-    function escapeHtml(value) {
-      return String(value).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-    }
-    function escapeJs(value) {
-      return String(value).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-    }
-    loadState().catch(err => {
-      document.getElementById("log").textContent = err.message;
-    });
-  </script>
-</body>
-</html>"#;
