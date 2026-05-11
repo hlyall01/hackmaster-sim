@@ -17,7 +17,10 @@ pub(crate) fn run() {
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(DEFAULT_PORT);
 
-    let app = Arc::new(Mutex::new(SquadBattlerApp::new()));
+    let app =
+        Arc::new(Mutex::new(SquadBattlerApp::new().unwrap_or_else(|err| {
+            panic!("Failed to start squad battler: {err}")
+        })));
     let listener = TcpListener::bind(("127.0.0.1", port))
         .unwrap_or_else(|err| panic!("Failed to bind 127.0.0.1:{port}: {err}"));
 

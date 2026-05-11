@@ -1,6 +1,6 @@
 use super::web_assets;
 use hackmaster_sim::squad_battler::state::SquadBattlerApp;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
@@ -87,8 +87,20 @@ fn route_request(request: HttpRequest, app: Arc<Mutex<SquadBattlerApp>>) -> Stri
             let app = app.lock().expect("squad battler lock poisoned");
             json_response(200, &app.view())
         }
+        ("POST", "/api/new-run") => {
+            let parsed = serde_json::from_str::<NewRunRequest>(&request.body)
+                .unwrap_or(NewRunRequest { seed: None });
+            let mut app = app.lock().expect("squad battler lock poisoned");
+            let view = app.new_run(parsed.seed);
+            json_response(200, &view)
+        }
         _ => error_response(404, "Not found".to_string()),
     }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct NewRunRequest {
+    seed: Option<u64>,
 }
 
 fn html_response(body: &str) -> String {
