@@ -26,6 +26,10 @@ const QUICK_STARTS_PATH: &str = "data/autobattler/autobattler_quick_starts.json"
 const NPC_PRESETS_PATH: &str = "data/sim/npc_presets.json";
 const EVENTS_PATH: &str = "data/autobattler/events_v1_handcrafted.json";
 const DEFAULT_PORT: u16 = 8787;
+const DEMO_START_DISTANCE_FT: f32 = 20.0;
+const DEMO_STOP_DISTANCE_FT: f32 = 1.0;
+const DEMO_FIGHT_MAX_SECONDS: u32 = 120;
+const SIM_STEP_SECONDS: f32 = 1.0;
 
 pub(crate) fn run() {
     hackmaster_sim::console::maybe_enable_console();
@@ -322,8 +326,7 @@ impl DemoApp {
         let mut enemy_combatant = builder.build_enemy(&enemy);
         player_combatant.team_id = 0;
         enemy_combatant.team_id = 1;
-        let mut sim =
-            SimState::with_rng(SimConfig::new(20.0, 1.0), SimRng::from_seed(combat_seed));
+        let mut sim = SimState::with_rng(demo_sim_config(), SimRng::from_seed(combat_seed));
         sim.reset_with_combatants(vec![player_combatant, enemy_combatant]);
         session.live_fight = Some(DemoLiveFight {
             sim,
@@ -331,7 +334,7 @@ impl DemoApp {
             enemy_name: pending.enemy_name,
             kind: pending.kind,
             tier: pending.tier,
-            max_seconds: 120,
+            max_seconds: DEMO_FIGHT_MAX_SECONDS,
             seen_events: 0,
             log_lines: Vec::new(),
             running: false,
@@ -394,7 +397,7 @@ impl DemoApp {
                 let Some(live) = session.live_fight.as_mut() else {
                     return;
                 };
-                live.sim.update(1.0);
+                live.sim.update(SIM_STEP_SECONDS);
                 ingest_live_fight_events(live);
                 live.sim.done || live.sim.elapsed_seconds >= live.max_seconds
             };
@@ -565,6 +568,10 @@ impl DemoApp {
     }
 }
 
+fn demo_sim_config() -> SimConfig {
+    SimConfig::new(DEMO_START_DISTANCE_FT, DEMO_STOP_DISTANCE_FT)
+}
+
 #[derive(Clone)]
 struct DemoSession {
     run_state: RunState,
@@ -719,6 +726,13 @@ impl DemoFightPlaybackView {
                     hp: combatant.state.hp,
                     max_hp: combatant.sheet.vitals.max_hp,
                     weapon: combatant.sheet.offense.weapon.name.clone(),
+                    weapon_speed_seconds: combatant.sheet.offense.weapon.speed,
+                    reach_ft: combatant.sheet.offense.weapon.reach_ft,
+                    next_attack_in_seconds: combatant
+                        .state
+                        .next_attack_time_primary
+                        .map(|time| (time - live.sim.elapsed_seconds as f32).max(0.0)),
+                    shield_name: combatant.sheet.defense.shield_name.clone(),
                     x: live
                         .sim
                         .actors
@@ -759,6 +773,10 @@ struct DemoCombatantView {
     hp: i32,
     max_hp: i32,
     weapon: String,
+    weapon_speed_seconds: f32,
+    reach_ft: f32,
+    next_attack_in_seconds: Option<f32>,
+    shield_name: Option<String>,
     x: i32,
     y: i32,
     trauma_seconds: i32,
@@ -1481,7 +1499,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>HackMaster Autobattler v2 Demo</title>
+  <title>HackMaster Ascent Demo</title>
   <style>
     :root {
       color-scheme: dark;
@@ -1958,7 +1976,380 @@ const INDEX_HTML: &str = r#"<!doctype html>
     }
     .danger { color: #f0a096; }
     .ok { color: #a9d48e; }
+
+    :root {
+      --bg: #20120d;
+      --panel: #2b1a12;
+      --panel-2: #3a2217;
+      --line: #7b4b2d;
+      --text: #f7e8c0;
+      --muted: #c9ad82;
+      --gold: #f0bd55;
+      --red: #b6402d;
+      --green: #628f55;
+      --blue: #356f86;
+      --steel: #7c6d5d;
+      --parchment: #c99152;
+      --parchment-dark: #7b4528;
+      --ink: #2b170f;
+    }
+    body {
+      background:
+        linear-gradient(180deg, rgba(32,18,13,.9), rgba(16,10,9,.96)),
+        radial-gradient(ellipse at 50% 18%, rgba(83,42,25,.58), transparent 54%),
+        linear-gradient(120deg, #21140f, #151412 46%, #251610);
+      font-family: Georgia, Cambria, "Times New Roman", serif;
+      color: var(--text);
+      overflow: hidden;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: .22;
+      background:
+        repeating-linear-gradient(0deg, transparent 0 10px, rgba(255,255,255,.035) 10px 11px),
+        repeating-linear-gradient(90deg, transparent 0 17px, rgba(0,0,0,.08) 17px 18px);
+      mix-blend-mode: soft-light;
+    }
+    button {
+      border: 2px solid #3a1b12;
+      border-radius: 10px 10px 14px 14px;
+      background:
+        linear-gradient(180deg, #d18a42 0%, #9d3d28 52%, #572113 100%);
+      color: #ffe9af;
+      padding: 10px 16px;
+      font-weight: 900;
+      text-shadow: 0 2px 0 rgba(0,0,0,.42);
+      box-shadow:
+        inset 0 2px 0 rgba(255,236,168,.36),
+        inset 0 -4px 0 rgba(53,18,11,.55),
+        0 6px 0 rgba(21,10,7,.82);
+    }
+    button:hover {
+      border-color: #f1c264;
+      color: #fff7d0;
+      transform: translateY(-1px);
+    }
+    button:active {
+      transform: translateY(3px);
+      box-shadow:
+        inset 0 2px 0 rgba(255,236,168,.3),
+        inset 0 -2px 0 rgba(53,18,11,.5),
+        0 2px 0 rgba(21,10,7,.82);
+    }
+    input, select {
+      border: 2px solid #5d341e;
+      background: #ead0a0;
+      color: var(--ink);
+      border-radius: 6px;
+      font-weight: 700;
+      box-shadow: inset 0 2px 4px rgba(58,27,12,.32);
+    }
+    .game-shell {
+      padding: 10px;
+      gap: 10px;
+      background:
+        linear-gradient(90deg, rgba(0,0,0,.28), transparent 18%, transparent 82%, rgba(0,0,0,.3));
+    }
+    .hud {
+      border: 3px solid #2a160e;
+      border-radius: 10px;
+      background:
+        linear-gradient(180deg, #402416, #20120c 65%, #130b08),
+        repeating-linear-gradient(90deg, rgba(255,255,255,.04) 0 1px, transparent 1px 18px);
+      box-shadow:
+        inset 0 0 0 2px rgba(241,194,100,.24),
+        0 10px 24px rgba(0,0,0,.46);
+    }
+    .sigil {
+      border-width: 2px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 35% 25%, #f2c769, #8d3a24 62%, #321409);
+      color: #211008;
+      font-weight: 900;
+    }
+    .hud h1 {
+      color: #ffd77a;
+      font-size: 24px;
+      text-shadow: 0 3px 0 #3a160d;
+    }
+    .hud-card {
+      border: 2px solid #442515;
+      border-radius: 7px;
+      background: linear-gradient(180deg, #51301d, #21130d);
+      box-shadow: inset 0 0 0 1px rgba(255,219,134,.12);
+    }
+    .hud-card span,
+    .pill {
+      color: #d9bd88;
+      letter-spacing: 0;
+    }
+    .hud-card strong {
+      color: #fff0bc;
+      font-size: 16px;
+    }
+    .panel {
+      border: 3px solid #2b170e;
+      border-radius: 10px;
+      background:
+        linear-gradient(180deg, rgba(74,40,23,.98), rgba(31,18,13,.98)),
+        repeating-linear-gradient(45deg, rgba(255,255,255,.035) 0 1px, transparent 1px 12px);
+      box-shadow:
+        inset 0 0 0 2px rgba(240,189,85,.18),
+        inset 0 16px 24px rgba(255,213,121,.06),
+        0 16px 28px rgba(0,0,0,.44);
+    }
+    .panel-inner {
+      padding: 14px;
+    }
+    h1, h2, h3 {
+      font-weight: 900;
+      text-shadow: 0 2px 0 rgba(0,0,0,.45);
+    }
+    h2 {
+      color: #ffd77a;
+      font-size: 18px;
+    }
+    h3 {
+      color: #ffe8aa;
+      font-size: 15px;
+    }
+    .sub {
+      color: #ddc08d;
+      font-size: 14px;
+    }
+    .section-title {
+      border-bottom: 2px solid rgba(31,13,7,.55);
+      box-shadow: 0 2px 0 rgba(255,218,132,.12);
+    }
+    .roll-box,
+    .sheet-name,
+    .stat,
+    .metric,
+    .reward,
+    .fight,
+    .combatant,
+    .loot-token,
+    .decision-slot {
+      border: 2px solid #4a2817;
+      border-radius: 8px;
+      background:
+        linear-gradient(180deg, rgba(240,200,137,.16), rgba(35,19,12,.34)),
+        #2f1b12;
+      box-shadow: inset 0 0 0 1px rgba(255,229,161,.12);
+    }
+    .sheet-name {
+      background:
+        linear-gradient(180deg, #d69d5a, #7d4125 72%, #3b1c10);
+      color: #fff2c2;
+    }
+    .metric {
+      padding: 9px 10px;
+      border-bottom: 2px solid #4a2817;
+    }
+    .stat {
+      color: #ffe9b0;
+      text-align: center;
+      font-weight: 900;
+    }
+    .xpbar,
+    .hpbar {
+      height: 14px;
+      border: 2px solid #2a150c;
+      background: #26140d;
+      box-shadow: inset 0 2px 4px rgba(0,0,0,.55);
+    }
+    .xpbar span {
+      background: linear-gradient(90deg, #2789a0, #f0bd55);
+    }
+    .hpbar span {
+      background: linear-gradient(90deg, #63a85d, #f0bd55);
+    }
+    .enemy .hpbar span {
+      background: linear-gradient(90deg, #ba402d, #f0bd55);
+    }
+    .map {
+      padding: 14px;
+    }
+    .map-grid {
+      border: 4px solid #2d180f;
+      border-radius: 12px;
+      background:
+        linear-gradient(rgba(111,65,36,.12), rgba(111,65,36,.12)),
+        repeating-linear-gradient(35deg, rgba(56,31,16,.07) 0 2px, transparent 2px 16px),
+        radial-gradient(ellipse at 50% 52%, #d7a45f 0, #b9773c 52%, #71391f 100%);
+      box-shadow:
+        inset 0 0 0 3px rgba(255,221,136,.22),
+        inset 0 0 80px rgba(60,26,11,.65);
+    }
+    .node-scene {
+      border: 0;
+      border-radius: 0;
+      background:
+        radial-gradient(ellipse at 50% 45%, rgba(255,226,152,.22), transparent 48%),
+        linear-gradient(180deg, rgba(80,43,24,.15), rgba(43,22,13,.34));
+      box-shadow: none;
+    }
+    .node-scene h2 {
+      color: #ffe5a2;
+      font-size: 36px;
+      text-shadow: 0 4px 0 #35160b;
+    }
+    .node-scene p {
+      color: #ffe3ae;
+      font-size: 18px;
+      text-shadow: 0 2px 0 rgba(35,13,6,.55);
+    }
+    .scene-mark {
+      border: 4px solid #2b160d;
+      border-radius: 50%;
+      background: radial-gradient(circle at 35% 25%, #ffe08a, #b7402d 58%, #35140b);
+      color: #210e08;
+      font-size: 38px;
+      font-weight: 900;
+      box-shadow:
+        inset 0 0 0 2px rgba(255,237,177,.38),
+        0 9px 0 rgba(41,18,10,.8);
+    }
+    .floor {
+      gap: 24px;
+    }
+    .floor:not(:last-child)::after {
+      right: -18px;
+      width: 22px;
+      border-top: 4px dotted rgba(74,36,18,.58);
+      filter: drop-shadow(0 1px 0 rgba(255,223,145,.25));
+    }
+    .node {
+      width: 88px;
+      min-height: 88px;
+      border: 4px solid #2d160c;
+      border-radius: 50%;
+      background: radial-gradient(circle at 35% 25%, #f6d27d, #7a3b23 72%, #2b140b);
+      color: #fff0bd;
+      box-shadow:
+        inset 0 0 0 2px rgba(255,238,183,.32),
+        0 8px 0 rgba(40,18,10,.78),
+        0 14px 24px rgba(0,0,0,.35);
+    }
+    .node.kind-event {
+      background: radial-gradient(circle at 35% 25%, #f6e0a2, #7b5630 70%, #2b170d);
+    }
+    .node.kind-rest {
+      background: radial-gradient(circle at 35% 25%, #d7f08a, #466b33 70%, #172211);
+    }
+    .node.kind-elite {
+      background: radial-gradient(circle at 35% 25%, #ffd76f, #a15b19 66%, #301407);
+    }
+    .node.kind-boss {
+      background: radial-gradient(circle at 35% 25%, #e1b5ff, #56336d 68%, #201028);
+    }
+    .node.available {
+      color: #fff8d8;
+      border-color: #ffe18a;
+      background: radial-gradient(circle at 35% 25%, #fff0a8, #bd4930 66%, #43190d);
+      transform: translateY(-5px) scale(1.05);
+      box-shadow:
+        inset 0 0 0 2px rgba(255,247,207,.5),
+        0 10px 0 rgba(40,18,10,.78),
+        0 0 22px rgba(255,205,96,.42);
+    }
+    .node.completed {
+      color: #d7c7a1;
+      filter: saturate(.55);
+      opacity: .72;
+    }
+    .node .icon {
+      font-size: 28px;
+      font-weight: 900;
+    }
+    .node .label {
+      font-size: 11px;
+      color: #fff0bd;
+      text-shadow: 0 2px 0 rgba(0,0,0,.55);
+    }
+    .arena-track {
+      height: 146px;
+      border: 4px solid #2d160c;
+      border-radius: 12px;
+      background:
+        linear-gradient(180deg, rgba(36,62,70,.62), transparent 38%),
+        linear-gradient(180deg, #684326 0%, #8a522a 52%, #3b2114 100%);
+      box-shadow:
+        inset 0 0 0 2px rgba(255,224,146,.18),
+        inset 0 -34px 42px rgba(49,23,11,.65);
+    }
+    .arena-track::after {
+      content: "";
+      position: absolute;
+      left: 5%;
+      right: 5%;
+      bottom: 22px;
+      border-bottom: 5px dotted rgba(44,22,12,.48);
+    }
+    .fighter-token {
+      width: 70px;
+      height: 88px;
+      border: 4px solid #29150b;
+      border-radius: 36px 36px 18px 18px;
+      background: radial-gradient(circle at 42% 24%, #ffeab6, #b0412b 58%, #3b170c);
+      color: #fff5c8;
+      font-size: 19px;
+      text-shadow: 0 2px 0 rgba(0,0,0,.6);
+      box-shadow:
+        inset 0 0 0 2px rgba(255,236,172,.28),
+        0 10px 0 rgba(42,18,10,.8),
+        0 16px 26px rgba(0,0,0,.42);
+      z-index: 1;
+    }
+    .fighter-token.enemy {
+      background: radial-gradient(circle at 42% 24%, #ffd6bf, #6f3527 62%, #21100b);
+    }
+    .fighter-token::after {
+      content: "";
+      position: absolute;
+      left: 10%;
+      right: 10%;
+      bottom: -15px;
+      height: 10px;
+      border-radius: 50%;
+      background: rgba(26,11,6,.58);
+      filter: blur(2px);
+      z-index: -1;
+    }
+    .combat-scene,
+    .reward-scene {
+      width: min(900px, 100%);
+    }
+    .combat-title {
+      padding: 4px 0 8px;
+      border-bottom: 3px solid rgba(45,22,12,.42);
+    }
+    .combatant.enemy {
+      background:
+        linear-gradient(180deg, rgba(186,64,45,.18), rgba(35,18,13,.54)),
+        #2f1b12;
+    }
+    .combat-controls {
+      justify-content: center;
+    }
+    .log {
+      border: 2px solid #30180d;
+      background: rgba(28,14,8,.74);
+      color: #efd49b;
+      border-radius: 8px;
+    }
+    .pill {
+      border: 2px solid #4a2817;
+      border-radius: 7px;
+      background: linear-gradient(180deg, #4a2a19, #21120c);
+      color: #f4d98d;
+      font-size: 11px;
+    }
     @media (max-width: 1050px) {
+      body { overflow: auto; }
       .game-shell { height: auto; min-height: 100vh; }
       .hud { grid-template-columns: 1fr; }
       .hud-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -1979,7 +2370,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
       <div class="hud-brand">
         <span class="sigil">HM</span>
         <div>
-          <h1>HackMaster Autobattler v2</h1>
+          <h1>HackMaster Ascent</h1>
           <div id="phase" class="sub">Roll a character to begin.</div>
         </div>
       </div>
@@ -2000,7 +2391,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
           <select id="preset"></select>
           <input id="name" placeholder="Name override" />
           <input id="seed" placeholder="Seed, blank for random" />
-          <button onclick="newRun()">Roll Character</button>
+          <button onclick="newRun()">Embark</button>
         </div>
         <div id="character" class="stack"></div>
       </div></aside>
@@ -2035,7 +2426,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
     let state = null;
     let autoTimer = null;
     let autoBusy = false;
-    const nodeIcons = { fight: "⚔", event: "?", rest: "✚", elite: "!", boss: "♛" };
+    const nodeIcons = { fight: "F", event: "?", rest: "R", elite: "E", boss: "B" };
     const nodeLabels = { fight: "Fight", event: "Event", rest: "Rest", elite: "Elite", boss: "Boss" };
 
     async function api(path, body) {
@@ -2193,7 +2584,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
       if (state.pending_fight) {
         const fight = state.pending_fight;
         map.innerHTML = `<div class="node-scene fight-scene">
-          <div class="scene-mark">⚔</div>
+          <div class="scene-mark">F</div>
           <h2>${escapeHtml(fight.tier)} Fight</h2>
           <p>You have committed to a route and are sizing up ${escapeHtml(fight.enemy_name)}. Combat will move to a timeline from here.</p>
           <button onclick="startFight()">Fight</button>
@@ -2209,7 +2600,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
 
     function nodeHtml(node) {
       const available = (state.available_nodes || []).includes(node.id);
-      const classes = ["node", available ? "available" : "", node.completed ? "completed" : ""].join(" ");
+      const classes = ["node", `kind-${node.kind}`, available ? "available" : "", node.completed ? "completed" : ""].join(" ");
       const disabled = available ? "" : "disabled";
       return `<div class="${classes}">
         <div class="icon">${nodeIcons[node.kind]}</div>
@@ -2245,7 +2636,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
       const player = fight.combatants.find(c => c.team_id === 0) || fight.combatants[0];
       const enemy = fight.combatants.find(c => c.team_id === 1) || fight.combatants[1];
       const distance = Number(fight.distance_ft || 0).toFixed(1);
-      const enemyPosition = clamp(82 - Math.min(fight.distance_ft || 0, 20) * 1.25, 50, 82);
+      const enemyPosition = arenaEnemyPosition(fight.distance_ft);
       return `<div class="node-scene fight-scene">
         <div class="combat-scene">
           <div class="combat-title">
@@ -2281,7 +2672,12 @@ const INDEX_HTML: &str = r#"<!doctype html>
       const hpPct = clamp((combatant.hp / Math.max(1, combatant.max_hp)) * 100, 0, 100);
       const tags = [
         combatant.weapon,
-        combatant.shield_intact ? "shield" : "shield broken",
+        `${formatSeconds(combatant.weapon_speed_seconds)}s speed`,
+        `${formatFeet(combatant.reach_ft)} reach`,
+        combatant.next_attack_in_seconds === null || combatant.next_attack_in_seconds === undefined
+          ? null
+          : `next ${formatSeconds(combatant.next_attack_in_seconds)}s`,
+        shieldLabel(combatant),
         combatant.trauma_seconds > 0 ? `${combatant.trauma_seconds}s trauma` : null,
         combatant.knocked_seconds > 0 ? `${combatant.knocked_seconds}s knocked` : null
       ].filter(Boolean);
@@ -2290,6 +2686,13 @@ const INDEX_HTML: &str = r#"<!doctype html>
         <div class="hpbar" style="--hp:${hpPct}%"><span></span></div>
         <div class="sub">${tags.map(escapeHtml).join(" | ")}</div>
       </div>`;
+    }
+
+    function shieldLabel(combatant) {
+      if (!combatant || !combatant.shield_name) return null;
+      return combatant.shield_intact
+        ? `${combatant.shield_name} ready`
+        : `${combatant.shield_name} broken`;
     }
 
     function decisionHtml(decision) {
@@ -2409,6 +2812,16 @@ const INDEX_HTML: &str = r#"<!doctype html>
     function phaseLabel(phase) {
       return String(phase || "No run").replace(/_/g, " ");
     }
+    function arenaEnemyPosition(distanceFt) {
+      const playerPosition = 18;
+      const contactPosition = playerPosition + 7;
+      const farPosition = 82;
+      const maxVisualRange = 20;
+      const meleeRange = 1;
+      const distance = clamp(Number(distanceFt || 0), 0, maxVisualRange);
+      if (distance <= meleeRange) return contactPosition;
+      return contactPosition + ((distance - meleeRange) / (maxVisualRange - meleeRange)) * (farPosition - contactPosition);
+    }
     function clamp(value, min, max) {
       return Math.max(min, Math.min(max, Number.isFinite(value) ? value : min));
     }
@@ -2423,6 +2836,14 @@ const INDEX_HTML: &str = r#"<!doctype html>
     function renderError(err) {
       const el = document.getElementById("log");
       if (el) el.textContent = err.message;
+    }
+    function formatSeconds(value) {
+      const number = Number(value || 0);
+      return Number.isInteger(number) ? String(number) : number.toFixed(1);
+    }
+    function formatFeet(value) {
+      const number = Number(value || 0);
+      return `${Number.isInteger(number) ? number : number.toFixed(1)}ft`;
     }
 
     function escapeHtml(value) {
