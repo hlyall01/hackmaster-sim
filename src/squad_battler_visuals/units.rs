@@ -8,7 +8,6 @@ use super::assets;
 use super::board::{BoardGeometry, TILE_WORLD_SIZE};
 
 const TOKEN_OUTER_SIZE: f32 = TILE_WORLD_SIZE * 0.72;
-const TOKEN_INNER_SIZE: f32 = TILE_WORLD_SIZE * 0.52;
 const HEALTH_BAR_WIDTH: f32 = TILE_WORLD_SIZE * 0.62;
 const HEALTH_BAR_HEIGHT: f32 = 5.0;
 
@@ -23,6 +22,16 @@ pub struct TargetWorldPosition(pub Vec3);
 #[derive(Component)]
 pub(crate) struct HealthFill {
     id: String,
+}
+
+#[derive(Component)]
+pub(crate) struct FigurePart {
+    id: String,
+}
+
+#[derive(Component)]
+pub(crate) struct StickFigureRig {
+    phase: f32,
 }
 
 pub(crate) fn spawn_units(
@@ -44,6 +53,7 @@ pub(crate) fn sync_unit_targets(
         Without<HealthFill>,
     >,
     mut health_fills: Query<(&HealthFill, &mut Sprite, &mut Transform)>,
+    mut figure_parts: Query<(&FigurePart, &mut Sprite), (Without<UnitToken>, Without<HealthFill>)>,
 ) {
     let Some(fight) = state.view.live_fight.as_ref() else {
         return;
@@ -58,7 +68,7 @@ pub(crate) fn sync_unit_targets(
     for (entity, token, mut target, mut sprite) in &mut tokens {
         if let Some(unit) = units_by_id.get(token.id.as_str()) {
             target.0 = geometry.grid_to_world(GridPos::new(unit.x, unit.y), 1.0);
-            sprite.color = outer_color(unit);
+            sprite.color = token_shadow_color(unit);
             present_ids.insert(token.id.clone());
         } else {
             commands.entity(entity).despawn_recursive();
@@ -80,6 +90,13 @@ pub(crate) fn sync_unit_targets(
         sprite.custom_size = Some(Vec2::new(width, HEALTH_BAR_HEIGHT));
         transform.translation.x = -HEALTH_BAR_WIDTH * 0.5 + width * 0.5;
     }
+
+    for (part, mut sprite) in &mut figure_parts {
+        let Some(unit) = units_by_id.get(part.id.as_str()) else {
+            continue;
+        };
+        sprite.color = figure_color(unit);
+    }
 }
 
 pub(crate) fn animate_unit_motion(
@@ -95,6 +112,18 @@ pub(crate) fn animate_unit_motion(
     }
 }
 
+pub(crate) fn animate_stick_figures(
+    time: Res<Time>,
+    mut rigs: Query<(&StickFigureRig, &mut Transform)>,
+) {
+    let elapsed = time.elapsed_seconds();
+    for (rig, mut transform) in &mut rigs {
+        let wave = (elapsed * 6.0 + rig.phase).sin();
+        transform.rotation = Quat::from_rotation_z(wave * 0.08);
+        transform.translation.y = 1.2 + wave.abs() * 1.5;
+    }
+}
+
 fn spawn_unit(commands: &mut Commands, geometry: BoardGeometry, unit: &BattleUnitView) {
     let pos = geometry.grid_to_world(GridPos::new(unit.x, unit.y), 1.0);
     let hp_width = HEALTH_BAR_WIDTH * health_pct(unit);
@@ -106,8 +135,8 @@ fn spawn_unit(commands: &mut Commands, geometry: BoardGeometry, unit: &BattleUni
             TargetWorldPosition(pos),
             SpriteBundle {
                 sprite: Sprite {
-                    color: outer_color(unit),
-                    custom_size: Some(Vec2::splat(TOKEN_OUTER_SIZE)),
+                    color: token_shadow_color(unit),
+                    custom_size: Some(Vec2::new(TOKEN_OUTER_SIZE * 0.92, TOKEN_OUTER_SIZE * 0.28)),
                     ..default()
                 },
                 transform: Transform::from_translation(pos),
@@ -115,13 +144,17 @@ fn spawn_unit(commands: &mut Commands, geometry: BoardGeometry, unit: &BattleUni
             },
         ))
         .with_children(|parent| {
-            parent.spawn(SpriteBundle {
-                sprite: Sprite {
-                    color: inner_color(unit),
-                    custom_size: Some(Vec2::splat(TOKEN_INNER_SIZE)),
-                    ..default()
-                },
-                transform: Transform::from_xyz(0.0, 0.0, 0.1),
+            spawn_stick_figure(parent, unit);
+            parent.spawn(Text2dBundle {
+                text: Text::from_section(
+                    unit_label(unit),
+                    TextStyle {
+                        font: Handle::<Font>::default(),
+                        font_size: 17.0,
+                        color: label_color(unit),
+                    },
+                ),
+                transform: Transform::from_xyz(0.0, 2.0, 0.35),
                 ..default()
             });
             parent.spawn(SpriteBundle {
@@ -154,17 +187,114 @@ fn spawn_unit(commands: &mut Commands, geometry: BoardGeometry, unit: &BattleUni
         });
 }
 
-fn outer_color(unit: &BattleUnitView) -> Color {
-    if unit.status == BattleUnitStatus::Downed {
-        return assets::downed_color();
-    }
-    match unit.team_id {
-        0 => assets::player_outer_color(),
-        _ => assets::enemy_outer_color(),
+fn spawn_stick_figure(parent: &mut ChildBuilder, unit: &BattleUnitView) {
+    let team_color = figure_color(unit);
+    parent
+        .spawn((
+            StickFigureRig {
+                phase: wiggle_phase(&unit.id),
+            },
+            SpatialBundle {
+                transform: Transform::from_xyz(0.0, 1.2, 0.12),
+                ..default()
+            },
+        ))
+        .with_children(|rig| {
+            rig.spawn(SpriteBundle {
+                sprite: figure_sprite(team_color, Vec2::splat(TILE_WORLD_SIZE * 0.20)),
+                transform: Transform::from_xyz(0.0, TILE_WORLD_SIZE * 0.19, 0.12),
+                ..default()
+            })
+            .insert(FigurePart {
+                id: unit.id.clone(),
+            });
+            rig.spawn(SpriteBundle {
+                sprite: figure_sprite(
+                    team_color,
+                    Vec2::new(TILE_WORLD_SIZE * 0.10, TILE_WORLD_SIZE * 0.28),
+                ),
+                transform: Transform::from_xyz(0.0, -TILE_WORLD_SIZE * 0.02, 0.12),
+                ..default()
+            })
+            .insert(FigurePart {
+                id: unit.id.clone(),
+            });
+            spawn_limb(
+                rig,
+                &unit.id,
+                team_color,
+                Vec2::new(TILE_WORLD_SIZE * 0.08, TILE_WORLD_SIZE * 0.26),
+                Vec3::new(-TILE_WORLD_SIZE * 0.11, -TILE_WORLD_SIZE * 0.01, 0.11),
+                0.72,
+            );
+            spawn_limb(
+                rig,
+                &unit.id,
+                team_color,
+                Vec2::new(TILE_WORLD_SIZE * 0.08, TILE_WORLD_SIZE * 0.26),
+                Vec3::new(TILE_WORLD_SIZE * 0.11, -TILE_WORLD_SIZE * 0.01, 0.11),
+                -0.72,
+            );
+            spawn_limb(
+                rig,
+                &unit.id,
+                team_color,
+                Vec2::new(TILE_WORLD_SIZE * 0.08, TILE_WORLD_SIZE * 0.30),
+                Vec3::new(-TILE_WORLD_SIZE * 0.07, -TILE_WORLD_SIZE * 0.25, 0.11),
+                0.38,
+            );
+            spawn_limb(
+                rig,
+                &unit.id,
+                team_color,
+                Vec2::new(TILE_WORLD_SIZE * 0.08, TILE_WORLD_SIZE * 0.30),
+                Vec3::new(TILE_WORLD_SIZE * 0.07, -TILE_WORLD_SIZE * 0.25, 0.11),
+                -0.38,
+            );
+        });
+}
+
+fn spawn_limb(
+    parent: &mut ChildBuilder,
+    id: &str,
+    color: Color,
+    size: Vec2,
+    translation: Vec3,
+    rotation_z: f32,
+) {
+    parent.spawn((
+        FigurePart { id: id.to_string() },
+        SpriteBundle {
+            sprite: figure_sprite(color, size),
+            transform: Transform {
+                translation,
+                rotation: Quat::from_rotation_z(rotation_z),
+                ..default()
+            },
+            ..default()
+        },
+    ));
+}
+
+fn figure_sprite(color: Color, size: Vec2) -> Sprite {
+    Sprite {
+        color,
+        custom_size: Some(size),
+        ..default()
     }
 }
 
-fn inner_color(unit: &BattleUnitView) -> Color {
+fn token_shadow_color(unit: &BattleUnitView) -> Color {
+    if unit.status == BattleUnitStatus::Downed {
+        return Color::rgba(0.18, 0.14, 0.12, 0.72);
+    }
+    match unit.team_id {
+        0 => Color::rgba(0.94, 0.67, 0.22, 0.36),
+        _ => Color::rgba(0.76, 0.23, 0.16, 0.34),
+    }
+}
+
+fn figure_color(unit: &BattleUnitView) -> Color {
     if unit.status == BattleUnitStatus::Downed {
         return assets::downed_color();
     }
@@ -190,4 +320,44 @@ fn health_color(unit: &BattleUnitView) -> Color {
     } else {
         assets::health_high_color()
     }
+}
+
+fn label_color(unit: &BattleUnitView) -> Color {
+    match unit.team_id {
+        0 => Color::rgb(1.0, 0.92, 0.68),
+        _ => Color::rgb(1.0, 0.78, 0.66),
+    }
+}
+
+fn unit_label(unit: &BattleUnitView) -> String {
+    if unit.team_id == 0 {
+        initials(&unit.name)
+    } else {
+        enemy_label(&unit.id).unwrap_or_else(|| initials(&unit.name))
+    }
+}
+
+fn initials(name: &str) -> String {
+    let mut initials = name
+        .split_whitespace()
+        .filter_map(|part| part.chars().next())
+        .take(2)
+        .collect::<String>();
+    if initials.is_empty() {
+        initials.push('?');
+    }
+    initials
+}
+
+fn enemy_label(id: &str) -> Option<String> {
+    id.rsplit_once('-')
+        .and_then(|(_, index)| index.parse::<usize>().ok())
+        .map(|index| format!("E{}", index + 1))
+}
+
+fn wiggle_phase(id: &str) -> f32 {
+    let hash = id.bytes().fold(0_u32, |acc, byte| {
+        acc.wrapping_mul(31).wrapping_add(byte as u32)
+    });
+    (hash % 628) as f32 / 100.0
 }

@@ -173,6 +173,7 @@ pub fn run() {
                 advance_combat,
                 units::sync_unit_targets,
                 units::animate_unit_motion,
+                units::animate_stick_figures,
             ),
         )
         .add_systems(

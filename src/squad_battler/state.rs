@@ -71,11 +71,19 @@ impl SquadBattlerApp {
             let mut rng = rand::thread_rng();
             rng.gen_range(1..=u64::MAX)
         });
-        let active = roll_starting_squad(
+        let mut active = roll_starting_squad(
             seed,
             &self.weapon_catalog,
             &self.armor_catalog,
             &self.shield_catalog,
+        );
+        sync_members_to_combat_vitals(
+            &mut active,
+            &self.weapon_catalog,
+            &self.armor_catalog,
+            &self.shield_catalog,
+            &self.npc_presets,
+            &self.talent_catalog,
         );
         let roster = SquadRoster::new(active).expect("starting roster exceeds active squad limit");
         let formation = default_formation_for_members(roster.active());
@@ -131,6 +139,8 @@ impl SquadBattlerApp {
                     &self.weapon_catalog,
                     &self.armor_catalog,
                     &self.shield_catalog,
+                    &self.npc_presets,
+                    &self.talent_catalog,
                 );
                 session.phase = SquadPhase::RewardReview;
                 session.log = vec!["A band of mercenaries offers to join the company.".to_string()];
@@ -156,6 +166,8 @@ impl SquadBattlerApp {
                         &self.weapon_catalog,
                         &self.armor_catalog,
                         &self.shield_catalog,
+                        &self.npc_presets,
+                        &self.talent_catalog,
                     );
                 }
                 session.selected_node = Some(node_id);
@@ -552,6 +564,8 @@ impl SquadBattlerApp {
                     &self.weapon_catalog,
                     &self.armor_catalog,
                     &self.shield_catalog,
+                    &self.npc_presets,
+                    &self.talent_catalog,
                 );
             } else {
                 session.recruit_offer.clear();
@@ -1045,9 +1059,11 @@ fn generate_recruit_offer(
     weapon_catalog: &WeaponCatalog,
     armor_catalog: &ArmorCatalog,
     shield_catalog: &ShieldCatalog,
+    npc_presets: &NpcPresetCatalog,
+    talent_catalog: &TalentCatalog,
 ) -> Vec<SquadMember> {
     let scaling = super::rewards::recruit_offer_scaling(depth, tier);
-    (0..scaling.offer_size.max(DEFAULT_RECRUIT_OFFER_SIZE))
+    let mut recruits = (0..scaling.offer_size.max(DEFAULT_RECRUIT_OFFER_SIZE))
         .map(|idx| {
             roll_recruit_member(
                 format!("recruit-{}-{}", depth, idx + 1),
@@ -1059,7 +1075,73 @@ fn generate_recruit_offer(
                 shield_catalog,
             )
         })
-        .collect()
+        .collect::<Vec<_>>();
+    sync_members_to_combat_vitals(
+        &mut recruits,
+        weapon_catalog,
+        armor_catalog,
+        shield_catalog,
+        npc_presets,
+        talent_catalog,
+    );
+    recruits
+}
+
+fn sync_members_to_combat_vitals(
+    members: &mut [SquadMember],
+    weapon_catalog: &WeaponCatalog,
+    armor_catalog: &ArmorCatalog,
+    shield_catalog: &ShieldCatalog,
+    npc_presets: &NpcPresetCatalog,
+    talent_catalog: &TalentCatalog,
+) {
+    for member in members {
+        sync_member_to_combat_vitals(
+            member,
+            weapon_catalog,
+            armor_catalog,
+            shield_catalog,
+            npc_presets,
+            talent_catalog,
+        );
+    }
+}
+
+fn sync_member_to_combat_vitals(
+    member: &mut SquadMember,
+    weapon_catalog: &WeaponCatalog,
+    armor_catalog: &ArmorCatalog,
+    shield_catalog: &ShieldCatalog,
+    npc_presets: &NpcPresetCatalog,
+    talent_catalog: &TalentCatalog,
+) {
+    let combatant = game_logic::build_combatant(
+        &member.config,
+        weapon_catalog,
+        armor_catalog,
+        shield_catalog,
+        npc_presets,
+        talent_catalog,
+    );
+    let combat_max_hp = combatant.sheet.vitals.max_hp.max(1);
+    if combat_max_hp == member.max_hp {
+        return;
+    }
+
+    let was_full = member.current_hp >= member.max_hp;
+    let hp_ratio = if member.max_hp <= 0 {
+        1.0
+    } else {
+        (member.current_hp.max(0) as f32 / member.max_hp as f32).clamp(0.0, 1.0)
+    };
+    member.max_hp = combat_max_hp;
+    member.current_hp = if was_full {
+        combat_max_hp
+    } else {
+        ((combat_max_hp as f32) * hp_ratio)
+            .round()
+            .clamp(0.0, combat_max_hp as f32) as i32
+    };
 }
 
 fn fight_seconds_to_next_initiative(fight: &SquadCombat) -> u32 {
@@ -1148,6 +1230,45 @@ mod tests {
             .expect("moved member should exist in combat");
 
         assert_eq!((unit.x, unit.y), (3, 7));
+    }
+
+    #[test]
+    fn fight_starts_players_at_full_combat_sheet_hp() {
+        let mut app = SquadBattlerApp::new().expect("app should load");
+        let view = app.new_run(Some(0x5155_4144_4256_0001));
+        assert!(
+            view.squad
+                .active
+                .iter()
+                .all(|member| member.hp == member.max_hp),
+            "freshly rolled heroes should start full"
+        );
+        let expected_hp = view
+            .squad
+            .active
+            .iter()
+            .map(|member| (member.id.clone(), member.max_hp))
+            .collect::<std::collections::HashMap<_, _>>();
+        let node_id = view
+            .available_nodes
+            .iter()
+            .copied()
+            .find(|node_id| {
+                view.route
+                    .iter()
+                    .find(|node| node.id == *node_id)
+                    .is_some_and(|node| matches!(node.kind, SquadNodeKind::Fight))
+            })
+            .expect("first floor should include a fight");
+
+        app.choose_node(node_id).expect("fight node should open");
+        let view = app.start_fight().expect("fight should start");
+        let fight = view.live_fight.expect("fight should be live");
+
+        for unit in fight.combatants.iter().filter(|unit| unit.team_id == 0) {
+            assert_eq!(unit.hp, unit.max_hp);
+            assert_eq!(Some(&unit.max_hp), expected_hp.get(&unit.id));
+        }
     }
 
     #[test]
