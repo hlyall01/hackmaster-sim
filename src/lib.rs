@@ -10,4 +10,6 @@ pub mod data;
 pub mod game_logic;
 pub mod sim;
 pub mod squad_battler;
+#[cfg(feature = "bevy")]
+pub mod squad_battler_visuals;
 pub mod ui_widgets;

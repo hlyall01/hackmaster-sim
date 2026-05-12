@@ -27,3 +27,8 @@ required-features = ["bevy"]
 name = "autobattler_bevy"
 path = "src/bin/autobattler_bevy.rs"
 required-features = ["bevy"]
+
+[[bin]]
+name = "squad_battler_bevy"
+path = "src/bin/squad_battler_bevy.rs"
+required-features = ["bevy"]
