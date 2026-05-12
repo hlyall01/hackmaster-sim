@@ -71,6 +71,14 @@ pub fn sync_hud(
     roots: Query<Entity, With<SquadBattlerHudRoot>>,
     mut last_signature: Local<Option<String>>,
 ) {
+    if state.view.phase != "combat_playback" || state.view.live_fight.is_none() {
+        for entity in &roots {
+            commands.entity(entity).despawn_recursive();
+        }
+        *last_signature = None;
+        return;
+    }
+
     let signature = hud_signature(&state.view);
     if last_signature.as_ref() == Some(&signature) && !roots.is_empty() {
         return;

@@ -28,11 +28,15 @@ pub struct RewardActionButton {
     pub event: RewardUiEvent,
 }
 
+#[derive(Default, Resource)]
+pub struct RewardScreenVisible(pub bool);
+
 pub struct RewardScreenPlugin;
 
 impl Plugin for RewardScreenPlugin {
     fn build(&self, app: &mut App) {
-        app.add_event::<RewardUiEvent>()
+        app.init_resource::<RewardScreenVisible>()
+            .add_event::<RewardUiEvent>()
             .add_systems(Update, (sync_reward_screen, emit_reward_ui_events));
     }
 }
@@ -40,12 +44,21 @@ impl Plugin for RewardScreenPlugin {
 pub fn sync_reward_screen(
     mut commands: Commands,
     state: Option<Res<VisualGameState>>,
+    visible: Res<RewardScreenVisible>,
     roots: Query<Entity, With<RewardScreenRoot>>,
 ) {
     let Some(state) = state else {
         return;
     };
-    if !state.is_changed() && !roots.is_empty() {
+
+    if !visible.0 {
+        for entity in &roots {
+            commands.entity(entity).despawn_recursive();
+        }
+        return;
+    }
+
+    if !state.is_changed() && !visible.is_changed() && !roots.is_empty() {
         return;
     }
 

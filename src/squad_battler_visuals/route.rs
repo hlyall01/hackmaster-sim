@@ -14,7 +14,7 @@ const ROUTE_PICK_RADIUS: f32 = 31.0;
 const ROUTE_FLOOR_SPACING: f32 = 104.0;
 const ROUTE_LANE_SPACING: f32 = 74.0;
 const ROUTE_Z: f32 = 8.0;
-const ROUTE_ORIGIN: Vec2 = Vec2::new(-460.0, 185.0);
+const ROUTE_ORIGIN: Vec2 = Vec2::new(-310.0, 150.0);
 
 #[derive(Clone, Copy, Debug, Default, Resource)]
 pub struct SelectedRouteNode {
@@ -56,6 +56,9 @@ struct RouteNodeSelectedRing {
 #[derive(Default, Resource)]
 pub struct RouteMapSignature(Vec<RouteNodeSignature>);
 
+#[derive(Default, Resource)]
+pub struct RouteMapVisible(pub bool);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct RouteNodeSignature {
     id: usize,
@@ -72,6 +75,7 @@ impl Plugin for RouteMapPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SelectedRouteNode>()
             .init_resource::<RouteMapSignature>()
+            .init_resource::<RouteMapVisible>()
             .add_systems(
                 Update,
                 (
@@ -94,9 +98,18 @@ pub fn spawn_route_map(commands: &mut Commands, view: &SquadBattlerView) {
 fn sync_route_map(
     mut commands: Commands,
     state: Res<VisualGameState>,
+    visible: Res<RouteMapVisible>,
     mut signature: ResMut<RouteMapSignature>,
     route_entities: Query<Entity, (With<RouteMapEntity>, Without<Parent>)>,
 ) {
+    if !visible.0 || state.view.phase != "choose_node" {
+        for entity in &route_entities {
+            commands.entity(entity).despawn_recursive();
+        }
+        signature.0.clear();
+        return;
+    }
+
     let available = state
         .view
         .available_nodes
@@ -117,8 +130,14 @@ fn sync_route_map(
 
 fn clear_unavailable_route_selection(
     state: Res<VisualGameState>,
+    visible: Res<RouteMapVisible>,
     mut selected: ResMut<SelectedRouteNode>,
 ) {
+    if !visible.0 {
+        selected.node_id = None;
+        selected.requested_node_id = None;
+        return;
+    }
     if selected
         .node_id
         .is_some_and(|id| !state.view.available_nodes.contains(&id))
@@ -135,11 +154,16 @@ fn clear_unavailable_route_selection(
 
 fn select_route_node_with_mouse(
     buttons: Res<ButtonInput<MouseButton>>,
+    state: Res<VisualGameState>,
+    visible: Res<RouteMapVisible>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform)>,
     nodes: Query<(&RouteNodeEntity, &GlobalTransform)>,
     mut selected: ResMut<SelectedRouteNode>,
 ) {
+    if !visible.0 || state.view.phase != "choose_node" {
+        return;
+    }
     if !buttons.just_pressed(MouseButton::Left) {
         return;
     }
@@ -166,9 +190,14 @@ fn select_route_node_with_mouse(
 
 fn select_route_node_with_keyboard(
     keys: Res<ButtonInput<KeyCode>>,
+    state: Res<VisualGameState>,
+    visible: Res<RouteMapVisible>,
     nodes: Query<(&RouteNodeEntity, &Transform)>,
     mut selected: ResMut<SelectedRouteNode>,
 ) {
+    if !visible.0 || state.view.phase != "choose_node" {
+        return;
+    }
     let mut available = nodes
         .iter()
         .filter(|(node, _)| node.available)
@@ -215,22 +244,24 @@ fn select_route_node_with_keyboard(
 
 fn sync_route_node_selection(
     selected: Res<SelectedRouteNode>,
-    mut nodes: Query<(&RouteNodeEntity, &mut RouteNodeSelection, &mut Sprite)>,
-    mut fills: Query<(&RouteNodeFill, &mut Sprite)>,
-    mut rings: Query<(&RouteNodeSelectedRing, &mut Visibility)>,
+    mut visuals: ParamSet<(
+        Query<(&RouteNodeEntity, &mut RouteNodeSelection, &mut Sprite)>,
+        Query<(&RouteNodeFill, &mut Sprite)>,
+        Query<(&RouteNodeSelectedRing, &mut Visibility)>,
+    )>,
 ) {
-    for (node, mut selection, mut sprite) in &mut nodes {
+    for (node, mut selection, mut sprite) in &mut visuals.p0() {
         selection.selected = selected.node_id == Some(node.node_id);
         sprite.color = node_outer_color(node.available, selection.selected);
     }
-    for (fill, mut sprite) in &mut fills {
+    for (fill, mut sprite) in &mut visuals.p1() {
         sprite.color = if selected.node_id == Some(fill.node_id) {
             Color::rgb(1.0, 0.92, 0.58)
         } else {
             fill.base_color
         };
     }
-    for (ring, mut visibility) in &mut rings {
+    for (ring, mut visibility) in &mut visuals.p2() {
         *visibility = if selected.node_id == Some(ring.node_id) {
             Visibility::Visible
         } else {

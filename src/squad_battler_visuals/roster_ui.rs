@@ -67,12 +67,16 @@ pub struct RosterUiSelection {
     pub bench_member_id: Option<String>,
 }
 
+#[derive(Default, Resource)]
+pub struct RosterUiVisible(pub bool);
+
 #[derive(Default)]
 pub struct RosterUiPlugin;
 
 impl Plugin for RosterUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<RosterUiSelection>()
+            .init_resource::<RosterUiVisible>()
             .add_event::<RosterMemberSelected>()
             .add_event::<RosterActionRequested>()
             .add_systems(Update, (sync_roster_ui, handle_roster_ui_interactions));
@@ -137,10 +141,19 @@ pub fn spawn_roster_ui(
 pub fn sync_roster_ui(
     mut commands: Commands,
     state: Res<VisualGameState>,
+    visible: Res<RosterUiVisible>,
     selection: Res<RosterUiSelection>,
     roots: Query<Entity, With<RosterUiRoot>>,
 ) {
-    if !state.is_changed() && !selection.is_changed() && !roots.is_empty() {
+    if !visible.0 {
+        for root in &roots {
+            commands.entity(root).despawn_recursive();
+        }
+        return;
+    }
+
+    if !state.is_changed() && !selection.is_changed() && !visible.is_changed() && !roots.is_empty()
+    {
         return;
     }
 
