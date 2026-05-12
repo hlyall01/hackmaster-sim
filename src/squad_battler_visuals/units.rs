@@ -39,7 +39,10 @@ pub(crate) fn sync_unit_targets(
     mut commands: Commands,
     geometry: Res<BoardGeometry>,
     state: Res<VisualGameState>,
-    mut tokens: Query<(Entity, &UnitToken, &mut TargetWorldPosition, &mut Sprite)>,
+    mut tokens: Query<
+        (Entity, &UnitToken, &mut TargetWorldPosition, &mut Sprite),
+        Without<HealthFill>,
+    >,
     mut health_fills: Query<(&HealthFill, &mut Sprite, &mut Transform)>,
 ) {
     let Some(fight) = state.view.live_fight.as_ref() else {
