@@ -13,8 +13,8 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 
 use super::combat::{
-    BattleGrid, BattleUnit, DEFAULT_GRID_HEIGHT, DEFAULT_GRID_WIDTH, SquadCombat, SquadCombatView,
-    TILE_SIZE_FT,
+    BattleGrid, BattleUnit, DEFAULT_GRID_HEIGHT, DEFAULT_GRID_WIDTH, GridPos, SquadCombat,
+    SquadCombatView, TILE_SIZE_FT,
 };
 use super::encounters::{
     SquadEncounterTier, SquadEventOutcomeKind, SquadNodeKind, SquadRouteNode, available_node_ids,
@@ -28,6 +28,7 @@ use super::roster::{
 
 const QUICK_STARTS_PATH: &str = "data/autobattler/autobattler_quick_starts.json";
 const NPC_PRESETS_PATH: &str = "data/sim/npc_presets.json";
+const PLAYER_DEPLOYMENT_COLUMNS: i32 = 4;
 
 #[derive(Clone)]
 pub struct SquadBattlerApp {
@@ -77,6 +78,7 @@ impl SquadBattlerApp {
             &self.shield_catalog,
         );
         let roster = SquadRoster::new(active).expect("starting roster exceeds active squad limit");
+        let formation = default_formation_for_members(roster.active());
         self.session = Some(SquadRun {
             seed,
             depth: 0,
@@ -87,6 +89,7 @@ impl SquadBattlerApp {
             },
             route: generate_route(seed),
             roster,
+            formation,
             phase: SquadPhase::ChoosingNode,
             pending_fight: None,
             live_fight: None,
@@ -186,6 +189,7 @@ impl SquadBattlerApp {
         if session.phase != SquadPhase::FightPreview {
             return Err("There is no pending fight.".to_string());
         }
+        sync_formation_for_active(session);
         let Some(pending) = session.pending_fight.take() else {
             return Err("There is no pending fight.".to_string());
         };
@@ -230,10 +234,16 @@ impl SquadBattlerApp {
             })
             .collect::<Vec<_>>();
         let combat_seed = derive_seed(session.seed, "squad-combat", pending.node_id as u64);
-        session.live_fight = Some(SquadCombat::new_with_seed(
+        let player_positions = session
+            .formation
+            .iter()
+            .map(|slot| (slot.member_id.clone(), slot.pos))
+            .collect::<Vec<_>>();
+        session.live_fight = Some(SquadCombat::new_with_seed_and_player_positions(
             player_units,
             enemy_units,
             combat_seed,
+            &player_positions,
         ));
         session.phase = SquadPhase::CombatPlayback;
         session.log = vec!["The squads surge onto the marked grid.".to_string()];
@@ -340,6 +350,34 @@ impl SquadBattlerApp {
                 .log
                 .push("Recruit decisions complete. Choose the next route.".to_string());
         }
+        sync_formation_for_active(session);
+        Ok(self.view())
+    }
+
+    pub fn set_formation_position(
+        &mut self,
+        member_id: String,
+        x: i32,
+        y: i32,
+    ) -> Result<SquadBattlerView, String> {
+        let Some(session) = self.session.as_mut() else {
+            return Err("Start a run first.".to_string());
+        };
+        if session.phase != SquadPhase::FightPreview {
+            return Err("Formation can only be changed while scouting a fight.".to_string());
+        }
+        let pos = validate_player_deployment_pos(GridPos::new(x, y))?;
+        if !session
+            .roster
+            .active()
+            .iter()
+            .any(|member| member.id == member_id)
+        {
+            return Err("Formation member is not in the active squad.".to_string());
+        }
+        sync_formation_for_active(session);
+        move_formation_member(session, &member_id, pos)?;
+        session.log = vec!["Formation updated.".to_string()];
         Ok(self.view())
     }
 
@@ -359,6 +397,7 @@ impl SquadBattlerApp {
             .roster
             .swap_bench_to_active(&active_member_id, &bench_member_id)
             .map_err(|err| err.to_string())?;
+        sync_formation_for_active(session);
         session.log.push("Roster positions swapped.".to_string());
         Ok(self.view())
     }
@@ -375,6 +414,7 @@ impl SquadBattlerApp {
             .roster
             .promote_bench_to_active(&bench_member_id)
             .map_err(|err| err.to_string())?;
+        sync_formation_for_active(session);
         session
             .log
             .push("Bench member promoted to active squad.".to_string());
@@ -454,6 +494,7 @@ impl SquadBattlerApp {
             .into_iter()
             .map(|member| member.profile.name)
             .collect::<Vec<_>>();
+        sync_formation_for_active(session);
         if let Some(node_id) = session.selected_node {
             complete_route_node(session, node_id);
         }
@@ -557,6 +598,10 @@ impl SquadBattlerApp {
                     height: DEFAULT_GRID_HEIGHT,
                     tile_size_ft: TILE_SIZE_FT,
                 },
+                formation: SquadFormationView {
+                    deployment_columns: PLAYER_DEPLOYMENT_COLUMNS,
+                    slots: Vec::new(),
+                },
                 route: placeholder_route(),
                 available_nodes: Vec::new(),
                 pending_fight: None,
@@ -589,6 +634,7 @@ impl SquadBattlerApp {
                 height: DEFAULT_GRID_HEIGHT,
                 tile_size_ft: TILE_SIZE_FT,
             },
+            formation: formation_view(&session.formation),
             route: session.route.clone(),
             available_nodes,
             pending_fight: session.pending_fight.as_ref().map(PendingFightView::from),
@@ -613,6 +659,7 @@ struct SquadRun {
     inventory: Inventory,
     route: Vec<SquadRouteNode>,
     roster: SquadRoster,
+    formation: Vec<FormationSlot>,
     phase: SquadPhase,
     pending_fight: Option<PendingSquadFight>,
     live_fight: Option<SquadCombat>,
@@ -656,6 +703,12 @@ struct EnemySquadMember {
     name: String,
     level: u8,
     preset_id: NpcPresetId,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FormationSlot {
+    member_id: String,
+    pos: GridPos,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -710,6 +763,7 @@ pub struct SquadBattlerView {
     pub inventory: InventoryView,
     pub squad: SquadView,
     pub grid: GridView,
+    pub formation: SquadFormationView,
     pub route: Vec<SquadRouteNode>,
     pub available_nodes: Vec<usize>,
     pub pending_fight: Option<PendingFightView>,
@@ -733,6 +787,19 @@ pub struct GridView {
     pub tile_size_ft: f32,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct SquadFormationView {
+    pub deployment_columns: i32,
+    pub slots: Vec<FormationSlotView>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct FormationSlotView {
+    pub member_id: String,
+    pub x: i32,
+    pub y: i32,
+}
+
 impl From<BattleGrid> for GridView {
     fn from(grid: BattleGrid) -> Self {
         Self {
@@ -741,6 +808,120 @@ impl From<BattleGrid> for GridView {
             tile_size_ft: grid.tile_size_ft,
         }
     }
+}
+
+fn formation_view(formation: &[FormationSlot]) -> SquadFormationView {
+    SquadFormationView {
+        deployment_columns: PLAYER_DEPLOYMENT_COLUMNS,
+        slots: formation
+            .iter()
+            .map(|slot| FormationSlotView {
+                member_id: slot.member_id.clone(),
+                x: slot.pos.x,
+                y: slot.pos.y,
+            })
+            .collect(),
+    }
+}
+
+fn default_formation_for_members(members: &[SquadMember]) -> Vec<FormationSlot> {
+    let grid = BattleGrid::default();
+    let count = members.len();
+    let center_y = grid.height / 2;
+    members
+        .iter()
+        .enumerate()
+        .map(|(idx, member)| {
+            let offset = idx as i32 - (count as i32 - 1) / 2;
+            FormationSlot {
+                member_id: member.id.clone(),
+                pos: GridPos::new(1, center_y + offset)
+                    .clamp(grid)
+                    .clamp(BattleGrid {
+                        width: PLAYER_DEPLOYMENT_COLUMNS,
+                        ..grid
+                    }),
+            }
+        })
+        .collect()
+}
+
+fn sync_formation_for_active(session: &mut SquadRun) {
+    let active = session
+        .roster
+        .active()
+        .iter()
+        .map(|member| member.id.clone())
+        .collect::<Vec<_>>();
+    session
+        .formation
+        .retain(|slot| active.iter().any(|member_id| member_id == &slot.member_id));
+
+    let mut occupied = session
+        .formation
+        .iter()
+        .map(|slot| slot.pos)
+        .collect::<std::collections::HashSet<_>>();
+    for member_id in active {
+        if session
+            .formation
+            .iter()
+            .any(|slot| slot.member_id == member_id)
+        {
+            continue;
+        }
+        let pos = first_open_formation_pos(&occupied);
+        occupied.insert(pos);
+        session.formation.push(FormationSlot { member_id, pos });
+    }
+}
+
+fn validate_player_deployment_pos(pos: GridPos) -> Result<GridPos, String> {
+    if pos.x < 0 || pos.x >= PLAYER_DEPLOYMENT_COLUMNS || pos.y < 0 || pos.y >= DEFAULT_GRID_HEIGHT
+    {
+        return Err(format!(
+            "Formation position must be inside the first {} columns of the grid.",
+            PLAYER_DEPLOYMENT_COLUMNS
+        ));
+    }
+    Ok(pos)
+}
+
+fn move_formation_member(
+    session: &mut SquadRun,
+    member_id: &str,
+    pos: GridPos,
+) -> Result<(), String> {
+    let Some(index) = session
+        .formation
+        .iter()
+        .position(|slot| slot.member_id == member_id)
+    else {
+        return Err("Formation member is not in the active squad.".to_string());
+    };
+    let old_pos = session.formation[index].pos;
+    if let Some(other_index) = session
+        .formation
+        .iter()
+        .position(|slot| slot.member_id != member_id && slot.pos == pos)
+    {
+        session.formation[other_index].pos = old_pos;
+    }
+    session.formation[index].pos = pos;
+    Ok(())
+}
+
+fn first_open_formation_pos(occupied: &std::collections::HashSet<GridPos>) -> GridPos {
+    let grid = BattleGrid::default();
+    let center_y = grid.height / 2;
+    let mut candidates = (0..grid.height)
+        .flat_map(|y| (0..PLAYER_DEPLOYMENT_COLUMNS).map(move |x| GridPos::new(x, y)))
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|pos| ((pos.y - center_y).abs(), (pos.x - 1).abs(), pos.y, pos.x));
+    candidates
+        .into_iter()
+        .find(|pos| !occupied.contains(pos))
+        .unwrap_or_else(|| GridPos::new(0, 0))
 }
 
 fn complete_route_node(session: &mut SquadRun, node_id: usize) {
@@ -927,4 +1108,83 @@ fn find_weapon_id_by_name(catalog: &WeaponCatalog, name: &str) -> Option<WeaponI
         .iter()
         .position(|weapon| weapon.name.eq_ignore_ascii_case(name))
         .map(WeaponId::new)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn formation_move_is_used_for_fight_spawn() {
+        let mut app = SquadBattlerApp::new().expect("app should load");
+        let view = app.new_run(Some(0x5155_4144_4256_0001));
+        let node_id = view
+            .available_nodes
+            .iter()
+            .copied()
+            .find(|node_id| {
+                view.route
+                    .iter()
+                    .find(|node| node.id == *node_id)
+                    .is_some_and(|node| {
+                        matches!(
+                            node.kind,
+                            SquadNodeKind::Fight | SquadNodeKind::Elite | SquadNodeKind::Boss
+                        )
+                    })
+            })
+            .expect("first floor should include a fight");
+        let view = app.choose_node(node_id).expect("fight node should open");
+        let member_id = view.squad.active[0].id.clone();
+
+        app.set_formation_position(member_id.clone(), 3, 7)
+            .expect("formation move should be accepted");
+        let view = app.start_fight().expect("fight should start");
+        let fight = view.live_fight.expect("fight should be live");
+        let unit = fight
+            .combatants
+            .iter()
+            .find(|unit| unit.id == member_id)
+            .expect("moved member should exist in combat");
+
+        assert_eq!((unit.x, unit.y), (3, 7));
+    }
+
+    #[test]
+    fn formation_swap_prevents_overlapping_slots() {
+        let mut app = SquadBattlerApp::new().expect("app should load");
+        let view = app.new_run(Some(0x5155_4144_4256_0001));
+        let node_id = view
+            .available_nodes
+            .iter()
+            .copied()
+            .find(|node_id| {
+                view.route
+                    .iter()
+                    .find(|node| node.id == *node_id)
+                    .is_some_and(|node| matches!(node.kind, SquadNodeKind::Fight))
+            })
+            .expect("first floor should include a fight");
+        let view = app.choose_node(node_id).expect("fight node should open");
+        let first = view.squad.active[0].id.clone();
+        let second_slot = view
+            .formation
+            .slots
+            .iter()
+            .find(|slot| slot.member_id == view.squad.active[1].id)
+            .expect("second member should have a slot")
+            .clone();
+
+        let view = app
+            .set_formation_position(first, second_slot.x, second_slot.y)
+            .expect("occupied formation move should swap");
+        let occupied = view
+            .formation
+            .slots
+            .iter()
+            .map(|slot| (slot.x, slot.y))
+            .collect::<std::collections::HashSet<_>>();
+
+        assert_eq!(occupied.len(), view.formation.slots.len());
+    }
 }

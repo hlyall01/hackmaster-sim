@@ -208,6 +208,28 @@ impl SquadCombat {
         let grid = BattleGrid::default();
         spawn_team(&mut player_units, grid, 0);
         spawn_team(&mut enemy_units, grid, 1);
+        Self::from_spawned_units(player_units, enemy_units, grid, seed)
+    }
+
+    pub fn new_with_seed_and_player_positions(
+        mut player_units: Vec<BattleUnit>,
+        mut enemy_units: Vec<BattleUnit>,
+        seed: u64,
+        player_positions: &[(String, GridPos)],
+    ) -> Self {
+        let grid = BattleGrid::default();
+        spawn_team(&mut player_units, grid, 0);
+        apply_team_positions(&mut player_units, grid, 0, player_positions);
+        spawn_team(&mut enemy_units, grid, 1);
+        Self::from_spawned_units(player_units, enemy_units, grid, seed)
+    }
+
+    fn from_spawned_units(
+        player_units: Vec<BattleUnit>,
+        enemy_units: Vec<BattleUnit>,
+        grid: BattleGrid,
+        seed: u64,
+    ) -> Self {
         let mut units = player_units;
         units.extend(enemy_units);
         Self {
@@ -1163,6 +1185,28 @@ fn spawn_team(units: &mut [BattleUnit], grid: BattleGrid, team_id: u8) {
     }
 }
 
+fn apply_team_positions(
+    units: &mut [BattleUnit],
+    grid: BattleGrid,
+    team_id: u8,
+    positions: &[(String, GridPos)],
+) {
+    let mut occupied = HashSet::new();
+    for unit in units.iter_mut() {
+        unit.team_id = team_id;
+        let Some((_, pos)) = positions.iter().find(|(id, _)| id == &unit.id) else {
+            occupied.insert(unit.pos);
+            continue;
+        };
+        let pos = pos.clamp(grid);
+        if occupied.insert(pos) {
+            unit.pos = pos;
+        } else {
+            occupied.insert(unit.pos);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1190,6 +1234,23 @@ mod tests {
             vec![unit("a", 0), unit("b", 0), unit("c", 0)],
             vec![unit("x", 1), unit("y", 1), unit("z", 1)],
         );
+        assert_eq!(combat.occupied_positions().len(), combat.units.len());
+    }
+
+    #[test]
+    fn player_spawn_positions_can_be_overridden() {
+        let combat = SquadCombat::new_with_seed_and_player_positions(
+            vec![unit("a", 0), unit("b", 0)],
+            vec![unit("x", 1)],
+            7,
+            &[
+                ("a".to_string(), GridPos::new(0, 0)),
+                ("b".to_string(), GridPos::new(3, 7)),
+            ],
+        );
+        assert_eq!(combat.units[0].pos, GridPos::new(0, 0));
+        assert_eq!(combat.units[1].pos, GridPos::new(3, 7));
+        assert_eq!(combat.units[2].pos, GridPos::new(10, 4));
         assert_eq!(combat.occupied_positions().len(), combat.units.len());
     }
 

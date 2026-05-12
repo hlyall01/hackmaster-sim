@@ -14,7 +14,7 @@ use super::assets;
 use super::board::{self, BoardGeometry};
 use super::camera;
 use super::combat_fx;
-use super::fight_preview::{self, BackHint, StartFightHint};
+use super::fight_preview::{self, BackHint, FormationMoveRequest, StartFightHint};
 use super::hud::{self, HudAction, SquadBattlerHudButton};
 use super::rewards::{self, RewardScreenVisible, RewardUiEvent};
 use super::roster_ui::{self, RosterActionRequested, RosterUiVisible};
@@ -134,6 +134,8 @@ pub fn run() {
         )))
         .insert_resource(VisualNav::default())
         .insert_resource(ScreenshotTour::from_env())
+        .init_resource::<fight_preview::FormationDragState>()
+        .add_event::<FormationMoveRequest>()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "HackMaster Squad Battler".to_string(),
@@ -160,6 +162,8 @@ pub fn run() {
                 handle_screen_buttons,
                 consume_route_requests,
                 handle_fight_preview_buttons,
+                fight_preview::handle_formation_drag,
+                handle_formation_move_requests,
                 handle_hud_buttons,
                 handle_reward_events,
                 handle_roster_events,
@@ -292,6 +296,27 @@ fn handle_fight_preview_buttons(
     {
         nav.message = "Back is disabled once the encounter is previewed.".to_string();
         nav.dirty = true;
+    }
+}
+
+fn handle_formation_move_requests(
+    mut events: EventReader<FormationMoveRequest>,
+    mut state: ResMut<VisualGameState>,
+    mut nav: ResMut<VisualNav>,
+) {
+    if nav.screen != GameScreen::FightPreview {
+        events.clear();
+        return;
+    }
+    for event in events.read() {
+        apply_view_result(
+            state
+                .app
+                .set_formation_position(event.member_id.clone(), event.x, event.y),
+            &mut state,
+            &mut nav,
+            "Formation updated.",
+        );
     }
 }
 
@@ -882,6 +907,11 @@ fn render_current_screen(
         GameScreen::FightPreview => {
             if let Some(root) =
                 fight_preview::spawn_fight_preview(&mut commands, &state.view, default_font())
+            {
+                commands.entity(root).insert(ScreenEntity);
+            }
+            if let Some(root) =
+                fight_preview::spawn_formation_board(&mut commands, &state.view, default_font())
             {
                 commands.entity(root).insert(ScreenEntity);
             }
