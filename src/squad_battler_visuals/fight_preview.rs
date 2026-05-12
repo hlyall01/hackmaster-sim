@@ -3,7 +3,7 @@ use bevy::window::PrimaryWindow;
 
 use crate::squad_battler::combat::GridPos;
 use crate::squad_battler::roster::{SquadMemberStatus, SquadMemberView};
-use crate::squad_battler::state::{EnemyView, SquadBattlerView};
+use crate::squad_battler::state::SquadBattlerView;
 
 const ROSTER_COLUMN_WIDTH: f32 = 300.0;
 const CARD_HEIGHT: f32 = 78.0;
@@ -84,9 +84,8 @@ pub fn spawn_fight_preview(
                 ));
                 panel.spawn(text(
                     format!(
-                        "{} active allies against {} hostile combatants",
-                        view.squad.active.len(),
-                        pending.enemy_count
+                        "{} active allies. Arrange formation before contact.",
+                        view.squad.active.len()
                     ),
                     font.clone(),
                     18.0,
@@ -99,7 +98,7 @@ pub fn spawn_fight_preview(
             });
 
             root.spawn(side_panel(Side::Right)).with_children(|panel| {
-                spawn_enemy_column(panel, &pending.enemies, font.clone());
+                spawn_blind_enemy_column(panel, font.clone());
             });
 
             root.spawn(action_panel()).with_children(|actions| {
@@ -117,7 +116,7 @@ pub fn spawn_formation_board(
     view: &SquadBattlerView,
     font: Handle<Font>,
 ) -> Option<Entity> {
-    let pending = view.pending_fight.as_ref()?;
+    view.pending_fight.as_ref()?;
     let width = view.grid.width;
     let height = view.grid.height;
     let deployment_columns = view.formation.deployment_columns;
@@ -163,20 +162,6 @@ pub fn spawn_formation_board(
             let pos = formation_slot_for_member(view, &member.id)
                 .unwrap_or_else(|| GridPos::new(1, height / 2));
             spawn_player_token(parent, member, pos, width, height, font.clone());
-        }
-
-        let center_y = height / 2;
-        let enemy_count = pending.enemies.len();
-        for (idx, enemy) in pending.enemies.iter().enumerate() {
-            let offset = idx as i32 - (enemy_count as i32 - 1) / 2;
-            let pos = GridPos::new(width - 2, center_y + offset).clamp(
-                crate::squad_battler::combat::BattleGrid {
-                    width,
-                    height,
-                    tile_size_ft: view.grid.tile_size_ft,
-                },
-            );
-            spawn_enemy_token(parent, enemy, idx, pos, width, height, font.clone());
         }
     });
 
@@ -355,18 +340,27 @@ fn spawn_active_squad_column(
         });
 }
 
-fn spawn_enemy_column(parent: &mut ChildBuilder, enemies: &[EnemyView], font: Handle<Font>) {
+fn spawn_blind_enemy_column(parent: &mut ChildBuilder, font: Handle<Font>) {
     parent
-        .spawn((PendingEnemiesPreview, column_container("Pending Enemies")))
+        .spawn((PendingEnemiesPreview, column_container("Enemy Side")))
         .with_children(|column| {
-            column.spawn(section_heading("Pending Enemies", font.clone()));
-            if enemies.is_empty() {
-                column.spawn(empty_text("Enemy squad unknown.", font));
-                return;
-            }
-            for enemy in enemies {
-                spawn_enemy_card(column, enemy, font.clone());
-            }
+            column.spawn(section_heading("Enemy Side", font.clone()));
+            column
+                .spawn(card(Color::rgb(0.13, 0.08, 0.06)))
+                .with_children(|card| {
+                    card.spawn(text(
+                        "Unknown Force",
+                        font.clone(),
+                        18.0,
+                        Color::rgb(0.98, 0.72, 0.50),
+                    ));
+                    card.spawn(text(
+                        "Hostiles reveal when combat begins.",
+                        font,
+                        14.0,
+                        Color::rgb(0.82, 0.70, 0.60),
+                    ));
+                });
         });
 }
 
@@ -396,25 +390,6 @@ fn spawn_member_card(parent: &mut ChildBuilder, member: &SquadMemberView, font: 
             card.spawn(health_back()).with_children(|bar| {
                 bar.spawn(health_fill(hp_pct, health_color(hp_pct)));
             });
-        });
-}
-
-fn spawn_enemy_card(parent: &mut ChildBuilder, enemy: &EnemyView, font: Handle<Font>) {
-    parent
-        .spawn(card(Color::rgb(0.18, 0.075, 0.055)))
-        .with_children(|card| {
-            card.spawn(text(
-                format!("{}  Lv {}", enemy.name, enemy.level),
-                font.clone(),
-                18.0,
-                Color::rgb(0.98, 0.54, 0.42),
-            ));
-            card.spawn(text(
-                "Hostile combatant".to_string(),
-                font,
-                14.0,
-                Color::rgb(0.88, 0.72, 0.64),
-            ));
         });
 }
 
@@ -485,51 +460,6 @@ fn spawn_player_token(
                     -FORMATION_TILE_SIZE * 0.43,
                     0.3,
                 ),
-                ..default()
-            });
-        });
-}
-
-fn spawn_enemy_token(
-    parent: &mut ChildBuilder,
-    _enemy: &EnemyView,
-    idx: usize,
-    pos: GridPos,
-    width: i32,
-    height: i32,
-    font: Handle<Font>,
-) {
-    let world = formation_world_pos(width, height, pos);
-    parent
-        .spawn(SpriteBundle {
-            sprite: Sprite {
-                color: Color::rgb(0.76, 0.23, 0.16),
-                custom_size: Some(Vec2::splat(FORMATION_TILE_SIZE * 0.72)),
-                ..default()
-            },
-            transform: Transform::from_translation(world + Vec3::new(0.0, 0.0, 3.0)),
-            ..default()
-        })
-        .with_children(|token| {
-            token.spawn(SpriteBundle {
-                sprite: Sprite {
-                    color: Color::rgb(0.22, 0.055, 0.04),
-                    custom_size: Some(Vec2::splat(FORMATION_TILE_SIZE * 0.50)),
-                    ..default()
-                },
-                transform: Transform::from_xyz(0.0, 0.0, 0.1),
-                ..default()
-            });
-            token.spawn(Text2dBundle {
-                text: Text::from_section(
-                    format!("E{}", idx + 1),
-                    TextStyle {
-                        font,
-                        font_size: 16.0,
-                        color: Color::rgb(1.0, 0.78, 0.66),
-                    },
-                ),
-                transform: Transform::from_xyz(0.0, 2.0, 0.3),
                 ..default()
             });
         });
