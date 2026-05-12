@@ -136,19 +136,23 @@ pub fn run() {
         .insert_resource(ScreenshotTour::from_env())
         .init_resource::<fight_preview::FormationDragState>()
         .add_event::<FormationMoveRequest>()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: "HackMaster Squad Battler".to_string(),
-                resolution: (1280.0, 768.0).into(),
-                resize_constraints: WindowResizeConstraints {
-                    min_width: 860.0,
-                    min_height: 520.0,
+        .add_plugins(
+            DefaultPlugins
+                .set(ImagePlugin::default_nearest())
+                .set(WindowPlugin {
+                    primary_window: Some(Window {
+                        title: "HackMaster Squad Battler".to_string(),
+                        resolution: (1280.0, 768.0).into(),
+                        resize_constraints: WindowResizeConstraints {
+                            min_width: 860.0,
+                            min_height: 520.0,
+                            ..default()
+                        },
+                        ..default()
+                    }),
                     ..default()
-                },
-                ..default()
-            }),
-            ..default()
-        }))
+                }),
+        )
         .add_plugins(combat_fx::CombatFxPlugin)
         .add_plugins(route::RouteMapPlugin)
         .add_plugins(rewards::RewardScreenPlugin)
@@ -173,7 +177,6 @@ pub fn run() {
                 advance_combat,
                 units::sync_unit_targets,
                 units::animate_unit_motion,
-                units::animate_stick_figures,
             ),
         )
         .add_systems(
@@ -863,6 +866,7 @@ fn request_tour_screenshot(
 
 fn render_current_screen(
     mut commands: Commands,
+    asset_server: Res<AssetServer>,
     mut nav: ResMut<VisualNav>,
     state: Res<VisualGameState>,
     screen_entities: Query<Entity, With<ScreenEntity>>,
@@ -897,7 +901,7 @@ fn render_current_screen(
                 board::spawn_board(&mut commands, geometry);
             }
             if screen_changed || units_missing {
-                units::spawn_units(&mut commands, geometry, fight);
+                units::spawn_units(&mut commands, geometry, fight, &asset_server);
             }
         }
     }

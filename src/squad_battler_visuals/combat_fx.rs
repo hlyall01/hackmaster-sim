@@ -9,8 +9,10 @@ use super::units::{self, UnitToken};
 const HIT_FLASH_SECONDS: f32 = 0.24;
 const SCALE_PULSE_SECONDS: f32 = 0.28;
 const LUNGE_SECONDS: f32 = 0.18;
+const ATTACK_WIGGLE_SECONDS: f32 = 0.24;
 const FLOATER_SECONDS: f32 = 0.9;
-const LUNGE_DISTANCE: f32 = 14.0;
+const LUNGE_DISTANCE: f32 = 8.0;
+const ATTACK_WIGGLE_SIDE_DISTANCE: f32 = 4.5;
 
 #[derive(SystemSet, Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum CombatFxSet {
@@ -34,6 +36,7 @@ impl Plugin for CombatFxPlugin {
                         animate_hit_flashes,
                         animate_scale_pulses,
                         animate_lunges,
+                        animate_attack_wiggles,
                         animate_floating_damage_text,
                     )
                         .in_set(CombatFxSet::Animation)
@@ -83,6 +86,14 @@ pub struct LungePulse {
     direction: Vec2,
     distance: f32,
     applied_offset: Vec2,
+}
+
+#[derive(Component)]
+pub struct AttackWiggle {
+    timer: Timer,
+    direction: Vec2,
+    applied_offset: Vec2,
+    base_rotation: Quat,
 }
 
 #[derive(Component)]
@@ -179,6 +190,35 @@ pub fn animate_lunges(
     }
 }
 
+pub fn animate_attack_wiggles(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut wiggles: Query<(Entity, &mut AttackWiggle, &mut Transform)>,
+) {
+    for (entity, mut wiggle, mut transform) in &mut wiggles {
+        wiggle.timer.tick(time.delta());
+        let pct = wiggle.timer.fraction();
+        let thrust = (std::f32::consts::PI * pct).sin().max(0.0);
+        let shake = (std::f32::consts::TAU * 3.0 * pct).sin();
+        let side = Vec2::new(-wiggle.direction.y, wiggle.direction.x)
+            * ATTACK_WIGGLE_SIDE_DISTANCE
+            * shake
+            * (1.0 - pct);
+        let offset = wiggle.direction * LUNGE_DISTANCE * 0.6 * thrust + side;
+        let delta = offset - wiggle.applied_offset;
+        transform.translation.x += delta.x;
+        transform.translation.y += delta.y;
+        transform.rotation = wiggle.base_rotation * Quat::from_rotation_z(shake * 0.18);
+        wiggle.applied_offset = offset;
+        if wiggle.timer.finished() {
+            transform.translation.x -= wiggle.applied_offset.x;
+            transform.translation.y -= wiggle.applied_offset.y;
+            transform.rotation = wiggle.base_rotation;
+            commands.entity(entity).remove::<AttackWiggle>();
+        }
+    }
+}
+
 pub fn animate_floating_damage_text(
     mut commands: Commands,
     time: Res<Time>,
@@ -207,6 +247,7 @@ fn play_event(
         SquadCombatEventKind::Attack => {
             if let Some((actor, target)) = actor_and_target(event, tokens) {
                 add_lunge(commands, actor, target);
+                add_attack_wiggle(commands, actor, target);
                 add_scale_pulse(commands, actor.0, actor.2.scale, 0.12);
             }
         }
@@ -222,11 +263,13 @@ fn play_event(
             }
             if let Some((actor, target)) = actor_and_target(event, tokens) {
                 add_lunge(commands, actor, target);
+                add_attack_wiggle(commands, actor, target);
             }
         }
         SquadCombatEventKind::Miss => {
             if let Some((actor, target)) = actor_and_target(event, tokens) {
                 add_lunge(commands, actor, target);
+                add_attack_wiggle(commands, actor, target);
                 add_scale_pulse(commands, actor.0, actor.2.scale, 0.08);
             }
         }
@@ -278,6 +321,21 @@ fn add_lunge(
         direction,
         distance: LUNGE_DISTANCE,
         applied_offset: Vec2::ZERO,
+    });
+}
+
+fn add_attack_wiggle(
+    commands: &mut Commands,
+    actor: (Entity, &UnitToken, &Transform, &Sprite),
+    target: (Entity, &UnitToken, &Transform, &Sprite),
+) {
+    let delta = target.2.translation.truncate() - actor.2.translation.truncate();
+    let direction = delta.try_normalize().unwrap_or(Vec2::X);
+    commands.entity(actor.0).insert(AttackWiggle {
+        timer: Timer::from_seconds(ATTACK_WIGGLE_SECONDS, TimerMode::Once),
+        direction,
+        applied_offset: Vec2::ZERO,
+        base_rotation: actor.2.rotation,
     });
 }
 
