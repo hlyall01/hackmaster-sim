@@ -138,6 +138,10 @@ pub fn run() {
         .add_event::<FormationMoveRequest>()
         .add_plugins(
             DefaultPlugins
+                .set(AssetPlugin {
+                    file_path: format!("{}/assets", env!("CARGO_MANIFEST_DIR")),
+                    ..default()
+                })
                 .set(ImagePlugin::default_nearest())
                 .set(WindowPlugin {
                     primary_window: Some(Window {

@@ -10,8 +10,10 @@ const HIT_FLASH_SECONDS: f32 = 0.24;
 const SCALE_PULSE_SECONDS: f32 = 0.28;
 const ATTACK_WIGGLE_SECONDS: f32 = 0.24;
 const FLOATER_SECONDS: f32 = 0.9;
-const ATTACK_WIGGLE_FORWARD_DISTANCE: f32 = 6.0;
+const ATTACK_WIGGLE_FORWARD_DISTANCE: f32 = 14.0;
 const ATTACK_WIGGLE_SIDE_DISTANCE: f32 = 4.5;
+const PRIORITY_SCALE_PULSE: u8 = 10;
+const PRIORITY_ATTACK_WIGGLE: u8 = 40;
 
 #[derive(SystemSet, Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum CombatFxSet {
@@ -33,8 +35,7 @@ impl Plugin for CombatFxPlugin {
                         .after(units::sync_unit_targets),
                     (
                         animate_hit_flashes,
-                        animate_scale_pulses,
-                        animate_attack_wiggles,
+                        (animate_scale_pulses, animate_attack_wiggles).chain(),
                         animate_floating_damage_text,
                     )
                         .in_set(CombatFxSet::Animation)
@@ -145,10 +146,22 @@ pub fn animate_hit_flashes(
 pub fn animate_scale_pulses(
     mut commands: Commands,
     time: Res<Time>,
-    mut pulses: Query<(Entity, &mut ScalePulse, &mut Transform)>,
+    mut pulses: Query<(
+        Entity,
+        &mut ScalePulse,
+        &mut Transform,
+        Option<&AttackWiggle>,
+    )>,
 ) {
-    for (entity, mut pulse, mut transform) in &mut pulses {
+    for (entity, mut pulse, mut transform, attack_wiggle) in &mut pulses {
         pulse.timer.tick(time.delta());
+        if highest_transform_priority(attack_wiggle) > PRIORITY_SCALE_PULSE {
+            transform.scale = pulse.base_scale;
+            if pulse.timer.finished() {
+                commands.entity(entity).remove::<ScalePulse>();
+            }
+            continue;
+        }
         let pct = pulse.timer.fraction();
         let wave = (std::f32::consts::PI * pct).sin().max(0.0);
         transform.scale = pulse.base_scale * (1.0 + pulse.amount * wave);
@@ -216,7 +229,6 @@ fn play_event(
         SquadCombatEventKind::Attack => {
             if let Some((actor, target)) = actor_and_target(event, tokens) {
                 add_attack_wiggle(commands, actor, target);
-                add_scale_pulse(commands, actor.0, actor.2.scale, 0.12);
             }
         }
         SquadCombatEventKind::Hit => {
@@ -231,8 +243,8 @@ fn play_event(
             }
         }
         SquadCombatEventKind::Miss => {
-            if let Some((actor, _target)) = actor_and_target(event, tokens) {
-                add_scale_pulse(commands, actor.0, actor.2.scale, 0.08);
+            if let Some((actor, target)) = actor_and_target(event, tokens) {
+                add_attack_wiggle(commands, actor, target);
             }
         }
         SquadCombatEventKind::Death => {
@@ -284,6 +296,14 @@ fn add_attack_wiggle(
         applied_offset: Vec2::ZERO,
         base_rotation: actor.2.rotation,
     });
+}
+
+fn highest_transform_priority(attack_wiggle: Option<&AttackWiggle>) -> u8 {
+    if attack_wiggle.is_some() {
+        PRIORITY_ATTACK_WIGGLE
+    } else {
+        0
+    }
 }
 
 fn spawn_damage_text(
