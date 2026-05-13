@@ -85,8 +85,11 @@ pub(crate) fn sync_unit_targets(
 
     for (entity, token, mut target) in &mut tokens {
         if let Some(unit) = units_by_id.get(token.id.as_str()) {
+            if !present_ids.insert(token.id.clone()) {
+                commands.entity(entity).despawn_recursive();
+                continue;
+            }
             target.0 = geometry.grid_to_world(GridPos::new(unit.x, unit.y), 1.0);
-            present_ids.insert(token.id.clone());
         } else {
             commands.entity(entity).despawn_recursive();
         }
@@ -317,6 +320,7 @@ fn enemy_label(id: &str) -> Option<String> {
 mod tests {
     use super::*;
     use crate::squad_battler::combat::{BattleGrid, InitiativeView};
+    use crate::squad_battler::state::SquadBattlerApp;
     use bevy::asset::AssetPlugin;
     use bevy::ecs::system::CommandQueue;
 
@@ -386,6 +390,54 @@ mod tests {
         assert!(
             !visible_rig_children.is_empty(),
             "animated visual rig should own the visible unit elements"
+        );
+    }
+
+    #[test]
+    fn sync_unit_targets_despawns_duplicate_unit_roots() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        app.init_asset::<Image>();
+        app.add_systems(Update, sync_unit_targets);
+
+        let asset_server = app.world.resource::<AssetServer>().clone();
+        let fight = sample_combat_view();
+        let geometry = BoardGeometry::new(fight.grid);
+        let mut game = SquadBattlerApp::new().expect("test app should load catalogs");
+        let mut view = game.new_run(Some(1));
+        view.live_fight = Some(fight.clone());
+        app.insert_resource(geometry);
+        app.insert_resource(VisualGameState { app: game, view });
+
+        let mut queue = CommandQueue::default();
+        {
+            let mut commands = Commands::new(&mut queue, &app.world);
+            spawn_units(&mut commands, geometry, &fight, &asset_server);
+            spawn_units(&mut commands, geometry, &fight, &asset_server);
+        }
+        queue.apply(&mut app.world);
+        assert_eq!(
+            app.world.query::<&UnitToken>().iter(&app.world).count(),
+            2,
+            "test setup should create two roots with the same unit id"
+        );
+
+        app.update();
+
+        assert_eq!(
+            app.world.query::<&UnitToken>().iter(&app.world).count(),
+            1,
+            "sync should keep only one rendered root per combatant id"
+        );
+        assert_eq!(
+            app.world.query::<&UnitVisual>().iter(&app.world).count(),
+            1,
+            "sync should remove the duplicate visual rig with its root"
+        );
+        assert_eq!(
+            app.world.query::<&UnitSprite>().iter(&app.world).count(),
+            1,
+            "sync should remove the duplicate body sprite with its root"
         );
     }
 

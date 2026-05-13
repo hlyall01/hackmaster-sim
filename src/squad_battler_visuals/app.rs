@@ -169,7 +169,7 @@ pub fn run() {
         .add_systems(Startup, setup)
         .add_systems(
             Update,
-            (
+            ((
                 sync_auxiliary_screen_visibility,
                 handle_keyboard_input,
                 handle_screen_buttons,
@@ -180,13 +180,14 @@ pub fn run() {
                 handle_hud_buttons,
                 handle_reward_events,
                 handle_roster_events,
-                render_current_screen,
-                hud::sync_hud,
-                camera::fit_camera_to_board,
                 advance_combat,
+                render_current_screen,
                 units::sync_unit_targets,
                 units::animate_unit_motion,
-            ),
+                hud::sync_hud,
+                camera::fit_camera_to_board,
+            )
+                .chain(),),
         )
         .add_systems(
             Update,
