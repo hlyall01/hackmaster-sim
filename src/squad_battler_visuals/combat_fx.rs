@@ -8,10 +8,9 @@ use super::units::{self, UnitToken};
 
 const HIT_FLASH_SECONDS: f32 = 0.24;
 const SCALE_PULSE_SECONDS: f32 = 0.28;
-const LUNGE_SECONDS: f32 = 0.18;
 const ATTACK_WIGGLE_SECONDS: f32 = 0.24;
 const FLOATER_SECONDS: f32 = 0.9;
-const LUNGE_DISTANCE: f32 = 8.0;
+const ATTACK_WIGGLE_FORWARD_DISTANCE: f32 = 6.0;
 const ATTACK_WIGGLE_SIDE_DISTANCE: f32 = 4.5;
 
 #[derive(SystemSet, Clone, Copy, Debug, Hash, PartialEq, Eq)]
@@ -35,7 +34,6 @@ impl Plugin for CombatFxPlugin {
                     (
                         animate_hit_flashes,
                         animate_scale_pulses,
-                        animate_lunges,
                         animate_attack_wiggles,
                         animate_floating_damage_text,
                     )
@@ -78,14 +76,6 @@ pub struct ScalePulse {
     timer: Timer,
     base_scale: Vec3,
     amount: f32,
-}
-
-#[derive(Component)]
-pub struct LungePulse {
-    timer: Timer,
-    direction: Vec2,
-    distance: f32,
-    applied_offset: Vec2,
 }
 
 #[derive(Component)]
@@ -169,27 +159,6 @@ pub fn animate_scale_pulses(
     }
 }
 
-pub fn animate_lunges(
-    mut commands: Commands,
-    time: Res<Time>,
-    mut lunges: Query<(Entity, &mut LungePulse, &mut Transform)>,
-) {
-    for (entity, mut lunge, mut transform) in &mut lunges {
-        lunge.timer.tick(time.delta());
-        let pct = lunge.timer.fraction();
-        let offset = lunge.direction * lunge.distance * (std::f32::consts::PI * pct).sin().max(0.0);
-        let delta = offset - lunge.applied_offset;
-        transform.translation.x += delta.x;
-        transform.translation.y += delta.y;
-        lunge.applied_offset = offset;
-        if lunge.timer.finished() {
-            transform.translation.x -= lunge.applied_offset.x;
-            transform.translation.y -= lunge.applied_offset.y;
-            commands.entity(entity).remove::<LungePulse>();
-        }
-    }
-}
-
 pub fn animate_attack_wiggles(
     mut commands: Commands,
     time: Res<Time>,
@@ -204,7 +173,7 @@ pub fn animate_attack_wiggles(
             * ATTACK_WIGGLE_SIDE_DISTANCE
             * shake
             * (1.0 - pct);
-        let offset = wiggle.direction * LUNGE_DISTANCE * 0.6 * thrust + side;
+        let offset = wiggle.direction * ATTACK_WIGGLE_FORWARD_DISTANCE * thrust + side;
         let delta = offset - wiggle.applied_offset;
         transform.translation.x += delta.x;
         transform.translation.y += delta.y;
@@ -246,7 +215,6 @@ fn play_event(
     match event.kind {
         SquadCombatEventKind::Attack => {
             if let Some((actor, target)) = actor_and_target(event, tokens) {
-                add_lunge(commands, actor, target);
                 add_attack_wiggle(commands, actor, target);
                 add_scale_pulse(commands, actor.0, actor.2.scale, 0.12);
             }
@@ -261,15 +229,9 @@ fn play_event(
                     spawn_damage_text(commands, text_style, target_transform.translation, damage);
                 }
             }
-            if let Some((actor, target)) = actor_and_target(event, tokens) {
-                add_lunge(commands, actor, target);
-                add_attack_wiggle(commands, actor, target);
-            }
         }
         SquadCombatEventKind::Miss => {
-            if let Some((actor, target)) = actor_and_target(event, tokens) {
-                add_lunge(commands, actor, target);
-                add_attack_wiggle(commands, actor, target);
+            if let Some((actor, _target)) = actor_and_target(event, tokens) {
                 add_scale_pulse(commands, actor.0, actor.2.scale, 0.08);
             }
         }
@@ -306,21 +268,6 @@ fn add_scale_pulse(commands: &mut Commands, entity: Entity, base_scale: Vec3, am
         timer: Timer::from_seconds(SCALE_PULSE_SECONDS, TimerMode::Once),
         base_scale,
         amount,
-    });
-}
-
-fn add_lunge(
-    commands: &mut Commands,
-    actor: (Entity, &UnitToken, &Transform, &Sprite),
-    target: (Entity, &UnitToken, &Transform, &Sprite),
-) {
-    let delta = target.2.translation.truncate() - actor.2.translation.truncate();
-    let direction = delta.try_normalize().unwrap_or(Vec2::ZERO);
-    commands.entity(actor.0).insert(LungePulse {
-        timer: Timer::from_seconds(LUNGE_SECONDS, TimerMode::Once),
-        direction,
-        distance: LUNGE_DISTANCE,
-        applied_offset: Vec2::ZERO,
     });
 }
 
