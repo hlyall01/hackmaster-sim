@@ -36,6 +36,11 @@ pub struct UnitToken {
 }
 
 #[derive(Component)]
+pub struct UnitVisual {
+    pub id: String,
+}
+
+#[derive(Component)]
 pub struct UnitSprite {
     pub id: String,
 }
@@ -144,70 +149,79 @@ fn spawn_unit(
             },
         ))
         .with_children(|parent| {
-            parent.spawn((
-                UnitSprite {
-                    id: unit.id.clone(),
-                },
-                SpriteBundle {
-                    texture: asset_server.load(unit_sprite_path(unit)),
-                    sprite: Sprite {
-                        color: unit_tint(unit),
-                        custom_size: Some(Vec2::splat(UNIT_SPRITE_SIZE)),
+            parent
+                .spawn((
+                    UnitVisual {
+                        id: unit.id.clone(),
+                    },
+                    SpatialBundle::default(),
+                ))
+                .with_children(|visual| {
+                    visual.spawn((
+                        UnitSprite {
+                            id: unit.id.clone(),
+                        },
+                        SpriteBundle {
+                            texture: asset_server.load(unit_sprite_path(unit)),
+                            sprite: Sprite {
+                                color: unit_tint(unit),
+                                custom_size: Some(Vec2::splat(UNIT_SPRITE_SIZE)),
+                                ..default()
+                            },
+                            transform: Transform::from_xyz(0.0, 0.0, 0.1),
+                            ..default()
+                        },
+                    ));
+                    visual.spawn(SpriteBundle {
+                        sprite: Sprite {
+                            color: shadow_color(unit),
+                            custom_size: Some(Vec2::new(UNIT_SHADOW_WIDTH, UNIT_SHADOW_HEIGHT)),
+                            ..default()
+                        },
+                        transform: Transform::from_xyz(0.0, -TILE_WORLD_SIZE * 0.26, -0.1),
                         ..default()
-                    },
-                    transform: Transform::from_xyz(0.0, 0.0, 0.1),
-                    ..default()
-                },
-            ));
-            parent.spawn(SpriteBundle {
-                sprite: Sprite {
-                    color: shadow_color(unit),
-                    custom_size: Some(Vec2::new(UNIT_SHADOW_WIDTH, UNIT_SHADOW_HEIGHT)),
-                    ..default()
-                },
-                transform: Transform::from_xyz(0.0, -TILE_WORLD_SIZE * 0.26, -0.1),
-                ..default()
-            });
-            parent.spawn(Text2dBundle {
-                text: Text::from_section(
-                    unit_label(unit),
-                    TextStyle {
-                        font: Handle::<Font>::default(),
-                        font_size: 15.0,
-                        color: label_color(unit),
-                    },
-                )
-                .with_justify(JustifyText::Center),
-                transform: Transform::from_xyz(0.0, TILE_WORLD_SIZE * 0.32, 0.35),
-                ..default()
-            });
-            parent.spawn(SpriteBundle {
-                sprite: Sprite {
-                    color: assets::health_back_color(),
-                    custom_size: Some(Vec2::new(HEALTH_BAR_WIDTH, HEALTH_BAR_HEIGHT + 2.0)),
-                    ..default()
-                },
-                transform: Transform::from_xyz(0.0, -TILE_WORLD_SIZE * 0.42, 0.2),
-                ..default()
-            });
-            parent.spawn((
-                HealthFill {
-                    id: unit.id.clone(),
-                },
-                SpriteBundle {
-                    sprite: Sprite {
-                        color: health_color(unit),
-                        custom_size: Some(Vec2::new(hp_width.max(1.0), HEALTH_BAR_HEIGHT)),
+                    });
+                    visual.spawn(Text2dBundle {
+                        text: Text::from_section(
+                            unit_label(unit),
+                            TextStyle {
+                                font: Handle::<Font>::default(),
+                                font_size: 15.0,
+                                color: label_color(unit),
+                            },
+                        )
+                        .with_justify(JustifyText::Center),
+                        transform: Transform::from_xyz(0.0, TILE_WORLD_SIZE * 0.32, 0.35),
                         ..default()
-                    },
-                    transform: Transform::from_xyz(
-                        -HEALTH_BAR_WIDTH * 0.5 + hp_width * 0.5,
-                        -TILE_WORLD_SIZE * 0.42,
-                        0.3,
-                    ),
-                    ..default()
-                },
-            ));
+                    });
+                    visual.spawn(SpriteBundle {
+                        sprite: Sprite {
+                            color: assets::health_back_color(),
+                            custom_size: Some(Vec2::new(HEALTH_BAR_WIDTH, HEALTH_BAR_HEIGHT + 2.0)),
+                            ..default()
+                        },
+                        transform: Transform::from_xyz(0.0, -TILE_WORLD_SIZE * 0.42, 0.2),
+                        ..default()
+                    });
+                    visual.spawn((
+                        HealthFill {
+                            id: unit.id.clone(),
+                        },
+                        SpriteBundle {
+                            sprite: Sprite {
+                                color: health_color(unit),
+                                custom_size: Some(Vec2::new(hp_width.max(1.0), HEALTH_BAR_HEIGHT)),
+                                ..default()
+                            },
+                            transform: Transform::from_xyz(
+                                -HEALTH_BAR_WIDTH * 0.5 + hp_width * 0.5,
+                                -TILE_WORLD_SIZE * 0.42,
+                                0.3,
+                            ),
+                            ..default()
+                        },
+                    ));
+                });
         });
 }
 
@@ -297,4 +311,111 @@ fn enemy_label(id: &str) -> Option<String> {
     id.rsplit_once('-')
         .and_then(|(_, index)| index.parse::<usize>().ok())
         .map(|index| format!("E{}", index + 1))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::squad_battler::combat::{BattleGrid, InitiativeView};
+    use bevy::asset::AssetPlugin;
+    use bevy::ecs::system::CommandQueue;
+
+    #[test]
+    fn visible_unit_elements_are_children_of_the_animated_visual_rig() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        app.init_asset::<Image>();
+        let asset_server = app.world.resource::<AssetServer>().clone();
+        let fight = sample_combat_view();
+        let geometry = BoardGeometry::new(fight.grid);
+
+        let mut queue = CommandQueue::default();
+        {
+            let mut commands = Commands::new(&mut queue, &app.world);
+            spawn_units(&mut commands, geometry, &fight, &asset_server);
+        }
+        queue.apply(&mut app.world);
+
+        let root = app
+            .world
+            .query_filtered::<Entity, With<UnitToken>>()
+            .single(&app.world);
+        let root_children = app
+            .world
+            .get::<Children>(root)
+            .expect("unit root should own visible children");
+        let visual_children = root_children
+            .iter()
+            .copied()
+            .filter(|child| app.world.get::<UnitVisual>(*child).is_some())
+            .collect::<Vec<_>>();
+        let static_visible_children = root_children
+            .iter()
+            .copied()
+            .filter(|child| {
+                app.world.get::<Sprite>(*child).is_some()
+                    || app.world.get::<Text>(*child).is_some()
+                    || app.world.get::<HealthFill>(*child).is_some()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            visual_children.len(),
+            1,
+            "unit root should own exactly one animated visual rig"
+        );
+        assert!(
+            static_visible_children.is_empty(),
+            "unit root has static visible children outside the animated visual rig: {:?}",
+            static_visible_children
+        );
+
+        let rig_children = app
+            .world
+            .get::<Children>(visual_children[0])
+            .expect("visual rig should own sprite, label, shadow, and health children");
+        let visible_rig_children = rig_children
+            .iter()
+            .copied()
+            .filter(|child| {
+                app.world.get::<Sprite>(*child).is_some()
+                    || app.world.get::<Text>(*child).is_some()
+                    || app.world.get::<HealthFill>(*child).is_some()
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            !visible_rig_children.is_empty(),
+            "animated visual rig should own the visible unit elements"
+        );
+    }
+
+    fn sample_combat_view() -> SquadCombatView {
+        SquadCombatView {
+            grid: BattleGrid::default(),
+            elapsed_seconds: 0,
+            max_seconds: 180,
+            running: false,
+            done: false,
+            winner_team: None,
+            combatants: vec![BattleUnitView {
+                id: "enemy-1-0".to_string(),
+                name: "Test Enemy".to_string(),
+                team_id: 1,
+                x: 4,
+                y: 3,
+                hp: 10,
+                max_hp: 10,
+                status: BattleUnitStatus::Alive,
+                weapon: "Claws".to_string(),
+                reach_ft: 5.0,
+                max_range_ft: None,
+                move_tiles: 4,
+                initiative: 0.0,
+                intent: "Testing".to_string(),
+            }],
+            initiative: Vec::<InitiativeView>::new(),
+            log_tail: Vec::new(),
+            events_tail: Vec::new(),
+        }
+    }
 }

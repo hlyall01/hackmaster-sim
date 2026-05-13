@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use crate::squad_battler::combat::{SquadCombatEvent, SquadCombatEventKind};
 
 use super::app::VisualGameState;
-use super::units::{self, UnitSprite, UnitToken};
+use super::units::{self, UnitSprite, UnitToken, UnitVisual};
 
 const HIT_FLASH_SECONDS: f32 = 0.24;
 const SCALE_PULSE_SECONDS: f32 = 0.28;
@@ -108,6 +108,7 @@ pub fn playback_combat_events(
     mut seen: ResMut<CombatFxSeenEvents>,
     text_style: Res<CombatFxTextStyle>,
     tokens: Query<(&UnitToken, &GlobalTransform)>,
+    visuals: Query<(Entity, &UnitVisual, &GlobalTransform, &Transform)>,
     sprites: Query<(Entity, &UnitSprite, &GlobalTransform, &Transform, &Sprite)>,
 ) {
     let Some(fight) = state.view.live_fight.as_ref() else {
@@ -122,7 +123,14 @@ pub fn playback_combat_events(
         if !seen.seen.insert(key) {
             continue;
         }
-        play_event(&mut commands, &text_style, event, &tokens, &sprites);
+        play_event(
+            &mut commands,
+            &text_style,
+            event,
+            &tokens,
+            &visuals,
+            &sprites,
+        );
     }
     seen.seen.retain(|key| current_tail.contains(key));
 }
@@ -225,44 +233,47 @@ fn play_event(
     text_style: &CombatFxTextStyle,
     event: &SquadCombatEvent,
     tokens: &Query<(&UnitToken, &GlobalTransform)>,
+    visuals: &Query<(Entity, &UnitVisual, &GlobalTransform, &Transform)>,
     sprites: &Query<(Entity, &UnitSprite, &GlobalTransform, &Transform, &Sprite)>,
 ) {
     match event.kind {
         SquadCombatEventKind::Attack => {
-            if let Some((actor, target)) = actor_and_target(event, tokens, sprites) {
+            if let Some((actor, target)) = actor_and_target(event, tokens, visuals) {
                 add_attack_wiggle(commands, actor, target);
             }
         }
         SquadCombatEventKind::Hit => {
-            if let Some((target_entity, _, target_global, target_local, target_sprite)) =
+            if let Some((target_entity, _, target_global, _, target_sprite)) =
                 target_sprite(event, sprites)
             {
                 add_hit_flash(commands, target_entity, target_sprite.color);
-                add_scale_pulse(commands, target_entity, target_local.scale, 0.18);
+                if let Some((visual_entity, _, _, visual_local)) = target_visual(event, visuals) {
+                    add_scale_pulse(commands, visual_entity, visual_local.scale, 0.18);
+                }
                 if let Some(damage) = event.damage {
                     spawn_damage_text(commands, text_style, target_global.translation(), damage);
                 }
             }
         }
         SquadCombatEventKind::Miss => {
-            if let Some((actor, target)) = actor_and_target(event, tokens, sprites) {
+            if let Some((actor, target)) = actor_and_target(event, tokens, visuals) {
                 add_attack_wiggle(commands, actor, target);
             }
         }
         SquadCombatEventKind::Death => {
-            if let Some((target_entity, _, _, target_local, target_sprite)) =
-                target_sprite(event, sprites)
-            {
+            if let Some((target_entity, _, _, _, target_sprite)) = target_sprite(event, sprites) {
                 add_hit_flash(commands, target_entity, target_sprite.color);
-                add_scale_pulse(commands, target_entity, target_local.scale, 0.24);
+                if let Some((visual_entity, _, _, visual_local)) = target_visual(event, visuals) {
+                    add_scale_pulse(commands, visual_entity, visual_local.scale, 0.24);
+                }
             }
         }
         SquadCombatEventKind::Knockback => {
-            if let Some((target_entity, _, _, target_local, target_sprite)) =
-                target_sprite(event, sprites)
-            {
+            if let Some((target_entity, _, _, _, target_sprite)) = target_sprite(event, sprites) {
                 add_hit_flash(commands, target_entity, target_sprite.color);
-                add_scale_pulse(commands, target_entity, target_local.scale, 0.16);
+                if let Some((visual_entity, _, _, visual_local)) = target_visual(event, visuals) {
+                    add_scale_pulse(commands, visual_entity, visual_local.scale, 0.16);
+                }
             }
         }
         SquadCombatEventKind::Move | SquadCombatEventKind::Skip | SquadCombatEventKind::Timeout => {
@@ -356,23 +367,30 @@ struct FxTarget<'a> {
 fn actor_and_target<'a>(
     event: &SquadCombatEvent,
     tokens: &'a Query<(&UnitToken, &GlobalTransform)>,
-    sprites: &'a Query<(Entity, &UnitSprite, &GlobalTransform, &Transform, &Sprite)>,
+    visuals: &'a Query<(Entity, &UnitVisual, &GlobalTransform, &Transform)>,
 ) -> Option<(FxActor<'a>, FxTarget<'a>)> {
-    let actor = actor_sprite(event, sprites)?;
+    let actor = actor_visual(event, visuals)?;
     let target = target_root(event, tokens)?;
     Some((actor, target))
 }
 
-fn actor_sprite<'a>(
+fn actor_visual<'a>(
     event: &SquadCombatEvent,
-    sprites: &'a Query<(Entity, &UnitSprite, &GlobalTransform, &Transform, &Sprite)>,
+    visuals: &'a Query<(Entity, &UnitVisual, &GlobalTransform, &Transform)>,
 ) -> Option<FxActor<'a>> {
-    let (entity, _, global, local, _) = sprite_by_id(&event.actor_id, sprites)?;
+    let (entity, _, global, local) = visual_by_id(&event.actor_id, visuals)?;
     Some(FxActor {
         entity,
         local,
         position: global.translation(),
     })
+}
+
+fn target_visual<'a>(
+    event: &SquadCombatEvent,
+    visuals: &'a Query<(Entity, &UnitVisual, &GlobalTransform, &Transform)>,
+) -> Option<(Entity, &'a UnitVisual, &'a GlobalTransform, &'a Transform)> {
+    visual_by_id(event.target_id.as_deref()?, visuals)
 }
 
 fn target_sprite<'a>(
@@ -404,6 +422,15 @@ fn root_by_id<'a>(
     tokens: &'a Query<(&UnitToken, &GlobalTransform)>,
 ) -> Option<(&'a UnitToken, &'a GlobalTransform)> {
     tokens.iter().find(|(token, _)| token.id == id)
+}
+
+fn visual_by_id<'a>(
+    id: &str,
+    visuals: &'a Query<(Entity, &UnitVisual, &GlobalTransform, &Transform)>,
+) -> Option<(Entity, &'a UnitVisual, &'a GlobalTransform, &'a Transform)> {
+    visuals
+        .iter()
+        .find(|(_, unit_visual, _, _)| unit_visual.id == id)
 }
 
 fn sprite_by_id<'a>(
