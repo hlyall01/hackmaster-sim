@@ -1,4 +1,5 @@
 use bevy::app::AppExit;
+use bevy::audio::AudioPlugin;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::ScreenshotManager;
 use bevy::window::{PrimaryWindow, WindowResizeConstraints};
@@ -125,6 +126,8 @@ enum ScreenAction {
 }
 
 pub fn run() {
+    configure_wsl_window_backend();
+
     App::new()
         .insert_resource(ClearColor(assets::clear_color()))
         .insert_resource(BoardGeometry::new(BattleGrid::default()))
@@ -138,6 +141,8 @@ pub fn run() {
         .add_event::<FormationMoveRequest>()
         .add_plugins(
             DefaultPlugins
+                .build()
+                .disable::<AudioPlugin>()
                 .set(AssetPlugin {
                     file_path: format!("{}/assets", env!("CARGO_MANIFEST_DIR")),
                     ..default()
@@ -191,6 +196,28 @@ pub fn run() {
                 .after(units::animate_unit_motion),
         )
         .run();
+}
+
+fn configure_wsl_window_backend() {
+    if std::env::var_os("WINIT_UNIX_BACKEND").is_some()
+        || std::env::var_os("DISPLAY").is_none()
+        || !is_wsl()
+    {
+        return;
+    }
+
+    // Bevy/winit over WSLg's Wayland bridge can occasionally drop the window
+    // connection with a broken pipe. X11 via Xwayland is less fussy here, and
+    // users can still override this with WINIT_UNIX_BACKEND.
+    unsafe {
+        std::env::set_var("WINIT_UNIX_BACKEND", "x11");
+    }
+}
+
+fn is_wsl() -> bool {
+    fs::read_to_string("/proc/sys/kernel/osrelease")
+        .map(|release| release.to_ascii_lowercase().contains("microsoft"))
+        .unwrap_or(false)
 }
 
 fn setup(mut commands: Commands) {
