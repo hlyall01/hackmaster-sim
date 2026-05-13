@@ -36,6 +36,11 @@ pub struct UnitToken {
 }
 
 #[derive(Component)]
+pub struct UnitSprite {
+    pub id: String,
+}
+
+#[derive(Component)]
 pub struct TargetWorldPosition(pub Vec3);
 
 #[derive(Component)]
@@ -59,10 +64,8 @@ pub(crate) fn sync_unit_targets(
     geometry: Res<BoardGeometry>,
     asset_server: Res<AssetServer>,
     state: Res<VisualGameState>,
-    mut tokens: Query<
-        (Entity, &UnitToken, &mut TargetWorldPosition, &mut Sprite),
-        Without<HealthFill>,
-    >,
+    mut tokens: Query<(Entity, &UnitToken, &mut TargetWorldPosition)>,
+    mut unit_sprites: Query<(&UnitSprite, &mut Sprite), Without<HealthFill>>,
     mut health_fills: Query<(&HealthFill, &mut Sprite, &mut Transform)>,
 ) {
     let Some(fight) = state.view.live_fight.as_ref() else {
@@ -75,10 +78,9 @@ pub(crate) fn sync_unit_targets(
         .collect::<HashMap<_, _>>();
     let mut present_ids = HashSet::new();
 
-    for (entity, token, mut target, mut sprite) in &mut tokens {
+    for (entity, token, mut target) in &mut tokens {
         if let Some(unit) = units_by_id.get(token.id.as_str()) {
             target.0 = geometry.grid_to_world(GridPos::new(unit.x, unit.y), 1.0);
-            sprite.color = unit_tint(unit);
             present_ids.insert(token.id.clone());
         } else {
             commands.entity(entity).despawn_recursive();
@@ -89,6 +91,13 @@ pub(crate) fn sync_unit_targets(
         if !present_ids.contains(&unit.id) {
             spawn_unit(&mut commands, *geometry, unit, &asset_server);
         }
+    }
+
+    for (unit_sprite, mut sprite) in &mut unit_sprites {
+        let Some(unit) = units_by_id.get(unit_sprite.id.as_str()) else {
+            continue;
+        };
+        sprite.color = unit_tint(unit);
     }
 
     for (fill, mut sprite, mut transform) in &mut health_fills {
@@ -129,18 +138,27 @@ fn spawn_unit(
                 id: unit.id.clone(),
             },
             TargetWorldPosition(pos),
-            SpriteBundle {
-                texture: asset_server.load(unit_sprite_path(unit)),
-                sprite: Sprite {
-                    color: unit_tint(unit),
-                    custom_size: Some(Vec2::splat(UNIT_SPRITE_SIZE)),
-                    ..default()
-                },
+            SpatialBundle {
                 transform: Transform::from_translation(pos),
                 ..default()
             },
         ))
         .with_children(|parent| {
+            parent.spawn((
+                UnitSprite {
+                    id: unit.id.clone(),
+                },
+                SpriteBundle {
+                    texture: asset_server.load(unit_sprite_path(unit)),
+                    sprite: Sprite {
+                        color: unit_tint(unit),
+                        custom_size: Some(Vec2::splat(UNIT_SPRITE_SIZE)),
+                        ..default()
+                    },
+                    transform: Transform::from_xyz(0.0, 0.0, 0.1),
+                    ..default()
+                },
+            ));
             parent.spawn(SpriteBundle {
                 sprite: Sprite {
                     color: shadow_color(unit),

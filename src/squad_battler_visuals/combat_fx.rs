@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use crate::squad_battler::combat::{SquadCombatEvent, SquadCombatEventKind};
 
 use super::app::VisualGameState;
-use super::units::{self, UnitToken};
+use super::units::{self, UnitSprite, UnitToken};
 
 const HIT_FLASH_SECONDS: f32 = 0.24;
 const SCALE_PULSE_SECONDS: f32 = 0.28;
@@ -107,7 +107,8 @@ pub fn playback_combat_events(
     state: Res<VisualGameState>,
     mut seen: ResMut<CombatFxSeenEvents>,
     text_style: Res<CombatFxTextStyle>,
-    tokens: Query<(Entity, &UnitToken, &Transform, &Sprite)>,
+    tokens: Query<(&UnitToken, &GlobalTransform)>,
+    sprites: Query<(Entity, &UnitSprite, &GlobalTransform, &Transform, &Sprite)>,
 ) {
     let Some(fight) = state.view.live_fight.as_ref() else {
         seen.seen.clear();
@@ -121,7 +122,7 @@ pub fn playback_combat_events(
         if !seen.seen.insert(key) {
             continue;
         }
-        play_event(&mut commands, &text_style, event, &tokens);
+        play_event(&mut commands, &text_style, event, &tokens, &sprites);
     }
     seen.seen.retain(|key| current_tail.contains(key));
 }
@@ -223,44 +224,45 @@ fn play_event(
     commands: &mut Commands,
     text_style: &CombatFxTextStyle,
     event: &SquadCombatEvent,
-    tokens: &Query<(Entity, &UnitToken, &Transform, &Sprite)>,
+    tokens: &Query<(&UnitToken, &GlobalTransform)>,
+    sprites: &Query<(Entity, &UnitSprite, &GlobalTransform, &Transform, &Sprite)>,
 ) {
     match event.kind {
         SquadCombatEventKind::Attack => {
-            if let Some((actor, target)) = actor_and_target(event, tokens) {
+            if let Some((actor, target)) = actor_and_target(event, tokens, sprites) {
                 add_attack_wiggle(commands, actor, target);
             }
         }
         SquadCombatEventKind::Hit => {
-            if let Some((target_entity, _, target_transform, target_sprite)) =
-                target_token(event, tokens)
+            if let Some((target_entity, _, target_global, target_local, target_sprite)) =
+                target_sprite(event, sprites)
             {
                 add_hit_flash(commands, target_entity, target_sprite.color);
-                add_scale_pulse(commands, target_entity, target_transform.scale, 0.18);
+                add_scale_pulse(commands, target_entity, target_local.scale, 0.18);
                 if let Some(damage) = event.damage {
-                    spawn_damage_text(commands, text_style, target_transform.translation, damage);
+                    spawn_damage_text(commands, text_style, target_global.translation(), damage);
                 }
             }
         }
         SquadCombatEventKind::Miss => {
-            if let Some((actor, target)) = actor_and_target(event, tokens) {
+            if let Some((actor, target)) = actor_and_target(event, tokens, sprites) {
                 add_attack_wiggle(commands, actor, target);
             }
         }
         SquadCombatEventKind::Death => {
-            if let Some((target_entity, _, target_transform, target_sprite)) =
-                target_token(event, tokens)
+            if let Some((target_entity, _, _, target_local, target_sprite)) =
+                target_sprite(event, sprites)
             {
                 add_hit_flash(commands, target_entity, target_sprite.color);
-                add_scale_pulse(commands, target_entity, target_transform.scale, 0.24);
+                add_scale_pulse(commands, target_entity, target_local.scale, 0.24);
             }
         }
         SquadCombatEventKind::Knockback => {
-            if let Some((target_entity, _, target_transform, target_sprite)) =
-                target_token(event, tokens)
+            if let Some((target_entity, _, _, target_local, target_sprite)) =
+                target_sprite(event, sprites)
             {
                 add_hit_flash(commands, target_entity, target_sprite.color);
-                add_scale_pulse(commands, target_entity, target_transform.scale, 0.16);
+                add_scale_pulse(commands, target_entity, target_local.scale, 0.16);
             }
         }
         SquadCombatEventKind::Move | SquadCombatEventKind::Skip | SquadCombatEventKind::Timeout => {
@@ -283,18 +285,14 @@ fn add_scale_pulse(commands: &mut Commands, entity: Entity, base_scale: Vec3, am
     });
 }
 
-fn add_attack_wiggle(
-    commands: &mut Commands,
-    actor: (Entity, &UnitToken, &Transform, &Sprite),
-    target: (Entity, &UnitToken, &Transform, &Sprite),
-) {
-    let delta = target.2.translation.truncate() - actor.2.translation.truncate();
+fn add_attack_wiggle(commands: &mut Commands, actor: FxActor<'_>, target: FxTarget<'_>) {
+    let delta = target.position.truncate() - actor.position.truncate();
     let direction = delta.try_normalize().unwrap_or(Vec2::X);
-    commands.entity(actor.0).insert(AttackWiggle {
+    commands.entity(actor.entity).insert(AttackWiggle {
         timer: Timer::from_seconds(ATTACK_WIGGLE_SECONDS, TimerMode::Once),
         direction,
         applied_offset: Vec2::ZERO,
-        base_rotation: actor.2.rotation,
+        base_rotation: actor.local.rotation,
     });
 }
 
@@ -344,37 +342,83 @@ fn spawn_damage_text(
     ));
 }
 
+struct FxActor<'a> {
+    entity: Entity,
+    local: &'a Transform,
+    position: Vec3,
+}
+
+struct FxTarget<'a> {
+    position: Vec3,
+    _marker: std::marker::PhantomData<&'a ()>,
+}
+
 fn actor_and_target<'a>(
     event: &SquadCombatEvent,
-    tokens: &'a Query<(Entity, &UnitToken, &Transform, &Sprite)>,
-) -> Option<(
-    (Entity, &'a UnitToken, &'a Transform, &'a Sprite),
-    (Entity, &'a UnitToken, &'a Transform, &'a Sprite),
-)> {
-    let actor = actor_token(event, tokens)?;
-    let target = target_token(event, tokens)?;
+    tokens: &'a Query<(&UnitToken, &GlobalTransform)>,
+    sprites: &'a Query<(Entity, &UnitSprite, &GlobalTransform, &Transform, &Sprite)>,
+) -> Option<(FxActor<'a>, FxTarget<'a>)> {
+    let actor = actor_sprite(event, sprites)?;
+    let target = target_root(event, tokens)?;
     Some((actor, target))
 }
 
-fn actor_token<'a>(
+fn actor_sprite<'a>(
     event: &SquadCombatEvent,
-    tokens: &'a Query<(Entity, &UnitToken, &Transform, &Sprite)>,
-) -> Option<(Entity, &'a UnitToken, &'a Transform, &'a Sprite)> {
-    token_by_id(&event.actor_id, tokens)
+    sprites: &'a Query<(Entity, &UnitSprite, &GlobalTransform, &Transform, &Sprite)>,
+) -> Option<FxActor<'a>> {
+    let (entity, _, global, local, _) = sprite_by_id(&event.actor_id, sprites)?;
+    Some(FxActor {
+        entity,
+        local,
+        position: global.translation(),
+    })
 }
 
-fn target_token<'a>(
+fn target_sprite<'a>(
     event: &SquadCombatEvent,
-    tokens: &'a Query<(Entity, &UnitToken, &Transform, &Sprite)>,
-) -> Option<(Entity, &'a UnitToken, &'a Transform, &'a Sprite)> {
-    token_by_id(event.target_id.as_deref()?, tokens)
+    sprites: &'a Query<(Entity, &UnitSprite, &GlobalTransform, &Transform, &Sprite)>,
+) -> Option<(
+    Entity,
+    &'a UnitSprite,
+    &'a GlobalTransform,
+    &'a Transform,
+    &'a Sprite,
+)> {
+    sprite_by_id(event.target_id.as_deref()?, sprites)
 }
 
-fn token_by_id<'a>(
+fn target_root<'a>(
+    event: &SquadCombatEvent,
+    tokens: &'a Query<(&UnitToken, &GlobalTransform)>,
+) -> Option<FxTarget<'a>> {
+    let (_, global) = root_by_id(event.target_id.as_deref()?, tokens)?;
+    Some(FxTarget {
+        position: global.translation(),
+        _marker: std::marker::PhantomData,
+    })
+}
+
+fn root_by_id<'a>(
     id: &str,
-    tokens: &'a Query<(Entity, &UnitToken, &Transform, &Sprite)>,
-) -> Option<(Entity, &'a UnitToken, &'a Transform, &'a Sprite)> {
-    tokens.iter().find(|(_, token, _, _)| token.id == id)
+    tokens: &'a Query<(&UnitToken, &GlobalTransform)>,
+) -> Option<(&'a UnitToken, &'a GlobalTransform)> {
+    tokens.iter().find(|(token, _)| token.id == id)
+}
+
+fn sprite_by_id<'a>(
+    id: &str,
+    sprites: &'a Query<(Entity, &UnitSprite, &GlobalTransform, &Transform, &Sprite)>,
+) -> Option<(
+    Entity,
+    &'a UnitSprite,
+    &'a GlobalTransform,
+    &'a Transform,
+    &'a Sprite,
+)> {
+    sprites
+        .iter()
+        .find(|(_, unit_sprite, _, _, _)| unit_sprite.id == id)
 }
 
 fn event_key(event: &SquadCombatEvent) -> CombatFxEventKey {
