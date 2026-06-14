@@ -1,0 +1,23 @@
+**Jab:** If using a weapon with a jab speed, you may jab at the listed jab speed. Jab attacks are generally faster, but deal half damage and do not penetrate.
+
+**Hold at Bay:** When a single target enters your Reach (and your Reach is longer than theirs), you may attempt to Hold at Bay. Attack as normal, but deliver no damage upon a success unless your weapon can Jab, in which case you may Jab while you Hold at Bay. The target cannot attack your body or advance any closer while held at bay. They must knock aside your weapon, a d20p Attack roll against your shieldless Defense roll, to be able to approach and engage. If they succeed, they may perform their initial engagement attack on the defender on the next second.
+
+**Aggressive Attack:** Gain a +5 to your next Attack roll and a -2 to your next Defense roll. A successful Aggressive Attack only deals half damage if the defender uses either Give Ground or Scamper Back. Aggressive Attack cannot be combined with any other combat maneuver, and no combat maneuvers may be used until your next attack opportunity.
+
+**Charge:** By running or sprinting into a foe at least 20 feet away in a straight line, you gain a +4 to Attack but lose any Dexterty bonus to defense upon contact with your target for 5 seconds. Normal damage is inflicted, but is considered doubled for the purposes of knock-backs.
+
+**Ready Against Charge:** If you have a polearm or spear that is able to be Set for Charge, you may brace the butt of the weapon against something and hold firm. Bracing in such a manner takes 3 seconds prior to a charging foe reaching the end of the weapon. The defender then attacks first. A successful melee attack not only breaks the charge (all attacker charge benefits are lost) but also causes double weapon damage. (e.g. 4d6p for a spear instead of 2d6p). Further, the attacker is held at bay.
+**
+Tactical Move:** During any second, you can move at walking pace while still engaged with an opponent. You suffer a -1 penalty to both Attack and Defense until your next attack. Penalties for multiple tactical moves are cumulative.
+
+**Fight Defensively:** Before your attack, you may announce you're fighting defensively and suffer an Attack penalty of -2, -4, -6, or -8, but gain a corresponding +1, +2, +3, or +4 to all Defense rolls. You may not apply penetration damage to your successful attacks while using this maneuver even should you score a Near Perfect or Perfect Defense. You can choose to stop fighting defensively at any time, but your next attack (within the same engagement) is still subject to the Attack penalty above. This maneuver may be combined with Give Ground or Scamper Back.
+
+**Full Parry:** You can forgo your attack and instead focus exclusively on defending. This provides a +5 to your Defense roll, instead of attacking, until your next attack. This may be combined with Give Ground, Scamper Back, and/or Fighting Withdrawal.
+
+**Give Ground:** When you are attacked, you may opt to retreat at a walking speed to gain a +5 to your Defense roll but suffer a -1 to your next Attack roll. The attacker can automatically advance in conjunction with this rearward movement. If you do not have room to retreat, you cannot give ground. Further, you cannot give ground against opponents that walk faster than you, or if you are being charged.
+
+**Scamper Back:** When you are attacked, you may retreat at a jogging pace to gain a +5 to your Defense roll but suffer a -4 to your next Attack roll. The attacker can automatically advance in conjunction with this rearward movement. If you do not have room to retreat, you cannot scamper back. Further, you cannot scamper back against opponents that walk faster than you can jog.
+
+**Fighting Withdrawal:** You can move at a walking speed to back up or sidestep during melee. You suffer a -2 to your next Attack and as long as you continue withdrawing. Attackers are free to pursue unless interposing allies prevent this.
+
+**Flee:** You may choose to turn and jog away from melee combat at any time. This may subject you to an attack from your opponent, but only if said attacker is due an attack in the next (half weapon speed) seconds. The presence of an ally who threatens the creature from which you're fleeing negates its ability to attack you as you escape. Unless prevented, the attacker can follow at normal speed. If the attacker elects to make an attack, the strike itself delays further pursuit for half the weapon speed rounded up. You cannot use your shield (if any) as part of your Defense while fleeing. If you have attempted to flee, your attack speed is reset, should you change your mind and attempt to attack. You use d10p for your Defense roll while fleeing.

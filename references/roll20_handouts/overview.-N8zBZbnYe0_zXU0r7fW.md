@@ -1,0 +1,1 @@
+If a character shifts alignment, and no longer fulfils the requirements for a class, he will retain his purchased class talents. Such a character cannot continue purchasing talents within that class unless he fulfils all of its requirements once more.

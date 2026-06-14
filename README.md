@@ -1,5 +1,11 @@
 # Hackmaster Sim
 
+## Reference handouts
+
+Roll20 handout exports for rules/data updates are stored in
+`references/roll20_handouts/`. These are Markdown-only extracts; raw browser
+HTML and campaign player notes are intentionally excluded.
+
 ## WSL build + Windows signing
 
 ### One-time: create a dev signing cert
