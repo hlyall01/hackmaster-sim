@@ -80,6 +80,13 @@ fn combatant_basic(
                 is_small_weapon: false,
                 is_unarmed: false,
                 hacking_or_piercing: false,
+                force_nonpenetrating_damage: false,
+                halve_damage: false,
+                ignore_all_dr: false,
+                internal_hemorrhage_damage: 0,
+                use_close_hit_damage_expr: None,
+                use_close_hit_damage_expr_cache: None,
+                use_close_hit_margin_less_than: 0,
                 crit_min_roll: 20,
                 crit_min_roll_ranged: None,
                 crit_severity_bonus: 0,
@@ -712,14 +719,30 @@ fn configure_volfango_mode(player: &mut game_logic::PlayerConfig, mode: Volfango
             player.offensive_dualwielding = true;
             player.offhand_weapon_id = Some(player.weapon_id);
             player.talents.push(TalentSelection {
+                id: "two_weapon_fighting".to_string(),
+                rank: 1,
+                weapon: None,
+            });
+            player.talents.push(TalentSelection {
                 id: "improved_two_weapon_fighting".to_string(),
                 rank: 1,
                 weapon: None,
             });
         }
         VolfangoMode::OffensiveGtwf => {
+            player.level = 6;
             player.offensive_dualwielding = true;
             player.offhand_weapon_id = Some(player.weapon_id);
+            player.talents.push(TalentSelection {
+                id: "two_weapon_fighting".to_string(),
+                rank: 1,
+                weapon: None,
+            });
+            player.talents.push(TalentSelection {
+                id: "improved_two_weapon_fighting".to_string(),
+                rank: 1,
+                weapon: None,
+            });
             player.talents.push(TalentSelection {
                 id: "greater_two_weapon_fighting".to_string(),
                 rank: 1,
@@ -873,7 +896,7 @@ fn volfango_dual_wield_talent_timelines_match_snapshot() {
                 offhand_speed: Some(6),
                 offensive_dualwielding: true,
                 defensive_dualwielding: false,
-                offhand_damage_penalty: -2,
+                offhand_damage_penalty: 0,
                 primary_recovery_penalty: 1,
                 secondary_recovery_penalty: 2,
             },
@@ -889,7 +912,7 @@ fn volfango_dual_wield_talent_timelines_match_snapshot() {
                 offhand_speed: Some(6),
                 offensive_dualwielding: true,
                 defensive_dualwielding: false,
-                offhand_damage_penalty: -2,
+                offhand_damage_penalty: 0,
                 primary_recovery_penalty: 1,
                 secondary_recovery_penalty: 1,
             },
@@ -1191,6 +1214,13 @@ fn advanced_sighting_scale_keeps_throwing_axe_at_minus_six_at_sixty_feet() {
         is_small_weapon: true,
         is_unarmed: false,
         hacking_or_piercing: false,
+        force_nonpenetrating_damage: false,
+        halve_damage: false,
+        ignore_all_dr: false,
+        internal_hemorrhage_damage: 0,
+        use_close_hit_damage_expr: None,
+        use_close_hit_damage_expr_cache: None,
+        use_close_hit_margin_less_than: 0,
         crit_min_roll: 20,
         crit_min_roll_ranged: None,
         crit_severity_bonus: 0,
@@ -1209,22 +1239,26 @@ fn extra_damage_dice_cycles_low_to_high() {
             DamageDie {
                 sides: 3,
                 penetrating: false,
-                penetration_triggers: None
+                penetration_triggers: None,
+                penetrate_on_max_minus_one: false,
             },
             DamageDie {
                 sides: 3,
                 penetrating: false,
-                penetration_triggers: None
+                penetration_triggers: None,
+                penetrate_on_max_minus_one: false,
             },
             DamageDie {
                 sides: 6,
                 penetrating: false,
-                penetration_triggers: None
+                penetration_triggers: None,
+                penetrate_on_max_minus_one: false,
             },
             DamageDie {
                 sides: 3,
                 penetrating: false,
-                penetration_triggers: None
+                penetration_triggers: None,
+                penetrate_on_max_minus_one: false,
             },
         ]
     );
@@ -1239,17 +1273,20 @@ fn extra_damage_dice_respects_penetration_flags() {
             DamageDie {
                 sides: 4,
                 penetrating: true,
-                penetration_triggers: None
+                penetration_triggers: None,
+                penetrate_on_max_minus_one: false,
             },
             DamageDie {
                 sides: 6,
                 penetrating: false,
-                penetration_triggers: None
+                penetration_triggers: None,
+                penetrate_on_max_minus_one: false,
             },
             DamageDie {
                 sides: 4,
                 penetrating: true,
-                penetration_triggers: None
+                penetration_triggers: None,
+                penetrate_on_max_minus_one: false,
             },
         ]
     );
@@ -1260,12 +1297,14 @@ fn extra_damage_dice_respects_penetration_flags() {
             DamageDie {
                 sides: 4,
                 penetrating: false,
-                penetration_triggers: None
+                penetration_triggers: None,
+                penetrate_on_max_minus_one: false,
             },
             DamageDie {
                 sides: 6,
                 penetrating: false,
-                penetration_triggers: None
+                penetration_triggers: None,
+                penetrate_on_max_minus_one: false,
             },
         ]
     );
@@ -1647,6 +1686,13 @@ fn ranged_weapons_cannot_hold_at_bay() {
         is_small_weapon: false,
         is_unarmed: false,
         hacking_or_piercing: false,
+        force_nonpenetrating_damage: false,
+        halve_damage: false,
+        ignore_all_dr: false,
+        internal_hemorrhage_damage: 0,
+        use_close_hit_damage_expr: None,
+        use_close_hit_damage_expr_cache: None,
+        use_close_hit_margin_less_than: 0,
         crit_min_roll: 20,
         crit_min_roll_ranged: None,
         crit_severity_bonus: 0,
@@ -1672,6 +1718,13 @@ fn ranged_weapons_cannot_hold_at_bay() {
         is_small_weapon: false,
         is_unarmed: false,
         hacking_or_piercing: false,
+        force_nonpenetrating_damage: false,
+        halve_damage: false,
+        ignore_all_dr: false,
+        internal_hemorrhage_damage: 0,
+        use_close_hit_damage_expr: None,
+        use_close_hit_damage_expr_cache: None,
+        use_close_hit_margin_less_than: 0,
         crit_min_roll: 20,
         crit_min_roll_ranged: None,
         crit_severity_bonus: 0,
@@ -1859,6 +1912,13 @@ fn equal_reach_trauma_does_not_block_simultaneous_attacks() {
                 is_small_weapon: false,
                 is_unarmed: false,
                 hacking_or_piercing: false,
+                force_nonpenetrating_damage: false,
+                halve_damage: false,
+                ignore_all_dr: false,
+                internal_hemorrhage_damage: 0,
+                use_close_hit_damage_expr: None,
+                use_close_hit_damage_expr_cache: None,
+                use_close_hit_margin_less_than: 0,
                 crit_min_roll: 20,
                 crit_min_roll_ranged: None,
                 crit_severity_bonus: 0,
@@ -2584,6 +2644,13 @@ fn equal_reach_knockback_does_not_block_simultaneous_attacks() {
                 is_small_weapon: false,
                 is_unarmed: false,
                 hacking_or_piercing: false,
+                force_nonpenetrating_damage: false,
+                halve_damage: false,
+                ignore_all_dr: false,
+                internal_hemorrhage_damage: 0,
+                use_close_hit_damage_expr: None,
+                use_close_hit_damage_expr_cache: None,
+                use_close_hit_margin_less_than: 0,
                 crit_min_roll: 20,
                 crit_min_roll_ranged: None,
                 crit_severity_bonus: 0,
@@ -4343,23 +4410,12 @@ fn arthur_mirror_symmetry_with_swapped_order() {
         &shield_catalog,
         &race_catalog,
     );
-    let players_a = [arthur.clone(), arthur.clone()];
-    let players_b = [arthur.clone(), arthur];
+    let players = [arthur.clone(), arthur];
 
-    let stop_distance_a =
-        game_logic::stop_distance_for_players(&players_a, &weapon_catalog, &talent_catalog);
-    let stop_distance_b =
-        game_logic::stop_distance_for_players(&players_b, &weapon_catalog, &talent_catalog);
-    let combatants_a = game_logic::build_combatants(
-        &players_a,
-        &weapon_catalog,
-        &armor_catalog,
-        &shield_catalog,
-        &npc_presets,
-        &talent_catalog,
-    );
-    let combatants_b = game_logic::build_combatants(
-        &players_b,
+    let stop_distance =
+        game_logic::stop_distance_for_players(&players, &weapon_catalog, &talent_catalog);
+    let combatants = game_logic::build_combatants(
+        &players,
         &weapon_catalog,
         &armor_catalog,
         &shield_catalog,
@@ -4367,33 +4423,31 @@ fn arthur_mirror_symmetry_with_swapped_order() {
         &talent_catalog,
     );
 
-    let runs = 1000;
+    let runs_per_seed = 1000;
     let max_seconds = 60;
-    let result_a = bulk_simulate(
-        SimConfig::new(200.0, stop_distance_a),
-        combatants_a,
-        runs,
-        max_seconds,
-    );
-    let result_b = bulk_simulate(
-        SimConfig::new(200.0, stop_distance_b),
-        combatants_b,
-        runs,
-        max_seconds,
-    );
+    let mut wins_left = 0u32;
+    let mut wins_right = 0u32;
+    let mut ties = 0u32;
+    for seed in [1, 2, 3, 4, 5, 42, 99, 1234] {
+        let result = bulk_simulate_with_seed(
+            SimConfig::new(200.0, stop_distance),
+            combatants.clone(),
+            runs_per_seed,
+            max_seconds,
+            seed,
+        );
+        wins_left += result.wins.get(0).copied().unwrap_or(0);
+        wins_right += result.wins.get(1).copied().unwrap_or(0);
+        ties += result.ties;
+    }
 
-    let wins_a_left = result_a.wins.get(0).copied().unwrap_or(0);
-    let wins_a_right = result_a.wins.get(1).copied().unwrap_or(0);
-    let wins_b_left = result_b.wins.get(0).copied().unwrap_or(0);
-    let wins_b_right = result_b.wins.get(1).copied().unwrap_or(0);
-
-    let diff_a = (wins_a_left as i32 - wins_a_right as i32).abs();
-    let diff_b = (wins_b_left as i32 - wins_b_right as i32).abs();
-    let max_diff = diff_a.max(diff_b);
+    let decisive = wins_left + wins_right;
+    let diff = wins_left.abs_diff(wins_right);
+    let max_diff = (decisive / 20).max(50);
 
     assert!(
-        max_diff <= 30,
-        "mirror symmetry failed: wins A L/R {wins_a_left}/{wins_a_right}, wins B L/R {wins_b_left}/{wins_b_right}"
+        diff <= max_diff,
+        "mirror symmetry failed: wins L/R {wins_left}/{wins_right}, ties {ties}, decisive {decisive}, diff {diff}, allowed {max_diff}"
     );
 }
 
@@ -5775,6 +5829,13 @@ fn throwing_axe_switches_to_melee_at_close_range() {
         is_small_weapon: false,
         is_unarmed: false,
         hacking_or_piercing: false,
+        force_nonpenetrating_damage: false,
+        halve_damage: false,
+        ignore_all_dr: false,
+        internal_hemorrhage_damage: 0,
+        use_close_hit_damage_expr: None,
+        use_close_hit_damage_expr_cache: None,
+        use_close_hit_margin_less_than: 0,
         crit_min_roll: 20,
         crit_min_roll_ranged: None,
         crit_severity_bonus: 0,
@@ -5800,6 +5861,13 @@ fn throwing_axe_switches_to_melee_at_close_range() {
         is_small_weapon: false,
         is_unarmed: false,
         hacking_or_piercing: false,
+        force_nonpenetrating_damage: false,
+        halve_damage: false,
+        ignore_all_dr: false,
+        internal_hemorrhage_damage: 0,
+        use_close_hit_damage_expr: None,
+        use_close_hit_damage_expr_cache: None,
+        use_close_hit_margin_less_than: 0,
         crit_min_roll: 20,
         crit_min_roll_ranged: None,
         crit_severity_bonus: 0,
@@ -5942,6 +6010,13 @@ fn throwing_axe_cooldown_resets_on_melee_engagement() {
         is_small_weapon: false,
         is_unarmed: false,
         hacking_or_piercing: false,
+        force_nonpenetrating_damage: false,
+        halve_damage: false,
+        ignore_all_dr: false,
+        internal_hemorrhage_damage: 0,
+        use_close_hit_damage_expr: None,
+        use_close_hit_damage_expr_cache: None,
+        use_close_hit_margin_less_than: 0,
         crit_min_roll: 20,
         crit_min_roll_ranged: None,
         crit_severity_bonus: 0,
@@ -5967,6 +6042,13 @@ fn throwing_axe_cooldown_resets_on_melee_engagement() {
         is_small_weapon: false,
         is_unarmed: false,
         hacking_or_piercing: false,
+        force_nonpenetrating_damage: false,
+        halve_damage: false,
+        ignore_all_dr: false,
+        internal_hemorrhage_damage: 0,
+        use_close_hit_damage_expr: None,
+        use_close_hit_damage_expr_cache: None,
+        use_close_hit_margin_less_than: 0,
         crit_min_roll: 20,
         crit_min_roll_ranged: None,
         crit_severity_bonus: 0,

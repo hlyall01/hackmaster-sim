@@ -166,7 +166,7 @@ pub fn run() {
         .add_plugins(route::RouteMapPlugin)
         .add_plugins(rewards::RewardScreenPlugin)
         .add_plugins(roster_ui::RosterUiPlugin)
-        .add_systems(Startup, setup)
+        .add_systems(Startup, (setup, units::setup_unit_sprite_atlas))
         .add_systems(
             Update,
             ((
@@ -184,6 +184,7 @@ pub fn run() {
                 render_current_screen,
                 units::sync_unit_targets,
                 units::animate_unit_motion,
+                units::animate_unit_sprites,
                 hud::sync_hud,
                 camera::fit_camera_to_board,
             )
@@ -899,6 +900,7 @@ fn request_tour_screenshot(
 fn render_current_screen(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
+    atlas: Res<units::UnitSpriteAtlas>,
     mut nav: ResMut<VisualNav>,
     state: Res<VisualGameState>,
     screen_entities: Query<Entity, With<ScreenEntity>>,
@@ -933,7 +935,7 @@ fn render_current_screen(
                 board::spawn_board(&mut commands, geometry);
             }
             if screen_changed || units_missing {
-                units::spawn_units(&mut commands, geometry, fight, &asset_server);
+                units::spawn_units(&mut commands, geometry, fight, &asset_server, &atlas);
             }
         }
     }

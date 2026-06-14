@@ -935,6 +935,7 @@ impl SimState {
                 .apply_f32(StatIdF32::WeaponSpeed, weapon.speed)
                 .max(1.0);
             let mut primary_attack_time = None;
+            let mut scheduled_primary_attack_time = None;
             if !use_ranged && distance > attacker_reach {
                 continue;
             }
@@ -958,18 +959,16 @@ impl SimState {
                     use_ranged,
                     &mut self.rng,
                 );
-                self.combatants[attacker_idx].state.set_next_attack_time(
-                    WeaponSlot::Primary,
-                    Some(now + delay + called_shot_delay),
-                );
+                let scheduled_time = now + delay + called_shot_delay;
+                self.combatants[attacker_idx]
+                    .state
+                    .set_next_attack_time(WeaponSlot::Primary, Some(scheduled_time));
+                scheduled_primary_attack_time = Some(scheduled_time);
             }
             let next_attack = if use_snapshot_timing {
-                snapshot_next_attack_primary.unwrap_or_else(|| {
-                    self.combatants[attacker_idx]
-                        .state
-                        .next_attack_time_primary
-                        .unwrap_or(now)
-                })
+                snapshot_next_attack_primary
+                    .or(scheduled_primary_attack_time)
+                    .unwrap_or(now)
             } else {
                 self.combatants[attacker_idx]
                     .state
@@ -1240,6 +1239,7 @@ impl SimState {
                 if use_ranged && ranged_mod.is_none() {
                     continue;
                 }
+                let mut scheduled_secondary_attack_time = None;
                 if self.combatants[attacker_idx]
                     .state
                     .next_attack_time_secondary
@@ -1255,18 +1255,16 @@ impl SimState {
                         use_ranged,
                         &mut self.rng,
                     );
-                    self.combatants[attacker_idx].state.set_next_attack_time(
-                        WeaponSlot::Secondary,
-                        Some(primary_anchor + offset + called_shot_delay),
-                    );
+                    let scheduled_time = primary_anchor + offset + called_shot_delay;
+                    self.combatants[attacker_idx]
+                        .state
+                        .set_next_attack_time(WeaponSlot::Secondary, Some(scheduled_time));
+                    scheduled_secondary_attack_time = Some(scheduled_time);
                 }
                 let next_attack = if use_snapshot_timing {
-                    snapshot_next_attack_secondary.unwrap_or_else(|| {
-                        self.combatants[attacker_idx]
-                            .state
-                            .next_attack_time_secondary
-                            .unwrap_or(now)
-                    })
+                    snapshot_next_attack_secondary
+                        .or(scheduled_secondary_attack_time)
+                        .unwrap_or(now)
                 } else {
                     self.combatants[attacker_idx]
                         .state
@@ -1620,6 +1618,17 @@ pub fn bulk_simulate(
     runs: u32,
     max_seconds: u32,
 ) -> BulkSimResult {
+    bulk_simulate_with_seed(config, combatants, runs, max_seconds, 1)
+}
+
+#[allow(dead_code)]
+pub fn bulk_simulate_with_seed(
+    config: SimConfig,
+    combatants: Vec<Combatant>,
+    runs: u32,
+    max_seconds: u32,
+    seed: u64,
+) -> BulkSimResult {
     if runs == 0 {
         return BulkSimResult::default();
     }
@@ -1636,7 +1645,8 @@ pub fn bulk_simulate(
     for (idx, team_id) in team_ids.iter().enumerate() {
         team_index.insert(*team_id, idx);
     }
-    let mut sim = SimState::with_logging(config, false);
+    let mut sim = SimState::with_rng(config, SimRng::from_seed(seed));
+    sim.log_events = false;
     sim.reset_with_combatants(combatants);
     let mut wins = vec![0u32; team_ids.len()];
     let mut ties = 0u32;

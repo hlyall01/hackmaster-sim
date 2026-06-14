@@ -2,18 +2,18 @@
   "presets": [
     {
       "name": "Arthur Du Randt",
-      "level": 6,
+      "level": 7,
       "progression": {
-        "attack": "III",
-        "speed": "II",
+        "attack": "IV",
+        "speed": "III",
         "initiative": "I",
         "health": "IV"
       },
       "masteries": {
-        "attack": 4,
+        "attack": 3,
         "defense": 3,
         "damage": 3,
-        "speed": 3,
+        "speed": 2,
         "shield_defense": 0,
         "shield_speed": 0
       },

@@ -12,7 +12,7 @@ use hackmaster_sim::core::gameplay::run::{Wound, heal_wounds, required_healing_s
 use hackmaster_sim::core::types::{RaceSpec, TalentSelection, TalentSpec};
 use hackmaster_sim::ui_widgets::searchable_select;
 use hackmaster_sim::{character, data, game_logic, sim};
-use sim::{BulkSimResult, SimConfig, SimState, bulk_simulate};
+use sim::{BulkSimResult, SimConfig, SimState, bulk_simulate_with_seed};
 use std::{collections::BTreeMap, time::Instant};
 
 #[derive(Clone, Copy)]
@@ -84,6 +84,7 @@ const PLAYER_EDITOR_TABS: [PlayerEditorTab; 6] = [
 const FIGHTER_PRESETS_PATH: &str = "data/sim/fighter_presets.json";
 const BULK_SIM_MAX_SECONDS: u32 = u32::MAX;
 const TALENT_TAB_ALL: &str = "All";
+const TALENT_TAB_LEARNED: &str = "Learned Talents";
 const TALENT_TAB_RACIALS: &str = "Racials";
 const WEAPON_GROUP_LABELS: [&str; 13] = [
     "Unarmed",
@@ -120,6 +121,7 @@ struct SimGuiApp {
     talent_category_tabs: [String; 2],
     last_screen_size: egui::Vec2,
     bulk_runs: u32,
+    bulk_seed: u64,
     bulk_result: Option<BulkSimResult>,
     bulk_sim_duration: Option<std::time::Duration>,
     active_tab: MainTab,
@@ -198,6 +200,7 @@ impl SimGuiApp {
             talent_category_tabs: [TALENT_TAB_ALL.to_string(), TALENT_TAB_ALL.to_string()],
             last_screen_size: egui::vec2(0.0, 0.0),
             bulk_runs: 1000,
+            bulk_seed: 1,
             bulk_result: None,
             bulk_sim_duration: None,
             active_tab: MainTab::Simulator,
@@ -265,8 +268,16 @@ impl SimGuiApp {
             self.sim.config.start_distance,
             self.sim.config.stop_distance,
         );
+        let seed = self.bulk_seed;
+        self.bulk_seed = self.bulk_seed.wrapping_add(1).max(1);
         let start = Instant::now();
-        let result = bulk_simulate(config, combatants, self.bulk_runs, BULK_SIM_MAX_SECONDS);
+        let result = bulk_simulate_with_seed(
+            config,
+            combatants,
+            self.bulk_runs,
+            BULK_SIM_MAX_SECONDS,
+            seed,
+        );
         self.bulk_result = Some(result);
         self.bulk_sim_duration = Some(start.elapsed());
     }
@@ -278,6 +289,7 @@ impl SimGuiApp {
                 &self.weapon_catalog,
                 &self.armor_catalog,
                 &self.shield_catalog,
+                &self.talent_catalog,
             );
         }
     }
@@ -1324,7 +1336,13 @@ fn render_player_editor(
         ui.label("Weapon catalog is empty.");
         return;
     }
-    game_logic::sanitize_player_ids(player, weapon_catalog, armor_catalog, shield_catalog);
+    game_logic::sanitize_player_ids(
+        player,
+        weapon_catalog,
+        armor_catalog,
+        shield_catalog,
+        talent_catalog,
+    );
     if let Some(weapon) = weapon_catalog.get(player.weapon_id) {
         if weapon.jab_speed.is_none() {
             player.use_jab = false;
@@ -2351,6 +2369,13 @@ fn render_player_editor(
                 ));
             }
             ui.label(format!("Weapon shield damage: {}", weapon_shield_damage));
+            let mainhand_weapon = &combatant.sheet.offense.weapon;
+            let effective_damage_expr = mainhand_weapon.damage_expr_for_attack();
+            let damage_roll = if mainhand_weapon.halves_damage_for_attack() {
+                format!("({effective_damage_expr} + {strength_damage}) / 2")
+            } else {
+                format!("{effective_damage_expr} + {strength_damage}")
+            };
             if player.called_shot {
                 ui.label(format!(
                     "Attack roll: d20p + {} (called shot: hit if > defense; precise at defense +{} vs current target armor, light/medium/heavy +{}/+{}/+{})",
@@ -2361,21 +2386,17 @@ fn render_player_editor(
                     called_shot_heavy_bonus
                 ));
                 ui.label(format!(
-                    "Damage roll: {} + {} vs target DR {} on precise called shot (near-miss DR {}, AP {})",
-                    combatant.sheet.offense.weapon.damage_expr,
-                    strength_damage,
+                    "Damage roll: {} vs target DR {} on precise called shot (near-miss DR {}, AP {})",
+                    damage_roll,
                     target_natural_dr,
                     target_armor_dr,
-                    combatant.sheet.offense.weapon.armor_penetration
+                    mainhand_weapon.armor_penetration
                 ));
             } else {
                 ui.label(format!("Attack roll: d20p + {}", attack_bonus));
                 ui.label(format!(
-                    "Damage roll: {} + {} vs target DR {} (AP {})",
-                    combatant.sheet.offense.weapon.damage_expr,
-                    strength_damage,
-                    target_armor_dr,
-                    combatant.sheet.offense.weapon.armor_penetration
+                    "Damage roll: {} vs target DR {} (AP {})",
+                    damage_roll, target_armor_dr, mainhand_weapon.armor_penetration
                 ));
             }
             if let Some(offhand) = combatant.sheet.offense.offhand.as_ref() {
@@ -2743,6 +2764,16 @@ fn format_talent_requirement_failure(
             "Requires proficiency with a large sword or polearm with at least 5 feet of reach."
                 .to_string()
         }
+        game_logic::TalentRequirementFailure::MissingCrescentMoonProficiency => {
+            "Requires proficiency in at least one small sword and one size M large sword."
+                .to_string()
+        }
+        game_logic::TalentRequirementFailure::MissingDoomrazorProficiency => {
+            "Requires proficiency in at least one piercing melee weapon.".to_string()
+        }
+        game_logic::TalentRequirementFailure::MissingFallingSunProficiency => {
+            "Requires flamberge or two-handed sword proficiency.".to_string()
+        }
         game_logic::TalentRequirementFailure::MissingFymblwngerProficiency => {
             "Requires battle axe, executioner's axe, or greataxe proficiency.".to_string()
         }
@@ -2755,11 +2786,27 @@ fn format_talent_requirement_failure(
         game_logic::TalentRequirementFailure::MissingIthicanPrinceProficiency => {
             "Requires shield proficiency and at least one small sword proficiency.".to_string()
         }
+        game_logic::TalentRequirementFailure::MissingQuietRiverProficiency => {
+            "Requires fist proficiency.".to_string()
+        }
         game_logic::TalentRequirementFailure::MissingRegenstatProficiency => {
             "Requires proficiency in at least one size M small or large sword.".to_string()
         }
         game_logic::TalentRequirementFailure::MissingReturnerProficiency => {
             "Requires proficiency in at least one size L large sword.".to_string()
+        }
+        game_logic::TalentRequirementFailure::MissingRhdwngFlowProficiency => {
+            "Requires proficiency in at least one throwing weapon.".to_string()
+        }
+        game_logic::TalentRequirementFailure::MissingRohavalanBridgeProficiency => {
+            "Requires staff proficiency or polearm proficiency.".to_string()
+        }
+        game_logic::TalentRequirementFailure::MissingScornOfTheDissendriProficiency => {
+            "Requires proficiency in at least one size S melee weapon.".to_string()
+        }
+        game_logic::TalentRequirementFailure::MissingSwordReachStyleProficiency => {
+            "Requires proficiency in at least one size S or M sword with at least 2 feet of reach."
+                .to_string()
         }
         game_logic::TalentRequirementFailure::MissingSixPathsProficiency => {
             "Requires shield proficiency and at least one size M large sword proficiency."
@@ -2882,6 +2929,7 @@ fn render_talent_selector(
     categories.sort_by(|a, b| a.0.cmp(&b.0));
 
     if active_category != TALENT_TAB_ALL
+        && active_category != TALENT_TAB_LEARNED
         && !categories.iter().any(|(name, _)| name == active_category)
     {
         active_category.clear();
@@ -2896,6 +2944,17 @@ fn render_talent_selector(
         {
             active_category.clear();
             active_category.push_str(TALENT_TAB_ALL);
+        }
+        let learned_label = format!("{TALENT_TAB_LEARNED} ({})", player.talents.len());
+        if ui
+            .selectable_label(
+                active_category.as_str() == TALENT_TAB_LEARNED,
+                learned_label,
+            )
+            .clicked()
+        {
+            active_category.clear();
+            active_category.push_str(TALENT_TAB_LEARNED);
         }
         for (category, specs) in &categories {
             let label = format!("{category} ({})", specs.len());
@@ -2930,7 +2989,29 @@ fn render_talent_selector(
     egui::ScrollArea::vertical()
         .max_height(320.0)
         .show(ui, |ui| {
-            if active_category.as_str() == TALENT_TAB_ALL {
+            if active_category.as_str() == TALENT_TAB_LEARNED {
+                if player.talents.is_empty() {
+                    ui.label("No learned talents.");
+                } else {
+                    let mut learned_talents: Vec<(String, usize)> = player
+                        .talents
+                        .iter()
+                        .enumerate()
+                        .map(|(index, selection)| {
+                            (talent_display_label(selection, talent_catalog), index)
+                        })
+                        .collect();
+                    learned_talents.sort_by(|left, right| left.0.cmp(&right.0));
+                    for (label, index) in learned_talents {
+                        ui.horizontal(|ui| {
+                            if ui.button("Remove").clicked() {
+                                remove_queue.push(index);
+                            }
+                            ui.label(label);
+                        });
+                    }
+                }
+            } else if active_category.as_str() == TALENT_TAB_ALL {
                 for (category, specs) in &categories {
                     if specs.is_empty() {
                         continue;

@@ -39,12 +39,12 @@ Notation for parsing:
 
 ## Basic Weapons
 
-| Weapon | STR required | Skill level | Damage | Shield Damage | Speed | Size | Reach or Range | Type | Weight |
-|---|---:|---|---|---|---:|---|---|---|---|
-| Club | 5 | minimal | d6[p]+d4[p] | d6[p] | 10 | M | 2.5 feet | C | 2 lbs |
-| Dart | 3 | medium | d4[p] | - | 5 | S | 0.5/40 feet | P | 0.1 lb |
-| Sling | 4 | medium | d4[p]+d6[p] | 1 | 10 | S | 160 feet | C/P | 0.5 lb |
-| StaffT | 7 | low | 2d4[p]+3 | d4[p] | 13 | L | 8 feet | C | 4 lbs |
+| Weapon | STR required | Skill level | Damage | Shield Damage | Speed | Size | Reach or Range | Defense | Type | Weight |
+|---|---:|---|---|---|---:|---|---|---|---|---|
+| Club | 5 | minimal | d6[p]+d4[p] | d6[p] | 10 | M | 2.5 feet | - | C | 2 lbs |
+| Dart | 3 | medium | d4[p] | - | 5 | S | 0.5/40 feet | - | P | 0.1 lb |
+| Sling | 4 | medium | d4[p]+d6[p] | 1 | 10 | S | 160 feet | - | C/P | 0.5 lb |
+| StaffT | 7 | low | 2d4[p]+3 | d4[p] | 13 | L | 8 feet | d20[p] | C | 4 lbs |
 
 ---
 
@@ -168,7 +168,7 @@ Notation for parsing:
 | PoleaxeT | 10 | medium | 3d6[p]+3^2 | 2d6[p]+3 | - | - | 13 (11) | - | L | 6 feet | d20[p] | H/P | - | 6 lbs |
 | PolehammerT | 11 | medium | d10[p]+d12[p]+3^2 | d12[p]+3 | yes | - | 15 (13) | - | L | 7 feet | d20[p] | C/P | - | 9 lbs |
 | Raven's BeakT | 9 | medium | 2d6[p]+3^2 | lower of 2d6[p] | yes | yes | 14 (10) | 2d6[p]+3 | L | 6 feet | d20[p]-4 | C/P | - | 8 lbs |
-| SwordstaffT | 8 | medium | 2d8[p]+3 | 1d8[p]+3 | - | - | 11 (8) | - | L | 8 feet | d20[p]-4 | H/P | - | 5 lbs |
+| SwordstaffT | 8 | medium | 2d8[p]+3 | 1d8[p]+3 | - | - | 11 (8) | - | L | 8 feet | d20[p] | H/P | - | 5 lbs |
 | VoulgeT | 9 | low | 4d4[p]+3 | 2d4[p]+3 | - | - | 15 (11) | 3d4+3 | L | 8 feet | d20[p]-4 | H | 2nd | 6 lbs |
 
 ---

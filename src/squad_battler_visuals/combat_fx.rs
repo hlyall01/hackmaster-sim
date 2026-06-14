@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use std::collections::HashSet;
 
-use crate::squad_battler::combat::{SquadCombatEvent, SquadCombatEventKind};
+use crate::squad_battler::combat::{SquadCombatEvent, SquadCombatEventKind, SquadCombatView};
 
 use super::app::VisualGameState;
 use super::units::{self, UnitSprite, UnitToken, UnitVisual};
@@ -126,6 +126,7 @@ pub fn playback_combat_events(
         play_event(
             &mut commands,
             &text_style,
+            fight,
             event,
             &tokens,
             &visuals,
@@ -231,6 +232,7 @@ pub fn animate_floating_damage_text(
 fn play_event(
     commands: &mut Commands,
     text_style: &CombatFxTextStyle,
+    fight: &SquadCombatView,
     event: &SquadCombatEvent,
     tokens: &Query<(&UnitToken, &GlobalTransform)>,
     visuals: &Query<(Entity, &UnitVisual, &GlobalTransform, &Transform)>,
@@ -239,6 +241,16 @@ fn play_event(
     match event.kind {
         SquadCombatEventKind::Attack => {
             if let Some((actor, target)) = actor_and_target(event, tokens, visuals) {
+                if let Some((sprite_entity, _, sprite_global, _, _)) = actor_sprite(event, sprites)
+                {
+                    units::trigger_attack_animation(
+                        commands,
+                        sprite_entity,
+                        sprite_global.translation(),
+                        target.position,
+                        actor_weapon(event, fight),
+                    );
+                }
                 add_attack_wiggle(commands, actor, target);
             }
         }
@@ -257,12 +269,32 @@ fn play_event(
         }
         SquadCombatEventKind::Miss => {
             if let Some((actor, target)) = actor_and_target(event, tokens, visuals) {
+                if let Some((sprite_entity, _, sprite_global, _, _)) = actor_sprite(event, sprites)
+                {
+                    units::trigger_attack_animation(
+                        commands,
+                        sprite_entity,
+                        sprite_global.translation(),
+                        target.position,
+                        actor_weapon(event, fight),
+                    );
+                }
                 add_attack_wiggle(commands, actor, target);
             }
         }
         SquadCombatEventKind::Death => {
-            if let Some((target_entity, _, _, _, target_sprite)) = target_sprite(event, sprites) {
+            if let Some((target_entity, _, target_global, _, target_sprite)) =
+                target_sprite(event, sprites)
+            {
                 add_hit_flash(commands, target_entity, target_sprite.color);
+                if let Some(actor) = actor_visual(event, visuals) {
+                    units::trigger_death_animation(
+                        commands,
+                        target_entity,
+                        actor.position,
+                        target_global.translation(),
+                    );
+                }
                 if let Some((visual_entity, _, _, visual_local)) = target_visual(event, visuals) {
                     add_scale_pulse(commands, visual_entity, visual_local.scale, 0.24);
                 }
@@ -404,6 +436,27 @@ fn target_sprite<'a>(
     &'a Sprite,
 )> {
     sprite_by_id(event.target_id.as_deref()?, sprites)
+}
+
+fn actor_sprite<'a>(
+    event: &SquadCombatEvent,
+    sprites: &'a Query<(Entity, &UnitSprite, &GlobalTransform, &Transform, &Sprite)>,
+) -> Option<(
+    Entity,
+    &'a UnitSprite,
+    &'a GlobalTransform,
+    &'a Transform,
+    &'a Sprite,
+)> {
+    sprite_by_id(&event.actor_id, sprites)
+}
+
+fn actor_weapon<'a>(event: &SquadCombatEvent, fight: &'a SquadCombatView) -> Option<&'a str> {
+    fight
+        .combatants
+        .iter()
+        .find(|unit| unit.id == event.actor_id)
+        .map(|unit| unit.weapon.as_str())
 }
 
 fn target_root<'a>(

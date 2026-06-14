@@ -121,34 +121,56 @@ const Store = {
 };
 
 const GridModule = {
+  gridKey: "",
+
   render(state) {
     const grid = state.live_fight?.grid || state.grid || {};
     const width = Math.max(1, Math.trunc(toNumber(grid.width, 12)));
     const height = Math.max(1, Math.trunc(toNumber(grid.height, 8)));
     const tileSize = toNumber(grid.tile_size_ft, 5);
     const el = $("battleGrid");
+    const { cellLayer, tokenLayer } = ensureGridLayers(el);
 
     el.style.setProperty("--cols", width);
     el.style.setProperty("--rows", height);
     el.setAttribute("aria-label", `${width} by ${height} tactical grid, ${tileSize} foot squares`);
     $("gridLabel").textContent = `${width} x ${height} - ${tileSize} ft squares`;
 
-    const fragment = document.createDocumentFragment();
-    for (let y = 0; y < height; y += 1) {
-      for (let x = 0; x < width; x += 1) {
-        const cell = document.createElement("div");
-        cell.className = "grid-cell";
-        cell.dataset.x = x;
-        cell.dataset.y = y;
-        fragment.appendChild(cell);
+    const nextGridKey = `${width}x${height}`;
+    if (this.gridKey !== nextGridKey) {
+      const fragment = document.createDocumentFragment();
+      for (let y = 0; y < height; y += 1) {
+        for (let x = 0; x < width; x += 1) {
+          const cell = document.createElement("div");
+          cell.className = "grid-cell";
+          cell.dataset.x = x;
+          cell.dataset.y = y;
+          fragment.appendChild(cell);
+        }
+      }
+      cellLayer.replaceChildren(fragment);
+      this.gridKey = nextGridKey;
+    }
+
+    const seen = new Set();
+    for (const unit of asArray(state.live_fight?.combatants)) {
+      const id = String(unit.id || "");
+      if (!id) continue;
+      seen.add(id);
+      let token = Array.from(tokenLayer.children)
+        .find((current) => current.dataset.tokenId === id);
+      if (!token) {
+        token = createToken(unit);
+        tokenLayer.appendChild(token);
+      }
+      updateToken(token, unit, width, height, state);
+    }
+
+    for (const token of Array.from(tokenLayer.children)) {
+      if (!seen.has(token.dataset.tokenId)) {
+        token.remove();
       }
     }
-
-    for (const unit of asArray(state.live_fight?.combatants)) {
-      fragment.appendChild(createToken(unit, width, height, state));
-    }
-
-    el.replaceChildren(fragment);
   },
 };
 
@@ -439,21 +461,39 @@ function renderReward(reward) {
   </div>`;
 }
 
-function createToken(unit, width, height, state) {
+function ensureGridLayers(el) {
+  let cellLayer = el.querySelector(".grid-cells");
+  let tokenLayer = el.querySelector(".token-layer");
+  if (!cellLayer || !tokenLayer) {
+    cellLayer = document.createElement("div");
+    cellLayer.className = "grid-cells";
+    tokenLayer = document.createElement("div");
+    tokenLayer.className = "token-layer";
+    el.replaceChildren(cellLayer, tokenLayer);
+  }
+  return { cellLayer, tokenLayer };
+}
+
+function createToken(unit) {
   const token = document.createElement("div");
+  token.dataset.tokenId = String(unit.id || "");
+  token.setAttribute("role", "button");
+  token.setAttribute("tabindex", "0");
+  token.textContent = initials(unit.name);
+  return token;
+}
+
+function updateToken(token, unit, width, height, state) {
   const x = Math.max(0, Math.min(width - 1, Math.trunc(toNumber(unit.x, 0))));
   const y = Math.max(0, Math.min(height - 1, Math.trunc(toNumber(unit.y, 0))));
   token.className = `unit-token team-${unit.team_id === 0 ? "0" : "1"}`;
-  token.style.gridColumn = `${x + 1} / span 1`;
-  token.style.gridRow = `${y + 1} / span 1`;
-  token.setAttribute("role", "button");
-  token.setAttribute("tabindex", "0");
+  token.style.setProperty("--x", x);
+  token.style.setProperty("--y", y);
   token.setAttribute("aria-disabled", toNumber(unit.hp, 0) <= 0 ? "true" : "false");
   token.setAttribute("aria-label", `${unit.name || "Unit"} at cell ${x + 1}, ${y + 1}`);
   token.dataset.tooltip = unitTooltip(unit, state);
   token.title = unitTooltip(unit, state).replaceAll("\n", " | ");
   token.textContent = initials(unit.name);
-  return token;
 }
 
 function normalizeState(state) {

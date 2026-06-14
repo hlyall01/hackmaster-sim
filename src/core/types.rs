@@ -279,9 +279,200 @@ pub enum TalentEffect {
         #[serde(default)]
         weapon_group: Option<String>,
     },
+    WeaponSpeedMultiplier {
+        multiplier: f32,
+        #[serde(default)]
+        min_multiplier: Option<f32>,
+        #[serde(default)]
+        weapon_groups: Vec<String>,
+        #[serde(default)]
+        weapon_names: Vec<String>,
+    },
+    WeaponSpeedFlatBonus {
+        amount: f32,
+        #[serde(default)]
+        min_reach_ft: Option<f32>,
+        #[serde(default)]
+        weapon_groups: Vec<String>,
+        #[serde(default)]
+        weapon_names: Vec<String>,
+    },
     WeaponReachBonus {
         amount: i32,
     },
+    WeaponReachMultiplier {
+        multiplier: f32,
+        #[serde(default)]
+        weapon_groups: Vec<String>,
+        #[serde(default)]
+        weapon_names: Vec<String>,
+    },
+    WeaponReachFlatBonus {
+        amount: f32,
+        #[serde(default)]
+        min_reach_ft: Option<f32>,
+        #[serde(default)]
+        weapon_groups: Vec<String>,
+        #[serde(default)]
+        weapon_names: Vec<String>,
+    },
+    CloseHitDamageExpr {
+        expr: String,
+        margin_less_than: i32,
+        #[serde(default)]
+        weapon_groups: Vec<String>,
+        #[serde(default)]
+        weapon_names: Vec<String>,
+    },
+    WeaponAttackBonus {
+        amount: i32,
+        #[serde(default)]
+        weapon_groups: Vec<String>,
+        #[serde(default)]
+        weapon_names: Vec<String>,
+    },
+    CritMinRollWeaponGroup {
+        min_roll: i32,
+        #[serde(default)]
+        ranged_only: bool,
+    },
+    CritSeverityBonusWeaponGroup {
+        amount: i32,
+    },
+    WeaponDamageOptions {
+        #[serde(default)]
+        no_strength_bonus: bool,
+        #[serde(default)]
+        no_mastery_bonus: bool,
+        #[serde(default)]
+        force_nonpenetrating: bool,
+        #[serde(default)]
+        halve_damage: bool,
+        #[serde(default)]
+        ignore_all_dr: bool,
+        #[serde(default)]
+        internal_hemorrhage_damage: i32,
+        #[serde(default)]
+        melee_only: bool,
+        #[serde(default)]
+        hacking_or_piercing: Option<bool>,
+        #[serde(default)]
+        weapon_groups: Vec<String>,
+        #[serde(default)]
+        weapon_names: Vec<String>,
+    },
+    ExpandedPenetration {
+        #[serde(default)]
+        attack_defense_max_minus_one: bool,
+        #[serde(default)]
+        damage_max_minus_one: bool,
+        #[serde(default)]
+        weapon_groups: Vec<String>,
+        #[serde(default)]
+        weapon_names: Vec<String>,
+    },
+    OpeningEngagementExtraDamageDice {
+        dice: i32,
+        #[serde(default)]
+        min_reach_ft: Option<f32>,
+        #[serde(default)]
+        weapon_groups: Vec<String>,
+        #[serde(default)]
+        weapon_names: Vec<String>,
+    },
+    AlwaysInitialEngagementIfReachAtLeastOpponent {
+        #[serde(default)]
+        min_reach_ft: Option<f32>,
+        #[serde(default)]
+        weapon_groups: Vec<String>,
+        #[serde(default)]
+        weapon_names: Vec<String>,
+    },
+    IgnoreDefenderMovementDefenseBonus {
+        #[serde(default)]
+        weapon_groups: Vec<String>,
+        #[serde(default)]
+        weapon_names: Vec<String>,
+    },
+    KnockbackResetsWeaponCount {
+        #[serde(default)]
+        weapon_groups: Vec<String>,
+        #[serde(default)]
+        weapon_names: Vec<String>,
+    },
+    HitCriticalEffectsNoExtraDice {
+        #[serde(default)]
+        weapon_groups: Vec<String>,
+        #[serde(default)]
+        weapon_names: Vec<String>,
+    },
+    IntAttackBonusToDamageAndDefense {
+        fraction: f32,
+        #[serde(default)]
+        weapon_groups: Vec<String>,
+        #[serde(default)]
+        shield_names: Vec<String>,
+    },
+    ThrownFullStrengthDamage {
+        #[serde(default)]
+        thrown_only: bool,
+        #[serde(default)]
+        weapon_groups: Vec<String>,
+        #[serde(default)]
+        weapon_names: Vec<String>,
+    },
+    ConsecutiveHitsForceTraumaTwenty {
+        hits: i32,
+        #[serde(default)]
+        weapon_groups: Vec<String>,
+        #[serde(default)]
+        weapon_names: Vec<String>,
+    },
+    ShieldDrBonusFiltered {
+        amount: i32,
+        #[serde(default)]
+        shield_names: Vec<String>,
+    },
+    ShieldBreakageUsesShieldDr {
+        #[serde(default)]
+        shield_names: Vec<String>,
+    },
+    KnockbackStepBonus {
+        amount: i32,
+    },
+    IncomingCritExtraDamageHalved,
+    IncomingCritSeverityReduction {
+        amount: i32,
+    },
+    IgnoreAncillaryCritEffects,
+    IncomingCritDamageRollTwiceTakeLower,
+    NearPerfectDefenseMinRoll {
+        roll: i32,
+    },
+    PerfectDefenseCounterForceCritical,
+    FightDefensivelyAttackPenaltyDivisor {
+        divisor: i32,
+    },
+    CalledShotDelayProfile {
+        profile: String,
+    },
+    CalledShotTargetDefenseBonusDivisor {
+        divisor: i32,
+    },
+    CalledShotSelfDefensePenalty {
+        amount: i32,
+    },
+    CalledShotDeceptiveDefender,
+    DualWieldOffhandDamagePenalty {
+        amount: i32,
+    },
+    DualWieldPrimaryRecoveryPenalty {
+        amount: f32,
+    },
+    DualWieldSecondaryRecoveryPenalty {
+        amount: f32,
+    },
+    PerfectTwoWeaponFighting,
     RangeDistanceMultiplier {
         multiplier: f32,
     },
@@ -311,16 +502,38 @@ pub enum TalentEffect {
     ShieldCoverValueAdjustment {
         amount: i32,
     },
-    CurseOfAxe,
+    ForcedWeaponLoadout {
+        weapon_name: String,
+        #[serde(default)]
+        min_weapon_material_tier: Option<i32>,
+        #[serde(default)]
+        clear_projectile_material: bool,
+        #[serde(default)]
+        disable_offhand: bool,
+        #[serde(default)]
+        force_two_hand_grip: bool,
+        #[serde(default)]
+        force_no_shield: bool,
+        #[serde(default)]
+        d6_penetration_triggers: Vec<i32>,
+    },
     LargeSwordShieldStyle,
     ArmerociPoleStyle,
+    CrescentMoonStyle,
+    DoomrazorStyle,
+    FallingSunStyle,
     FymblwngerStyle,
     HammererStyle,
     HobblerStyle,
     IthicanPrinceStyle,
+    QuietRiverStyle,
     RegenstatStyle,
     ReturnerStyle,
+    RhdwngFlowStyle,
+    ScornOfTheDissendriStyle,
+    ShieldOfBladesStyle,
     SixPathsStyle,
+    StormOfBladesStyle,
     ThreeMountainsStyle,
     UnbreakableWallStyle,
 }

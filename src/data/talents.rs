@@ -16,6 +16,11 @@ struct TalentsFile {
 pub fn load_talents(path: &str) -> Result<TalentCatalog, String> {
     let data = fs::read_to_string(resolve_data_path(path))
         .unwrap_or_else(|_| EMBEDDED_TALENTS_JSON.to_string());
-    let parsed: TalentsFile = serde_json::from_str(&data).map_err(|err| err.to_string())?;
+    let parsed: TalentsFile = serde_json::from_str(&data)
+        .or_else(|err| {
+            eprintln!("Failed to parse external talents data: {err}; using embedded talents.");
+            serde_json::from_str(EMBEDDED_TALENTS_JSON)
+        })
+        .map_err(|err| err.to_string())?;
     Ok(TalentCatalog::new(parsed.talents))
 }

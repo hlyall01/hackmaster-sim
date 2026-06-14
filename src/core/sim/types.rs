@@ -68,6 +68,7 @@ pub struct DamageDie {
     pub sides: i32,
     pub penetrating: bool,
     pub penetration_triggers: Option<&'static [i32]>,
+    pub penetrate_on_max_minus_one: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -105,9 +106,42 @@ pub struct WeaponProfile {
     pub is_small_weapon: bool,
     pub is_unarmed: bool,
     pub hacking_or_piercing: bool,
+    pub force_nonpenetrating_damage: bool,
+    pub halve_damage: bool,
+    pub ignore_all_dr: bool,
+    pub internal_hemorrhage_damage: i32,
+    pub use_close_hit_damage_expr: Option<String>,
+    pub use_close_hit_damage_expr_cache: Option<DamageExprCache>,
+    pub use_close_hit_margin_less_than: i32,
     pub crit_min_roll: i32,
     pub crit_min_roll_ranged: Option<i32>,
     pub crit_severity_bonus: i32,
+}
+
+impl WeaponProfile {
+    pub fn damage_expr_for_attack(&self) -> &str {
+        if self.use_jab {
+            self.jab_special_expr
+                .as_deref()
+                .unwrap_or(self.damage_expr.as_str())
+        } else {
+            self.damage_expr.as_str()
+        }
+    }
+
+    pub fn damage_expr_cache_for_attack(&self) -> &DamageExprCache {
+        if self.use_jab {
+            self.jab_special_expr_cache
+                .as_ref()
+                .unwrap_or(&self.damage_expr_cache)
+        } else {
+            &self.damage_expr_cache
+        }
+    }
+
+    pub fn halves_damage_for_attack(&self) -> bool {
+        self.use_jab && self.jab_special_expr_cache.is_none()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -425,6 +459,13 @@ impl Default for WeaponProfile {
             is_small_weapon: false,
             is_unarmed: false,
             hacking_or_piercing: false,
+            force_nonpenetrating_damage: false,
+            halve_damage: false,
+            ignore_all_dr: false,
+            internal_hemorrhage_damage: 0,
+            use_close_hit_damage_expr: None,
+            use_close_hit_damage_expr_cache: None,
+            use_close_hit_margin_less_than: 0,
             crit_min_roll: 20,
             crit_min_roll_ranged: None,
             crit_severity_bonus: 0,

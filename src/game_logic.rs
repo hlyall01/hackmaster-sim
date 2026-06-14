@@ -16,7 +16,7 @@ use crate::sim::{
     WeaponProfile,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 pub type WeaponCatalog = Catalog<WeaponTag, WeaponPreset>;
@@ -77,27 +77,41 @@ pub const TWO_HANDED_SPEED_PENALTY: f32 = 2.0;
 pub const TALENT_CATEGORY_WEAPON_STYLES: &str = "Weapon Styles";
 const TALENT_ID_TWELVE_PATHS: &str = "twelve_paths";
 const TALENT_ID_ARMEROCI_POLE: &str = "armeroci_pole";
+const TALENT_ID_CRESCENT_MOON: &str = "crescent_moon";
+const TALENT_ID_DOOMRAZOR: &str = "doomrazor";
+const TALENT_ID_FALLING_SUN: &str = "falling_sun";
 const TALENT_ID_FYMBLWNGER: &str = "fymblwnger";
 const TALENT_ID_HAMMERER: &str = "hammerer";
 const TALENT_ID_HOBBLER: &str = "hobbler";
 const TALENT_ID_ITHICAN_PRINCE: &str = "ithican_prince";
+const TALENT_ID_QUIET_RIVER: &str = "quiet_river";
 const TALENT_ID_REGENSTAT: &str = "regenstat";
 const TALENT_ID_RETURNER: &str = "returner";
+const TALENT_ID_RHDWNG_FLOW: &str = "rhdwng_flow";
+const TALENT_ID_ROHAVALAN_BRIDGE: &str = "rohavalan_bridge";
+const TALENT_ID_SCORN_OF_THE_DISSENDRI: &str = "scorn_of_the_dissendri";
+const TALENT_ID_SHIELD_OF_BLADES: &str = "shield_of_blades";
 const TALENT_ID_SIX_PATHS: &str = "six_paths";
+const TALENT_ID_STORM_OF_BLADES: &str = "storm_of_blades";
 const TALENT_ID_THREE_MOUNTAINS: &str = "three_mountains";
 const TALENT_ID_UNBREAKABLE_WALL: &str = "unbreakable_wall";
-const TALENT_ID_COMBAT_EXPERTISE: &str = "combat_expertise";
 const TALENT_ID_DUELIST: &str = "duelist";
 const TALENT_ID_CONTENDER: &str = "contender";
+#[cfg(test)]
 const TALENT_ID_TWO_WEAPON_FIGHTING: &str = "two_weapon_fighting";
+#[cfg(test)]
 const TALENT_ID_IMPROVED_TWO_WEAPON_FIGHTING: &str = "improved_two_weapon_fighting";
+#[cfg(test)]
 const TALENT_ID_GREATER_TWO_WEAPON_FIGHTING: &str = "greater_two_weapon_fighting";
 const TALENT_ID_PERFECT_TWO_WEAPON_FIGHTING: &str = "perfect_two_weapon_fighting";
+#[cfg(test)]
+const TALENT_ID_CURSE_OF_AXE: &str = "curse_of_axe";
+#[cfg(test)]
+const CURSE_OF_AXE_WEAPON_NAME: &str = "Greataxe";
 const TALENT_ID_DECEPTIVE_DEFENDER: &str = "deceptive_defender";
 const TALENT_ID_PRECISION_AIMING: &str = "precision_aiming";
 const TALENT_ID_PRECISION_COMBATANT: &str = "precision_combatant";
-const TALENT_ID_CURSE_OF_AXE: &str = "curse_of_axe";
-const CURSE_OF_AXE_WEAPON_NAME: &str = "Greataxe";
+#[cfg(test)]
 const CURSE_OF_AXE_D6_TRIGGERS: &[i32] = &[4, 5, 6];
 const TWELVE_PATHS_DAMAGE_PENALTY: i32 = 3;
 const ARMEROCI_POLE_REACH_BONUS_FT: f32 = 1.0;
@@ -492,6 +506,12 @@ struct TraumaDieOverride {
 }
 
 #[derive(Clone, Debug)]
+struct CloseHitDamageRule {
+    expr: String,
+    margin_less_than: i32,
+}
+
+#[derive(Clone, Debug)]
 struct TalentModifiers {
     hp_bonus: i32,
     armor_dr_bonus: i32,
@@ -506,8 +526,31 @@ struct TalentModifiers {
     attack_bonus_by_weapon: HashMap<WeaponId, i32>,
     damage_bonus_by_weapon: HashMap<WeaponId, i32>,
     weapon_speed_bonus_by_weapon: HashMap<WeaponId, i32>,
+    weapon_speed_flat_bonus_by_weapon: HashMap<WeaponId, f32>,
+    weapon_speed_multiplier_by_weapon: HashMap<WeaponId, f32>,
+    weapon_min_speed_multiplier_by_weapon: HashMap<WeaponId, f32>,
+    weapon_reach_flat_bonus_by_weapon: HashMap<WeaponId, f32>,
+    no_strength_damage_by_weapon: HashSet<WeaponId>,
+    no_mastery_damage_by_weapon: HashSet<WeaponId>,
+    force_nonpenetrating_damage_by_weapon: HashSet<WeaponId>,
+    halve_damage_by_weapon: HashSet<WeaponId>,
+    ignore_all_dr_by_weapon: HashSet<WeaponId>,
+    internal_hemorrhage_damage_by_weapon: HashMap<WeaponId, i32>,
+    expanded_attack_defense_penetration_by_weapon: HashSet<WeaponId>,
+    expanded_damage_penetration_by_weapon: HashSet<WeaponId>,
+    opening_engagement_extra_damage_dice_by_weapon: HashMap<WeaponId, i32>,
+    always_initial_engagement_by_weapon: HashSet<WeaponId>,
+    ignore_movement_defense_bonus_by_weapon: HashSet<WeaponId>,
+    knockback_resets_weapon_count_by_weapon: HashSet<WeaponId>,
+    hit_critical_effects_no_extra_dice_by_weapon: HashSet<WeaponId>,
+    thrown_full_strength_damage_by_weapon: HashSet<WeaponId>,
+    consecutive_hits_force_trauma_twenty_by_weapon: HashMap<WeaponId, i32>,
     shield_defense_bonus: i32,
     shield_cover_value_adjustment: i32,
+    shield_dr_bonus_filtered: i32,
+    shield_dr_bonus_by_name: HashMap<String, i32>,
+    shield_breakage_uses_shield_dr: bool,
+    shield_breakage_uses_shield_dr_by_name: HashSet<String>,
     ignore_armor_initiative_penalty: bool,
     ignore_armor_speed_penalty: bool,
     armor_dr_bonus_armored: i32,
@@ -517,6 +560,8 @@ struct TalentModifiers {
     heavy_armor_damage_bonus_divisor: Option<i32>,
     heavy_armor_damage_bonus_flat: i32,
     reach_bonus_by_group: HashMap<WeaponGroup, i32>,
+    reach_multiplier_by_weapon: HashMap<WeaponId, f32>,
+    close_hit_damage_by_weapon: HashMap<WeaponId, CloseHitDamageRule>,
     range_distance_multiplier: f32,
     threshold_of_pain_multiplier: f32,
     threshold_of_pain_level_bonus: f32,
@@ -530,18 +575,46 @@ struct TalentModifiers {
     defiant: bool,
     superior_defense: bool,
     edge_counter: bool,
+    fight_defensively_attack_penalty_divisor: i32,
+    called_shot_delay_profile: Option<sim::CalledShotDelayProfile>,
+    called_shot_target_defense_bonus_divisor: i32,
+    called_shot_self_defense_penalty: Option<i32>,
+    called_shot_deceptive_defender: bool,
+    dualwield_offhand_damage_penalty: Option<i32>,
+    dualwield_primary_recovery_penalty: Option<f32>,
+    dualwield_secondary_recovery_penalty: Option<f32>,
+    perfect_two_weapon_fighting: bool,
     large_sword_shield_style: bool,
     armeroci_pole_style: bool,
+    crescent_moon_style: bool,
+    doomrazor_style: bool,
+    falling_sun_style: bool,
     fymblwnger_style: bool,
     hammerer_style: bool,
     hobbler_style: bool,
     ithican_prince_style: bool,
+    quiet_river_style: bool,
     regenstat_style: bool,
     returner_style: bool,
+    rhdwng_flow_style: bool,
+    scorn_of_the_dissendri_style: bool,
+    shield_of_blades_style: bool,
     six_paths_style: bool,
+    storm_of_blades_style: bool,
     three_mountains_style: bool,
     unbreakable_wall_style: bool,
-    curse_of_axe: bool,
+    forced_weapon_loadout: Option<ForcedWeaponLoadout>,
+}
+
+#[derive(Clone, Debug)]
+struct ForcedWeaponLoadout {
+    weapon_name: String,
+    min_weapon_material_tier: Option<i32>,
+    clear_projectile_material: bool,
+    disable_offhand: bool,
+    force_two_hand_grip: bool,
+    force_no_shield: bool,
+    d6_penetration_triggers: Vec<i32>,
 }
 
 impl Default for TalentModifiers {
@@ -560,8 +633,31 @@ impl Default for TalentModifiers {
             attack_bonus_by_weapon: HashMap::new(),
             damage_bonus_by_weapon: HashMap::new(),
             weapon_speed_bonus_by_weapon: HashMap::new(),
+            weapon_speed_flat_bonus_by_weapon: HashMap::new(),
+            weapon_speed_multiplier_by_weapon: HashMap::new(),
+            weapon_min_speed_multiplier_by_weapon: HashMap::new(),
+            weapon_reach_flat_bonus_by_weapon: HashMap::new(),
+            no_strength_damage_by_weapon: HashSet::new(),
+            no_mastery_damage_by_weapon: HashSet::new(),
+            force_nonpenetrating_damage_by_weapon: HashSet::new(),
+            halve_damage_by_weapon: HashSet::new(),
+            ignore_all_dr_by_weapon: HashSet::new(),
+            internal_hemorrhage_damage_by_weapon: HashMap::new(),
+            expanded_attack_defense_penetration_by_weapon: HashSet::new(),
+            expanded_damage_penetration_by_weapon: HashSet::new(),
+            opening_engagement_extra_damage_dice_by_weapon: HashMap::new(),
+            always_initial_engagement_by_weapon: HashSet::new(),
+            ignore_movement_defense_bonus_by_weapon: HashSet::new(),
+            knockback_resets_weapon_count_by_weapon: HashSet::new(),
+            hit_critical_effects_no_extra_dice_by_weapon: HashSet::new(),
+            thrown_full_strength_damage_by_weapon: HashSet::new(),
+            consecutive_hits_force_trauma_twenty_by_weapon: HashMap::new(),
             shield_defense_bonus: 0,
             shield_cover_value_adjustment: 0,
+            shield_dr_bonus_filtered: 0,
+            shield_dr_bonus_by_name: HashMap::new(),
+            shield_breakage_uses_shield_dr: false,
+            shield_breakage_uses_shield_dr_by_name: HashSet::new(),
             ignore_armor_initiative_penalty: false,
             ignore_armor_speed_penalty: false,
             armor_dr_bonus_armored: 0,
@@ -571,6 +667,8 @@ impl Default for TalentModifiers {
             heavy_armor_damage_bonus_divisor: None,
             heavy_armor_damage_bonus_flat: 0,
             reach_bonus_by_group: HashMap::new(),
+            reach_multiplier_by_weapon: HashMap::new(),
+            close_hit_damage_by_weapon: HashMap::new(),
             range_distance_multiplier: 1.0,
             threshold_of_pain_multiplier: 1.0,
             threshold_of_pain_level_bonus: 0.0,
@@ -584,18 +682,35 @@ impl Default for TalentModifiers {
             defiant: false,
             superior_defense: false,
             edge_counter: false,
+            fight_defensively_attack_penalty_divisor: 1,
+            called_shot_delay_profile: None,
+            called_shot_target_defense_bonus_divisor: 1,
+            called_shot_self_defense_penalty: None,
+            called_shot_deceptive_defender: false,
+            dualwield_offhand_damage_penalty: None,
+            dualwield_primary_recovery_penalty: None,
+            dualwield_secondary_recovery_penalty: None,
+            perfect_two_weapon_fighting: false,
             large_sword_shield_style: false,
             armeroci_pole_style: false,
+            crescent_moon_style: false,
+            doomrazor_style: false,
+            falling_sun_style: false,
             fymblwnger_style: false,
             hammerer_style: false,
             hobbler_style: false,
             ithican_prince_style: false,
+            quiet_river_style: false,
             regenstat_style: false,
             returner_style: false,
+            rhdwng_flow_style: false,
+            scorn_of_the_dissendri_style: false,
+            shield_of_blades_style: false,
             six_paths_style: false,
+            storm_of_blades_style: false,
             three_mountains_style: false,
             unbreakable_wall_style: false,
-            curse_of_axe: false,
+            forced_weapon_loadout: None,
         }
     }
 }
@@ -624,8 +739,47 @@ impl TalentModifiers {
             .unwrap_or(&0)
     }
 
+    fn weapon_speed_flat_bonus_for_weapon(&self, weapon_id: WeaponId) -> f32 {
+        *self
+            .weapon_speed_flat_bonus_by_weapon
+            .get(&weapon_id)
+            .unwrap_or(&0.0)
+    }
+
+    fn weapon_speed_multiplier_for_weapon(&self, weapon_id: WeaponId) -> f32 {
+        *self
+            .weapon_speed_multiplier_by_weapon
+            .get(&weapon_id)
+            .unwrap_or(&1.0)
+    }
+
+    fn weapon_min_speed_multiplier_for_weapon(&self, weapon_id: WeaponId) -> f32 {
+        *self
+            .weapon_min_speed_multiplier_by_weapon
+            .get(&weapon_id)
+            .unwrap_or(&1.0)
+    }
+
+    fn weapon_reach_flat_bonus_for_weapon(&self, weapon_id: WeaponId) -> f32 {
+        *self
+            .weapon_reach_flat_bonus_by_weapon
+            .get(&weapon_id)
+            .unwrap_or(&0.0)
+    }
+
     fn reach_bonus_for_group(&self, group: WeaponGroup) -> i32 {
         *self.reach_bonus_by_group.get(&group).unwrap_or(&0)
+    }
+
+    fn reach_multiplier_for_weapon(&self, weapon_id: WeaponId) -> f32 {
+        *self
+            .reach_multiplier_by_weapon
+            .get(&weapon_id)
+            .unwrap_or(&1.0)
+    }
+
+    fn close_hit_damage_for_weapon(&self, weapon_id: WeaponId) -> Option<&CloseHitDamageRule> {
+        self.close_hit_damage_by_weapon.get(&weapon_id)
     }
 
     fn crit_min_for_group(&self, group: WeaponGroup) -> i32 {
@@ -826,12 +980,20 @@ pub enum TalentRequirementFailure {
     MissingSizeLLargeSwordProficiency,
     MissingShieldProficiency,
     MissingArmerociPoleProficiency,
+    MissingCrescentMoonProficiency,
+    MissingDoomrazorProficiency,
+    MissingFallingSunProficiency,
     MissingFymblwngerProficiency,
     MissingHammererProficiency,
     MissingHobblerProficiency,
     MissingIthicanPrinceProficiency,
+    MissingQuietRiverProficiency,
     MissingRegenstatProficiency,
     MissingReturnerProficiency,
+    MissingRhdwngFlowProficiency,
+    MissingRohavalanBridgeProficiency,
+    MissingScornOfTheDissendriProficiency,
+    MissingSwordReachStyleProficiency,
     MissingSixPathsProficiency,
     MissingThreeMountainsProficiency,
     MissingUnbreakableWallProficiency,
@@ -1038,6 +1200,24 @@ fn has_size_m_large_sword_proficiency(context: &TalentContext<'_>) -> bool {
     }) || has_weapon_group_proficiency(context, WeaponGroup::LargeSwords)
 }
 
+fn has_small_sword_proficiency(context: &TalentContext<'_>) -> bool {
+    has_weapon_group_proficiency(context, WeaponGroup::SmallSwords)
+}
+
+fn has_crescent_moon_proficiency(context: &TalentContext<'_>) -> bool {
+    has_small_sword_proficiency(context) && has_size_m_large_sword_proficiency(context)
+}
+
+fn has_doomrazor_proficiency(context: &TalentContext<'_>) -> bool {
+    has_weapon_matching(context, |weapon| {
+        !is_ranged_weapon(weapon) && weapon.hacking_or_piercing
+    })
+}
+
+fn has_falling_sun_proficiency(context: &TalentContext<'_>) -> bool {
+    has_any_weapon_name_proficiency(context, &["Flamberge", "Two-handed sword"])
+}
+
 fn has_armeroci_pole_proficiency(context: &TalentContext<'_>) -> bool {
     has_weapon_matching(context, |weapon| {
         (weapon.group == WeaponGroup::LargeSwords || weapon.group == WeaponGroup::Polearms)
@@ -1049,6 +1229,39 @@ fn has_armeroci_pole_proficiency(context: &TalentContext<'_>) -> bool {
 fn has_hobbler_proficiency(context: &TalentContext<'_>) -> bool {
     has_weapon_group_proficiency(context, WeaponGroup::Polearms)
         || has_weapon_group_proficiency(context, WeaponGroup::Spears)
+}
+
+fn has_quiet_river_proficiency(context: &TalentContext<'_>) -> bool {
+    has_any_weapon_name_proficiency(context, &["Fist"])
+        || has_weapon_group_proficiency(context, WeaponGroup::Unarmed)
+}
+
+fn has_throwing_weapon_proficiency(context: &TalentContext<'_>) -> bool {
+    has_weapon_matching(context, |weapon| {
+        weapon.range_bands_feet.is_some() && weapon.ammunition.is_none()
+    })
+}
+
+fn has_rohavalan_bridge_proficiency(context: &TalentContext<'_>) -> bool {
+    has_any_weapon_name_proficiency(context, &["Staff"])
+        || has_weapon_group_proficiency(context, WeaponGroup::Polearms)
+}
+
+fn has_size_s_melee_weapon_proficiency(context: &TalentContext<'_>) -> bool {
+    has_weapon_matching(context, |weapon| {
+        weapon.size == WeaponSize::Small && !is_ranged_weapon(weapon)
+    })
+}
+
+fn has_size_s_or_m_sword_reach_proficiency(context: &TalentContext<'_>) -> bool {
+    has_weapon_matching(context, |weapon| {
+        matches!(
+            weapon.group,
+            WeaponGroup::SmallSwords | WeaponGroup::LargeSwords
+        ) && matches!(weapon.size, WeaponSize::Small | WeaponSize::Medium)
+            && weapon.reach_ft >= 2.0
+    }) || has_weapon_group_proficiency(context, WeaponGroup::SmallSwords)
+        || has_weapon_group_proficiency(context, WeaponGroup::LargeSwords)
 }
 
 pub fn evaluate_talent_requirements(
@@ -1152,6 +1365,21 @@ pub fn evaluate_talent_requirements(
                 failures.push(TalentRequirementFailure::MissingArmerociPoleProficiency);
             }
         }
+        TALENT_ID_CRESCENT_MOON => {
+            if !has_crescent_moon_proficiency(context) {
+                failures.push(TalentRequirementFailure::MissingCrescentMoonProficiency);
+            }
+        }
+        TALENT_ID_DOOMRAZOR => {
+            if !has_doomrazor_proficiency(context) {
+                failures.push(TalentRequirementFailure::MissingDoomrazorProficiency);
+            }
+        }
+        TALENT_ID_FALLING_SUN => {
+            if !has_falling_sun_proficiency(context) {
+                failures.push(TalentRequirementFailure::MissingFallingSunProficiency);
+            }
+        }
         TALENT_ID_FYMBLWNGER => {
             if !has_any_weapon_name_proficiency(
                 context,
@@ -1180,6 +1408,11 @@ pub fn evaluate_talent_requirements(
                 failures.push(TalentRequirementFailure::MissingIthicanPrinceProficiency);
             }
         }
+        TALENT_ID_QUIET_RIVER => {
+            if !has_quiet_river_proficiency(context) {
+                failures.push(TalentRequirementFailure::MissingQuietRiverProficiency);
+            }
+        }
         TALENT_ID_REGENSTAT => {
             if !has_size_m_small_or_large_sword_proficiency(context) {
                 failures.push(TalentRequirementFailure::MissingRegenstatProficiency);
@@ -1188,6 +1421,26 @@ pub fn evaluate_talent_requirements(
         TALENT_ID_RETURNER => {
             if !has_size_l_large_sword_proficiency(context) {
                 failures.push(TalentRequirementFailure::MissingReturnerProficiency);
+            }
+        }
+        TALENT_ID_RHDWNG_FLOW => {
+            if !has_throwing_weapon_proficiency(context) {
+                failures.push(TalentRequirementFailure::MissingRhdwngFlowProficiency);
+            }
+        }
+        TALENT_ID_ROHAVALAN_BRIDGE => {
+            if !has_rohavalan_bridge_proficiency(context) {
+                failures.push(TalentRequirementFailure::MissingRohavalanBridgeProficiency);
+            }
+        }
+        TALENT_ID_SCORN_OF_THE_DISSENDRI => {
+            if !has_size_s_melee_weapon_proficiency(context) {
+                failures.push(TalentRequirementFailure::MissingScornOfTheDissendriProficiency);
+            }
+        }
+        TALENT_ID_SHIELD_OF_BLADES | TALENT_ID_STORM_OF_BLADES => {
+            if !has_size_s_or_m_sword_reach_proficiency(context) {
+                failures.push(TalentRequirementFailure::MissingSwordReachStyleProficiency);
             }
         }
         TALENT_ID_SIX_PATHS => {
@@ -1232,6 +1485,90 @@ fn weapon_group_from_str(value: &str) -> Option<WeaponGroup> {
     }
 }
 
+fn weapon_matches_effect_filter(
+    weapon: &WeaponPreset,
+    weapon_groups: &[String],
+    weapon_names: &[String],
+) -> bool {
+    let group_matches = weapon_groups
+        .iter()
+        .filter_map(|group| weapon_group_from_str(group))
+        .any(|group| weapon.group == group);
+    let name_matches = weapon_names
+        .iter()
+        .any(|name| weapon.name.trim().eq_ignore_ascii_case(name.trim()));
+    if weapon_groups.is_empty() && weapon_names.is_empty() {
+        true
+    } else {
+        group_matches || name_matches
+    }
+}
+
+fn weapon_matches_effect_filter_with_min_reach(
+    weapon: &WeaponPreset,
+    weapon_groups: &[String],
+    weapon_names: &[String],
+    min_reach_ft: Option<f32>,
+) -> bool {
+    weapon_matches_effect_filter(weapon, weapon_groups, weapon_names)
+        && min_reach_ft
+            .map(|min_reach_ft| weapon.reach_ft >= min_reach_ft)
+            .unwrap_or(true)
+}
+
+fn filtered_weapon_ids<'a>(
+    weapon_catalog: &'a WeaponCatalog,
+    weapon_groups: &'a [String],
+    weapon_names: &'a [String],
+) -> impl Iterator<Item = WeaponId> + 'a {
+    weapon_catalog
+        .entries()
+        .iter()
+        .enumerate()
+        .filter(move |(_, weapon)| {
+            weapon_matches_effect_filter(weapon, weapon_groups, weapon_names)
+        })
+        .filter_map(|(idx, _)| weapon_catalog.id_from_index(idx))
+}
+
+fn filtered_weapon_ids_with_min_reach<'a>(
+    weapon_catalog: &'a WeaponCatalog,
+    weapon_groups: &'a [String],
+    weapon_names: &'a [String],
+    min_reach_ft: Option<f32>,
+) -> impl Iterator<Item = WeaponId> + 'a {
+    weapon_catalog
+        .entries()
+        .iter()
+        .enumerate()
+        .filter(move |(_, weapon)| {
+            weapon_matches_effect_filter_with_min_reach(
+                weapon,
+                weapon_groups,
+                weapon_names,
+                min_reach_ft,
+            )
+        })
+        .filter_map(|(idx, _)| weapon_catalog.id_from_index(idx))
+}
+
+fn shield_filter_key(name: &str) -> String {
+    name.trim().to_ascii_lowercase()
+}
+
+fn called_shot_delay_profile_from_str(value: &str) -> Option<sim::CalledShotDelayProfile> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "standard" => Some(sim::CalledShotDelayProfile::Standard),
+        "precision_combatant" | "precision combatant" => {
+            Some(sim::CalledShotDelayProfile::PrecisionCombatant)
+        }
+        "precision_aiming" | "precision aiming" => {
+            Some(sim::CalledShotDelayProfile::PrecisionAiming)
+        }
+        _ => None,
+    }
+}
+
 fn talent_effects_active(spec: &TalentSpec, player: &PlayerConfig) -> bool {
     match spec.id.as_str() {
         "natural_attunement" | "natural_protection" | "natural_awareness" => {
@@ -1247,12 +1584,20 @@ fn is_proficiency_requirement_failure(failure: &TalentRequirementFailure) -> boo
         TalentRequirementFailure::MissingSizeLLargeSwordProficiency
             | TalentRequirementFailure::MissingShieldProficiency
             | TalentRequirementFailure::MissingArmerociPoleProficiency
+            | TalentRequirementFailure::MissingCrescentMoonProficiency
+            | TalentRequirementFailure::MissingDoomrazorProficiency
+            | TalentRequirementFailure::MissingFallingSunProficiency
             | TalentRequirementFailure::MissingFymblwngerProficiency
             | TalentRequirementFailure::MissingHammererProficiency
             | TalentRequirementFailure::MissingHobblerProficiency
             | TalentRequirementFailure::MissingIthicanPrinceProficiency
+            | TalentRequirementFailure::MissingQuietRiverProficiency
             | TalentRequirementFailure::MissingRegenstatProficiency
             | TalentRequirementFailure::MissingReturnerProficiency
+            | TalentRequirementFailure::MissingRhdwngFlowProficiency
+            | TalentRequirementFailure::MissingRohavalanBridgeProficiency
+            | TalentRequirementFailure::MissingScornOfTheDissendriProficiency
+            | TalentRequirementFailure::MissingSwordReachStyleProficiency
             | TalentRequirementFailure::MissingSixPathsProficiency
             | TalentRequirementFailure::MissingThreeMountainsProficiency
             | TalentRequirementFailure::MissingUnbreakableWallProficiency
@@ -1331,6 +1676,18 @@ fn armeroci_pole_style_active(modifiers: &TalentModifiers, weapon: &WeaponPreset
         && weapon.reach_ft >= 5.0
 }
 
+fn falling_sun_style_active(modifiers: &TalentModifiers, weapon: &WeaponPreset) -> bool {
+    modifiers.falling_sun_style
+        && matches!(
+            weapon.name.trim().to_ascii_lowercase().as_str(),
+            "flamberge" | "two-handed sword"
+        )
+}
+
+fn doomrazor_style_active(modifiers: &TalentModifiers, weapon: &WeaponPreset) -> bool {
+    modifiers.doomrazor_style && !is_ranged_weapon(weapon) && weapon.hacking_or_piercing
+}
+
 fn fymblwnger_style_active(modifiers: &TalentModifiers, weapon: &WeaponPreset) -> bool {
     modifiers.fymblwnger_style
         && matches!(
@@ -1349,6 +1706,22 @@ fn hammerer_style_active(modifiers: &TalentModifiers, weapon: &WeaponPreset) -> 
 
 fn hobbler_style_active(modifiers: &TalentModifiers, weapon: &WeaponPreset) -> bool {
     modifiers.hobbler_style && matches!(weapon.group, WeaponGroup::Polearms | WeaponGroup::Spears)
+}
+
+fn quiet_river_style_active(
+    modifiers: &TalentModifiers,
+    weapon: &WeaponPreset,
+    armor_type: ArmorType,
+    shield: Option<&Shield>,
+) -> bool {
+    modifiers.quiet_river_style
+        && weapon.name.trim().eq_ignore_ascii_case("fist")
+        && matches!(armor_type, ArmorType::None)
+        && shield.is_none()
+}
+
+fn rhdwng_flow_style_active(modifiers: &TalentModifiers, weapon: &WeaponPreset) -> bool {
+    modifiers.rhdwng_flow_style && weapon.range_bands_feet.is_some() && weapon.ammunition.is_none()
 }
 
 fn ithican_prince_style_active(
@@ -1587,6 +1960,57 @@ fn resolve_talent_modifiers(
                         .or_insert(0);
                     *entry += amount * rank;
                 }
+                TalentEffect::WeaponSpeedMultiplier {
+                    multiplier,
+                    min_multiplier,
+                    weapon_groups,
+                    weapon_names,
+                } => {
+                    if *multiplier <= 0.0 {
+                        continue;
+                    }
+                    for (idx, weapon) in weapon_catalog.entries().iter().enumerate() {
+                        if !weapon_matches_effect_filter(weapon, weapon_groups, weapon_names) {
+                            continue;
+                        }
+                        let Some(weapon_id) = weapon_catalog.id_from_index(idx) else {
+                            continue;
+                        };
+                        let entry = modifiers
+                            .weapon_speed_multiplier_by_weapon
+                            .entry(weapon_id)
+                            .or_insert(1.0);
+                        *entry *= multiplier.powi(rank);
+                        if let Some(min_multiplier) = min_multiplier {
+                            if *min_multiplier > 0.0 {
+                                let entry = modifiers
+                                    .weapon_min_speed_multiplier_by_weapon
+                                    .entry(weapon_id)
+                                    .or_insert(1.0);
+                                *entry *= min_multiplier.powi(rank);
+                            }
+                        }
+                    }
+                }
+                TalentEffect::WeaponSpeedFlatBonus {
+                    amount,
+                    min_reach_ft,
+                    weapon_groups,
+                    weapon_names,
+                } => {
+                    for weapon_id in filtered_weapon_ids_with_min_reach(
+                        weapon_catalog,
+                        weapon_groups,
+                        weapon_names,
+                        *min_reach_ft,
+                    ) {
+                        let entry = modifiers
+                            .weapon_speed_flat_bonus_by_weapon
+                            .entry(weapon_id)
+                            .or_insert(0.0);
+                        *entry += *amount * rank as f32;
+                    }
+                }
                 TalentEffect::WeaponReachBonus { amount } => {
                     if let Some(weapon_name) = selection.weapon.as_deref() {
                         if let Some(weapon_id) = weapon_id_by_name_cached(weapon_name) {
@@ -1599,6 +2023,409 @@ fn resolve_talent_modifiers(
                             }
                         }
                     }
+                }
+                TalentEffect::WeaponReachMultiplier {
+                    multiplier,
+                    weapon_groups,
+                    weapon_names,
+                } => {
+                    if *multiplier <= 0.0 {
+                        continue;
+                    }
+                    for (idx, weapon) in weapon_catalog.entries().iter().enumerate() {
+                        if !weapon_matches_effect_filter(weapon, weapon_groups, weapon_names) {
+                            continue;
+                        }
+                        let Some(weapon_id) = weapon_catalog.id_from_index(idx) else {
+                            continue;
+                        };
+                        let entry = modifiers
+                            .reach_multiplier_by_weapon
+                            .entry(weapon_id)
+                            .or_insert(1.0);
+                        *entry *= multiplier.powi(rank);
+                    }
+                }
+                TalentEffect::WeaponReachFlatBonus {
+                    amount,
+                    min_reach_ft,
+                    weapon_groups,
+                    weapon_names,
+                } => {
+                    for weapon_id in filtered_weapon_ids_with_min_reach(
+                        weapon_catalog,
+                        weapon_groups,
+                        weapon_names,
+                        *min_reach_ft,
+                    ) {
+                        let entry = modifiers
+                            .weapon_reach_flat_bonus_by_weapon
+                            .entry(weapon_id)
+                            .or_insert(0.0);
+                        *entry += *amount * rank as f32;
+                    }
+                }
+                TalentEffect::CloseHitDamageExpr {
+                    expr,
+                    margin_less_than,
+                    weapon_groups,
+                    weapon_names,
+                } => {
+                    if expr.trim().is_empty() || *margin_less_than <= 0 {
+                        continue;
+                    }
+                    for (idx, weapon) in weapon_catalog.entries().iter().enumerate() {
+                        if !weapon_matches_effect_filter(weapon, weapon_groups, weapon_names) {
+                            continue;
+                        }
+                        let Some(weapon_id) = weapon_catalog.id_from_index(idx) else {
+                            continue;
+                        };
+                        modifiers.close_hit_damage_by_weapon.insert(
+                            weapon_id,
+                            CloseHitDamageRule {
+                                expr: expr.clone(),
+                                margin_less_than: *margin_less_than,
+                            },
+                        );
+                    }
+                }
+                TalentEffect::WeaponAttackBonus {
+                    amount,
+                    weapon_groups,
+                    weapon_names,
+                } => {
+                    for weapon_id in
+                        filtered_weapon_ids(weapon_catalog, weapon_groups, weapon_names)
+                    {
+                        let entry = modifiers
+                            .attack_bonus_by_weapon
+                            .entry(weapon_id)
+                            .or_insert(0);
+                        *entry += amount * rank;
+                    }
+                }
+                TalentEffect::CritMinRollWeaponGroup {
+                    min_roll,
+                    ranged_only,
+                } => {
+                    if let Some(group) = selection_weapon_group(selection) {
+                        if *ranged_only {
+                            let entry = modifiers
+                                .crit_min_ranged_by_group
+                                .entry(group)
+                                .or_insert(20);
+                            *entry = (*entry).min(*min_roll);
+                        } else {
+                            let entry = modifiers.crit_min_by_group.entry(group).or_insert(20);
+                            *entry = (*entry).min(*min_roll);
+                        }
+                    }
+                }
+                TalentEffect::CritSeverityBonusWeaponGroup { amount } => {
+                    if let Some(group) = selection_weapon_group(selection) {
+                        let entry = modifiers
+                            .crit_severity_bonus_by_group
+                            .entry(group)
+                            .or_insert(0);
+                        *entry += amount * rank;
+                    }
+                }
+                TalentEffect::WeaponDamageOptions {
+                    no_strength_bonus,
+                    no_mastery_bonus,
+                    force_nonpenetrating,
+                    halve_damage,
+                    ignore_all_dr,
+                    internal_hemorrhage_damage,
+                    melee_only,
+                    hacking_or_piercing,
+                    weapon_groups,
+                    weapon_names,
+                } => {
+                    for (idx, weapon) in weapon_catalog.entries().iter().enumerate() {
+                        if !weapon_matches_effect_filter(weapon, weapon_groups, weapon_names) {
+                            continue;
+                        }
+                        if *melee_only && is_ranged_weapon(weapon) {
+                            continue;
+                        }
+                        if let Some(required) = hacking_or_piercing {
+                            if weapon.hacking_or_piercing != *required {
+                                continue;
+                            }
+                        }
+                        let Some(weapon_id) = weapon_catalog.id_from_index(idx) else {
+                            continue;
+                        };
+                        if *no_strength_bonus {
+                            modifiers.no_strength_damage_by_weapon.insert(weapon_id);
+                        }
+                        if *no_mastery_bonus {
+                            modifiers.no_mastery_damage_by_weapon.insert(weapon_id);
+                        }
+                        if *force_nonpenetrating {
+                            modifiers
+                                .force_nonpenetrating_damage_by_weapon
+                                .insert(weapon_id);
+                        }
+                        if *halve_damage {
+                            modifiers.halve_damage_by_weapon.insert(weapon_id);
+                        }
+                        if *ignore_all_dr {
+                            modifiers.ignore_all_dr_by_weapon.insert(weapon_id);
+                        }
+                        if *internal_hemorrhage_damage != 0 {
+                            let entry = modifiers
+                                .internal_hemorrhage_damage_by_weapon
+                                .entry(weapon_id)
+                                .or_insert(0);
+                            *entry += internal_hemorrhage_damage * rank;
+                        }
+                    }
+                }
+                TalentEffect::ExpandedPenetration {
+                    attack_defense_max_minus_one,
+                    damage_max_minus_one,
+                    weapon_groups,
+                    weapon_names,
+                } => {
+                    for weapon_id in
+                        filtered_weapon_ids(weapon_catalog, weapon_groups, weapon_names)
+                    {
+                        if *attack_defense_max_minus_one {
+                            modifiers
+                                .expanded_attack_defense_penetration_by_weapon
+                                .insert(weapon_id);
+                        }
+                        if *damage_max_minus_one {
+                            modifiers
+                                .expanded_damage_penetration_by_weapon
+                                .insert(weapon_id);
+                        }
+                    }
+                }
+                TalentEffect::OpeningEngagementExtraDamageDice {
+                    dice,
+                    min_reach_ft,
+                    weapon_groups,
+                    weapon_names,
+                } => {
+                    for weapon_id in filtered_weapon_ids_with_min_reach(
+                        weapon_catalog,
+                        weapon_groups,
+                        weapon_names,
+                        *min_reach_ft,
+                    ) {
+                        let entry = modifiers
+                            .opening_engagement_extra_damage_dice_by_weapon
+                            .entry(weapon_id)
+                            .or_insert(0);
+                        *entry += dice * rank;
+                    }
+                }
+                TalentEffect::AlwaysInitialEngagementIfReachAtLeastOpponent {
+                    min_reach_ft,
+                    weapon_groups,
+                    weapon_names,
+                } => {
+                    for weapon_id in filtered_weapon_ids_with_min_reach(
+                        weapon_catalog,
+                        weapon_groups,
+                        weapon_names,
+                        *min_reach_ft,
+                    ) {
+                        modifiers
+                            .always_initial_engagement_by_weapon
+                            .insert(weapon_id);
+                    }
+                }
+                TalentEffect::IgnoreDefenderMovementDefenseBonus {
+                    weapon_groups,
+                    weapon_names,
+                } => {
+                    for weapon_id in
+                        filtered_weapon_ids(weapon_catalog, weapon_groups, weapon_names)
+                    {
+                        modifiers
+                            .ignore_movement_defense_bonus_by_weapon
+                            .insert(weapon_id);
+                    }
+                }
+                TalentEffect::KnockbackResetsWeaponCount {
+                    weapon_groups,
+                    weapon_names,
+                } => {
+                    for weapon_id in
+                        filtered_weapon_ids(weapon_catalog, weapon_groups, weapon_names)
+                    {
+                        modifiers
+                            .knockback_resets_weapon_count_by_weapon
+                            .insert(weapon_id);
+                    }
+                }
+                TalentEffect::HitCriticalEffectsNoExtraDice {
+                    weapon_groups,
+                    weapon_names,
+                } => {
+                    for weapon_id in
+                        filtered_weapon_ids(weapon_catalog, weapon_groups, weapon_names)
+                    {
+                        modifiers
+                            .hit_critical_effects_no_extra_dice_by_weapon
+                            .insert(weapon_id);
+                    }
+                }
+                TalentEffect::IntAttackBonusToDamageAndDefense {
+                    fraction: _,
+                    weapon_groups,
+                    shield_names: _,
+                } => {
+                    for weapon_id in filtered_weapon_ids(weapon_catalog, weapon_groups, &[]) {
+                        modifiers
+                            .attack_bonus_by_weapon
+                            .entry(weapon_id)
+                            .or_insert(0);
+                    }
+                    modifiers.ithican_prince_style = true;
+                }
+                TalentEffect::ThrownFullStrengthDamage {
+                    thrown_only,
+                    weapon_groups,
+                    weapon_names,
+                } => {
+                    for (idx, weapon) in weapon_catalog.entries().iter().enumerate() {
+                        if !weapon_matches_effect_filter(weapon, weapon_groups, weapon_names) {
+                            continue;
+                        }
+                        if *thrown_only
+                            && (weapon.range_bands_feet.is_none() || weapon.ammunition.is_some())
+                        {
+                            continue;
+                        }
+                        let Some(weapon_id) = weapon_catalog.id_from_index(idx) else {
+                            continue;
+                        };
+                        modifiers
+                            .thrown_full_strength_damage_by_weapon
+                            .insert(weapon_id);
+                    }
+                }
+                TalentEffect::ConsecutiveHitsForceTraumaTwenty {
+                    hits,
+                    weapon_groups,
+                    weapon_names,
+                } => {
+                    for weapon_id in
+                        filtered_weapon_ids(weapon_catalog, weapon_groups, weapon_names)
+                    {
+                        modifiers
+                            .consecutive_hits_force_trauma_twenty_by_weapon
+                            .insert(weapon_id, *hits);
+                    }
+                }
+                TalentEffect::ShieldDrBonusFiltered {
+                    amount,
+                    shield_names,
+                } => {
+                    if shield_names.is_empty() {
+                        modifiers.shield_dr_bonus_filtered += amount * rank;
+                    } else {
+                        for shield_name in shield_names {
+                            let entry = modifiers
+                                .shield_dr_bonus_by_name
+                                .entry(shield_filter_key(shield_name))
+                                .or_insert(0);
+                            *entry += amount * rank;
+                        }
+                    }
+                }
+                TalentEffect::ShieldBreakageUsesShieldDr { shield_names } => {
+                    if shield_names.is_empty() {
+                        modifiers.shield_breakage_uses_shield_dr = true;
+                    } else {
+                        for shield_name in shield_names {
+                            modifiers
+                                .shield_breakage_uses_shield_dr_by_name
+                                .insert(shield_filter_key(shield_name));
+                        }
+                    }
+                }
+                TalentEffect::KnockbackStepBonus { amount } => {
+                    modifiers.knockback_step_bumps += amount * rank;
+                }
+                TalentEffect::IncomingCritExtraDamageHalved => {
+                    modifiers.light_armor_crit_extra_damage_halved = true;
+                }
+                TalentEffect::IncomingCritSeverityReduction { amount } => {
+                    modifiers.medium_armor_crit_severity_reduction += amount * rank;
+                }
+                TalentEffect::IgnoreAncillaryCritEffects => {
+                    modifiers.heavy_armor_ignore_ancillary_crit_effects = true;
+                }
+                TalentEffect::IncomingCritDamageRollTwiceTakeLower => {
+                    modifiers.defiant = true;
+                }
+                TalentEffect::NearPerfectDefenseMinRoll { roll } => {
+                    if *roll <= 18 {
+                        modifiers.superior_defense = true;
+                    }
+                }
+                TalentEffect::PerfectDefenseCounterForceCritical => {
+                    modifiers.edge_counter = true;
+                }
+                TalentEffect::FightDefensivelyAttackPenaltyDivisor { divisor } => {
+                    modifiers.fight_defensively_attack_penalty_divisor = modifiers
+                        .fight_defensively_attack_penalty_divisor
+                        .max(*divisor);
+                }
+                TalentEffect::CalledShotDelayProfile { profile } => {
+                    if let Some(profile) = called_shot_delay_profile_from_str(profile) {
+                        modifiers.called_shot_delay_profile = Some(profile);
+                    }
+                }
+                TalentEffect::CalledShotTargetDefenseBonusDivisor { divisor } => {
+                    modifiers.called_shot_target_defense_bonus_divisor = modifiers
+                        .called_shot_target_defense_bonus_divisor
+                        .max(*divisor);
+                }
+                TalentEffect::CalledShotSelfDefensePenalty { amount } => {
+                    modifiers.called_shot_self_defense_penalty = Some(
+                        modifiers
+                            .called_shot_self_defense_penalty
+                            .map(|current| current.min(*amount))
+                            .unwrap_or(*amount),
+                    );
+                }
+                TalentEffect::CalledShotDeceptiveDefender => {
+                    modifiers.called_shot_deceptive_defender = true;
+                }
+                TalentEffect::DualWieldOffhandDamagePenalty { amount } => {
+                    modifiers.dualwield_offhand_damage_penalty = Some(
+                        modifiers
+                            .dualwield_offhand_damage_penalty
+                            .map(|current| current.max(*amount))
+                            .unwrap_or(*amount),
+                    );
+                }
+                TalentEffect::DualWieldPrimaryRecoveryPenalty { amount } => {
+                    modifiers.dualwield_primary_recovery_penalty = Some(
+                        modifiers
+                            .dualwield_primary_recovery_penalty
+                            .map(|current| current.min(*amount))
+                            .unwrap_or(*amount),
+                    );
+                }
+                TalentEffect::DualWieldSecondaryRecoveryPenalty { amount } => {
+                    modifiers.dualwield_secondary_recovery_penalty = Some(
+                        modifiers
+                            .dualwield_secondary_recovery_penalty
+                            .map(|current| current.min(*amount))
+                            .unwrap_or(*amount),
+                    );
+                }
+                TalentEffect::PerfectTwoWeaponFighting => {
+                    modifiers.perfect_two_weapon_fighting = true;
                 }
                 TalentEffect::RangeDistanceMultiplier { multiplier } => {
                     if *multiplier > 0.0 {
@@ -1635,14 +2462,39 @@ fn resolve_talent_modifiers(
                 TalentEffect::ShieldCoverValueAdjustment { amount } => {
                     modifiers.shield_cover_value_adjustment += amount * rank;
                 }
-                TalentEffect::CurseOfAxe => {
-                    modifiers.curse_of_axe = true;
+                TalentEffect::ForcedWeaponLoadout {
+                    weapon_name,
+                    min_weapon_material_tier,
+                    clear_projectile_material,
+                    disable_offhand,
+                    force_two_hand_grip,
+                    force_no_shield,
+                    d6_penetration_triggers,
+                } => {
+                    modifiers.forced_weapon_loadout = Some(ForcedWeaponLoadout {
+                        weapon_name: weapon_name.clone(),
+                        min_weapon_material_tier: *min_weapon_material_tier,
+                        clear_projectile_material: *clear_projectile_material,
+                        disable_offhand: *disable_offhand,
+                        force_two_hand_grip: *force_two_hand_grip,
+                        force_no_shield: *force_no_shield,
+                        d6_penetration_triggers: d6_penetration_triggers.clone(),
+                    });
                 }
                 TalentEffect::LargeSwordShieldStyle => {
                     modifiers.large_sword_shield_style = true;
                 }
                 TalentEffect::ArmerociPoleStyle => {
                     modifiers.armeroci_pole_style = true;
+                }
+                TalentEffect::CrescentMoonStyle => {
+                    modifiers.crescent_moon_style = true;
+                }
+                TalentEffect::DoomrazorStyle => {
+                    modifiers.doomrazor_style = true;
+                }
+                TalentEffect::FallingSunStyle => {
+                    modifiers.falling_sun_style = true;
                 }
                 TalentEffect::FymblwngerStyle => {
                     modifiers.fymblwnger_style = true;
@@ -1656,14 +2508,29 @@ fn resolve_talent_modifiers(
                 TalentEffect::IthicanPrinceStyle => {
                     modifiers.ithican_prince_style = true;
                 }
+                TalentEffect::QuietRiverStyle => {
+                    modifiers.quiet_river_style = true;
+                }
                 TalentEffect::RegenstatStyle => {
                     modifiers.regenstat_style = true;
                 }
                 TalentEffect::ReturnerStyle => {
                     modifiers.returner_style = true;
                 }
+                TalentEffect::RhdwngFlowStyle => {
+                    modifiers.rhdwng_flow_style = true;
+                }
+                TalentEffect::ScornOfTheDissendriStyle => {
+                    modifiers.scorn_of_the_dissendri_style = true;
+                }
+                TalentEffect::ShieldOfBladesStyle => {
+                    modifiers.shield_of_blades_style = true;
+                }
                 TalentEffect::SixPathsStyle => {
                     modifiers.six_paths_style = true;
+                }
+                TalentEffect::StormOfBladesStyle => {
+                    modifiers.storm_of_blades_style = true;
                 }
                 TalentEffect::ThreeMountainsStyle => {
                     modifiers.three_mountains_style = true;
@@ -1673,60 +2540,6 @@ fn resolve_talent_modifiers(
                 }
             }
         }
-        match spec.id.as_str() {
-            "improved_critical" => {
-                if let Some(group) = selection_weapon_group(selection) {
-                    let entry = modifiers.crit_min_by_group.entry(group).or_insert(20);
-                    *entry = (*entry).min(19);
-                }
-            }
-            "critical_mastery" => {
-                if let Some(group) = selection_weapon_group(selection) {
-                    let entry = modifiers.crit_min_by_group.entry(group).or_insert(20);
-                    *entry = (*entry).min(18);
-                }
-            }
-            "ranged_critical_mastery" => {
-                if let Some(group) = selection_weapon_group(selection) {
-                    let entry = modifiers
-                        .crit_min_ranged_by_group
-                        .entry(group)
-                        .or_insert(20);
-                    *entry = (*entry).min(18);
-                }
-            }
-            "wounding_criticals" => {
-                if let Some(group) = selection_weapon_group(selection) {
-                    let entry = modifiers
-                        .crit_severity_bonus_by_group
-                        .entry(group)
-                        .or_insert(0);
-                    *entry += 3 * rank;
-                }
-            }
-            "light_armor_optimization" => {
-                modifiers.light_armor_crit_extra_damage_halved = true;
-            }
-            "medium_armor_optimization" => {
-                modifiers.medium_armor_crit_severity_reduction += 10 * rank;
-            }
-            "heavy_armor_optimization" => {
-                modifiers.heavy_armor_ignore_ancillary_crit_effects = true;
-            }
-            "stout" | "sturdy" => {
-                modifiers.knockback_step_bumps += rank;
-            }
-            "defiant" => {
-                modifiers.defiant = true;
-            }
-            "superior_defense" => {
-                modifiers.superior_defense = true;
-            }
-            "edge_counter" => {
-                modifiers.edge_counter = true;
-            }
-            _ => {}
-        }
     }
     modifiers
 }
@@ -1735,21 +2548,16 @@ fn player_has_talent(player: &PlayerConfig, id: &str) -> bool {
     player.talents.iter().any(|talent| talent.id == id)
 }
 
-fn has_fight_defensively_enhancer(player: &PlayerConfig) -> bool {
-    player_has_talent(player, TALENT_ID_COMBAT_EXPERTISE)
-        || player_has_talent(player, TALENT_ID_DUELIST)
-}
-
-fn fight_defensively_attack_penalty_for_player(player: &PlayerConfig) -> i32 {
+fn fight_defensively_attack_penalty_with_modifiers(
+    player: &PlayerConfig,
+    modifiers: &TalentModifiers,
+) -> i32 {
     if !player.fight_defensively {
         return 0;
     }
     let base_penalty = normalize_fight_defensively_penalty(player.fight_defensively_penalty);
-    if has_fight_defensively_enhancer(player) {
-        base_penalty / 2
-    } else {
-        base_penalty
-    }
+    let divisor = modifiers.fight_defensively_attack_penalty_divisor.max(1);
+    base_penalty / divisor
 }
 
 fn fight_defensively_defense_bonus_for_player(player: &PlayerConfig) -> i32 {
@@ -1771,14 +2579,13 @@ fn has_deceptive_defender_effect(player: &PlayerConfig) -> bool {
         || player_has_talent(player, TALENT_ID_DUELIST)
 }
 
-fn called_shot_defense_bonus_for_player(player: &PlayerConfig) -> i32 {
-    let mut bonus = 8;
-    if player_has_talent(player, TALENT_ID_PRECISION_AIMING)
-        || has_precision_combatant_effect(player)
-    {
-        bonus /= 2;
-    }
-    bonus.max(1)
+fn called_shot_defense_bonus_with_modifiers(
+    modifiers: &TalentModifiers,
+    armor_type: ArmorType,
+) -> i32 {
+    let bonus = called_shot_target_defense_bonus_base_for_armor_type(armor_type);
+    let divisor = modifiers.called_shot_target_defense_bonus_divisor.max(1);
+    (bonus / divisor).max(1)
 }
 
 fn called_shot_defense_penalty_for_player(player: &PlayerConfig) -> i32 {
@@ -1791,6 +2598,10 @@ fn called_shot_defense_penalty_for_player(player: &PlayerConfig) -> i32 {
     }
 }
 
+fn called_shot_defense_penalty_with_modifiers(modifiers: &TalentModifiers) -> i32 {
+    modifiers.called_shot_self_defense_penalty.unwrap_or(4)
+}
+
 fn called_shot_delay_profile_for_player(player: &PlayerConfig) -> sim::CalledShotDelayProfile {
     if player_has_talent(player, TALENT_ID_PRECISION_AIMING) {
         sim::CalledShotDelayProfile::PrecisionAiming
@@ -1799,6 +2610,14 @@ fn called_shot_delay_profile_for_player(player: &PlayerConfig) -> sim::CalledSho
     } else {
         sim::CalledShotDelayProfile::Standard
     }
+}
+
+fn called_shot_delay_profile_with_modifiers(
+    modifiers: &TalentModifiers,
+) -> sim::CalledShotDelayProfile {
+    modifiers
+        .called_shot_delay_profile
+        .unwrap_or(sim::CalledShotDelayProfile::Standard)
 }
 
 fn called_shot_target_defense_bonus_base_for_armor_type(armor_type: ArmorType) -> i32 {
@@ -1917,6 +2736,7 @@ pub fn sanitize_player_ids(
     weapon_catalog: &WeaponCatalog,
     armor_catalog: &ArmorCatalog,
     shield_catalog: &ShieldCatalog,
+    talent_catalog: &TalentCatalog,
 ) {
     if weapon_catalog.get(player.weapon_id).is_none() {
         if let Some(id) = weapon_catalog.first_id() {
@@ -1938,37 +2758,49 @@ pub fn sanitize_player_ids(
             player.shield_id = id;
         }
     }
-    enforce_forced_talent_equipment(player, weapon_catalog, shield_catalog);
+    enforce_forced_talent_equipment(player, weapon_catalog, shield_catalog, talent_catalog);
 }
 
 pub fn enforce_forced_talent_equipment(
     player: &mut PlayerConfig,
     weapon_catalog: &WeaponCatalog,
     shield_catalog: &ShieldCatalog,
+    talent_catalog: &TalentCatalog,
 ) {
-    if !curse_of_axe_active(player) {
+    let modifiers = resolve_talent_modifiers(player, talent_catalog, weapon_catalog);
+    let Some(loadout) = modifiers.forced_weapon_loadout.as_ref() else {
         return;
-    }
+    };
     for (idx, weapon) in weapon_catalog.entries().iter().enumerate() {
-        if weapon.name == CURSE_OF_AXE_WEAPON_NAME {
+        if weapon.name == loadout.weapon_name {
             if let Some(id) = weapon_catalog.id_from_index(idx) {
                 player.weapon_id = id;
             }
             break;
         }
     }
-    player.weapon_material_tier = player.weapon_material_tier.max(2);
-    player.projectile_material_tier = 0;
-    player.offhand_weapon_id = None;
-    player.offensive_dualwielding = false;
-    player.defensive_dualwielding = false;
-    player.two_hand_grip = true;
-    for (idx, entry) in shield_catalog.entries().iter().enumerate() {
-        if entry.shield.is_none() || entry.label.eq_ignore_ascii_case("None") {
-            if let Some(id) = shield_catalog.id_from_index(idx) {
-                player.shield_id = id;
+    if let Some(min_tier) = loadout.min_weapon_material_tier {
+        player.weapon_material_tier = player.weapon_material_tier.max(min_tier);
+    }
+    if loadout.clear_projectile_material {
+        player.projectile_material_tier = 0;
+    }
+    if loadout.disable_offhand {
+        player.offhand_weapon_id = None;
+        player.offensive_dualwielding = false;
+        player.defensive_dualwielding = false;
+    }
+    if loadout.force_two_hand_grip {
+        player.two_hand_grip = true;
+    }
+    if loadout.force_no_shield {
+        for (idx, entry) in shield_catalog.entries().iter().enumerate() {
+            if entry.shield.is_none() || entry.label.eq_ignore_ascii_case("None") {
+                if let Some(id) = shield_catalog.id_from_index(idx) {
+                    player.shield_id = id;
+                }
+                break;
             }
-            break;
         }
     }
 }
@@ -2068,34 +2900,28 @@ pub fn shield_equipped_with_catalog(
     can_equip_shield(player, weapon, shield, talent_catalog, weapon_catalog)
 }
 
-fn has_two_weapon_fighting_effect(player: &PlayerConfig) -> bool {
-    player_has_talent(player, TALENT_ID_TWO_WEAPON_FIGHTING)
-        || player_has_talent(player, TALENT_ID_IMPROVED_TWO_WEAPON_FIGHTING)
-        || player_has_talent(player, TALENT_ID_GREATER_TWO_WEAPON_FIGHTING)
-        || player_has_talent(player, TALENT_ID_PERFECT_TWO_WEAPON_FIGHTING)
-}
-
-fn has_improved_two_weapon_fighting_effect(player: &PlayerConfig) -> bool {
-    player_has_talent(player, TALENT_ID_IMPROVED_TWO_WEAPON_FIGHTING)
-        || player_has_talent(player, TALENT_ID_GREATER_TWO_WEAPON_FIGHTING)
-        || player_has_talent(player, TALENT_ID_PERFECT_TWO_WEAPON_FIGHTING)
-}
-
-fn has_greater_two_weapon_fighting_effect(player: &PlayerConfig) -> bool {
-    player_has_talent(player, TALENT_ID_GREATER_TWO_WEAPON_FIGHTING)
-        || player_has_talent(player, TALENT_ID_PERFECT_TWO_WEAPON_FIGHTING)
-}
-
 fn has_perfect_two_weapon_fighting_effect(player: &PlayerConfig) -> bool {
     player_has_talent(player, TALENT_ID_PERFECT_TWO_WEAPON_FIGHTING)
 }
 
 fn dualwield_mode_flags(player: &PlayerConfig, weapon: &WeaponPreset) -> (bool, bool, bool) {
+    dualwield_mode_flags_with_perfect(
+        player,
+        weapon,
+        has_perfect_two_weapon_fighting_effect(player),
+    )
+}
+
+fn dualwield_mode_flags_with_perfect(
+    player: &PlayerConfig,
+    weapon: &WeaponPreset,
+    has_perfect_two_weapon_fighting: bool,
+) -> (bool, bool, bool) {
     if weapon.handedness != WeaponHandedness::OneHanded || player.two_hand_grip {
         return (false, false, false);
     }
     let offensive = player.offensive_dualwielding;
-    let perfect_with_offense = offensive && has_perfect_two_weapon_fighting_effect(player);
+    let perfect_with_offense = offensive && has_perfect_two_weapon_fighting;
     let defensive = if offensive {
         perfect_with_offense
     } else {
@@ -2174,15 +3000,16 @@ pub struct PlayerSummary {
     pub defense: DefenseDisplaySummary,
 }
 
-fn weapon_for_player<'a>(
+fn weapon_for_player_with_modifiers<'a>(
     player: &PlayerConfig,
     weapon_catalog: &'a WeaponCatalog,
+    modifiers: &TalentModifiers,
 ) -> &'a WeaponPreset {
-    if curse_of_axe_active(player) {
+    if let Some(loadout) = modifiers.forced_weapon_loadout.as_ref() {
         if let Some(weapon) = weapon_catalog
             .entries()
             .iter()
-            .find(|weapon| weapon.name == CURSE_OF_AXE_WEAPON_NAME)
+            .find(|weapon| weapon.name == loadout.weapon_name)
         {
             return weapon;
         }
@@ -2193,17 +3020,14 @@ fn weapon_for_player<'a>(
         .expect("weapon catalog is empty")
 }
 
-fn curse_of_axe_active(player: &PlayerConfig) -> bool {
-    player
-        .talents
-        .iter()
-        .any(|selection| selection.id == TALENT_ID_CURSE_OF_AXE && selection.rank.max(1) > 0)
-}
-
-fn weapon_id_for_player(player: &PlayerConfig, weapon_catalog: &WeaponCatalog) -> WeaponId {
-    if curse_of_axe_active(player) {
+fn weapon_id_for_player_with_modifiers(
+    player: &PlayerConfig,
+    weapon_catalog: &WeaponCatalog,
+    modifiers: &TalentModifiers,
+) -> WeaponId {
+    if let Some(loadout) = modifiers.forced_weapon_loadout.as_ref() {
         for (idx, weapon) in weapon_catalog.entries().iter().enumerate() {
-            if weapon.name == CURSE_OF_AXE_WEAPON_NAME {
+            if weapon.name == loadout.weapon_name {
                 if let Some(id) = weapon_catalog.id_from_index(idx) {
                     return id;
                 }
@@ -2213,34 +3037,56 @@ fn weapon_id_for_player(player: &PlayerConfig, weapon_catalog: &WeaponCatalog) -
     player.weapon_id
 }
 
-fn weapon_material_tier_for_player(player: &PlayerConfig, weapon: &WeaponPreset) -> i32 {
-    if curse_of_axe_active(player) && weapon.name == CURSE_OF_AXE_WEAPON_NAME {
-        player.weapon_material_tier.max(2)
+fn weapon_material_tier_with_modifiers(
+    player: &PlayerConfig,
+    weapon: &WeaponPreset,
+    modifiers: &TalentModifiers,
+) -> i32 {
+    if let Some(loadout) = modifiers.forced_weapon_loadout.as_ref() {
+        if weapon.name == loadout.weapon_name {
+            return loadout
+                .min_weapon_material_tier
+                .map(|min_tier| player.weapon_material_tier.max(min_tier))
+                .unwrap_or(player.weapon_material_tier);
+        }
+    }
+    player.weapon_material_tier
+}
+
+fn effective_two_hand_grip_with_modifiers(
+    player: &PlayerConfig,
+    weapon: &WeaponPreset,
+    modifiers: &TalentModifiers,
+) -> bool {
+    if modifiers
+        .forced_weapon_loadout
+        .as_ref()
+        .map(|loadout| loadout.force_two_hand_grip && weapon.name == loadout.weapon_name)
+        .unwrap_or(false)
+    {
+        true
     } else {
-        player.weapon_material_tier
+        player.two_hand_grip
     }
 }
 
-fn damage_expr_for_player_weapon(player: &PlayerConfig, weapon: &WeaponPreset) -> String {
-    if curse_of_axe_active(player) && weapon.name == CURSE_OF_AXE_WEAPON_NAME {
-        weapon.damage_expr.clone()
-    } else {
-        weapon.damage_expr.clone()
-    }
+fn damage_expr_for_player_weapon(_player: &PlayerConfig, weapon: &WeaponPreset) -> String {
+    weapon.damage_expr.clone()
 }
 
 fn damage_expr_cache_for_player_weapon(
-    player: &PlayerConfig,
     weapon: &WeaponPreset,
+    modifiers: &TalentModifiers,
 ) -> DamageExprCache {
-    if curse_of_axe_active(player) && weapon.name == CURSE_OF_AXE_WEAPON_NAME {
-        DamageExprCache::new_with_d6_penetration_triggers(
-            &weapon.damage_expr,
-            CURSE_OF_AXE_D6_TRIGGERS,
-        )
-    } else {
-        DamageExprCache::new(&weapon.damage_expr)
+    if let Some(loadout) = modifiers.forced_weapon_loadout.as_ref() {
+        if weapon.name == loadout.weapon_name && !loadout.d6_penetration_triggers.is_empty() {
+            return DamageExprCache::new_with_d6_penetration_triggers(
+                &weapon.damage_expr,
+                &loadout.d6_penetration_triggers,
+            );
+        }
     }
+    DamageExprCache::new(&weapon.damage_expr)
 }
 
 pub fn ability_set_from_player(player: &PlayerConfig) -> AbilitySet {
@@ -2265,7 +3111,8 @@ pub fn player_summary(
     shield_catalog: &ShieldCatalog,
     talent_catalog: &TalentCatalog,
 ) -> PlayerSummary {
-    let weapon = weapon_for_player(player, weapon_catalog);
+    let modifiers = resolve_talent_modifiers(player, talent_catalog, weapon_catalog);
+    let weapon = weapon_for_player_with_modifiers(player, weapon_catalog, &modifiers);
     let character = build_character(
         player,
         weapon_catalog,
@@ -2273,17 +3120,17 @@ pub fn player_summary(
         shield_catalog,
         talent_catalog,
     );
-    let modifiers = resolve_talent_modifiers(player, talent_catalog, weapon_catalog);
     let misc_modifiers = resolve_misc_modifiers(player);
     let armor_adjustments =
         armor_talent_adjustments(character.equipment.armor.as_ref(), &modifiers);
     let (defensive_dualwielding, offensive_dualwielding, perfect_two_weapon_fighting_active) =
-        dualwield_mode_flags(player, weapon);
-    let weapon_id = weapon_id_for_player(player, weapon_catalog);
-    let fight_defensively_attack_penalty = fight_defensively_attack_penalty_for_player(player);
+        dualwield_mode_flags_with_perfect(player, weapon, modifiers.perfect_two_weapon_fighting);
+    let weapon_id = weapon_id_for_player_with_modifiers(player, weapon_catalog, &modifiers);
+    let fight_defensively_attack_penalty =
+        fight_defensively_attack_penalty_with_modifiers(player, &modifiers);
     let fight_defensively_defense_bonus = fight_defensively_defense_bonus_for_player(player);
     let called_shot_defense_penalty = if player.called_shot {
-        called_shot_defense_penalty_for_player(player)
+        called_shot_defense_penalty_with_modifiers(&modifiers)
     } else {
         0
     };
@@ -2408,8 +3255,9 @@ fn defense_display_summary(
     } else {
         "d20p"
     };
-    let after_attack_bonus =
-        (defensive_dualwielding || player.two_hand_grip) && !weapon.defense_bonus_always;
+    let after_attack_bonus = (defensive_dualwielding
+        || effective_two_hand_grip_with_modifiers(player, weapon, modifiers))
+        && !weapon.defense_bonus_always;
     let weapon_defense_bonus = if weapon.defense_bonus_always { 4 } else { 0 };
     let (melee_roll_label, melee_with_shield_dv) = if let Some(shield_bonus) = shield_bonus {
         let melee_base = derived.base_dv + defense_mastery + 4 + fight_defensively_defense_bonus
@@ -2487,9 +3335,9 @@ fn roll_summary(
 ) -> RollSummary {
     let is_ranged_weapon = is_ranged_weapon(weapon);
     let uses_projectiles = uses_projectiles(&weapon.name, weapon.ammunition.is_some());
-    let weapon_id = weapon_id_for_player(player, weapon_catalog);
+    let weapon_id = weapon_id_for_player_with_modifiers(player, weapon_catalog, modifiers);
     let (material_attack_bonus, material_damage_bonus) = material_bonuses(
-        weapon_material_tier_for_player(player, weapon),
+        weapon_material_tier_with_modifiers(player, weapon, modifiers),
         player.projectile_material_tier,
         is_ranged_weapon,
         uses_projectiles,
@@ -2502,7 +3350,8 @@ fn roll_summary(
         + modifiers.attack_bonus_for_weapon(weapon_id)
         + style_attack_bonus
         - fight_defensively_attack_penalty;
-    let two_hand_bonus = two_hand_damage_bonus(weapon, player.two_hand_grip);
+    let effective_two_hand = effective_two_hand_grip_with_modifiers(player, weapon, modifiers);
+    let two_hand_bonus = two_hand_damage_bonus(weapon, effective_two_hand);
     let mut strength_damage =
         strength_damage_for_weapon(weapon, character.ability_mods.strength.damage)
             + two_hand_bonus
@@ -2534,7 +3383,8 @@ pub fn build_character(
     shield_catalog: &ShieldCatalog,
     talent_catalog: &TalentCatalog,
 ) -> Character {
-    let weapon_preset = weapon_for_player(player, weapon_catalog);
+    let modifiers = resolve_talent_modifiers(player, talent_catalog, weapon_catalog);
+    let weapon_preset = weapon_for_player_with_modifiers(player, weapon_catalog, &modifiers);
     let weapon = Weapon {
         name: weapon_preset.name.clone(),
         group: weapon_preset.group,
@@ -2560,7 +3410,14 @@ pub fn build_character(
         base_threshold: base_weapon_threshold(weapon_preset.group),
     };
 
-    let shield = if can_equip_shield(
+    let shield = if modifiers
+        .forced_weapon_loadout
+        .as_ref()
+        .map(|loadout| loadout.force_no_shield && weapon_preset.name == loadout.weapon_name)
+        .unwrap_or(false)
+    {
+        None
+    } else if can_equip_shield(
         player,
         weapon_preset,
         shield.as_ref(),
@@ -2627,8 +3484,9 @@ pub fn build_combatant(
     npc_presets: &NpcPresetCatalog,
     talent_catalog: &TalentCatalog,
 ) -> Combatant {
-    let weapon_preset = weapon_for_player(player, weapon_catalog);
-    let weapon_id = weapon_id_for_player(player, weapon_catalog);
+    let modifiers = resolve_talent_modifiers(player, talent_catalog, weapon_catalog);
+    let weapon_preset = weapon_for_player_with_modifiers(player, weapon_catalog, &modifiers);
+    let weapon_id = weapon_id_for_player_with_modifiers(player, weapon_catalog, &modifiers);
     let character = build_character(
         player,
         weapon_catalog,
@@ -2636,7 +3494,6 @@ pub fn build_combatant(
         shield_catalog,
         talent_catalog,
     );
-    let modifiers = resolve_talent_modifiers(player, talent_catalog, weapon_catalog);
     let misc_modifiers = resolve_misc_modifiers(player);
     let armor_adjustments =
         armor_talent_adjustments(character.equipment.armor.as_ref(), &modifiers);
@@ -2664,7 +3521,8 @@ pub fn build_combatant(
         .map(|weapon| weapon.speed)
         .unwrap_or(10.0);
     let speed_mod = derived.speed_mod as f32;
-    let reach_bonus = modifiers.reach_bonus_for_group(weapon_preset.group) as f32;
+    let reach_bonus = modifiers.reach_bonus_for_group(weapon_preset.group) as f32
+        + modifiers.weapon_reach_flat_bonus_for_weapon(weapon_id);
     let mut weapon_reach = (character
         .equipment
         .weapon
@@ -2714,16 +3572,65 @@ pub fn build_combatant(
         .range_bands_feet
         .or_else(|| sim::range_bands_for_weapon_name(&weapon_preset.name));
 
-    let effective_two_hand = effective_two_hand_grip(weapon_preset, player.two_hand_grip);
-    let two_hand_damage_bonus = two_hand_damage_bonus(weapon_preset, player.two_hand_grip);
-    let two_hand_speed_penalty = two_hand_speed_penalty(weapon_preset, player.two_hand_grip);
+    let effective_two_hand =
+        effective_two_hand_grip_with_modifiers(player, weapon_preset, &modifiers);
+    let two_hand_damage_bonus = two_hand_damage_bonus(weapon_preset, effective_two_hand);
+    let two_hand_speed_penalty = two_hand_speed_penalty(weapon_preset, effective_two_hand);
     let use_jab = player.use_jab && weapon_preset.jab_speed.is_some();
     let min_speed = weapon_preset.size.min_speed();
     let has_shield = character.equipment.shield.is_some();
-    let armeroci_pole_active = armeroci_pole_style_active(&modifiers, weapon_preset);
-    let fymblwnger_active = fymblwnger_style_active(&modifiers, weapon_preset);
-    let hammerer_active = hammerer_style_active(&modifiers, weapon_preset);
-    let hobbler_active = hobbler_style_active(&modifiers, weapon_preset);
+    let armeroci_pole_active = armeroci_pole_style_active(&modifiers, weapon_preset)
+        || modifiers
+            .opening_engagement_extra_damage_dice_by_weapon
+            .get(&weapon_id)
+            .copied()
+            .unwrap_or(0)
+            > 0
+        || modifiers
+            .always_initial_engagement_by_weapon
+            .contains(&weapon_id);
+    let falling_sun_active = falling_sun_style_active(&modifiers, weapon_preset)
+        || modifiers
+            .expanded_attack_defense_penetration_by_weapon
+            .contains(&weapon_id)
+        || modifiers
+            .expanded_damage_penetration_by_weapon
+            .contains(&weapon_id);
+    let doomrazor_active = doomrazor_style_active(&modifiers, weapon_preset)
+        || modifiers
+            .force_nonpenetrating_damage_by_weapon
+            .contains(&weapon_id)
+        || modifiers.no_strength_damage_by_weapon.contains(&weapon_id)
+        || modifiers.no_mastery_damage_by_weapon.contains(&weapon_id)
+        || modifiers
+            .internal_hemorrhage_damage_by_weapon
+            .get(&weapon_id)
+            .copied()
+            .unwrap_or(0)
+            > 0;
+    let fymblwnger_active = fymblwnger_style_active(&modifiers, weapon_preset)
+        || modifiers
+            .ignore_movement_defense_bonus_by_weapon
+            .contains(&weapon_id);
+    let hammerer_active = hammerer_style_active(&modifiers, weapon_preset)
+        || modifiers
+            .knockback_resets_weapon_count_by_weapon
+            .contains(&weapon_id);
+    let hobbler_active = hobbler_style_active(&modifiers, weapon_preset)
+        || modifiers
+            .hit_critical_effects_no_extra_dice_by_weapon
+            .contains(&weapon_id);
+    let quiet_river_active =
+        quiet_river_style_active(&modifiers, weapon_preset, armor_type, shield_data)
+            || ((modifiers.halve_damage_by_weapon.contains(&weapon_id)
+                || modifiers.ignore_all_dr_by_weapon.contains(&weapon_id))
+                && weapon_preset.name.trim().eq_ignore_ascii_case("fist")
+                && matches!(armor_type, ArmorType::None)
+                && shield_data.is_none());
+    let rhdwng_flow_active = rhdwng_flow_style_active(&modifiers, weapon_preset)
+        || modifiers
+            .thrown_full_strength_damage_by_weapon
+            .contains(&weapon_id);
     let ithican_prince_active = ithican_prince_style_active(&modifiers, weapon_preset, shield_data);
     let regenstat_active = regenstat_style_active(
         &modifiers,
@@ -2734,53 +3641,75 @@ pub fn build_combatant(
     );
     let returner_active = returner_style_active(&modifiers, weapon_preset);
     let six_paths_active = six_paths_style_active(&modifiers, weapon_preset, shield_data);
-    let three_mountains_active = three_mountains_style_active(&modifiers, weapon_preset);
-    let unbreakable_wall_active = unbreakable_wall_style_active(&modifiers, shield_data);
+    let three_mountains_active = three_mountains_style_active(&modifiers, weapon_preset)
+        || modifiers
+            .consecutive_hits_force_trauma_twenty_by_weapon
+            .contains_key(&weapon_id);
+    let shield_filter_key = shield_data.map(|shield| shield_filter_key(&shield.name));
+    let unbreakable_wall_active = unbreakable_wall_style_active(&modifiers, shield_data)
+        || modifiers.shield_dr_bonus_filtered != 0 && shield_data.is_some()
+        || modifiers.shield_breakage_uses_shield_dr && shield_data.is_some()
+        || shield_filter_key
+            .as_ref()
+            .map(|name| {
+                modifiers.shield_dr_bonus_by_name.contains_key(name)
+                    || modifiers
+                        .shield_breakage_uses_shield_dr_by_name
+                        .contains(name)
+            })
+            .unwrap_or(false);
     let twelve_paths_active = twelve_paths_style_active(&modifiers, weapon_preset, shield_data);
-    if armeroci_pole_active {
+    if modifiers.armeroci_pole_style && armeroci_pole_style_active(&modifiers, weapon_preset) {
         weapon_reach = (weapon_reach + ARMEROCI_POLE_REACH_BONUS_FT).max(1.0);
     }
-    let armeroci_speed_penalty = if armeroci_pole_active {
-        ARMEROCI_POLE_SPEED_PENALTY
+    let armeroci_speed_penalty =
+        if modifiers.armeroci_pole_style && armeroci_pole_style_active(&modifiers, weapon_preset) {
+            ARMEROCI_POLE_SPEED_PENALTY
+        } else {
+            0.0
+        };
+    let falling_sun_speed_penalty = if modifiers.falling_sun_style && falling_sun_active {
+        2.0
     } else {
         0.0
     };
+    let weapon_speed_flat_bonus = modifiers.weapon_speed_flat_bonus_for_weapon(weapon_id);
+    let speed_multiplier = modifiers.weapon_speed_multiplier_for_weapon(weapon_id);
+    let min_speed_multiplier = modifiers.weapon_min_speed_multiplier_for_weapon(weapon_id);
+    let reach_multiplier = modifiers.reach_multiplier_for_weapon(weapon_id);
     let has_offhand = player.offhand_weapon_id.is_some();
     let (
         defensive_dualwielding_selected,
         mut offensive_dualwielding,
         perfect_two_weapon_fighting_active,
-    ) = dualwield_mode_flags(player, weapon_preset);
+    ) = dualwield_mode_flags_with_perfect(
+        player,
+        weapon_preset,
+        modifiers.perfect_two_weapon_fighting,
+    );
     let mut defensive_dualwielding = defensive_dualwielding_selected;
-    let dualwield_offhand_damage_penalty = if has_two_weapon_fighting_effect(player) {
-        0
-    } else {
-        -2
-    };
-    let dualwield_primary_recovery_penalty = if has_improved_two_weapon_fighting_effect(player) {
-        1.0
-    } else {
-        2.0
-    };
-    let dualwield_secondary_recovery_penalty = if has_greater_two_weapon_fighting_effect(player) {
-        1.0
-    } else {
-        2.0
-    };
+    let dualwield_offhand_damage_penalty = modifiers.dualwield_offhand_damage_penalty.unwrap_or(-2);
+    let dualwield_primary_recovery_penalty =
+        modifiers.dualwield_primary_recovery_penalty.unwrap_or(2.0);
+    let dualwield_secondary_recovery_penalty = modifiers
+        .dualwield_secondary_recovery_penalty
+        .unwrap_or(2.0);
     let mut offensive_dualwielding_defense_penalty =
         offensive_dualwielding && !perfect_two_weapon_fighting_active;
-    let fight_defensively_attack_penalty = fight_defensively_attack_penalty_for_player(player);
+    let fight_defensively_attack_penalty =
+        fight_defensively_attack_penalty_with_modifiers(player, &modifiers);
     let fight_defensively_defense_bonus = fight_defensively_defense_bonus_for_player(player);
-    let called_shot_defense_bonus = called_shot_defense_bonus_for_player(player);
-    let called_shot_defense_penalty = called_shot_defense_penalty_for_player(player);
-    let called_shot_delay_profile = called_shot_delay_profile_for_player(player);
-    let called_shot_deceptive_defender = has_deceptive_defender_effect(player);
+    let called_shot_defense_bonus =
+        called_shot_defense_bonus_with_modifiers(&modifiers, ArmorType::Medium);
+    let called_shot_defense_penalty = called_shot_defense_penalty_with_modifiers(&modifiers);
+    let called_shot_delay_profile = called_shot_delay_profile_with_modifiers(&modifiers);
+    let called_shot_deceptive_defender = modifiers.called_shot_deceptive_defender;
     let mut called_shot_target_defense_bonus_base = character
         .equipment
         .armor
         .as_ref()
-        .map(|armor| called_shot_target_defense_bonus_base_for_armor_type(armor.armor_type))
-        .unwrap_or(CALLED_SHOT_TARGET_DEFENSE_BONUS_LIGHT);
+        .map(|armor| called_shot_defense_bonus_with_modifiers(&modifiers, armor.armor_type))
+        .unwrap_or_else(|| called_shot_defense_bonus_with_modifiers(&modifiers, ArmorType::Light));
     if offensive_dualwielding {
         defensive_dualwielding = perfect_two_weapon_fighting_active;
     }
@@ -2803,8 +3732,11 @@ pub fn build_combatant(
         - speed_mastery
         + free_hand_speed_bonus
         + armeroci_speed_penalty
-        + modifiers.weapon_speed_bonus_for_weapon(weapon_id) as f32)
+        + falling_sun_speed_penalty
+        + modifiers.weapon_speed_bonus_for_weapon(weapon_id) as f32
+        + weapon_speed_flat_bonus)
         .max(min_speed);
+    let jab_speed = (jab_speed * speed_multiplier).max(min_speed * min_speed_multiplier);
     let jab_special_expr = if use_jab {
         weapon_preset.jab_special_expr.clone()
     } else {
@@ -2830,7 +3762,7 @@ pub fn build_combatant(
     let primary_uses_projectiles =
         uses_projectiles(&weapon_preset.name, weapon_preset.ammunition.is_some());
     let (material_attack_bonus, material_damage_bonus) = material_bonuses(
-        weapon_material_tier_for_player(player, weapon_preset),
+        weapon_material_tier_with_modifiers(player, weapon_preset, &modifiers),
         player.projectile_material_tier,
         primary_is_ranged,
         primary_uses_projectiles,
@@ -2853,11 +3785,17 @@ pub fn build_combatant(
     let damage_mastery = effective_damage_mastery(player);
     let mut attack_bonus =
         attack_bonus_base + material_attack_bonus + modifiers.attack_bonus_for_weapon(weapon_id);
-    if hobbler_active {
+    if modifiers.hobbler_style && hobbler_style_active(&modifiers, weapon_preset) {
         attack_bonus -= HOBBLER_ATTACK_PENALTY;
+        attack_bonus_base -= HOBBLER_ATTACK_PENALTY;
+    } else if hobbler_active {
         attack_bonus_base -= HOBBLER_ATTACK_PENALTY;
     }
     let mut defense_mod = derived.base_dv + defense_mastery + defense_bonus + defense_bonus_weapon;
+    if quiet_river_active {
+        defense_mod =
+            derived.base_dv + (defense_mastery * 2) + defense_bonus + defense_bonus_weapon;
+    }
     if returner_active {
         defense_mod -= RETURNER_DEFENSE_PENALTY;
     }
@@ -2885,6 +3823,12 @@ pub fn build_combatant(
         defense_mod += half_int_bonus;
         strength_damage += half_int_bonus;
     }
+    if doomrazor_active || modifiers.no_strength_damage_by_weapon.contains(&weapon_id) {
+        strength_damage -= strength_damage_for_weapon(weapon_preset, strength_damage_base);
+    }
+    if doomrazor_active || modifiers.no_mastery_damage_by_weapon.contains(&weapon_id) {
+        strength_damage -= damage_mastery;
+    }
     let mut max_hp =
         (derived.hit_points as i32 + modifiers.hp_bonus + misc_modifiers.hp_bonus).max(1);
     let mut threshold_of_pain = threshold_of_pain(max_hp, player.level);
@@ -2903,8 +3847,18 @@ pub fn build_combatant(
     let mut shield_defense_bonus = shield_data.map(|shield| shield.defense_bonus).unwrap_or(0)
         + modifiers.shield_defense_bonus;
     let mut shield_dr = shield_data.map(|shield| shield.dr).unwrap_or(0);
-    if unbreakable_wall_active {
+    if modifiers.unbreakable_wall_style && unbreakable_wall_active {
         shield_dr += 2;
+    }
+    if modifiers.shield_dr_bonus_filtered != 0 && shield_data.map(|_| true).unwrap_or(false) {
+        shield_dr += modifiers.shield_dr_bonus_filtered;
+    }
+    if let Some(shield_key) = shield_filter_key.as_ref() {
+        shield_dr += modifiers
+            .shield_dr_bonus_by_name
+            .get(shield_key)
+            .copied()
+            .unwrap_or(0);
     }
     let mut shield_cover_value = shield_data.map(|shield| shield.cover_value);
     if let Some(cover_value) = shield_cover_value.as_mut() {
@@ -2953,13 +3907,25 @@ pub fn build_combatant(
     let weapon_speed = if use_jab {
         jab_speed
     } else {
-        (base_weapon_speed + two_hand_speed_penalty + speed_mod - speed_mastery
+        let speed = (base_weapon_speed + two_hand_speed_penalty + speed_mod - speed_mastery
             + free_hand_speed_bonus
             + armeroci_speed_penalty
-            + modifiers.weapon_speed_bonus_for_weapon(weapon_id) as f32)
-            .max(min_speed)
+            + falling_sun_speed_penalty
+            + modifiers.weapon_speed_bonus_for_weapon(weapon_id) as f32
+            + weapon_speed_flat_bonus)
+            .max(min_speed);
+        (speed * speed_multiplier).max(min_speed * min_speed_multiplier)
     };
-    let damage_expr_cache = damage_expr_cache_for_player_weapon(player, weapon_preset);
+    weapon_reach = (weapon_reach * reach_multiplier).max(0.5);
+    let damage_expr_cache = if falling_sun_active
+        || modifiers
+            .expanded_damage_penetration_by_weapon
+            .contains(&weapon_id)
+    {
+        DamageExprCache::new_with_max_minus_one_penetration(&weapon_damage)
+    } else {
+        damage_expr_cache_for_player_weapon(weapon_preset, &modifiers)
+    };
     let shield_damage_expr_cache = shield_damage_expr.as_deref().map(DamageExprCache::new);
     let jab_special_expr_cache = jab_special_expr.as_deref().map(DamageExprCache::new);
     let is_unarmed_weapon = weapon_preset.group == WeaponGroup::Unarmed;
@@ -3060,6 +4026,13 @@ pub fn build_combatant(
                             is_small_weapon: offhand_is_small,
                             is_unarmed: offhand_is_unarmed,
                             hacking_or_piercing: offhand_preset.hacking_or_piercing,
+                            force_nonpenetrating_damage: false,
+                            halve_damage: false,
+                            ignore_all_dr: false,
+                            internal_hemorrhage_damage: 0,
+                            use_close_hit_damage_expr: None,
+                            use_close_hit_damage_expr_cache: None,
+                            use_close_hit_margin_less_than: 0,
                             crit_min_roll: offhand_crit_min_roll,
                             crit_min_roll_ranged: offhand_crit_min_roll_ranged,
                             crit_severity_bonus: offhand_crit_severity_bonus,
@@ -3120,6 +4093,12 @@ pub fn build_combatant(
             sim::ModifierOpI32::Set(1),
         );
     }
+    if falling_sun_active {
+        sheet_modifiers.add_i32(
+            sim::StatIdI32::FlagFallingSunStyle,
+            sim::ModifierOpI32::Set(1),
+        );
+    }
     if fymblwnger_active {
         sheet_modifiers.add_i32(
             sim::StatIdI32::FlagFymblwngerStyle,
@@ -3134,6 +4113,18 @@ pub fn build_combatant(
     }
     if hobbler_active {
         sheet_modifiers.add_i32(sim::StatIdI32::FlagHobblerStyle, sim::ModifierOpI32::Set(1));
+    }
+    if quiet_river_active {
+        sheet_modifiers.add_i32(
+            sim::StatIdI32::FlagQuietRiverStyle,
+            sim::ModifierOpI32::Set(1),
+        );
+    }
+    if rhdwng_flow_active {
+        sheet_modifiers.add_i32(
+            sim::StatIdI32::FlagRhdwngFlowStyle,
+            sim::ModifierOpI32::Set(1),
+        );
     }
     if ithican_prince_active {
         sheet_modifiers.add_i32(
@@ -3200,6 +4191,29 @@ pub fn build_combatant(
                 is_small_weapon,
                 is_unarmed: is_unarmed_weapon,
                 hacking_or_piercing: weapon_preset.hacking_or_piercing,
+                force_nonpenetrating_damage: doomrazor_active
+                    || modifiers
+                        .force_nonpenetrating_damage_by_weapon
+                        .contains(&weapon_id),
+                halve_damage: quiet_river_active
+                    || modifiers.halve_damage_by_weapon.contains(&weapon_id),
+                ignore_all_dr: quiet_river_active
+                    || modifiers.ignore_all_dr_by_weapon.contains(&weapon_id),
+                internal_hemorrhage_damage: modifiers
+                    .internal_hemorrhage_damage_by_weapon
+                    .get(&weapon_id)
+                    .copied()
+                    .unwrap_or(if doomrazor_active { 1 } else { 0 }),
+                use_close_hit_damage_expr: modifiers
+                    .close_hit_damage_for_weapon(weapon_id)
+                    .map(|rule| rule.expr.clone()),
+                use_close_hit_damage_expr_cache: modifiers
+                    .close_hit_damage_for_weapon(weapon_id)
+                    .map(|rule| DamageExprCache::new(&rule.expr)),
+                use_close_hit_margin_less_than: modifiers
+                    .close_hit_damage_for_weapon(weapon_id)
+                    .map(|rule| rule.margin_less_than)
+                    .unwrap_or(0),
                 crit_min_roll,
                 crit_min_roll_ranged,
                 crit_severity_bonus,
@@ -3280,24 +4294,24 @@ pub fn stop_distance_for_players(
             .and_then(|token| token.parse::<f32>().ok())
     };
     let reach_for_player = |player: &PlayerConfig| {
-        weapon_catalog
-            .get(player.weapon_id)
-            .map(|weapon| {
-                let modifiers = resolve_talent_modifiers(player, talent_catalog, weapon_catalog);
-                let reach_bonus = modifiers.reach_bonus_for_group(weapon.group) as f32;
-                let armeroci_reach_bonus = if armeroci_pole_style_active(&modifiers, weapon) {
-                    ARMEROCI_POLE_REACH_BONUS_FT
-                } else {
-                    0.0
-                };
-                let base_reach = if is_ranged_weapon(weapon) {
-                    melee_reach_from_label(&weapon.reach_label).unwrap_or(1.0)
-                } else {
-                    weapon.reach_ft
-                };
-                (base_reach + reach_bonus + armeroci_reach_bonus).max(1.0)
-            })
-            .unwrap_or(1.0)
+        let modifiers = resolve_talent_modifiers(player, talent_catalog, weapon_catalog);
+        let weapon = weapon_for_player_with_modifiers(player, weapon_catalog, &modifiers);
+        let weapon_id = weapon_id_for_player_with_modifiers(player, weapon_catalog, &modifiers);
+        let reach_bonus = modifiers.reach_bonus_for_group(weapon.group) as f32
+            + modifiers.weapon_reach_flat_bonus_for_weapon(weapon_id);
+        let armeroci_reach_bonus =
+            if modifiers.armeroci_pole_style && armeroci_pole_style_active(&modifiers, weapon) {
+                ARMEROCI_POLE_REACH_BONUS_FT
+            } else {
+                0.0
+            };
+        let reach_multiplier = modifiers.reach_multiplier_for_weapon(weapon_id);
+        let base_reach = if is_ranged_weapon(weapon) {
+            melee_reach_from_label(&weapon.reach_label).unwrap_or(1.0)
+        } else {
+            weapon.reach_ft
+        };
+        ((base_reach + reach_bonus + armeroci_reach_bonus) * reach_multiplier).max(0.5)
     };
     let reach_a = reach_for_player(&players[0]);
     let reach_b = reach_for_player(&players[1]);
@@ -3698,6 +4712,7 @@ mod tests {
         let mut duelist_player = base_player(weapon_id);
         duelist_player.fight_defensively = true;
         duelist_player.fight_defensively_penalty = 6;
+        add_talent(&mut duelist_player, "contender", None);
         add_talent(&mut duelist_player, "duelist", None);
         let maneuvers = build_maneuvers(&duelist_player);
         assert_eq!(maneuvers.fight_defensively_attack_penalty, 3);
@@ -3768,6 +4783,7 @@ mod tests {
         assert!(maneuvers.called_shot_deceptive_defender);
 
         let mut duelist = baseline.clone();
+        add_talent(&mut duelist, TALENT_ID_CONTENDER, None);
         add_talent(&mut duelist, TALENT_ID_DUELIST, None);
         let maneuvers = build_maneuvers(&duelist);
         assert_eq!(maneuvers.called_shot_defense_bonus, 4);
@@ -3944,6 +4960,7 @@ mod tests {
         let mut player = base_player(weapon_id);
         player.fight_defensively = true;
         player.fight_defensively_penalty = 6;
+        add_talent(&mut player, "contender", None);
         add_talent(&mut player, "duelist", None);
 
         let with_duelist = build_maneuvers(&player);
@@ -3967,6 +4984,7 @@ mod tests {
         player.fight_defensively = true;
         player.fight_defensively_penalty = 8;
         add_talent(&mut player, "combat_expertise", None);
+        add_talent(&mut player, "contender", None);
         add_talent(&mut player, "duelist", None);
 
         let maneuvers = build_maneuvers(&player);
@@ -4716,16 +5734,20 @@ mod tests {
         assert_eq!(maneuvers.dualwield_secondary_recovery_penalty, 2.0);
 
         let mut improved = baseline.clone();
+        add_talent(&mut improved, TALENT_ID_TWO_WEAPON_FIGHTING, None);
         add_talent(&mut improved, TALENT_ID_IMPROVED_TWO_WEAPON_FIGHTING, None);
         let maneuvers = build_maneuvers(&improved);
-        assert_eq!(maneuvers.dualwield_offhand_damage_penalty, -2);
+        assert_eq!(maneuvers.dualwield_offhand_damage_penalty, 0);
         assert_eq!(maneuvers.dualwield_primary_recovery_penalty, 1.0);
         assert_eq!(maneuvers.dualwield_secondary_recovery_penalty, 2.0);
 
         let mut greater = baseline.clone();
+        greater.level = 6;
+        add_talent(&mut greater, TALENT_ID_TWO_WEAPON_FIGHTING, None);
+        add_talent(&mut greater, TALENT_ID_IMPROVED_TWO_WEAPON_FIGHTING, None);
         add_talent(&mut greater, TALENT_ID_GREATER_TWO_WEAPON_FIGHTING, None);
         let maneuvers = build_maneuvers(&greater);
-        assert_eq!(maneuvers.dualwield_offhand_damage_penalty, -2);
+        assert_eq!(maneuvers.dualwield_offhand_damage_penalty, 0);
         assert_eq!(maneuvers.dualwield_primary_recovery_penalty, 1.0);
         assert_eq!(maneuvers.dualwield_secondary_recovery_penalty, 1.0);
     }
@@ -4743,6 +5765,10 @@ mod tests {
         let baseline_summary = player_summary(&baseline, &weapons, &armor, &shields, &talents);
 
         let mut perfect = baseline.clone();
+        perfect.level = 9;
+        add_talent(&mut perfect, TALENT_ID_TWO_WEAPON_FIGHTING, None);
+        add_talent(&mut perfect, TALENT_ID_IMPROVED_TWO_WEAPON_FIGHTING, None);
+        add_talent(&mut perfect, TALENT_ID_GREATER_TWO_WEAPON_FIGHTING, None);
         add_talent(&mut perfect, TALENT_ID_PERFECT_TWO_WEAPON_FIGHTING, None);
         let perfect_combatant =
             build_combatant(&perfect, &weapons, &armor, &shields, &npc_presets, &talents);
@@ -5799,6 +6825,207 @@ mod tests {
                 - ARMEROCI_POLE_SPEED_PENALTY)
                 .abs()
                 < 0.001
+        );
+    }
+
+    #[test]
+    fn falling_sun_adds_speed_penalty_and_expanded_penetration() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npc_presets = Catalog::new(Vec::new());
+        let weapon_id = weapons
+            .entries()
+            .iter()
+            .position(|weapon| weapon.name.eq_ignore_ascii_case("Flamberge"))
+            .and_then(|idx| weapons.id_from_index(idx))
+            .expect("no flamberge found");
+        let mut player = base_player(weapon_id);
+        player.proficiencies = vec!["Flamberge".to_string()];
+        add_talent(&mut player, TALENT_ID_FALLING_SUN, None);
+        let combatant =
+            build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
+        let mut baseline = player.clone();
+        baseline.talents.clear();
+        let baseline_combatant = build_combatant(
+            &baseline,
+            &weapons,
+            &armor,
+            &shields,
+            &npc_presets,
+            &talents,
+        );
+
+        assert!(
+            (combatant.sheet.offense.weapon.speed
+                - baseline_combatant.sheet.offense.weapon.speed
+                - 2.0)
+                .abs()
+                < 0.001
+        );
+        assert!(
+            combatant
+                .sheet
+                .offense
+                .weapon
+                .damage_expr_cache
+                .penetrate_on_max_minus_one()
+        );
+        assert!(combatant.apply_i32(crate::sim::StatIdI32::FlagFallingSunStyle, 0) > 0);
+    }
+
+    #[test]
+    fn doomrazor_removes_strength_mastery_and_forces_nonpenetrating_damage() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npc_presets = Catalog::new(Vec::new());
+        let weapon_id = weapons
+            .entries()
+            .iter()
+            .position(|weapon| weapon.name.eq_ignore_ascii_case("Dagger"))
+            .and_then(|idx| weapons.id_from_index(idx))
+            .expect("no dagger found");
+        let mut player = base_player(weapon_id);
+        player.mastery_damage = 3;
+        player.proficiencies = vec!["Dagger".to_string()];
+        add_talent(&mut player, TALENT_ID_DOOMRAZOR, None);
+        let combatant =
+            build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
+        let mut baseline = player.clone();
+        baseline.talents.clear();
+        let baseline_combatant = build_combatant(
+            &baseline,
+            &weapons,
+            &armor,
+            &shields,
+            &npc_presets,
+            &talents,
+        );
+        let weapon = weapons.get(weapon_id).expect("selected weapon missing");
+        let removed_damage = strength_damage_for_weapon(
+            weapon,
+            baseline_combatant.sheet.offense.strength_damage_base,
+        ) + player.mastery_damage;
+
+        assert_eq!(
+            baseline_combatant.sheet.offense.strength_damage
+                - combatant.sheet.offense.strength_damage,
+            removed_damage
+        );
+        assert!(combatant.sheet.offense.weapon.force_nonpenetrating_damage);
+        assert_eq!(combatant.sheet.offense.weapon.internal_hemorrhage_damage, 1);
+    }
+
+    #[test]
+    fn quiet_river_halves_damage_ignores_dr_and_doubles_unarmed_defense_mastery() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npc_presets = Catalog::new(Vec::new());
+        let weapon_id = weapons
+            .entries()
+            .iter()
+            .position(|weapon| weapon.name.eq_ignore_ascii_case("Fist"))
+            .and_then(|idx| weapons.id_from_index(idx))
+            .expect("no fist found");
+        let mut player = base_player(weapon_id);
+        player.mastery_defense = 3;
+        player.proficiencies = vec!["Fist".to_string()];
+        add_talent(&mut player, TALENT_ID_QUIET_RIVER, None);
+        let combatant =
+            build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
+        let mut baseline = player.clone();
+        baseline.talents.clear();
+        let baseline_combatant = build_combatant(
+            &baseline,
+            &weapons,
+            &armor,
+            &shields,
+            &npc_presets,
+            &talents,
+        );
+
+        assert!(combatant.sheet.offense.weapon.halve_damage);
+        assert!(combatant.sheet.offense.weapon.ignore_all_dr);
+        assert_eq!(
+            combatant.sheet.defense.defense_mod - baseline_combatant.sheet.defense.defense_mod,
+            player.mastery_defense
+        );
+    }
+
+    #[test]
+    fn rhdwng_flow_marks_throwing_weapon_style_active() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npc_presets = Catalog::new(Vec::new());
+        let weapon_id = weapons
+            .entries()
+            .iter()
+            .position(|weapon| weapon.name.eq_ignore_ascii_case("Throwing axe"))
+            .and_then(|idx| weapons.id_from_index(idx))
+            .expect("no throwing axe found");
+        let mut player = base_player(weapon_id);
+        player.proficiencies = vec!["Throwing axe".to_string()];
+        add_talent(&mut player, TALENT_ID_RHDWNG_FLOW, None);
+        let combatant =
+            build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
+
+        assert!(combatant.apply_i32(crate::sim::StatIdI32::FlagRhdwngFlowStyle, 0) > 0);
+    }
+
+    #[test]
+    fn rohavalan_bridge_halves_speed_and_reach_and_sets_close_hit_damage() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npc_presets = Catalog::new(Vec::new());
+        let weapon_id = weapons
+            .entries()
+            .iter()
+            .position(|weapon| weapon.name.eq_ignore_ascii_case("Staff"))
+            .and_then(|idx| weapons.id_from_index(idx))
+            .expect("no staff found");
+        let mut player = base_player(weapon_id);
+        player.proficiencies = vec!["Staff".to_string()];
+        add_talent(&mut player, TALENT_ID_ROHAVALAN_BRIDGE, None);
+        let combatant =
+            build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
+        let mut baseline = player.clone();
+        baseline.talents.clear();
+        let baseline_combatant = build_combatant(
+            &baseline,
+            &weapons,
+            &armor,
+            &shields,
+            &npc_presets,
+            &talents,
+        );
+
+        assert!(
+            (combatant.sheet.offense.weapon.speed
+                - (baseline_combatant.sheet.offense.weapon.speed / 2.0))
+                .abs()
+                < 0.001
+        );
+        assert!(
+            (combatant.sheet.offense.weapon.reach_ft
+                - (baseline_combatant.sheet.offense.weapon.reach_ft / 2.0))
+                .abs()
+                < 0.001
+        );
+        assert_eq!(
+            combatant
+                .sheet
+                .offense
+                .weapon
+                .use_close_hit_damage_expr
+                .as_deref(),
+            Some("2d4p")
+        );
+        assert_eq!(
+            combatant
+                .sheet
+                .offense
+                .weapon
+                .use_close_hit_margin_less_than,
+            10
         );
     }
 

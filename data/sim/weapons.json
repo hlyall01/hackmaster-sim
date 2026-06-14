@@ -368,7 +368,8 @@
       "weight_lbs": 4.0,
       "armor_penetration": 0,
       "handedness": "2h",
-      "defense_bonus_always": false,
+      "defense": "d20p",
+      "defense_bonus_always": true,
       "price_gp": 45
     },
     {
@@ -1515,11 +1516,11 @@
       "dismount": false,
       "set_for_charge": false,
       "jab_special": "d8+3",
-      "defense": "d20p-4",
+      "defense": "d20p",
       "phalanx_rank": null,
       "armor_penetration": 0,
       "handedness": "2h",
-      "defense_bonus_always": false,
+      "defense_bonus_always": true,
       "price_gp": 58
     },
     {

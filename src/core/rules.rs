@@ -8,6 +8,7 @@ pub struct DamageExprCache {
     cleaned_nonpenetrating: String,
     is_lower_of: bool,
     d6_penetration_triggers: Option<Vec<i32>>,
+    penetrate_on_max_minus_one: bool,
 }
 
 impl DamageExprCache {
@@ -21,6 +22,7 @@ impl DamageExprCache {
             cleaned_nonpenetrating,
             is_lower_of,
             d6_penetration_triggers: None,
+            penetrate_on_max_minus_one: false,
         }
     }
 
@@ -39,14 +41,27 @@ impl DamageExprCache {
         cache
     }
 
+    pub fn new_with_max_minus_one_penetration(expr: &str) -> Self {
+        let mut cache = Self::new(expr);
+        cache.penetrate_on_max_minus_one = true;
+        cache
+    }
+
     pub fn roll(&self, rng: &mut impl Rng, nonpenetrating: bool) -> i32 {
         if nonpenetrating {
-            roll_damage_expr_cached(&self.cleaned_nonpenetrating, self.is_lower_of, None, rng)
+            roll_damage_expr_cached(
+                &self.cleaned_nonpenetrating,
+                self.is_lower_of,
+                None,
+                false,
+                rng,
+            )
         } else {
             roll_damage_expr_cached(
                 &self.cleaned,
                 self.is_lower_of,
                 self.d6_penetration_triggers.as_deref(),
+                self.penetrate_on_max_minus_one,
                 rng,
             )
         }
@@ -54,6 +69,10 @@ impl DamageExprCache {
 
     pub fn d6_penetration_triggers(&self) -> Option<&[i32]> {
         self.d6_penetration_triggers.as_deref()
+    }
+
+    pub fn penetrate_on_max_minus_one(&self) -> bool {
+        self.penetrate_on_max_minus_one
     }
 }
 
@@ -103,11 +122,11 @@ pub fn roll_damage_expr(expr: &str, rng: &mut impl Rng, nonpenetrating: bool) ->
         cleaned
     };
     if is_lower_of {
-        let a_total = evaluate_expression(&cleaned, None, rng);
-        let b_total = evaluate_expression(&cleaned, None, rng);
+        let a_total = evaluate_expression(&cleaned, None, false, rng);
+        let b_total = evaluate_expression(&cleaned, None, false, rng);
         a_total.min(b_total)
     } else {
-        evaluate_expression(&cleaned, None, rng)
+        evaluate_expression(&cleaned, None, false, rng)
     }
 }
 
@@ -115,14 +134,30 @@ fn roll_damage_expr_cached(
     cleaned: &str,
     is_lower_of: bool,
     d6_penetration_triggers: Option<&[i32]>,
+    penetrate_on_max_minus_one: bool,
     rng: &mut impl Rng,
 ) -> i32 {
     if is_lower_of {
-        let a_total = evaluate_expression(cleaned, d6_penetration_triggers, rng);
-        let b_total = evaluate_expression(cleaned, d6_penetration_triggers, rng);
+        let a_total = evaluate_expression(
+            cleaned,
+            d6_penetration_triggers,
+            penetrate_on_max_minus_one,
+            rng,
+        );
+        let b_total = evaluate_expression(
+            cleaned,
+            d6_penetration_triggers,
+            penetrate_on_max_minus_one,
+            rng,
+        );
         a_total.min(b_total)
     } else {
-        evaluate_expression(cleaned, d6_penetration_triggers, rng)
+        evaluate_expression(
+            cleaned,
+            d6_penetration_triggers,
+            penetrate_on_max_minus_one,
+            rng,
+        )
     }
 }
 
@@ -170,6 +205,7 @@ pub fn clean_damage_expr(expr: &str) -> String {
 fn evaluate_expression(
     expr: &str,
     d6_penetration_triggers: Option<&[i32]>,
+    penetrate_on_max_minus_one: bool,
     rng: &mut impl Rng,
 ) -> i32 {
     let mut total = 0;
@@ -207,7 +243,12 @@ fn evaluate_expression(
 
         let term = &expr[start..idx];
         if !term.is_empty() {
-            let term_value = evaluate_term(term, d6_penetration_triggers, rng);
+            let term_value = evaluate_term(
+                term,
+                d6_penetration_triggers,
+                penetrate_on_max_minus_one,
+                rng,
+            );
             total += sign * term_value;
         }
     }
@@ -259,11 +300,21 @@ fn expected_expression(expr: &str) -> f64 {
     total
 }
 
-fn evaluate_term(term: &str, d6_penetration_triggers: Option<&[i32]>, rng: &mut impl Rng) -> i32 {
+fn evaluate_term(
+    term: &str,
+    d6_penetration_triggers: Option<&[i32]>,
+    penetrate_on_max_minus_one: bool,
+    rng: &mut impl Rng,
+) -> i32 {
     let trimmed = strip_outer_parens(term);
 
     if has_top_level_operator(trimmed) {
-        return evaluate_expression(trimmed, d6_penetration_triggers, rng);
+        return evaluate_expression(
+            trimmed,
+            d6_penetration_triggers,
+            penetrate_on_max_minus_one,
+            rng,
+        );
     }
 
     if let Some(d_pos) = trimmed.find('d') {
@@ -289,7 +340,9 @@ fn evaluate_term(term: &str, d6_penetration_triggers: Option<&[i32]>, rng: &mut 
 
         let mut subtotal = 0;
         for _ in 0..count {
-            let roll = if penetration.is_some() && sides == 6 && d6_penetration_triggers.is_some() {
+            let roll = if penetration.is_some() && penetrate_on_max_minus_one {
+                penetrating_roll_trigger_set(sides, &[(sides - 1).max(1), sides], rng)
+            } else if penetration.is_some() && sides == 6 && d6_penetration_triggers.is_some() {
                 penetrating_roll_trigger_set(sides, d6_penetration_triggers.unwrap(), rng)
             } else {
                 roll_die_with_penetration(sides, penetration, rng)

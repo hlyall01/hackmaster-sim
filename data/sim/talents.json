@@ -207,7 +207,12 @@
       "cost_bp": 25,
       "category": "Martial",
       "max_rank": 1,
-      "effects": []
+      "effects": [
+        {
+          "type": "fight_defensively_attack_penalty_divisor",
+          "divisor": 2
+        }
+      ]
     },
     {
       "id": "combat_reflexes",
@@ -239,7 +244,11 @@
       "cost_bp": 17,
       "category": "Martial",
       "max_rank": 1,
-      "effects": []
+      "effects": [
+        {
+          "type": "called_shot_deceptive_defender"
+        }
+      ]
     },
     {
       "id": "double_weapon_focus",
@@ -359,6 +368,9 @@
         {
           "type": "heavy_armor_damage_bonus_from_dr",
           "divisor": 4
+        },
+        {
+          "type": "ignore_ancillary_crit_effects"
         }
       ]
     },
@@ -369,7 +381,12 @@
       "cost_bp": 25,
       "category": "Martial",
       "max_rank": 1,
-      "effects": []
+      "effects": [
+        {
+          "type": "crit_min_roll_weapon_group",
+          "min_roll": 19
+        }
+      ]
     },
     {
       "id": "improved_reach",
@@ -410,6 +427,9 @@
         {
           "type": "light_armor_defense_bonus_from_dr",
           "divisor": 2
+        },
+        {
+          "type": "incoming_crit_extra_damage_halved"
         }
       ]
     },
@@ -440,6 +460,10 @@
         {
           "type": "medium_armor_defense_penalty_reduction",
           "amount": 1
+        },
+        {
+          "type": "incoming_crit_severity_reduction",
+          "amount": 10
         }
       ]
     },
@@ -490,7 +514,16 @@
       "cost_bp": 18,
       "category": "Martial",
       "max_rank": 1,
-      "effects": []
+      "effects": [
+        {
+          "type": "called_shot_delay_profile",
+          "profile": "precision_aiming"
+        },
+        {
+          "type": "called_shot_target_defense_bonus_divisor",
+          "divisor": 2
+        }
+      ]
     },
     {
       "id": "precision_combatant",
@@ -499,7 +532,20 @@
       "cost_bp": 12,
       "category": "Martial",
       "max_rank": 1,
-      "effects": []
+      "effects": [
+        {
+          "type": "called_shot_delay_profile",
+          "profile": "precision_combatant"
+        },
+        {
+          "type": "called_shot_self_defense_penalty",
+          "amount": 2
+        },
+        {
+          "type": "called_shot_target_defense_bonus_divisor",
+          "divisor": 2
+        }
+      ]
     },
     {
       "id": "shield_focus",
@@ -590,72 +636,211 @@
     {
       "id": "armeroci_pole",
       "name": "Armeroci Pole",
-      "description": "Increase reach by 1 foot and gain an extra damage die on your opening engagement strike while increasing weapon speed by 2. You also threaten engagement strikes when foes enter your reach if your reach is at least theirs.",
+      "description": "The Armeroci do not simply wield weapons, they draw circles of death around themselves, and dare others to cross the line. Your reach is increased by 1 foot and you deal an extra die of damage on your initial engagement strikes at the cost of increasing your weapon speed by 2. In addition, you always receive an initial engagement strike against foes engaging you, as long as your reach is equivalent or greater than theirs, even if you are already engaged.",
       "cost_bp": 20,
       "category": "Weapon Styles",
       "max_rank": 1,
       "effects": [
         {
-          "type": "armeroci_pole_style"
+          "type": "weapon_reach_flat_bonus",
+          "amount": 1.0,
+          "min_reach_ft": 5.0,
+          "weapon_groups": [
+            "Large swords",
+            "Polearms"
+          ]
+        },
+        {
+          "type": "weapon_speed_flat_bonus",
+          "amount": 2.0,
+          "min_reach_ft": 5.0,
+          "weapon_groups": [
+            "Large swords",
+            "Polearms"
+          ]
+        },
+        {
+          "type": "opening_engagement_extra_damage_dice",
+          "dice": 1,
+          "min_reach_ft": 5.0,
+          "weapon_groups": [
+            "Large swords",
+            "Polearms"
+          ]
+        },
+        {
+          "type": "always_initial_engagement_if_reach_at_least_opponent",
+          "min_reach_ft": 5.0,
+          "weapon_groups": [
+            "Large swords",
+            "Polearms"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "crescent_moon",
+      "name": "Crescent Moon",
+      "description": "Strike to unbalance and disarm, turn every attack into an opening for a counter. When two-weapon fighting defensively with a primary large sword and secondary small sword, your perfect and near-perfect defenses allow you to immediately called shot your opponent's weapon, granting them a +6 to defense, instead of dealing damage. If you hit, your opponent's weapon is flung 2d6p feet in a random direction; results of 4 feet or less mean the weapon falls to the ground beneath them. You also treat natural 18s as near-perfect defenses, or 17s with the Superior Defense talent.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "crescent_moon_style"
+        }
+      ]
+    },
+    {
+      "id": "doomrazor",
+      "name": "Doomrazor",
+      "description": "It is an art, leaving wounds that seem shallow at first, until the victim realizes too late that the bleeding is happening where no bandage can reach. Do not add your strength or mastery bonus to damage, and no longer penetrate. In exchange, each wound you inflict is accompanied by internal hemorrhaging.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "weapon_damage_options",
+          "no_strength_bonus": true,
+          "no_mastery_bonus": true,
+          "force_nonpenetrating": true,
+          "internal_hemorrhage_damage": 1,
+          "melee_only": true,
+          "hacking_or_piercing": true
+        }
+      ]
+    },
+    {
+      "id": "falling_sun",
+      "name": "Falling Sun",
+      "description": "It is said that this technique was taught to man by a being forged of light who, shortly after, ascended into the night sky. At the cost of increasing your weapon speed by 2, your attack, defense and damage rolls now penetrate on both the maximum die roll and said roll -1.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "weapon_speed_flat_bonus",
+          "amount": 2.0,
+          "weapon_names": [
+            "Flamberge",
+            "Two-handed sword"
+          ]
+        },
+        {
+          "type": "expanded_penetration",
+          "attack_defense_max_minus_one": true,
+          "damage_max_minus_one": true,
+          "weapon_names": [
+            "Flamberge",
+            "Two-handed sword"
+          ]
         }
       ]
     },
     {
       "id": "fymblwnger",
       "name": "Fymblwnger",
-      "description": "Opponents do not gain defense bonuses from Give Ground or Scamper Back against your attacks.",
+      "description": "Said to originate from giants, warriors using this style are taught to swing as though hurling mountains. Your opponents are no longer afforded a bonus to defense when they Give Ground or Scamper Back.",
       "cost_bp": 20,
       "category": "Weapon Styles",
       "max_rank": 1,
       "effects": [
         {
-          "type": "fymblwnger_style"
+          "type": "ignore_defender_movement_defense_bonus",
+          "weapon_names": [
+            "Battle axe",
+            "Executioner's axe",
+            "Greataxe"
+          ]
         }
       ]
     },
     {
       "id": "hammerer",
       "name": "Hammerer",
-      "description": "Any knockback you inflict resets your opponent's weapon count.",
+      "description": "Bodies crumpling with each blow, reminding them that resistance has a cost. Your knock-backs always reset your opponent's weapon count.",
       "cost_bp": 20,
       "category": "Weapon Styles",
       "max_rank": 1,
       "effects": [
         {
-          "type": "hammerer_style"
+          "type": "knockback_resets_weapon_count",
+          "weapon_names": [
+            "Greathammer",
+            "Hammer",
+            "Maul",
+            "Warhammer"
+          ]
         }
       ]
     },
     {
       "id": "hobbler",
       "name": "Hobbler",
-      "description": "Suffer -4 attack, but every landed strike applies critical strike effects by severity without extra critical damage dice.",
+      "description": "If you can't move, you cannot fight. You suffer a -4 penalty to attack, but roll a d2000 for each strike you land. You deal the effects of a critical strike in that location according to the severity of the blow, although without the extra damage dice.",
       "cost_bp": 20,
       "category": "Weapon Styles",
       "max_rank": 1,
       "effects": [
         {
-          "type": "hobbler_style"
+          "type": "weapon_attack_bonus",
+          "amount": -4,
+          "weapon_groups": [
+            "Polearms",
+            "Spears"
+          ]
+        },
+        {
+          "type": "hit_critical_effects_no_extra_dice",
+          "weapon_groups": [
+            "Polearms",
+            "Spears"
+          ]
         }
       ]
     },
     {
       "id": "ithican_prince",
       "name": "Ithican Prince",
-      "description": "While using a buckler and small sword, add half your Intelligence attack bonus to both damage and defense.",
+      "description": "The merchant princes of Ithica prize cleverness above strength. Every step a feint, every strike a lesson. Your intelligence grants half its attack bonus to both damage and defense while using a buckler and small sword.",
       "cost_bp": 20,
       "category": "Weapon Styles",
       "max_rank": 1,
       "effects": [
         {
-          "type": "ithican_prince_style"
+          "type": "int_attack_bonus_to_damage_and_defense",
+          "fraction": 0.5,
+          "weapon_groups": [
+            "Small swords"
+          ],
+          "shield_names": [
+            "Buckler"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "quiet_river",
+      "name": "Quiet River",
+      "description": "A quiet river carves mountains. You deal half damage, but ignore all DR. While not wearing armor or using a shield, your base defense with your bare hands is d20p and you receive double the defense bonus from unarmed weapons mastery. You are not considered armed, however armed opponents do not receive free counterattacks against you.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "weapon_damage_options",
+          "halve_damage": true,
+          "ignore_all_dr": true,
+          "weapon_names": [
+            "Fist"
+          ]
         }
       ]
     },
     {
       "id": "regenstat",
       "name": "Regenstat",
-      "description": "While in its stance, gain +1 attack and defense (max +8) after each successful attack or defense; reset on a miss or when hit.",
+      "description": "The Vetlander sword-duelists train to read the slightest hint of intent. When engaged with a single opponent while using your sword two-handed or one-handed without an offhand, gain +1 to attack and defense each time you successfully attack or defend, maximum +8, resetting upon missing or being hit.",
       "cost_bp": 20,
       "category": "Weapon Styles",
       "max_rank": 1,
@@ -668,7 +853,7 @@
     {
       "id": "returner",
       "name": "Returner",
-      "description": "Take -4 defense and gain retaliatory attacks as enemies strike you, limited to one return attack between your own attack rolls.",
+      "description": "Conceived by a warrior-king tired of bloodshed, many wars were settled in single combat with this gambit. Subject yourself to a -4 penalty to your defense and in exchange you may take advantage of your opponent's exposed defenses to attack them as they attack you. You may only do this return attack against one enemy attack between your own attack rolls, but you still suffer the defense penalty against subsequent attacks. In addition, you may forgo your initial attack when engaging and instead deal double damage on your retaliatory attack.",
       "cost_bp": 20,
       "category": "Weapon Styles",
       "max_rank": 1,
@@ -679,9 +864,91 @@
       ]
     },
     {
+      "id": "rhdwng_flow",
+      "name": "Rhdwng Flow",
+      "description": "Rhdwngers say that force does not begin in the body, but in the earth itself. You may add your full strength bonus to thrown weapons, if applicable, no matter the speed at which you move.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "thrown_full_strength_damage",
+          "thrown_only": true
+        }
+      ]
+    },
+    {
+      "id": "rohavalan_bridge",
+      "name": "Rohavalan Bridge",
+      "description": "A ceaseless cascade, one blow flowing into another. Halve your modified weapon speed, minimum weapon speed and reach. However, you must use a 2d4p in place of your weapon's normal damage die if your attack exceeds your opponent's defense by less than 10.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "weapon_speed_multiplier",
+          "multiplier": 0.5,
+          "min_multiplier": 0.5,
+          "weapon_groups": [
+            "Polearms"
+          ],
+          "weapon_names": [
+            "Staff"
+          ]
+        },
+        {
+          "type": "weapon_reach_multiplier",
+          "multiplier": 0.5,
+          "weapon_groups": [
+            "Polearms"
+          ],
+          "weapon_names": [
+            "Staff"
+          ]
+        },
+        {
+          "type": "close_hit_damage_expr",
+          "expr": "2d4p",
+          "margin_less_than": 10,
+          "weapon_groups": [
+            "Polearms"
+          ],
+          "weapon_names": [
+            "Staff"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "scorn_of_the_dissendri",
+      "name": "Scorn of the Dissendri",
+      "description": "Two hands, one will. When two-weapon fighting, offensively or defensively, strike with both weapons on the initial engagement hits, perfect defenses and near-perfect defenses.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "scorn_of_the_dissendri_style"
+        }
+      ]
+    },
+    {
+      "id": "shield_of_blades",
+      "name": "Shield of Blades",
+      "description": "Be not a man, but a wall wrought of whirling iron. When wielding two one-handed swords defensively, you may use a full d20p plus any defense bonus from both the primary and secondary weapons for all defense rolls against frontal and flank attackers. This bonus may additionally be used against ranged attackers, provided you can see the approaching missile. If you possess the Perfect Two-Weapon Fighting talent, you may use this style and Storm of Blades simultaneously.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "shield_of_blades_style"
+        }
+      ]
+    },
+    {
       "id": "six_paths",
       "name": "Six Paths",
-      "description": "With a medium large sword and medium or small shield, shield blocks only on misses within 5 and landed strikes grant a quick shield-bash follow-up timing window.",
+      "description": "There's an odd calmness to this style. Parry, cut, bash, over and over. When wielding a large sword and either a medium or small shield, your shield is only hit within 5 of the defense roll instead of 10. Furthermore, each successful strike you land permits you a free shield bash attack on the following second.",
       "cost_bp": 20,
       "category": "Weapon Styles",
       "max_rank": 1,
@@ -692,35 +959,66 @@
       ]
     },
     {
-      "id": "three_mountains",
-      "name": "Three Mountains",
-      "description": "After three consecutive hits on the same foe, force their next trauma save to resolve as a 20 result.",
+      "id": "storm_of_blades",
+      "name": "Storm of Blades",
+      "description": "A relentless cascade of steel, sure to turn any foe into mist. When wielding two one-handed swords offensively, the initial attack of your secondary weapon is always made exactly two seconds after your initial primary attack. Additionally, your subsequent attacks, both primary and secondary, are delayed one second less. If you possess the Perfect Two-Weapon Fighting talent, you may use this style and Shield of Blades simultaneously.",
       "cost_bp": 20,
       "category": "Weapon Styles",
       "max_rank": 1,
       "effects": [
         {
-          "type": "three_mountains_style"
+          "type": "storm_of_blades_style"
+        }
+      ]
+    },
+    {
+      "id": "three_mountains",
+      "name": "Three Mountains",
+      "description": "West of Caernoth lies a monastery hidden within this technique's namesake, what it has to do with it, I do not know. If you strike the same creature three times in a row without missing, it must make a Physical Saving Throw against your most recent adjusted attack roll or automatically take 20 on its next Trauma save.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "consecutive_hits_force_trauma_twenty",
+          "hits": 3,
+          "weapon_groups": [
+            "Blunt"
+          ]
         }
       ]
     },
     {
       "id": "unbreakable_wall",
       "name": "Unbreakable Wall",
-      "description": "Large and tower shields gain +2 DR and apply shield DR when checking shield breakage damage.",
+      "description": "The blow meets the shield, and dies there. Large or tower shields you wield gain +2 DR. You know how to lean your body into your shield, reducing the damage dealt to your shield by its DR for the purposes of breakage.",
       "cost_bp": 20,
       "category": "Weapon Styles",
       "max_rank": 1,
       "effects": [
         {
-          "type": "unbreakable_wall_style"
+          "type": "shield_dr_bonus_filtered",
+          "amount": 2,
+          "shield_names": [
+            "Large wooden shield",
+            "Large metallic shield",
+            "Tower shield"
+          ]
+        },
+        {
+          "type": "shield_breakage_uses_shield_dr",
+          "shield_names": [
+            "Large wooden shield",
+            "Large metallic shield",
+            "Tower shield"
+          ]
         }
       ]
     },
     {
       "id": "twelve_paths",
       "name": "Twelve Paths",
-      "description": "Requires proficiency in at least one type of size L large sword and shields. At the cost of a -3 penalty to damage, you are able to wield both a size L large sword and either a small shield or buckler in conjunction, combining your defense modifiers from both your weapon and shield against all attackers in your arc of defense. In addition, your next attack comes two seconds sooner each time an opponent strikes your shield (immediately attacking if this reduces your weapon count to the current second).",
+      "description": "Ask a dozen Twelve Paths students how to defend yourself, and you'll get a dozen different answers. It's all very philosophical until you have to fight one. At the cost of a -3 penalty to damage, you are able to wield both a size L large sword and either a small shield or buckler in conjunction, combining your defense modifiers from both your weapon and shield against all attackers in your arc of defense. In addition, your next attack comes two seconds sooner each time an opponent strikes your shield, immediately attacking if this reduces your weapon count to the current second.",
       "cost_bp": 20,
       "category": "Weapon Styles",
       "max_rank": 1,
@@ -744,7 +1042,12 @@
         }
       ],
       "max_rank": 1,
-      "effects": []
+      "effects": [
+        {
+          "type": "dual_wield_offhand_damage_penalty",
+          "amount": 0
+        }
+      ]
     },
     {
       "id": "improved_two_weapon_fighting",
@@ -768,7 +1071,12 @@
         }
       ],
       "max_rank": 1,
-      "effects": []
+      "effects": [
+        {
+          "type": "dual_wield_primary_recovery_penalty",
+          "amount": 1.0
+        }
+      ]
     },
     {
       "id": "greater_two_weapon_fighting",
@@ -792,7 +1100,20 @@
         }
       ],
       "max_rank": 1,
-      "effects": []
+      "effects": [
+        {
+          "type": "dual_wield_offhand_damage_penalty",
+          "amount": 0
+        },
+        {
+          "type": "dual_wield_primary_recovery_penalty",
+          "amount": 1.0
+        },
+        {
+          "type": "dual_wield_secondary_recovery_penalty",
+          "amount": 1.0
+        }
+      ]
     },
     {
       "id": "perfect_two_weapon_fighting",
@@ -816,7 +1137,23 @@
         }
       ],
       "max_rank": 1,
-      "effects": []
+      "effects": [
+        {
+          "type": "dual_wield_offhand_damage_penalty",
+          "amount": 0
+        },
+        {
+          "type": "dual_wield_primary_recovery_penalty",
+          "amount": 1.0
+        },
+        {
+          "type": "dual_wield_secondary_recovery_penalty",
+          "amount": 1.0
+        },
+        {
+          "type": "perfect_two_weapon_fighting"
+        }
+      ]
     },
     {
       "id": "weapon_focus",
@@ -988,7 +1325,12 @@
       "cost_bp": 20,
       "category": "Miscellaneous",
       "max_rank": 1,
-      "effects": []
+      "effects": [
+        {
+          "type": "knockback_step_bonus",
+          "amount": 1
+        }
+      ]
     },
     {
       "id": "bridled_rage",
@@ -1482,7 +1824,12 @@
         }
       ],
       "max_rank": 1,
-      "effects": []
+      "effects": [
+        {
+          "type": "crit_min_roll_weapon_group",
+          "min_roll": 18
+        }
+      ]
     },
     {
       "id": "fighter_hardened",
@@ -1650,7 +1997,12 @@
         }
       ],
       "max_rank": 2,
-      "effects": []
+      "effects": [
+        {
+          "type": "crit_severity_bonus_weapon_group",
+          "amount": 3
+        }
+      ]
     },
     {
       "id": "chivalry",
@@ -2107,7 +2459,13 @@
         }
       ],
       "max_rank": 1,
-      "effects": []
+      "effects": [
+        {
+          "type": "crit_min_roll_weapon_group",
+          "min_roll": 18,
+          "ranged_only": true
+        }
+      ]
     },
     {
       "id": "ranged_weapon_specialization",
@@ -2535,7 +2893,12 @@
       "cost_bp": 15,
       "category": "Rogue",
       "max_rank": 1,
-      "effects": [],
+      "effects": [
+        {
+          "type": "near_perfect_defense_min_roll",
+          "roll": 18
+        }
+      ],
       "requirements": [
         {
           "type": "min_stat",
@@ -2730,7 +3093,11 @@
         "fymblwngen"
       ],
       "max_rank": 1,
-      "effects": []
+      "effects": [
+        {
+          "type": "incoming_crit_damage_roll_twice_take_lower"
+        }
+      ]
     },
     {
       "id": "contender",
@@ -2742,7 +3109,23 @@
         "ithican"
       ],
       "max_rank": 1,
-      "effects": []
+      "effects": [
+        {
+          "type": "called_shot_deceptive_defender"
+        },
+        {
+          "type": "called_shot_delay_profile",
+          "profile": "precision_combatant"
+        },
+        {
+          "type": "called_shot_self_defense_penalty",
+          "amount": 2
+        },
+        {
+          "type": "called_shot_target_defense_bonus_divisor",
+          "divisor": 2
+        }
+      ]
     },
     {
       "id": "duelist",
@@ -2760,7 +3143,27 @@
         }
       ],
       "max_rank": 1,
-      "effects": []
+      "effects": [
+        {
+          "type": "called_shot_deceptive_defender"
+        },
+        {
+          "type": "called_shot_delay_profile",
+          "profile": "precision_combatant"
+        },
+        {
+          "type": "called_shot_self_defense_penalty",
+          "amount": 0
+        },
+        {
+          "type": "called_shot_target_defense_bonus_divisor",
+          "divisor": 2
+        },
+        {
+          "type": "fight_defensively_attack_penalty_divisor",
+          "divisor": 2
+        }
+      ]
     },
     {
       "id": "haggler",
@@ -2894,7 +3297,11 @@
         "katlakehan"
       ],
       "max_rank": 1,
-      "effects": []
+      "effects": [
+        {
+          "type": "perfect_defense_counter_force_critical"
+        }
+      ]
     },
     {
       "id": "common",
@@ -3393,7 +3800,12 @@
         "vorova_male"
       ],
       "max_rank": 1,
-      "effects": []
+      "effects": [
+        {
+          "type": "knockback_step_bonus",
+          "amount": 1
+        }
+      ]
     },
     {
       "id": "heat_adaptation",
@@ -3642,7 +4054,18 @@
       "max_rank": 1,
       "effects": [
         {
-          "type": "curse_of_axe"
+          "type": "forced_weapon_loadout",
+          "weapon_name": "Greataxe",
+          "min_weapon_material_tier": 2,
+          "clear_projectile_material": true,
+          "disable_offhand": true,
+          "force_two_hand_grip": true,
+          "force_no_shield": true,
+          "d6_penetration_triggers": [
+            4,
+            5,
+            6
+          ]
         }
       ]
     }
