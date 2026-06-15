@@ -109,6 +109,7 @@ const TALENT_ID_CURSE_OF_AXE: &str = "curse_of_axe";
 #[cfg(test)]
 const CURSE_OF_AXE_WEAPON_NAME: &str = "Greataxe";
 const TALENT_ID_DECEPTIVE_DEFENDER: &str = "deceptive_defender";
+const TALENT_ID_POWER_ATTACK: &str = "power_attack";
 const TALENT_ID_PRECISION_AIMING: &str = "precision_aiming";
 const TALENT_ID_PRECISION_COMBATANT: &str = "precision_combatant";
 #[cfg(test)]
@@ -238,6 +239,8 @@ pub struct CombatManeuverConfig {
     #[serde(default, skip_serializing_if = "is_false")]
     pub called_shot: bool,
     #[serde(default, skip_serializing_if = "is_false")]
+    pub power_attack: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
     pub aggressive_attack: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub charge: bool,
@@ -272,6 +275,7 @@ impl Default for CombatManeuverConfig {
             use_jab: false,
             hold_at_bay: false,
             called_shot: false,
+            power_attack: false,
             aggressive_attack: false,
             charge: false,
             ready_against_charge: false,
@@ -412,6 +416,7 @@ pub struct PlayerConfig {
     pub use_jab: bool,
     pub hold_at_bay: bool,
     pub called_shot: bool,
+    pub power_attack: bool,
     pub aggressive_attack: bool,
     pub charge: bool,
     pub ready_against_charge: bool,
@@ -474,6 +479,7 @@ impl PlayerConfig {
             use_jab: false,
             hold_at_bay: false,
             called_shot: false,
+            power_attack: false,
             aggressive_attack: false,
             charge: false,
             ready_against_charge: false,
@@ -939,6 +945,7 @@ pub fn talent_is_implemented(spec: &TalentSpec) -> bool {
             | "improved_two_weapon_fighting"
             | "greater_two_weapon_fighting"
             | "perfect_two_weapon_fighting"
+            | "power_attack"
             | "stout"
             | "sturdy"
             | "defiant"
@@ -2548,6 +2555,46 @@ fn player_has_talent(player: &PlayerConfig, id: &str) -> bool {
     player.talents.iter().any(|talent| talent.id == id)
 }
 
+fn positive_int_dex_attack_bonus(character: &Character) -> i32 {
+    character.ability_mods.intelligence.attack.max(0)
+        + character.ability_mods.dexterity.attack.max(0)
+}
+
+pub fn power_attack_available_for_player(player: &PlayerConfig, weapon: &WeaponPreset) -> bool {
+    player_has_talent(player, TALENT_ID_POWER_ATTACK)
+        && player.strength_base >= 13
+        && !is_ranged_weapon(weapon)
+        && !matches!(weapon.size, WeaponSize::Small)
+}
+
+fn power_attack_active(player: &PlayerConfig, weapon: &WeaponPreset) -> bool {
+    player.power_attack && power_attack_available_for_player(player, weapon)
+}
+
+fn power_attack_attack_penalty(
+    player: &PlayerConfig,
+    weapon: &WeaponPreset,
+    character: &Character,
+) -> i32 {
+    if power_attack_active(player, weapon) {
+        positive_int_dex_attack_bonus(character)
+    } else {
+        0
+    }
+}
+
+fn power_attack_strength_damage_bonus(
+    player: &PlayerConfig,
+    weapon: &WeaponPreset,
+    strength_damage_base: i32,
+) -> i32 {
+    if power_attack_active(player, weapon) {
+        strength_damage_for_weapon(weapon, strength_damage_base)
+    } else {
+        0
+    }
+}
+
 fn fight_defensively_attack_penalty_with_modifiers(
     player: &PlayerConfig,
     modifiers: &TalentModifiers,
@@ -3344,11 +3391,13 @@ fn roll_summary(
     );
     let attack_mastery = effective_attack_mastery(player);
     let damage_mastery = effective_damage_mastery(player);
+    let power_attack_penalty = power_attack_attack_penalty(player, weapon, character);
     let attack_bonus = derived.attack_bonus
         + material_attack_bonus
         + attack_mastery
         + modifiers.attack_bonus_for_weapon(weapon_id)
         + style_attack_bonus
+        - power_attack_penalty
         - fight_defensively_attack_penalty;
     let effective_two_hand = effective_two_hand_grip_with_modifiers(player, weapon, modifiers);
     let two_hand_bonus = two_hand_damage_bonus(weapon, effective_two_hand);
@@ -3368,6 +3417,8 @@ fn roll_summary(
         strength_damage -= TWELVE_PATHS_DAMAGE_PENALTY;
     }
     strength_damage += style_damage_bonus;
+    strength_damage +=
+        power_attack_strength_damage_bonus(player, weapon, character.ability_mods.strength.damage);
 
     RollSummary {
         attack_bonus,
@@ -3743,7 +3794,7 @@ pub fn build_combatant(
         None
     };
 
-    let mut name = character.name;
+    let mut name = character.name.clone();
     let primary_is_ranged = is_ranged_weapon(weapon_preset);
     let mut crit_min_roll = modifiers.crit_min_for_group(weapon_preset.group);
     if primary_is_ranged {
@@ -3769,6 +3820,8 @@ pub fn build_combatant(
     );
     let attack_mastery = effective_attack_mastery(player);
     let mut attack_bonus_base = derived.attack_bonus + attack_mastery;
+    let power_attack_penalty = power_attack_attack_penalty(player, weapon_preset, &character);
+    attack_bonus_base -= power_attack_penalty;
     if offensive_dualwielding && !perfect_two_weapon_fighting_active {
         derived.base_dv = 0;
     }
@@ -3823,6 +3876,8 @@ pub fn build_combatant(
         defense_mod += half_int_bonus;
         strength_damage += half_int_bonus;
     }
+    strength_damage +=
+        power_attack_strength_damage_bonus(player, weapon_preset, strength_damage_base);
     if doomrazor_active || modifiers.no_strength_damage_by_weapon.contains(&weapon_id) {
         strength_damage -= strength_damage_for_weapon(weapon_preset, strength_damage_base);
     }
@@ -3946,10 +4001,13 @@ pub fn build_combatant(
                         offhand_is_ranged,
                         offhand_uses_projectiles,
                     );
+                    let offhand_power_attack_penalty =
+                        power_attack_attack_penalty(player, offhand_preset, &character);
                     let offhand_attack_bonus = derived.attack_bonus
                         + attack_mastery
                         + material_attack_bonus
-                        + modifiers.attack_bonus_for_weapon(offhand_id);
+                        + modifiers.attack_bonus_for_weapon(offhand_id)
+                        - offhand_power_attack_penalty;
                     let mut offhand_strength_damage =
                         strength_damage_for_weapon(offhand_preset, strength_damage_base)
                             + material_damage_bonus
@@ -3961,6 +4019,11 @@ pub fn build_combatant(
                     if !offhand_is_ranged {
                         offhand_strength_damage += armor_adjustments.heavy_armor_damage_bonus;
                     }
+                    offhand_strength_damage += power_attack_strength_damage_bonus(
+                        player,
+                        offhand_preset,
+                        strength_damage_base,
+                    );
                     let offhand_reach = (offhand_preset.reach_ft.max(1.0)
                         + modifiers.reach_bonus_for_group(offhand_preset.group) as f32)
                         .max(1.0);
@@ -4252,6 +4315,7 @@ pub fn build_combatant(
             called_shot_delay_profile,
             called_shot_deceptive_defender,
             called_shot_target_defense_bonus_base,
+            power_attack: power_attack_active(player, weapon_preset),
             aggressive_attack: player.aggressive_attack,
             charge: player.charge,
             ready_against_charge: player.ready_against_charge,
@@ -4540,6 +4604,19 @@ mod tests {
             .expect("No ranged weapon found for weapon group")
     }
 
+    fn weapon_id_matching<F>(weapons: &WeaponCatalog, predicate: F) -> WeaponId
+    where
+        F: Fn(&WeaponPreset) -> bool,
+    {
+        weapons
+            .entries()
+            .iter()
+            .enumerate()
+            .find(|(_, weapon)| predicate(weapon))
+            .and_then(|(idx, _)| weapons.id_from_index(idx))
+            .expect("No matching weapon found")
+    }
+
     fn base_player(weapon_id: WeaponId) -> PlayerConfig {
         let mut player = PlayerConfig::new("Test", weapon_id);
         player.level = 3;
@@ -4559,7 +4636,11 @@ mod tests {
         let (weapons, armor, shields) = sample_catalogs();
         let talents = sample_talents();
         let npc_presets = sample_npc_presets();
-        let weapon_id = one_handed_weapon_id(&weapons);
+        let weapon_id = weapon_id_matching(&weapons, |weapon| {
+            weapon.handedness == WeaponHandedness::OneHanded
+                && !is_ranged_weapon(weapon)
+                && !matches!(weapon.size, WeaponSize::Small)
+        });
         let base = base_player(weapon_id);
         let build_maneuvers = |player: &PlayerConfig| {
             build_combatant(player, &weapons, &armor, &shields, &npc_presets, &talents)
@@ -4574,6 +4655,11 @@ mod tests {
         let mut player = base.clone();
         player.called_shot = true;
         assert!(build_maneuvers(&player).called_shot);
+
+        let mut player = base.clone();
+        player.power_attack = true;
+        add_talent(&mut player, TALENT_ID_POWER_ATTACK, None);
+        assert!(build_maneuvers(&player).power_attack);
 
         let mut player = base.clone();
         player.aggressive_attack = true;
@@ -4793,6 +4879,213 @@ mod tests {
             sim::CalledShotDelayProfile::PrecisionCombatant
         );
         assert!(maneuvers.called_shot_deceptive_defender);
+    }
+
+    #[test]
+    fn power_attack_off_matches_baseline_even_with_talent() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npc_presets = sample_npc_presets();
+        let weapon_id = weapon_id_matching(&weapons, |weapon| {
+            weapon.handedness == WeaponHandedness::OneHanded
+                && !is_ranged_weapon(weapon)
+                && !matches!(weapon.size, WeaponSize::Small)
+        });
+        let baseline = base_player(weapon_id);
+        let mut player = baseline.clone();
+        add_talent(&mut player, TALENT_ID_POWER_ATTACK, None);
+
+        let baseline_summary = player_summary(&baseline, &weapons, &armor, &shields, &talents);
+        let summary = player_summary(&player, &weapons, &armor, &shields, &talents);
+        let baseline_combatant = build_combatant(
+            &baseline,
+            &weapons,
+            &armor,
+            &shields,
+            &npc_presets,
+            &talents,
+        );
+        let combatant =
+            build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
+
+        assert_eq!(
+            summary.roll.attack_bonus,
+            baseline_summary.roll.attack_bonus
+        );
+        assert_eq!(
+            summary.roll.strength_damage,
+            baseline_summary.roll.strength_damage
+        );
+        assert_eq!(
+            combatant.sheet.offense.attack_bonus,
+            baseline_combatant.sheet.offense.attack_bonus
+        );
+        assert_eq!(
+            combatant.sheet.offense.strength_damage,
+            baseline_combatant.sheet.offense.strength_damage
+        );
+        assert!(!combatant.sheet.maneuvers.power_attack);
+    }
+
+    #[test]
+    fn power_attack_removes_positive_int_dex_attack_and_doubles_strength_damage() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npc_presets = sample_npc_presets();
+        let weapon_id = weapon_id_matching(&weapons, |weapon| {
+            weapon.handedness == WeaponHandedness::OneHanded
+                && !is_ranged_weapon(weapon)
+                && !matches!(weapon.size, WeaponSize::Small)
+        });
+        let weapon = weapons.get(weapon_id).expect("missing weapon");
+        let baseline = base_player(weapon_id);
+        let mut player = baseline.clone();
+        player.power_attack = true;
+        add_talent(&mut player, TALENT_ID_POWER_ATTACK, None);
+
+        let character = build_character(&player, &weapons, &armor, &shields, &talents);
+        let expected_attack_penalty = positive_int_dex_attack_bonus(&character);
+        let expected_damage_bonus =
+            strength_damage_for_weapon(weapon, character.ability_mods.strength.damage);
+        assert!(expected_attack_penalty > 0);
+        assert!(expected_damage_bonus > 0);
+
+        let baseline_summary = player_summary(&baseline, &weapons, &armor, &shields, &talents);
+        let summary = player_summary(&player, &weapons, &armor, &shields, &talents);
+        assert_eq!(
+            baseline_summary.roll.attack_bonus - summary.roll.attack_bonus,
+            expected_attack_penalty
+        );
+        assert_eq!(
+            summary.roll.strength_damage - baseline_summary.roll.strength_damage,
+            expected_damage_bonus
+        );
+
+        let baseline_combatant = build_combatant(
+            &baseline,
+            &weapons,
+            &armor,
+            &shields,
+            &npc_presets,
+            &talents,
+        );
+        let combatant =
+            build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
+        assert_eq!(
+            baseline_combatant.sheet.offense.attack_bonus - combatant.sheet.offense.attack_bonus,
+            expected_attack_penalty
+        );
+        assert_eq!(
+            combatant.sheet.offense.strength_damage
+                - baseline_combatant.sheet.offense.strength_damage,
+            expected_damage_bonus
+        );
+        assert!(combatant.sheet.maneuvers.power_attack);
+    }
+
+    #[test]
+    fn power_attack_requires_talent_strength_and_eligible_melee_weapon() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npc_presets = sample_npc_presets();
+        let eligible_id = weapon_id_matching(&weapons, |weapon| {
+            !is_ranged_weapon(weapon) && !matches!(weapon.size, WeaponSize::Small)
+        });
+        let small_melee_id = weapon_id_matching(&weapons, |weapon| {
+            !is_ranged_weapon(weapon) && matches!(weapon.size, WeaponSize::Small)
+        });
+        let ranged_id = weapon_id_matching(&weapons, is_ranged_weapon);
+
+        for (weapon_id, add_power_attack_talent, strength_base) in [
+            (eligible_id, false, 15),
+            (eligible_id, true, 12),
+            (small_melee_id, true, 15),
+            (ranged_id, true, 15),
+        ] {
+            let mut baseline = base_player(weapon_id);
+            baseline.strength_base = strength_base;
+            let mut player = baseline.clone();
+            player.power_attack = true;
+            if add_power_attack_talent {
+                add_talent(&mut player, TALENT_ID_POWER_ATTACK, None);
+            }
+
+            let baseline_combatant = build_combatant(
+                &baseline,
+                &weapons,
+                &armor,
+                &shields,
+                &npc_presets,
+                &talents,
+            );
+            let combatant =
+                build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
+            assert_eq!(
+                combatant.sheet.offense.attack_bonus,
+                baseline_combatant.sheet.offense.attack_bonus
+            );
+            assert_eq!(
+                combatant.sheet.offense.strength_damage,
+                baseline_combatant.sheet.offense.strength_damage
+            );
+            assert!(!combatant.sheet.maneuvers.power_attack);
+        }
+    }
+
+    #[test]
+    fn power_attack_applies_to_eligible_offhand_attacks() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npc_presets = sample_npc_presets();
+        let weapon_id = weapon_id_matching(&weapons, |weapon| {
+            weapon.handedness == WeaponHandedness::OneHanded
+                && !is_ranged_weapon(weapon)
+                && !matches!(weapon.size, WeaponSize::Small)
+        });
+        let weapon = weapons.get(weapon_id).expect("missing weapon");
+        let mut baseline = base_player(weapon_id);
+        baseline.offensive_dualwielding = true;
+        baseline.offhand_weapon_id = Some(weapon_id);
+        let mut player = baseline.clone();
+        player.power_attack = true;
+        add_talent(&mut player, TALENT_ID_POWER_ATTACK, None);
+
+        let character = build_character(&player, &weapons, &armor, &shields, &talents);
+        let expected_attack_penalty = positive_int_dex_attack_bonus(&character);
+        let expected_damage_bonus =
+            strength_damage_for_weapon(weapon, character.ability_mods.strength.damage);
+        let baseline_combatant = build_combatant(
+            &baseline,
+            &weapons,
+            &armor,
+            &shields,
+            &npc_presets,
+            &talents,
+        );
+        let combatant =
+            build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
+        let baseline_offhand = baseline_combatant
+            .sheet
+            .offense
+            .offhand
+            .as_ref()
+            .expect("baseline offhand");
+        let offhand = combatant
+            .sheet
+            .offense
+            .offhand
+            .as_ref()
+            .expect("power attack offhand");
+
+        assert_eq!(
+            baseline_offhand.attack_bonus - offhand.attack_bonus,
+            expected_attack_penalty
+        );
+        assert_eq!(
+            offhand.strength_damage - baseline_offhand.strength_damage,
+            expected_damage_bonus
+        );
+        assert!(combatant.sheet.maneuvers.power_attack);
     }
 
     #[test]
@@ -7903,6 +8196,7 @@ mod tests {
             "improved_two_weapon_fighting",
             "greater_two_weapon_fighting",
             "perfect_two_weapon_fighting",
+            "power_attack",
         ] {
             let spec = talents
                 .entries()

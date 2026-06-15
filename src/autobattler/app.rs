@@ -1367,6 +1367,7 @@ impl AutobattlerApp {
         creation.player.use_jab = preset.maneuvers.use_jab;
         creation.player.hold_at_bay = preset.maneuvers.hold_at_bay;
         creation.player.called_shot = preset.maneuvers.called_shot;
+        creation.player.power_attack = preset.maneuvers.power_attack;
         creation.player.aggressive_attack = preset.maneuvers.aggressive_attack;
         creation.player.charge = preset.maneuvers.charge;
         creation.player.ready_against_charge = preset.maneuvers.ready_against_charge;

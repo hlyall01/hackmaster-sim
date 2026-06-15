@@ -1228,6 +1228,7 @@ fn player_config_from_preset(
     player.use_jab = preset.maneuvers.use_jab;
     player.hold_at_bay = preset.maneuvers.hold_at_bay;
     player.called_shot = preset.maneuvers.called_shot;
+    player.power_attack = preset.maneuvers.power_attack;
     player.aggressive_attack = preset.maneuvers.aggressive_attack;
     player.charge = preset.maneuvers.charge;
     player.ready_against_charge = preset.maneuvers.ready_against_charge;

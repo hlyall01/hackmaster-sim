@@ -1945,6 +1945,19 @@ fn render_player_editor(
                     "Target defense (light/medium/heavy): +{called_shot_light_bonus}/+{called_shot_medium_bonus}/+{called_shot_heavy_bonus}, self -{called_shot_self_penalty} defense, speed +{called_shot_delay_expr}"
                 ));
             });
+            ui.horizontal(|ui| {
+                let can_power_attack =
+                    game_logic::power_attack_available_for_player(player, weapon);
+                ui.add_enabled_ui(can_power_attack, |ui| {
+                    ui.checkbox(&mut player.power_attack, "Power attack");
+                });
+                if can_power_attack {
+                    ui.label("Ignores positive INT/DEX attack bonuses and doubles Strength damage");
+                } else {
+                    player.power_attack = false;
+                    ui.label("Requires Power Attack, STR 13+, and a non-small melee weapon");
+                }
+            });
             ui.separator();
             ui.add_enabled_ui(false, |ui| {
                 ui.checkbox(&mut player.aggressive_attack, "Aggressive attack (NYI)");
@@ -2299,6 +2312,9 @@ fn render_player_editor(
                     ));
                 }
             }
+            if player.power_attack {
+                ui.label("Power attack: positive INT/DEX attack bonuses ignored, Strength damage doubled");
+            }
             ui.label(format!("Initiative mod: {}", derived.initiative_mod));
             ui.label(format!("Base DV: {}", derived.base_dv));
             if let Some(dv_with_shield) = defense.melee_with_shield_dv {
@@ -2462,6 +2478,7 @@ fn apply_fighter_preset(
     player.use_jab = maneuvers.use_jab;
     player.hold_at_bay = maneuvers.hold_at_bay;
     player.called_shot = maneuvers.called_shot;
+    player.power_attack = maneuvers.power_attack;
     player.aggressive_attack = maneuvers.aggressive_attack;
     player.charge = maneuvers.charge;
     player.ready_against_charge = maneuvers.ready_against_charge;
@@ -2568,6 +2585,7 @@ fn fighter_preset_from_player(
             use_jab: player.use_jab,
             hold_at_bay: player.hold_at_bay,
             called_shot: player.called_shot,
+            power_attack: player.power_attack,
             aggressive_attack: player.aggressive_attack,
             charge: player.charge,
             ready_against_charge: player.ready_against_charge,

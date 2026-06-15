@@ -700,6 +700,11 @@ impl AutobattlerApp {
                                     summary.derived.base_dv - called_shot_self_penalty
                                 ));
                             }
+                            if self.creation.player.power_attack {
+                                ui.label(
+                                    "Power attack: positive INT/DEX attack bonuses ignored, Strength damage doubled",
+                                );
+                            }
                         }
                         CreationStep::MoneyGear => {
                             ui.heading("Money and Gear");

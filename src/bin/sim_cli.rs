@@ -236,6 +236,7 @@ fn main() {
             called_shot_delay_profile: sim::CalledShotDelayProfile::Standard,
             called_shot_deceptive_defender: false,
             called_shot_target_defense_bonus_base: 8,
+            power_attack: false,
             aggressive_attack: false,
             charge: false,
             ready_against_charge: false,
