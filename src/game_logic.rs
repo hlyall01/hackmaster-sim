@@ -954,6 +954,122 @@ pub fn talent_is_implemented(spec: &TalentSpec) -> bool {
     )
 }
 
+const DATA_ONLY_TALENT_IDS: &[&str] = &[
+    "weapon_focus",
+    "weapon_specialization",
+    "weapon_supremacy",
+    "ranged_weapon_specialization",
+    "ranged_weapon_supremacy",
+];
+
+const SUPPORTED_TACTICAL_TOGGLES: &[&str] = &[
+    "use_jab",
+    "hold_at_bay",
+    "called_shot",
+    "power_attack",
+    "charge",
+    "fight_defensively",
+    "mounted",
+    "defensive_dualwielding",
+    "offensive_dualwielding",
+];
+
+const KNOWN_UNSUPPORTED_TACTICAL_TOGGLES: &[&str] = &[
+    "aggressive_attack",
+    "ready_against_charge",
+    "tactical_move",
+    "full_parry",
+    "give_ground",
+    "scamper_back",
+    "fighting_withdrawal",
+    "flee",
+];
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct SimCapabilityReport {
+    pub schema_version: u32,
+    pub generated_from: String,
+    pub supported_talent_ids_with_direct_combat_effects: Vec<String>,
+    pub supported_tactical_toggles: Vec<String>,
+    pub supported_weapon_style_ids: Vec<String>,
+    pub known_data_only_talent_ids: Vec<String>,
+    pub known_unsupported_tactical_toggles: Vec<String>,
+    pub nyi_talent_ids: Vec<String>,
+    pub notes: Vec<String>,
+}
+
+fn sorted_strings(values: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut values: Vec<String> = values.into_iter().collect();
+    values.sort();
+    values.dedup();
+    values
+}
+
+fn is_known_data_only_talent_id(id: &str) -> bool {
+    DATA_ONLY_TALENT_IDS.contains(&id)
+}
+
+pub fn sim_capability_report(talent_catalog: &TalentCatalog) -> SimCapabilityReport {
+    let supported_weapon_style_ids = sorted_strings(
+        talent_catalog
+            .entries()
+            .iter()
+            .filter(|spec| is_weapon_style_category(&spec.category))
+            .map(|spec| spec.id.clone()),
+    );
+    let known_data_only_talent_ids = sorted_strings(
+        talent_catalog
+            .entries()
+            .iter()
+            .filter(|spec| is_known_data_only_talent_id(&spec.id))
+            .map(|spec| spec.id.clone()),
+    );
+    let supported_talent_ids_with_direct_combat_effects = sorted_strings(
+        talent_catalog
+            .entries()
+            .iter()
+            .filter(|spec| {
+                talent_is_implemented(spec)
+                    && !is_weapon_style_category(&spec.category)
+                    && !is_known_data_only_talent_id(&spec.id)
+            })
+            .map(|spec| spec.id.clone()),
+    );
+    let nyi_talent_ids = sorted_strings(
+        talent_catalog
+            .entries()
+            .iter()
+            .filter(|spec| {
+                !talent_is_implemented(spec)
+                    && !is_weapon_style_category(&spec.category)
+                    && !is_known_data_only_talent_id(&spec.id)
+            })
+            .map(|spec| spec.id.clone()),
+    );
+
+    SimCapabilityReport {
+        schema_version: 1,
+        generated_from: "data/sim/talents.json".to_string(),
+        supported_talent_ids_with_direct_combat_effects,
+        supported_tactical_toggles: SUPPORTED_TACTICAL_TOGGLES
+            .iter()
+            .map(|value| value.to_string())
+            .collect(),
+        supported_weapon_style_ids,
+        known_data_only_talent_ids,
+        known_unsupported_tactical_toggles: KNOWN_UNSUPPORTED_TACTICAL_TOGGLES
+            .iter()
+            .map(|value| value.to_string())
+            .collect(),
+        nyi_talent_ids,
+        notes: vec![
+            "Power Attack is modeled as an explicit tactical toggle requiring the talent, STR 13+, and an eligible non-small melee weapon.".to_string(),
+            "Weapon Focus, Weapon Specialization, and Weapon Supremacy are data-only for fixed-mastery duel output and should feed mastery/progression planning instead.".to_string(),
+            "Weapon style IDs are reported separately because styles are trained/acquired options rather than ordinary BP purchases.".to_string(),
+        ],
+    }
+}
+
 #[derive(Clone)]
 pub struct TalentContext<'a> {
     pub level: u8,
@@ -8221,6 +8337,61 @@ mod tests {
         assert!(
             !talent_is_implemented(spec),
             "great_cleave should remain NYI until runtime behavior exists"
+        );
+    }
+
+    #[test]
+    fn capability_report_lists_supported_power_attack_and_weapon_styles() {
+        let talents = sample_talents();
+        let report = sim_capability_report(&talents);
+
+        assert!(
+            report
+                .supported_tactical_toggles
+                .contains(&"power_attack".to_string())
+        );
+        assert!(
+            report
+                .supported_talent_ids_with_direct_combat_effects
+                .contains(&"power_attack".to_string())
+        );
+        assert!(
+            report
+                .supported_weapon_style_ids
+                .contains(&"rohavalan_bridge".to_string())
+        );
+        assert!(
+            report
+                .supported_weapon_style_ids
+                .contains(&"shield_of_blades".to_string())
+        );
+        assert!(
+            report
+                .supported_weapon_style_ids
+                .contains(&"storm_of_blades".to_string())
+        );
+    }
+
+    #[test]
+    fn capability_report_separates_data_only_and_nyi_talents() {
+        let talents = sample_talents();
+        let report = sim_capability_report(&talents);
+
+        for id in ["weapon_focus", "weapon_specialization", "weapon_supremacy"] {
+            let id = id.to_string();
+            assert!(report.known_data_only_talent_ids.contains(&id));
+            assert!(
+                !report
+                    .supported_talent_ids_with_direct_combat_effects
+                    .contains(&id)
+            );
+            assert!(!report.nyi_talent_ids.contains(&id));
+        }
+        assert!(report.nyi_talent_ids.contains(&"great_cleave".to_string()));
+        assert!(
+            report
+                .known_unsupported_tactical_toggles
+                .contains(&"aggressive_attack".to_string())
         );
     }
 }
