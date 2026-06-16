@@ -566,6 +566,8 @@ mod tests {
         WeaponPreset {
             name: name.to_string(),
             group,
+            str_required: None,
+            skill_level: "minimal".to_string(),
             speed: speed as f32,
             speed_label: speed.to_string(),
             jab_speed: None,
@@ -578,9 +580,15 @@ mod tests {
             range_bands_feet: None,
             armor_pen,
             defense_bonus_always: false,
+            defense: None,
             size,
             handedness,
+            damage_type: "C".to_string(),
             ammunition: None,
+            weight_lbs: None,
+            dismount: None,
+            set_for_charge: None,
+            phalanx_rank: None,
         }
     }
 

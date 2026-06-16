@@ -20,6 +20,8 @@ struct WeaponsFile {
 struct WeaponJson {
     name: String,
     group: String,
+    str_required: Option<i32>,
+    skill_level: String,
     speed: String,
     jab_speed: Option<String>,
     jab_special: Option<String>,
@@ -29,10 +31,17 @@ struct WeaponJson {
     range_bands_feet: Option<Vec<f32>>,
     armor_penetration: Option<i32>,
     defense_bonus_always: Option<bool>,
+    defense: Option<String>,
     #[serde(rename = "reach_or_range")]
     reach_or_range: Option<String>,
     size: String,
     handedness: String,
+    #[serde(rename = "type")]
+    damage_type: String,
+    weight_lbs: Option<f32>,
+    dismount: Option<bool>,
+    set_for_charge: Option<bool>,
+    phalanx_rank: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -84,6 +93,8 @@ pub fn load_weapon_catalog(path: &str) -> Result<WeaponCatalog, String> {
         catalog.push(WeaponPreset {
             name: entry.name,
             group,
+            str_required: entry.str_required,
+            skill_level: entry.skill_level,
             speed: speed_value,
             speed_label,
             jab_speed: jab_speed_value,
@@ -96,9 +107,15 @@ pub fn load_weapon_catalog(path: &str) -> Result<WeaponCatalog, String> {
             range_bands_feet,
             armor_pen: entry.armor_penetration.unwrap_or(0),
             defense_bonus_always: entry.defense_bonus_always.unwrap_or(false),
+            defense: entry.defense.clone(),
             size,
             handedness,
+            damage_type: entry.damage_type,
             ammunition: entry.ammunition.clone(),
+            weight_lbs: entry.weight_lbs,
+            dismount: entry.dismount,
+            set_for_charge: entry.set_for_charge,
+            phalanx_rank: entry.phalanx_rank.clone(),
         });
     }
     if catalog.is_empty() {
@@ -143,7 +160,10 @@ fn split_speed_label(speed: &str, jab_speed: Option<&str>) -> (String, Option<St
     let trimmed = speed.trim();
     if let Some(jab_speed) = jab_speed {
         let jab_speed = jab_speed.trim();
-        let speed = trimmed.split_once(',').map(|pair| pair.0).unwrap_or(trimmed);
+        let speed = trimmed
+            .split_once(',')
+            .map(|pair| pair.0)
+            .unwrap_or(trimmed);
         (speed.trim().to_string(), Some(jab_speed.to_string()))
     } else {
         let mut jab = None;
@@ -247,4 +267,110 @@ fn parse_range_bands_feet(values: &[f32]) -> Option<[f32; 4]> {
         return None;
     }
     Some([values[0], values[1], values[2], values[3]])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn weapon<'a>(catalog: &'a WeaponCatalog, name: &str) -> &'a WeaponPreset {
+        catalog
+            .entries()
+            .iter()
+            .find(|weapon| weapon.name == name)
+            .unwrap_or_else(|| panic!("missing weapon {name}"))
+    }
+
+    fn shield<'a>(catalog: &'a ShieldCatalog, name: &str) -> &'a ShieldPreset {
+        catalog
+            .entries()
+            .iter()
+            .find_map(|entry| entry.shield.as_ref().filter(|shield| shield.name == name))
+            .unwrap_or_else(|| panic!("missing shield {name}"))
+    }
+
+    #[test]
+    fn weapon_catalog_loads_updated_table_metadata() {
+        let catalog = load_weapon_catalog("data/weapons.json").expect("weapon catalog");
+        assert_eq!(catalog.len(), 94);
+
+        let battle_axe = weapon(&catalog, "Battle axe");
+        assert_eq!(battle_axe.str_required, Some(10));
+        assert_eq!(battle_axe.skill_level, "low");
+        assert_eq!(battle_axe.damage_expr, "4d3p");
+        assert_eq!(battle_axe.shield_damage_expr.as_deref(), Some("3d3p"));
+        assert_eq!(battle_axe.armor_pen, 2);
+        assert_eq!(battle_axe.damage_type, "H");
+        assert_eq!(battle_axe.weight_lbs, Some(3.5));
+
+        let arbalest = weapon(&catalog, "Arbalest");
+        assert_eq!(arbalest.speed_label, "40R");
+        assert_eq!(arbalest.speed, 40.0);
+        assert_eq!(arbalest.ammunition.as_deref(), Some("Heavy quarrel"));
+
+        let club = weapon(&catalog, "Club");
+        assert_eq!(club.defense.as_deref(), Some("d20p-4"));
+
+        let staff = weapon(&catalog, "Staff");
+        assert_eq!(staff.defense.as_deref(), Some("d20p"));
+    }
+
+    #[test]
+    fn polearm_and_spear_rows_match_updated_table_values() {
+        let catalog = load_weapon_catalog("data/weapons.json").expect("weapon catalog");
+
+        let bardiche = weapon(&catalog, "Bardiche");
+        assert_eq!(bardiche.damage_expr, "4d6p+3");
+        assert_eq!(bardiche.shield_damage_expr.as_deref(), Some("2d6p+3"));
+        assert_eq!(bardiche.dismount, None);
+        assert_eq!(bardiche.set_for_charge, None);
+
+        let hasta = weapon(&catalog, "Hasta");
+        assert_eq!(hasta.speed_label, "11");
+        assert_eq!(hasta.jab_speed_label.as_deref(), Some("8"));
+        assert_eq!(hasta.reach_label, "8 feet");
+        assert_eq!(hasta.phalanx_rank.as_deref(), Some("2nd"));
+
+        let pike = weapon(&catalog, "Pike");
+        assert_eq!(pike.phalanx_rank.as_deref(), Some("4th"));
+
+        let trident = weapon(&catalog, "Trident");
+        assert_eq!(trident.damage_expr, "d4p+d6p+d8p+3");
+        assert_eq!(trident.shield_damage_expr.as_deref(), Some("d8p"));
+        assert_eq!(trident.jab_special_expr.as_deref(), Some("d4+d6+d8+3"));
+
+        let spear_axe = weapon(&catalog, "Spear-axe");
+        assert_eq!(spear_axe.damage_expr, "2d6p and 4d3p");
+        assert_eq!(
+            spear_axe.shield_damage_expr.as_deref(),
+            Some("d6p+3 and 3d3p")
+        );
+        // The current simulator models a single active damage head, so this field
+        // tracks the first listed head's armor penetration.
+        assert_eq!(spear_axe.armor_pen, 0);
+        assert_eq!(spear_axe.jab_special_expr, None);
+    }
+
+    #[test]
+    fn shield_catalog_parses_updated_table_values() {
+        let catalog = load_shield_catalog("data/weapons.json").expect("shield catalog");
+
+        let buckler = shield(&catalog, "Buckler");
+        assert_eq!(buckler.defense_bonus, 2);
+        assert_eq!(buckler.dr, 6);
+        assert_eq!(buckler.cover_value, 20);
+        assert_eq!(buckler.weight_lbs, 2.0);
+
+        let medium_wood = shield(&catalog, "Medium wooden shield");
+        assert_eq!(medium_wood.defense_bonus, 6);
+        assert_eq!(medium_wood.dr, 4);
+        assert_eq!(medium_wood.cover_value, 16);
+        assert_eq!(medium_wood.weight_lbs, 6.0);
+
+        let tower = shield(&catalog, "Tower shield");
+        assert_eq!(tower.defense_bonus, 6);
+        assert_eq!(tower.dr, 6);
+        assert_eq!(tower.cover_value, 6);
+        assert_eq!(tower.weight_lbs, 35.0);
+    }
 }
