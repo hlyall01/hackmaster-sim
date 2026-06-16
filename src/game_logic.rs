@@ -30,6 +30,8 @@ pub type TalentCatalog = Catalog<TalentTag, TalentSpec>;
 pub struct WeaponPreset {
     pub name: String,
     pub group: WeaponGroup,
+    pub str_required: Option<i32>,
+    pub skill_level: String,
     pub speed: f32,
     pub speed_label: String,
     pub jab_speed: Option<f32>,
@@ -42,9 +44,15 @@ pub struct WeaponPreset {
     pub range_bands_feet: Option<[f32; 4]>,
     pub armor_pen: i32,
     pub defense_bonus_always: bool,
+    pub defense: Option<String>,
     pub size: WeaponSize,
     pub handedness: WeaponHandedness,
+    pub damage_type: String,
     pub ammunition: Option<String>,
+    pub weight_lbs: Option<f32>,
+    pub dismount: Option<bool>,
+    pub set_for_charge: Option<bool>,
+    pub phalanx_rank: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
