@@ -848,6 +848,15 @@
       "effects": []
     },
     {
+      "id": "kanian_impaler",
+      "name": "Kanian Impaler",
+      "description": "Requires proficiency in at least one type of size L spear. When attacking with a size L spear, consider opponents one size category smaller for knock-backs. When you deal a double or greater knock-back, you may choose the direction to launch your opponent as you withdraw your spear.",
+      "cost_bp": 20,
+      "category": "Miscellaneous",
+      "max_rank": 1,
+      "effects": []
+    },
+    {
       "id": "bridled_rage",
       "name": "Bridled Rage",
       "description": "Requires 5th level and either HackLust or HackFrenzy. When HackLust or HackFrenzy triggers, you may choose to pass or fail the Wisdom check to resist entering rage. At 10th level, you may choose to pass or fail the Wisdom check to end rage. At 13th level, you will not attack allies if no foes remain, instead sprinting to seek new foes. Barbarian requirements and Magic Phobia apply (see references/barbarian.md).",

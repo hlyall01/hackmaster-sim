@@ -1038,6 +1038,17 @@ fn player_has_talent(player: &PlayerConfig, id: &str) -> bool {
     player.talents.iter().any(|talent| talent.id == id)
 }
 
+fn kanian_impaler_knockback_adjustment(player: &PlayerConfig, weapon: &WeaponPreset) -> i32 {
+    if player_has_talent(player, "kanian_impaler")
+        && weapon.group == WeaponGroup::Spears
+        && weapon.size == WeaponSize::Large
+    {
+        -5
+    } else {
+        0
+    }
+}
+
 fn resolve_misc_modifiers(player: &PlayerConfig) -> MiscRollModifiers {
     let mut modifiers = player.misc_modifiers;
     if let Some(race_id) = player.race_id.as_deref() {
@@ -1747,6 +1758,8 @@ pub fn build_combatant(
                         modifiers.crit_severity_bonus_for_group(offhand_preset.group);
                     let offhand_is_unarmed = offhand_preset.group == WeaponGroup::Unarmed;
                     let offhand_is_small = matches!(offhand_preset.size, WeaponSize::Small);
+                    let offhand_knockback_adjustment =
+                        kanian_impaler_knockback_adjustment(player, offhand_preset);
                     offhand_profile = Some(sim::OffhandProfile {
                         attack_bonus: offhand_attack_bonus,
                         strength_damage: offhand_strength_damage,
@@ -1773,6 +1786,7 @@ pub fn build_combatant(
                             crit_min_roll: offhand_crit_min_roll,
                             crit_min_roll_ranged: offhand_crit_min_roll_ranged,
                             crit_severity_bonus: offhand_crit_severity_bonus,
+                            defender_knockback_step_adjustment: offhand_knockback_adjustment,
                         }),
                     });
                 }
@@ -1798,6 +1812,8 @@ pub fn build_combatant(
             sim::ModifierOpI32::Set(1),
         );
     }
+    let defender_knockback_step_adjustment =
+        kanian_impaler_knockback_adjustment(player, weapon_preset);
     let sheet = CombatantSheet {
         name,
         offense: OffenseProfile {
@@ -1829,6 +1845,7 @@ pub fn build_combatant(
                 crit_min_roll,
                 crit_min_roll_ranged,
                 crit_severity_bonus,
+                defender_knockback_step_adjustment,
             }),
             offhand: offhand_profile,
         },
@@ -3496,6 +3513,73 @@ mod tests {
         let combatant =
             build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
         assert_eq!(combatant.sheet.defense.knockback_step, 20);
+    }
+
+    #[test]
+    fn kanian_impaler_loads_from_talent_catalog() {
+        let talents = sample_talents();
+        let talent = talents
+            .entries()
+            .iter()
+            .find(|talent| talent.id == "kanian_impaler")
+            .expect("Missing Kanian Impaler talent");
+        assert_eq!(talent.name, "Kanian Impaler");
+    }
+
+    #[test]
+    fn kanian_impaler_treats_opponents_smaller_with_large_spears() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npc_presets = Catalog::new(Vec::new());
+        let weapon_id = weapons
+            .entries()
+            .iter()
+            .enumerate()
+            .find(|(_, weapon)| {
+                weapon.group == WeaponGroup::Spears && weapon.size == WeaponSize::Large
+            })
+            .map(|(idx, _)| WeaponId::new(idx))
+            .expect("Missing size L spear");
+        let mut player = base_player(weapon_id);
+        add_talent(&mut player, "kanian_impaler", None);
+        let combatant =
+            build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
+        assert_eq!(
+            combatant
+                .sheet
+                .offense
+                .weapon
+                .defender_knockback_step_adjustment,
+            -5
+        );
+    }
+
+    #[test]
+    fn kanian_impaler_does_not_apply_to_medium_spears() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npc_presets = Catalog::new(Vec::new());
+        let weapon_id = weapons
+            .entries()
+            .iter()
+            .enumerate()
+            .find(|(_, weapon)| {
+                weapon.group == WeaponGroup::Spears && weapon.size == WeaponSize::Medium
+            })
+            .map(|(idx, _)| WeaponId::new(idx))
+            .expect("Missing size M spear");
+        let mut player = base_player(weapon_id);
+        add_talent(&mut player, "kanian_impaler", None);
+        let combatant =
+            build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
+        assert_eq!(
+            combatant
+                .sheet
+                .offense
+                .weapon
+                .defender_knockback_step_adjustment,
+            0
+        );
     }
 
     #[test]
