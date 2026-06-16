@@ -71,6 +71,7 @@ pub struct WeaponProfile {
     pub crit_min_roll: i32,
     pub crit_min_roll_ranged: Option<i32>,
     pub crit_severity_bonus: i32,
+    pub defender_knockback_step_adjustment: i32,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -299,6 +300,7 @@ impl Default for WeaponProfile {
             crit_min_roll: 20,
             crit_min_roll_ranged: None,
             crit_severity_bonus: 0,
+            defender_knockback_step_adjustment: 0,
         }
     }
 }

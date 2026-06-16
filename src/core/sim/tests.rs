@@ -80,6 +80,7 @@
                     crit_min_roll: 20,
                     crit_min_roll_ranged: None,
                     crit_severity_bonus: 0,
+                    defender_knockback_step_adjustment: 0,
                 }),
                 offhand: None,
             },
@@ -644,6 +645,7 @@
                     crit_min_roll: 20,
                     crit_min_roll_ranged: None,
                     crit_severity_bonus: 0,
+                    defender_knockback_step_adjustment: 0,
                 }),
                 offhand: None,
             },
@@ -774,6 +776,7 @@
                     crit_min_roll: 20,
                     crit_min_roll_ranged: None,
                     crit_severity_bonus: 0,
+                    defender_knockback_step_adjustment: 0,
                 }),
                 offhand: None,
             },
@@ -1589,6 +1592,69 @@
     }
 
     #[test]
+    fn kanian_impaler_knockback_adjustment_increases_distance() {
+        let mut attacker = combatant_basic(
+            "Attacker".to_string(),
+            "Partisan".to_string(),
+            100,
+            0,
+            0,
+            false,
+            0,
+            "20d1".to_string(),
+            0,
+            10.0,
+            1.0,
+            5.0,
+            false,
+            false,
+            None,
+            true,
+            false,
+            20,
+        );
+        let mut weapon = attacker.sheet.offense.weapon.as_ref().clone();
+        weapon.defender_knockback_step_adjustment = -5;
+        attacker.sheet.offense.weapon = Arc::new(weapon);
+        let defender = combatant_basic(
+            "Defender".to_string(),
+            "Shield".to_string(),
+            0,
+            0,
+            0,
+            false,
+            0,
+            "1d1".to_string(),
+            0,
+            10.0,
+            1.0,
+            5.0,
+            false,
+            false,
+            None,
+            true,
+            false,
+            20,
+        );
+        let mut state = make_state(attacker, defender);
+        let mut rng = FixedRng(0);
+        let outcome = resolve_attack(
+            &mut state.combatants,
+            0,
+            1,
+            0,
+            false,
+            1.0,
+            AttackMode::Normal,
+            WeaponSlot::Primary,
+            0.0,
+            None,
+            &mut rng,
+        );
+        assert_eq!(outcome.knockback_ft, 10.0);
+    }
+
+    #[test]
     fn ranged_stationary_uses_d12p_defense() {
         assert_eq!(defense_die_sides(true, false, false, false, false), 12);
     }
@@ -1775,6 +1841,7 @@
             crit_min_roll: 20,
             crit_min_roll_ranged: None,
             crit_severity_bonus: 0,
+            defender_knockback_step_adjustment: 0,
         });
         let melee_weapon = Arc::new(WeaponProfile {
             name: "Sword".to_string(),
@@ -1799,6 +1866,7 @@
             crit_min_roll: 20,
             crit_min_roll_ranged: None,
             crit_severity_bonus: 0,
+            defender_knockback_step_adjustment: 0,
         });
         let attacker = Combatant::new(CombatantSheet {
             name: "Thrower".to_string(),
@@ -1934,6 +2002,7 @@
             crit_min_roll: 20,
             crit_min_roll_ranged: None,
             crit_severity_bonus: 0,
+            defender_knockback_step_adjustment: 0,
         });
         let melee_weapon = Arc::new(WeaponProfile {
             name: "Sword".to_string(),
@@ -1958,6 +2027,7 @@
             crit_min_roll: 20,
             crit_min_roll_ranged: None,
             crit_severity_bonus: 0,
+            defender_knockback_step_adjustment: 0,
         });
         let attacker = Combatant::new(CombatantSheet {
             name: "Thrower".to_string(),
