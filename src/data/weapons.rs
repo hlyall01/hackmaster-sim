@@ -334,6 +334,11 @@ mod tests {
         let pike = weapon(&catalog, "Pike");
         assert_eq!(pike.phalanx_rank.as_deref(), Some("4th"));
 
+        let raven = weapon(&catalog, "Raven's Beak");
+        assert_eq!(raven.damage_expr, "2d6p+3");
+        assert_eq!(raven.armor_pen, 2);
+        assert_eq!(raven.jab_special_expr.as_deref(), Some("2d6+3"));
+
         let trident = weapon(&catalog, "Trident");
         assert_eq!(trident.damage_expr, "d4p+d6p+d8p+3");
         assert_eq!(trident.shield_damage_expr.as_deref(), Some("d8p"));
@@ -348,7 +353,27 @@ mod tests {
         // The current simulator models a single active damage head, so this field
         // tracks the first listed head's armor penetration.
         assert_eq!(spear_axe.armor_pen, 0);
-        assert_eq!(spear_axe.jab_special_expr, None);
+        assert_eq!(spear_axe.jab_special_expr.as_deref(), Some("d6"));
+    }
+
+    #[test]
+    fn table_update_preserves_existing_jab_specials() {
+        let catalog = load_weapon_catalog("data/weapons.json").expect("weapon catalog");
+
+        let fauchard = weapon(&catalog, "Fauchard");
+        assert_eq!(fauchard.jab_special_expr.as_deref(), Some("d6+3"));
+
+        let glaive = weapon(&catalog, "Glaive");
+        assert_eq!(glaive.jab_special_expr.as_deref(), Some("2d4+3"));
+
+        let polehammer = weapon(&catalog, "Polehammer");
+        assert_eq!(polehammer.jab_special_expr.as_deref(), Some("d10+3"));
+
+        let swordstaff = weapon(&catalog, "Swordstaff");
+        assert_eq!(swordstaff.jab_special_expr.as_deref(), Some("d8+3"));
+
+        let longsword = weapon(&catalog, "Longsword");
+        assert_eq!(longsword.jab_special_expr.as_deref(), Some("d8"));
     }
 
     #[test]
