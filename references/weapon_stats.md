@@ -177,17 +177,17 @@ Notation for parsing:
 
 | Weapon | STR required | Skill level | Damage | Shield Damage | Dismount | Set for Charge | Speed (jab) | Jab Special | Size | Reach or Range | Defense | Type | Phalanx | Weight |
 |---|---:|---|---|---|---|---|---:|---|---|---|---|---|---|---|
-| Hasta | 9 | low | 2d6[p] | lower of 2d6[p] | - | yes | 12 (8) | 2d6 | M | 7 feet | d20[p]-4 | P | 2nd | 4 lbs |
+| Hasta | 9 | low | 2d6[p] | lower of 2d6[p] | - | yes | 11 (8) | 2d6 | L | 8 feet | d20[p]-4 | P | 2nd | 4 lbs |
 | Javelin | 6 | low | d12[p] | 1 | - | - | 7 | - | M | 5/100 feet | d20[p]-4 | P | - | 2 lbs |
 | LanceH | 11 | medium | 2d8[p]^2 | d8[p] | - | - | 12 | - | L | 10 feet | d20[p]-4 | P | - | 6 lbs |
-| PartisanT | 9 | low | 2d8[p]+3 | lower of 2d8[p] | - | yes | 14 (9) | 2d8+3 | L | 7 feet | d20[p]-4 | P | - | 5 lbs |
-| PikeT | 10 | low | 2d6[p]+3 | lower of 2d6[p] | - | yes | 18 (14) | 2d6+3 | L | 18 feet | d20[p]-4 | P | 3rd | 10 lbs |
+| PartisanT | 9 | low | 2d8[p]+3 | lower of 2d8[p] | - | yes | 12 (8) | 2d8+3 | L | 7 feet | d20[p]-4 | P | - | 5 lbs |
+| PikeT | 10 | low | 2d6[p]+3 | lower of 2d6[p] | - | yes | 18 (14) | 2d6+3 | L | 18 feet | d20[p]-4 | P | 4th | 10 lbs |
 | Pilum | 8 | low | 2d6[p] | 2 | - | - | 8 | - | M | 5/80 feet | d20[p]-4 | P | - | 3 lbs |
 | RanseurT | 9 | medium | 2d6[p]+3^3 | lower of 2d6[p] | yes | yes | 13 (8) | 2d6+3 | L | 8 feet | d20[p]-4 | P | 2nd | 5 lbs |
-| Short Spear | 5 | low | d4[p]+d6[p] | lower of d4[p]+d6[p] | - | yes | 12 (8) | d4+d6 | M | 5 feet | d20[p]-4 | P | - | 3 lbs |
+| Short Spear | 5 | low | d4[p]+d6[p] | lower of d4[p]+d6[p] | - | yes | 10 (7) | d4+d6 | M | 5 feet | d20[p]-4 | P | - | 3 lbs |
 | Spear | 9 | low | 2d6[p] | lower of 2d6[p] | - | yes | 12 (8) | 2d6 | L | 13 feet | d20[p]-4 | P | 3rd | 4 lbs |
 | SpetumT | 9 | low | 2d8[p]+3 | lower of 2d8[p] | - | yes | 13 (9) | 2d8+3 | L | 8 feet | d20[p] | P | 2nd | 5 lbs |
-| TridentT | 9 | medium | d6[p]+d8[p]+3 | lower of d6[p]+d8[p] | - | - | 12 (8) | d6+d8+3 | L | 6 feet | d20[p]-4 | P | - | 6 lbs |
+| TridentT | 9 | medium | d4[p]+d6[p]+d8[p]+3 | d8[p] | - | - | 12 (8) | d4+d6+d8+3 | L | 6 feet | d20[p]-4 | P | - | 6 lbs |
 
 ---
 

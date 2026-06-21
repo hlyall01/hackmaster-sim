@@ -200,6 +200,7 @@ fn main() {
                 crit_min_roll: 20,
                 crit_min_roll_ranged: None,
                 crit_severity_bonus: 0,
+                defender_knockback_step_adjustment: 0,
             }),
             offhand: None,
         },

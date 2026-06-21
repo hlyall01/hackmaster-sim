@@ -90,6 +90,7 @@ fn combatant_basic(
                 crit_min_roll: 20,
                 crit_min_roll_ranged: None,
                 crit_severity_bonus: 0,
+                defender_knockback_step_adjustment: 0,
             }),
             offhand: None,
         },
@@ -1224,6 +1225,7 @@ fn advanced_sighting_scale_keeps_throwing_axe_at_minus_six_at_sixty_feet() {
         crit_min_roll: 20,
         crit_min_roll_ranged: None,
         crit_severity_bonus: 0,
+        defender_knockback_step_adjustment: 0,
     };
 
     let penalty = range_modifier_for_weapon_with_scale(&weapon, 60.0, 0.666);
@@ -1696,6 +1698,7 @@ fn ranged_weapons_cannot_hold_at_bay() {
         crit_min_roll: 20,
         crit_min_roll_ranged: None,
         crit_severity_bonus: 0,
+        defender_knockback_step_adjustment: 0,
     });
     let melee_weapon = Arc::new(WeaponProfile {
         name: "Test Blade".to_string(),
@@ -1728,6 +1731,7 @@ fn ranged_weapons_cannot_hold_at_bay() {
         crit_min_roll: 20,
         crit_min_roll_ranged: None,
         crit_severity_bonus: 0,
+        defender_knockback_step_adjustment: 0,
     });
     let mut maneuvers = ManeuverProfile::default();
     maneuvers.hold_at_bay = true;
@@ -1922,6 +1926,7 @@ fn equal_reach_trauma_does_not_block_simultaneous_attacks() {
                 crit_min_roll: 20,
                 crit_min_roll_ranged: None,
                 crit_severity_bonus: 0,
+                defender_knockback_step_adjustment: 0,
             }),
             offhand: None,
         },
@@ -2654,6 +2659,7 @@ fn equal_reach_knockback_does_not_block_simultaneous_attacks() {
                 crit_min_roll: 20,
                 crit_min_roll_ranged: None,
                 crit_severity_bonus: 0,
+                defender_knockback_step_adjustment: 0,
             }),
             offhand: None,
         },
@@ -5839,6 +5845,7 @@ fn throwing_axe_switches_to_melee_at_close_range() {
         crit_min_roll: 20,
         crit_min_roll_ranged: None,
         crit_severity_bonus: 0,
+        defender_knockback_step_adjustment: 0,
     });
     let melee_weapon = Arc::new(WeaponProfile {
         name: "Sword".to_string(),
@@ -5871,6 +5878,7 @@ fn throwing_axe_switches_to_melee_at_close_range() {
         crit_min_roll: 20,
         crit_min_roll_ranged: None,
         crit_severity_bonus: 0,
+        defender_knockback_step_adjustment: 0,
     });
     let attacker = Combatant::new(CombatantSheet {
         name: "Thrower".to_string(),
@@ -6020,6 +6028,7 @@ fn throwing_axe_cooldown_resets_on_melee_engagement() {
         crit_min_roll: 20,
         crit_min_roll_ranged: None,
         crit_severity_bonus: 0,
+        defender_knockback_step_adjustment: 0,
     });
     let melee_weapon = Arc::new(WeaponProfile {
         name: "Sword".to_string(),
@@ -6052,6 +6061,7 @@ fn throwing_axe_cooldown_resets_on_melee_engagement() {
         crit_min_roll: 20,
         crit_min_roll_ranged: None,
         crit_severity_bonus: 0,
+        defender_knockback_step_adjustment: 0,
     });
     let attacker = Combatant::new(CombatantSheet {
         name: "Thrower".to_string(),

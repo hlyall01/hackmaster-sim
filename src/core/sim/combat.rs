@@ -36,6 +36,7 @@ struct AttackProfile {
     use_jab: bool,
     uses_projectiles: bool,
     damage_penalty: i32,
+    defender_knockback_step_adjustment: i32,
 }
 
 fn attack_profile_for_slot(attacker: &Combatant, slot: WeaponSlot) -> Option<AttackProfile> {
@@ -55,6 +56,11 @@ fn attack_profile_for_slot(attacker: &Combatant, slot: WeaponSlot) -> Option<Att
             use_jab: attacker.sheet.offense.weapon.use_jab,
             uses_projectiles: attacker.sheet.offense.weapon.uses_projectiles,
             damage_penalty: 0,
+            defender_knockback_step_adjustment: attacker
+                .sheet
+                .offense
+                .weapon
+                .defender_knockback_step_adjustment,
         }),
         WeaponSlot::Secondary => {
             attacker
@@ -74,6 +80,9 @@ fn attack_profile_for_slot(attacker: &Combatant, slot: WeaponSlot) -> Option<Att
                     use_jab: offhand.weapon.use_jab,
                     uses_projectiles: offhand.weapon.uses_projectiles,
                     damage_penalty: attacker.sheet.maneuvers.dualwield_offhand_damage_penalty,
+                    defender_knockback_step_adjustment: offhand
+                        .weapon
+                        .defender_knockback_step_adjustment,
                 })
         }
     }
@@ -685,6 +694,7 @@ fn resolve_counter_attack(
         crit_severity,
         attacker_weapon_hacking_or_piercing,
         damage_penalty,
+        defender_knockback_step_adjustment,
         weapon_profile,
         unarmed_expr,
     ) = if use_weapon {
@@ -712,6 +722,7 @@ fn resolve_counter_attack(
             crit_severity,
             profile.weapon.hacking_or_piercing,
             profile.damage_penalty,
+            profile.defender_knockback_step_adjustment,
             Some(profile.weapon),
             None,
         )
@@ -745,6 +756,7 @@ fn resolve_counter_attack(
             20,
             0,
             false,
+            0,
             0,
             None,
             Some(damage_expr),
@@ -1033,7 +1045,10 @@ fn resolve_counter_attack(
                     .unwrap_or(0);
             }
             combatants[defender_idx].state.hp -= damage;
-            knockback_ft = knockback_distance_ft(raw, defender_knockback_step);
+            knockback_ft = knockback_distance_ft(
+                raw,
+                defender_knockback_step + defender_knockback_step_adjustment,
+            );
             trauma_seconds = maybe_apply_trauma(combatants, defender_idx, damage, rng);
             if let Some(crit) = critical.as_mut() {
                 if let Some(crit_seconds) = crit.trauma_seconds {
@@ -1333,6 +1348,7 @@ pub(crate) fn resolve_attack(
     let use_jab = attack_profile.use_jab;
     let attacker_uses_projectiles = attack_profile.uses_projectiles;
     let damage_penalty = attack_profile.damage_penalty;
+    let defender_knockback_step_adjustment = attack_profile.defender_knockback_step_adjustment;
     let weapon = attack_profile.weapon;
     let strength_damage = if is_ranged && attacker_uses_projectiles {
         0
@@ -1681,7 +1697,10 @@ pub(crate) fn resolve_attack(
             } else {
                 raw
             };
-            knockback_ft = knockback_distance_ft(knockback_raw, defender_knockback_step);
+            knockback_ft = knockback_distance_ft(
+                knockback_raw,
+                defender_knockback_step + defender_knockback_step_adjustment,
+            );
 
             if let Some(effect) = crit_effect {
                 if effect.instant_kill {
