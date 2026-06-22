@@ -536,6 +536,7 @@ struct TalentModifiers {
     weapon_speed_flat_bonus_by_weapon: HashMap<WeaponId, f32>,
     weapon_speed_multiplier_by_weapon: HashMap<WeaponId, f32>,
     weapon_min_speed_multiplier_by_weapon: HashMap<WeaponId, f32>,
+    weapon_speed_round_up_by_weapon: HashSet<WeaponId>,
     weapon_reach_flat_bonus_by_weapon: HashMap<WeaponId, f32>,
     no_strength_damage_by_weapon: HashSet<WeaponId>,
     no_mastery_damage_by_weapon: HashSet<WeaponId>,
@@ -570,7 +571,7 @@ struct TalentModifiers {
     reach_multiplier_by_weapon: HashMap<WeaponId, f32>,
     close_hit_damage_by_weapon: HashMap<WeaponId, CloseHitDamageRule>,
     range_distance_multiplier: f32,
-    threshold_of_pain_multiplier: f32,
+    threshold_of_pain_bonus_pct: f32,
     threshold_of_pain_level_bonus: f32,
     crit_min_by_group: HashMap<WeaponGroup, i32>,
     crit_min_ranged_by_group: HashMap<WeaponGroup, i32>,
@@ -644,6 +645,7 @@ impl Default for TalentModifiers {
             weapon_speed_flat_bonus_by_weapon: HashMap::new(),
             weapon_speed_multiplier_by_weapon: HashMap::new(),
             weapon_min_speed_multiplier_by_weapon: HashMap::new(),
+            weapon_speed_round_up_by_weapon: HashSet::new(),
             weapon_reach_flat_bonus_by_weapon: HashMap::new(),
             no_strength_damage_by_weapon: HashSet::new(),
             no_mastery_damage_by_weapon: HashSet::new(),
@@ -678,7 +680,7 @@ impl Default for TalentModifiers {
             reach_multiplier_by_weapon: HashMap::new(),
             close_hit_damage_by_weapon: HashMap::new(),
             range_distance_multiplier: 1.0,
-            threshold_of_pain_multiplier: 1.0,
+            threshold_of_pain_bonus_pct: 0.0,
             threshold_of_pain_level_bonus: 0.0,
             crit_min_by_group: HashMap::new(),
             crit_min_ranged_by_group: HashMap::new(),
@@ -766,6 +768,10 @@ impl TalentModifiers {
             .weapon_min_speed_multiplier_by_weapon
             .get(&weapon_id)
             .unwrap_or(&1.0)
+    }
+
+    fn weapon_speed_rounds_up_for_weapon(&self, weapon_id: WeaponId) -> bool {
+        self.weapon_speed_round_up_by_weapon.contains(&weapon_id)
     }
 
     fn weapon_reach_flat_bonus_for_weapon(&self, weapon_id: WeaponId) -> f32 {
@@ -2056,7 +2062,9 @@ fn resolve_talent_modifiers(
                 }
                 TalentEffect::ThresholdOfPainMultiplier { multiplier } => {
                     if *multiplier > 0.0 {
-                        modifiers.threshold_of_pain_multiplier *= multiplier.powi(rank);
+                        // Historical data calls this a multiplier, but the rule is a
+                        // percentage-point bonus to the Threshold of Pain formula.
+                        modifiers.threshold_of_pain_bonus_pct += (multiplier - 1.0) * rank as f32;
                     }
                 }
                 TalentEffect::ThresholdOfPainLevelBonus { per_level_pct } => {
@@ -2130,6 +2138,9 @@ fn resolve_talent_modifiers(
                                     .or_insert(1.0);
                                 *entry *= min_multiplier.powi(rank);
                             }
+                        }
+                        if spec.id == TALENT_ID_ROHAVALAN_BRIDGE {
+                            modifiers.weapon_speed_round_up_by_weapon.insert(weapon_id);
                         }
                     }
                 }
@@ -3873,6 +3884,7 @@ pub fn build_combatant(
     let weapon_speed_flat_bonus = modifiers.weapon_speed_flat_bonus_for_weapon(weapon_id);
     let speed_multiplier = modifiers.weapon_speed_multiplier_for_weapon(weapon_id);
     let min_speed_multiplier = modifiers.weapon_min_speed_multiplier_for_weapon(weapon_id);
+    let speed_rounds_up = modifiers.weapon_speed_rounds_up_for_weapon(weapon_id);
     let reach_multiplier = modifiers.reach_multiplier_for_weapon(weapon_id);
     let has_offhand = player.offhand_weapon_id.is_some();
     let (
@@ -3934,6 +3946,11 @@ pub fn build_combatant(
         + weapon_speed_flat_bonus)
         .max(min_speed);
     let jab_speed = (jab_speed * speed_multiplier).max(min_speed * min_speed_multiplier);
+    let jab_speed = if speed_rounds_up {
+        jab_speed.ceil()
+    } else {
+        jab_speed
+    };
     let jab_special_expr = if use_jab {
         weapon_preset.jab_special_expr.clone()
     } else {
@@ -4032,18 +4049,10 @@ pub fn build_combatant(
     }
     let mut max_hp =
         (derived.hit_points as i32 + modifiers.hp_bonus + misc_modifiers.hp_bonus).max(1);
-    let mut threshold_of_pain = threshold_of_pain(max_hp, player.level);
-    if modifiers.threshold_of_pain_level_bonus != 0.0 {
-        let level_pct = player.level as f32 * 0.01;
-        let bonus_pct = player.level as f32 * modifiers.threshold_of_pain_level_bonus;
-        let pct = 0.30 + level_pct + bonus_pct;
-        threshold_of_pain = ((max_hp as f32) * pct).ceil() as i32;
-    }
-    if modifiers.threshold_of_pain_multiplier != 1.0 {
-        threshold_of_pain =
-            ((threshold_of_pain as f32) * modifiers.threshold_of_pain_multiplier).ceil() as i32;
-        threshold_of_pain = threshold_of_pain.max(1);
-    }
+    let level_pct = player.level as f32 * 0.01;
+    let level_bonus_pct = player.level as f32 * modifiers.threshold_of_pain_level_bonus;
+    let top_pct = 0.30 + level_pct + level_bonus_pct + modifiers.threshold_of_pain_bonus_pct;
+    let mut threshold_of_pain = ((max_hp as f32) * top_pct).ceil() as i32;
     let mut shield_name = shield_data.map(|shield| shield.name.clone());
     let mut shield_defense_bonus = shield_data.map(|shield| shield.defense_bonus).unwrap_or(0)
         + modifiers.shield_defense_bonus;
@@ -4115,7 +4124,8 @@ pub fn build_combatant(
             + modifiers.weapon_speed_bonus_for_weapon(weapon_id) as f32
             + weapon_speed_flat_bonus)
             .max(min_speed);
-        (speed * speed_multiplier).max(min_speed * min_speed_multiplier)
+        let speed = (speed * speed_multiplier).max(min_speed * min_speed_multiplier);
+        if speed_rounds_up { speed.ceil() } else { speed }
     };
     weapon_reach = (weapon_reach * reach_multiplier).max(0.5);
     let damage_expr_cache = if falling_sun_active
@@ -7507,8 +7517,8 @@ mod tests {
 
         assert!(
             (combatant.sheet.offense.weapon.speed
-                - (baseline_combatant.sheet.offense.weapon.speed / 2.0))
-                .abs()
+                - (baseline_combatant.sheet.offense.weapon.speed / 2.0).ceil())
+            .abs()
                 < 0.001
         );
         assert!(
@@ -8120,7 +8130,7 @@ mod tests {
     }
 
     #[test]
-    fn talent_pain_tolerant_increases_threshold_of_pain() {
+    fn talent_pain_tolerant_adds_to_threshold_of_pain_percentage() {
         let (weapons, armor, shields) = sample_catalogs();
         let talents = sample_talents();
         let weapon_id = one_handed_weapon_id(&weapons);
@@ -8139,8 +8149,9 @@ mod tests {
             &npc_presets,
             &talents,
         );
-        let expected =
-            ((baseline_combatant.sheet.vitals.threshold_of_pain as f32) * 1.1).ceil() as i32;
+        let expected = ((baseline_combatant.sheet.vitals.max_hp as f32)
+            * (0.30 + (player.level as f32 * 0.01) + 0.10))
+            .ceil() as i32;
         assert_eq!(combatant.sheet.vitals.threshold_of_pain, expected);
     }
 

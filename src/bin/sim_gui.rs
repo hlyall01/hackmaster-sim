@@ -1075,6 +1075,16 @@ impl eframe::App for SimGuiApp {
                                             .get(idx)
                                             .copied()
                                             .unwrap_or(0.0);
+                                        let avg_rolled = result
+                                            .avg_damage_rolled_by_team
+                                            .get(idx)
+                                            .copied()
+                                            .unwrap_or(0.0);
+                                        let avg_landed = result
+                                            .avg_damage_landed_by_team
+                                            .get(idx)
+                                            .copied()
+                                            .unwrap_or(0.0);
                                         let avg_hp = result
                                             .avg_remaining_hp_by_team
                                             .get(idx)
@@ -1103,6 +1113,14 @@ impl eframe::App for SimGuiApp {
                                         ui.separator();
                                         ui.label(format!("{name} avg dmg dealt: {:.1}", avg_dealt));
                                         ui.label(format!("{name} avg dmg taken: {:.1}", avg_taken));
+                                        ui.label(format!(
+                                            "{name} average damage rolled: {:.1}",
+                                            avg_rolled
+                                        ));
+                                        ui.label(format!(
+                                            "{name} average damage landed: {:.1}",
+                                            avg_landed
+                                        ));
                                         ui.label(format!("{name} avg remaining HP: {:.1}", avg_hp));
                                         ui.label(format!(
                                             "{name} highest crit hit: {}",

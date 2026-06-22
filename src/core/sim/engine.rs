@@ -233,6 +233,8 @@ impl SimState {
         attacker_idx: usize,
         defender_idx: usize,
         hp_damage: i32,
+        damage_rolled: Option<i32>,
+        damage_landed: Option<i32>,
         highest_hit_bucket: Option<bool>,
         instant_kill: bool,
         shield_block: bool,
@@ -257,6 +259,13 @@ impl SimState {
             attacker.max_shield_hit_dealt = attacker.max_shield_hit_dealt.max(shield_damage.max(0));
             attacker.total_hp_damage_dealt =
                 attacker.total_hp_damage_dealt.saturating_add(hp_damage_u32);
+            if let Some(damage_rolled) = damage_rolled {
+                attacker.total_damage_rolled_dealt += i64::from(damage_rolled);
+                attacker.damage_rolls_dealt = attacker.damage_rolls_dealt.saturating_add(1);
+            }
+            if let Some(damage_landed) = damage_landed {
+                attacker.total_damage_landed_dealt += i64::from(damage_landed);
+            }
             attacker.total_shield_damage_dealt = attacker
                 .total_shield_damage_dealt
                 .saturating_add(shield_damage_u32);
@@ -1023,6 +1032,13 @@ impl SimState {
                     event.attacker_idx,
                     event.defender_idx,
                     event.damage,
+                    event
+                        .damage_breakdown
+                        .as_ref()
+                        .map(|breakdown| breakdown.raw_damage),
+                    event.damage_breakdown.as_ref().map(|breakdown| {
+                        (breakdown.raw_damage - breakdown.effective_armor_dr).max(0)
+                    }),
                     match event.critical.as_ref() {
                         Some(crit) if crit.instant_kill => None,
                         Some(_) => Some(true),
@@ -1095,6 +1111,13 @@ impl SimState {
                         counter.attacker_idx,
                         counter.defender_idx,
                         counter.damage,
+                        counter
+                            .damage_breakdown
+                            .as_ref()
+                            .map(|breakdown| breakdown.raw_damage),
+                        counter.damage_breakdown.as_ref().map(|breakdown| {
+                            (breakdown.raw_damage - breakdown.effective_armor_dr).max(0)
+                        }),
                         match counter.critical.as_ref() {
                             Some(crit) if crit.instant_kill => None,
                             Some(_) => Some(true),
@@ -1293,6 +1316,13 @@ impl SimState {
                         event.attacker_idx,
                         event.defender_idx,
                         event.damage,
+                        event
+                            .damage_breakdown
+                            .as_ref()
+                            .map(|breakdown| breakdown.raw_damage),
+                        event.damage_breakdown.as_ref().map(|breakdown| {
+                            (breakdown.raw_damage - breakdown.effective_armor_dr).max(0)
+                        }),
                         match event.critical.as_ref() {
                             Some(crit) if crit.instant_kill => None,
                             Some(_) => Some(true),
@@ -1369,6 +1399,13 @@ impl SimState {
                             counter.attacker_idx,
                             counter.defender_idx,
                             counter.damage,
+                            counter
+                                .damage_breakdown
+                                .as_ref()
+                                .map(|breakdown| breakdown.raw_damage),
+                            counter.damage_breakdown.as_ref().map(|breakdown| {
+                                (breakdown.raw_damage - breakdown.effective_armor_dr).max(0)
+                            }),
                             match counter.critical.as_ref() {
                                 Some(crit) if crit.instant_kill => None,
                                 Some(_) => Some(true),
@@ -1606,6 +1643,8 @@ pub struct BulkSimResult {
     pub highest_single_shield_hit_by_team: Vec<i32>,
     pub avg_damage_dealt_by_team: Vec<f32>,
     pub avg_damage_taken_by_team: Vec<f32>,
+    pub avg_damage_rolled_by_team: Vec<f32>,
+    pub avg_damage_landed_by_team: Vec<f32>,
     pub avg_remaining_hp_by_team: Vec<f32>,
     pub max_total_knockback_one_side_ft: f32,
     pub avg_max_knockback_one_side_ft: f32,
@@ -1667,6 +1706,9 @@ pub fn bulk_simulate_with_seed(
     let mut instakills_by_team = vec![0u32; team_ids.len()];
     let mut total_damage_dealt_by_team = vec![0u64; team_ids.len()];
     let mut total_damage_taken_by_team = vec![0u64; team_ids.len()];
+    let mut total_damage_rolled_dealt_by_team = vec![0i64; team_ids.len()];
+    let mut total_damage_landed_dealt_by_team = vec![0i64; team_ids.len()];
+    let mut damage_rolls_dealt_by_team = vec![0u64; team_ids.len()];
     let mut total_remaining_hp_by_team = vec![0u64; team_ids.len()];
     let mut max_total_knockback_one_side_ft = 0.0f32;
     let mut total_max_knockback_one_side_ft = 0.0f32;
@@ -1762,6 +1804,10 @@ pub fn bulk_simulate_with_seed(
                 .saturating_add(u64::from(state.total_hp_damage_dealt));
             total_damage_taken_by_team[team_idx] = total_damage_taken_by_team[team_idx]
                 .saturating_add(u64::from(state.total_hp_damage_taken));
+            total_damage_rolled_dealt_by_team[team_idx] += state.total_damage_rolled_dealt;
+            total_damage_landed_dealt_by_team[team_idx] += state.total_damage_landed_dealt;
+            damage_rolls_dealt_by_team[team_idx] = damage_rolls_dealt_by_team[team_idx]
+                .saturating_add(u64::from(state.damage_rolls_dealt));
             total_remaining_hp_by_team[team_idx] =
                 total_remaining_hp_by_team[team_idx].saturating_add(state.hp.max(0) as u64);
             fight_max_knockback_side = fight_max_knockback_side.max(state.total_knockback_taken_ft);
@@ -1772,12 +1818,35 @@ pub fn bulk_simulate_with_seed(
     }
     let avg_duration = total_seconds as f32 / runs as f32;
     let avg_damage_dealt_by_team = total_damage_dealt_by_team
-        .into_iter()
+        .iter()
+        .copied()
         .map(|value| value as f32 / runs as f32)
         .collect();
     let avg_damage_taken_by_team = total_damage_taken_by_team
         .into_iter()
         .map(|value| value as f32 / runs as f32)
+        .collect();
+    let avg_damage_landed_by_team = total_damage_landed_dealt_by_team
+        .into_iter()
+        .zip(damage_rolls_dealt_by_team.iter().copied())
+        .map(|(total, count)| {
+            if count > 0 {
+                total as f32 / count as f32
+            } else {
+                0.0
+            }
+        })
+        .collect();
+    let avg_damage_rolled_by_team = total_damage_rolled_dealt_by_team
+        .into_iter()
+        .zip(damage_rolls_dealt_by_team)
+        .map(|(total, count)| {
+            if count > 0 {
+                total as f32 / count as f32
+            } else {
+                0.0
+            }
+        })
         .collect();
     let avg_remaining_hp_by_team = total_remaining_hp_by_team
         .into_iter()
@@ -1816,6 +1885,8 @@ pub fn bulk_simulate_with_seed(
         highest_single_shield_hit_by_team,
         avg_damage_dealt_by_team,
         avg_damage_taken_by_team,
+        avg_damage_rolled_by_team,
+        avg_damage_landed_by_team,
         avg_remaining_hp_by_team,
         max_total_knockback_one_side_ft,
         avg_max_knockback_one_side_ft: total_max_knockback_one_side_ft / runs as f32,

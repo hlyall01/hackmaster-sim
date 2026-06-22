@@ -4565,7 +4565,7 @@ fn bulk_highest_hit_metrics_reset_between_bulk_runs() {
         false,
         0,
         "12".to_string(),
-        0,
+        3,
         1.0,
         5.0,
         0.0,
@@ -4672,6 +4672,93 @@ fn bulk_shield_metrics_report_presence_without_combat() {
 }
 
 #[test]
+fn bulk_average_damage_splits_rolled_and_landed_hit_damage() {
+    let mut attacker = combatant_basic(
+        "Attacker".to_string(),
+        "Test Blade".to_string(),
+        100,
+        0,
+        0,
+        false,
+        0,
+        "12".to_string(),
+        3,
+        1.0,
+        5.0,
+        0.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        100,
+    );
+    let mut weapon = attacker.sheet.offense.weapon.as_ref().clone();
+    weapon.crit_min_roll = 100;
+    attacker.sheet.offense.weapon = Arc::new(weapon);
+
+    let defender = combatant_basic(
+        "Defender".to_string(),
+        "Shield".to_string(),
+        -100,
+        0,
+        5,
+        false,
+        0,
+        "1".to_string(),
+        0,
+        10.0,
+        5.0,
+        0.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        8,
+    );
+    let mut attacker = attacker;
+    let mut defender = defender;
+    attacker.team_id = 0;
+    defender.team_id = 1;
+
+    let result = bulk_simulate(SimConfig::new(5.0, 5.0), vec![attacker, defender], 1, 20);
+
+    assert_eq!(
+        result
+            .avg_damage_rolled_by_team
+            .first()
+            .copied()
+            .unwrap_or(0.0),
+        15.0
+    );
+    assert_eq!(
+        result
+            .avg_damage_landed_by_team
+            .first()
+            .copied()
+            .unwrap_or(0.0),
+        10.0
+    );
+    assert_eq!(
+        result
+            .avg_damage_rolled_by_team
+            .get(1)
+            .copied()
+            .unwrap_or(0.0),
+        0.0
+    );
+    assert_eq!(
+        result
+            .avg_damage_landed_by_team
+            .get(1)
+            .copied()
+            .unwrap_or(0.0),
+        0.0
+    );
+}
+
+#[test]
 fn instant_kill_crit_does_not_count_toward_highest_crit_metric() {
     let mut attacker = combatant_basic(
         "Attacker".to_string(),
@@ -4735,6 +4822,22 @@ fn instant_kill_crit_does_not_count_toward_highest_crit_metric() {
             .unwrap_or(0.0)
             > 0.0,
         "expected instant-kill damage to still count toward total damage"
+    );
+    assert_eq!(
+        result
+            .avg_damage_rolled_by_team
+            .first()
+            .copied()
+            .unwrap_or(0.0),
+        1.0
+    );
+    assert_eq!(
+        result
+            .avg_damage_landed_by_team
+            .first()
+            .copied()
+            .unwrap_or(0.0),
+        1.0
     );
 }
 
