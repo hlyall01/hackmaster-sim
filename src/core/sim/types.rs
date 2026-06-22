@@ -266,6 +266,7 @@ pub struct MobilityProfile {
 pub struct Vitals {
     pub max_hp: i32,
     pub constitution: u8,
+    pub drain_resistance: i32,
     pub threshold_of_pain: i32,
     pub trauma_die_sides: i32,
     pub trauma_die_penetrating: bool,
@@ -521,6 +522,7 @@ impl Default for Vitals {
         Self {
             max_hp: 10,
             constitution: 10,
+            drain_resistance: 0,
             threshold_of_pain: 3,
             trauma_die_sides: 20,
             trauma_die_penetrating: false,

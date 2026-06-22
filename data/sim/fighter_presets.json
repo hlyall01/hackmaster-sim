@@ -10,19 +10,19 @@
         "health": "IV"
       },
       "masteries": {
-        "attack": 3,
+        "attack": 4,
         "defense": 3,
         "damage": 3,
-        "speed": 2,
+        "speed": 4,
         "shield_defense": 0,
         "shield_speed": 0
       },
       "base_hp": 10,
       "move_speed": 20.0,
       "strength_base": 17,
-      "strength_pct": 46,
+      "strength_pct": 65,
       "dex_base": 15,
-      "dex_pct": 51,
+      "dex_pct": 71,
       "intelligence": 10,
       "wisdom": 12,
       "constitution": 13,
@@ -46,6 +46,7 @@
         "Glaive",
         "Poleaxe",
         "Lance",
+        "Polehammer",
         "Light armor",
         "Medium armor",
         "Heavy armor",
@@ -103,7 +104,7 @@
     },
     {
       "name": "Zorya",
-      "level": 6,
+      "level": 7,
       "progression": {
         "attack": "II",
         "speed": "V",
@@ -111,31 +112,31 @@
         "health": "II"
       },
       "masteries": {
-        "attack": 2,
-        "defense": 1,
-        "damage": 2,
-        "speed": 2,
+        "attack": 3,
+        "defense": 4,
+        "damage": 3,
+        "speed": 3,
         "shield_defense": 0,
         "shield_speed": 1
       },
       "base_hp": 10,
       "move_speed": 20.0,
       "strength_base": 12,
-      "strength_pct": 18,
+      "strength_pct": 27,
       "dex_base": 17,
-      "dex_pct": 26,
+      "dex_pct": 41,
       "intelligence": 11,
-      "wisdom": 15,
-      "constitution": 13,
+      "wisdom": 16,
+      "constitution": 14,
       "looks": 7,
       "charisma": 8,
       "weapon": "Throwing axe",
       "armor": "Gambeson",
       "shield": "Medium wooden shield",
-      "weapon_material_tier": 1,
+      "weapon_material_tier": 2,
       "armor_material_tier": 2,
       "projectile_material_tier": 0,
-      "shield_material_tier": 1,
+      "shield_material_tier": 2,
       "two_hand_grip": false,
       "maneuvers": {
         "charge": true
@@ -146,6 +147,7 @@
         "Throwing axe",
         "Shortbow",
         "Battle axe",
+        "Greataxe",
         "Light armor",
         "Shields",
         "Hiking",
@@ -185,6 +187,26 @@
         },
         {
           "id": "light_armor_optimization",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "fymblwnger",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "improved_awareness",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "hibernate",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "essence_health_bonus",
           "rank": 1,
           "weapon": null
         },
@@ -207,7 +229,7 @@
     },
     {
       "name": "Zorya (axe cursed)",
-      "level": 6,
+      "level": 7,
       "progression": {
         "attack": "II",
         "speed": "V",
@@ -216,21 +238,21 @@
       },
       "masteries": {
         "attack": 3,
-        "defense": 3,
+        "defense": 4,
         "damage": 3,
         "speed": 3,
-        "shield_defense": 3,
-        "shield_speed": 3
+        "shield_defense": 0,
+        "shield_speed": 1
       },
       "base_hp": 10,
       "move_speed": 20.0,
       "strength_base": 12,
-      "strength_pct": 18,
+      "strength_pct": 27,
       "dex_base": 17,
-      "dex_pct": 26,
+      "dex_pct": 41,
       "intelligence": 11,
-      "wisdom": 15,
-      "constitution": 13,
+      "wisdom": 16,
+      "constitution": 14,
       "looks": 7,
       "charisma": 8,
       "weapon": "Greataxe",
@@ -239,7 +261,7 @@
       "weapon_material_tier": 2,
       "armor_material_tier": 2,
       "projectile_material_tier": 0,
-      "shield_material_tier": 1,
+      "shield_material_tier": 2,
       "two_hand_grip": true,
       "maneuvers": {
         "charge": true
@@ -250,6 +272,7 @@
         "Throwing axe",
         "Shortbow",
         "Battle axe",
+        "Greataxe",
         "Light armor",
         "Shields",
         "Hiking",
@@ -289,6 +312,26 @@
         },
         {
           "id": "light_armor_optimization",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "fymblwnger",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "improved_awareness",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "hibernate",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "essence_health_bonus",
           "rank": 1,
           "weapon": null
         },
@@ -383,27 +426,27 @@
     },
     {
       "name": "Errit",
-      "level": 6,
+      "level": 7,
       "progression": {
-        "attack": "III",
+        "attack": "IV",
         "speed": "II",
         "initiative": "II",
         "health": "IV"
       },
       "masteries": {
-        "attack": 1,
-        "defense": 1,
-        "damage": 1,
+        "attack": 2,
+        "defense": 2,
+        "damage": 2,
         "speed": 1,
         "shield_defense": 1,
         "shield_speed": 1
       },
       "base_hp": 10,
       "move_speed": 20.0,
-      "strength_base": 13,
-      "strength_pct": 79,
+      "strength_base": 14,
+      "strength_pct": 23,
       "dex_base": 12,
-      "dex_pct": 11,
+      "dex_pct": 24,
       "intelligence": 8,
       "wisdom": 10,
       "constitution": 16,
@@ -412,7 +455,7 @@
       "weapon": "Flamberge",
       "armor": "Platemail",
       "shield": "Small metallic shield",
-      "weapon_material_tier": 1,
+      "weapon_material_tier": 2,
       "armor_material_tier": 1,
       "projectile_material_tier": 0,
       "shield_material_tier": 1,
@@ -427,6 +470,7 @@
         "Light armor",
         "Medium armor",
         "Heavy armor",
+        "Laborer",
         "Hiking",
         "Roadmarching"
       ],
@@ -462,6 +506,11 @@
           "weapon": "Large swords"
         },
         {
+          "id": "improved_awareness",
+          "rank": 1,
+          "weapon": null
+        },
+        {
           "id": "twelve_paths",
           "rank": 1,
           "weapon": null
@@ -478,6 +527,11 @@
         },
         {
           "id": "inspire_others",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "intimidate_adversary",
           "rank": 1,
           "weapon": null
         },
@@ -559,8 +613,127 @@
       ]
     },
     {
+      "name": "Wren",
+      "level": 7,
+      "progression": {
+        "attack": "III",
+        "speed": "III",
+        "initiative": "III",
+        "health": "IV"
+      },
+      "masteries": {
+        "attack": 2,
+        "defense": 1,
+        "damage": 2,
+        "speed": 2,
+        "shield_defense": 2,
+        "shield_speed": 1
+      },
+      "base_hp": 10,
+      "move_speed": 20.0,
+      "strength_base": 16,
+      "strength_pct": 11,
+      "dex_base": 10,
+      "dex_pct": 11,
+      "intelligence": 14,
+      "wisdom": 10,
+      "constitution": 13,
+      "looks": 16,
+      "charisma": 13,
+      "weapon": "Hasta",
+      "armor": "Halfplate",
+      "shield": "Large metallic shield",
+      "weapon_material_tier": 2,
+      "armor_material_tier": 2,
+      "projectile_material_tier": 0,
+      "shield_material_tier": 2,
+      "two_hand_grip": false,
+      "maneuvers": {
+        "power_attack": true
+      },
+      "defensive_dualwielding": false,
+      "race_id": "kanian",
+      "proficiencies": [
+        "Hasta",
+        "Lance",
+        "Light armor",
+        "Medium armor",
+        "Heavy armor",
+        "Shields",
+        "Hiking",
+        "Roadmarching"
+      ],
+      "talents": [
+        {
+          "id": "armor_focus",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "armor_specialization",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "armor_master",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "heavy_armor_optimization",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "power_attack",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "shield_focus",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "weapon_focus",
+          "rank": 1,
+          "weapon": "Spears"
+        },
+        {
+          "id": "weapon_focus",
+          "rank": 1,
+          "weapon": "Shields"
+        },
+        {
+          "id": "tough_as_nails",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "kanian_impaler",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "improved_awareness",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "destined",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "improvisation",
+          "rank": 1,
+          "weapon": null
+        }
+      ]
+    },
+    {
       "name": "Volfango Drakos",
-      "level": 6,
+      "level": 7,
       "progression": {
         "attack": "III",
         "speed": "II",
@@ -568,19 +741,19 @@
         "health": "IV"
       },
       "masteries": {
-        "attack": 1,
+        "attack": 2,
         "defense": 2,
-        "damage": 1,
-        "speed": 1,
+        "damage": 2,
+        "speed": 2,
         "shield_defense": 0,
         "shield_speed": 0
       },
       "base_hp": 10,
       "move_speed": 20.0,
-      "strength_base": 10,
-      "strength_pct": 1,
+      "strength_base": 11,
+      "strength_pct": 34,
       "dex_base": 20,
-      "dex_pct": 62,
+      "dex_pct": 84,
       "intelligence": 15,
       "wisdom": 12,
       "constitution": 11,
@@ -590,8 +763,8 @@
       "offhand_weapon": "Short sword",
       "armor": "Gambeson",
       "shield": "None",
-      "weapon_material_tier": 1,
-      "offhand_weapon_material_tier": 1,
+      "weapon_material_tier": 2,
+      "offhand_weapon_material_tier": 2,
       "armor_material_tier": 2,
       "projectile_material_tier": 0,
       "shield_material_tier": 0,
@@ -648,6 +821,16 @@
         },
         {
           "id": "light_armor_optimization",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "shield_of_blades",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "improved_awareness",
           "rank": 1,
           "weapon": null
         },

@@ -15,6 +15,19 @@
       ]
     },
     {
+      "id": "essence_health_bonus",
+      "name": "Confluence",
+      "description": "Essence talent. Gain level-scaled hit points and record drain resistance: levels 1-4 +1 HP/0 drain resistance; 5-7 +3 HP/+2 drain resistance; 8-10 +4 HP/+4 drain resistance; 11-13 +6 HP/+6 drain resistance; 14-16 +7 HP/+8 drain resistance; 17-20 +9 HP/+10 drain resistance. Drain resistance is recorded but not applied to combat.",
+      "cost_bp": 0,
+      "category": "Essence",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "essence_advancement"
+        }
+      ]
+    },
+    {
       "id": "tough_as_nails",
       "name": "Tough as Nails",
       "description": "Use a d12p for Threshold of Pain checks.",
@@ -1337,7 +1350,7 @@
       "name": "Kanian Impaler",
       "description": "Requires proficiency in at least one type of size L spear. When attacking with a size L spear, consider opponents one size category smaller for knock-backs. When you deal a double or greater knock-back, you may choose the direction to launch your opponent as you withdraw your spear.",
       "cost_bp": 20,
-      "category": "Miscellaneous",
+      "category": "Weapon Styles",
       "max_rank": 1,
       "effects": []
     },

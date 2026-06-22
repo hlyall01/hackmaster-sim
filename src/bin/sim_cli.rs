@@ -90,6 +90,7 @@ fn main() {
         "Hit points: {} (x{:.1})",
         derived.hit_points, derived.health_mult
     );
+    println!("Drain resistance: {}", derived.drain_resistance);
     println!("Base DV: {}", derived.base_dv);
     println!("Armor DR: {}", derived.armor_dr);
     println!(
@@ -222,6 +223,7 @@ fn main() {
         vitals: Vitals {
             max_hp: derived.hit_points as i32,
             constitution: character.abilities.constitution,
+            drain_resistance: derived.drain_resistance,
             threshold_of_pain: game_logic::threshold_of_pain(
                 derived.hit_points as i32,
                 character.level,

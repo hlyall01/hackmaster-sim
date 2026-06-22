@@ -520,6 +520,7 @@ struct CloseHitDamageRule {
 #[derive(Clone, Debug)]
 struct TalentModifiers {
     hp_bonus: i32,
+    drain_resistance: i32,
     armor_dr_bonus: i32,
     initiative_die_bonus: i32,
     speed_mod_bonus: i32,
@@ -627,6 +628,7 @@ impl Default for TalentModifiers {
     fn default() -> Self {
         Self {
             hp_bonus: 0,
+            drain_resistance: 0,
             armor_dr_bonus: 0,
             initiative_die_bonus: 0,
             speed_mod_bonus: 0,
@@ -1799,6 +1801,17 @@ fn armeroci_pole_style_active(modifiers: &TalentModifiers, weapon: &WeaponPreset
         && weapon.reach_ft >= 5.0
 }
 
+fn essence_advancement_stats(level: u8) -> (i32, i32) {
+    match level {
+        1..=4 => (1, 0),
+        5..=7 => (3, 2),
+        8..=10 => (4, 4),
+        11..=13 => (6, 6),
+        14..=16 => (7, 8),
+        _ => (9, 10),
+    }
+}
+
 fn falling_sun_style_active(modifiers: &TalentModifiers, weapon: &WeaponPreset) -> bool {
     modifiers.falling_sun_style
         && matches!(
@@ -1967,6 +1980,11 @@ fn resolve_talent_modifiers(
             match effect {
                 TalentEffect::HitPointBonus { amount } => {
                     modifiers.hp_bonus += amount * rank;
+                }
+                TalentEffect::EssenceAdvancement => {
+                    let (hp_bonus, drain_resistance) = essence_advancement_stats(player.level);
+                    modifiers.hp_bonus += hp_bonus * rank;
+                    modifiers.drain_resistance += drain_resistance * rank;
                 }
                 TalentEffect::ArmorDrBonus { amount } => {
                     modifiers.armor_dr_bonus += amount * rank;
@@ -3325,6 +3343,7 @@ pub fn player_summary(
         .improved(modifiers.initiative_die_bonus + misc_modifiers.initiative_die_bonus);
     derived.hit_points =
         (derived.hit_points as i32 + modifiers.hp_bonus + misc_modifiers.hp_bonus).max(1) as u32;
+    derived.drain_resistance += modifiers.drain_resistance;
     derived.armor_dr = (derived.armor_dr
         + armor_adjustments.armor_dr_bonus
         + modifiers.armor_dr_bonus
@@ -4436,6 +4455,7 @@ pub fn build_combatant(
         vitals: Vitals {
             max_hp,
             constitution: player.constitution,
+            drain_resistance: modifiers.drain_resistance,
             threshold_of_pain,
             trauma_die_sides,
             trauma_die_penetrating,
@@ -6348,6 +6368,67 @@ mod tests {
                 with_bonus.sheet.vitals.max_hp - without_bonus.sheet.vitals.max_hp,
                 bonus,
                 "{talent_id} should add {bonus} hp"
+            );
+        }
+    }
+
+    #[test]
+    fn confluence_scales_hp_and_records_drain_resistance() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let weapon_id = one_handed_weapon_id(&weapons);
+        let npc_presets = Catalog::new(Vec::new());
+        let confluence = talents
+            .entries()
+            .iter()
+            .find(|talent| talent.id == "essence_health_bonus")
+            .expect("missing Confluence talent");
+        assert_eq!(confluence.name, "Confluence");
+
+        for (level, hp_bonus, drain_resistance) in [
+            (1, 1, 0),
+            (4, 1, 0),
+            (5, 3, 2),
+            (7, 3, 2),
+            (8, 4, 4),
+            (10, 4, 4),
+            (11, 6, 6),
+            (13, 6, 6),
+            (14, 7, 8),
+            (16, 7, 8),
+            (17, 9, 10),
+            (20, 9, 10),
+        ] {
+            let mut player = base_player(weapon_id);
+            player.level = level;
+            add_talent(&mut player, "essence_health_bonus", None);
+            let with_confluence =
+                build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
+            let summary = player_summary(&player, &weapons, &armor, &shields, &talents);
+
+            let mut baseline = player.clone();
+            baseline.talents.clear();
+            let without_confluence = build_combatant(
+                &baseline,
+                &weapons,
+                &armor,
+                &shields,
+                &npc_presets,
+                &talents,
+            );
+
+            assert_eq!(
+                with_confluence.sheet.vitals.max_hp - without_confluence.sheet.vitals.max_hp,
+                hp_bonus,
+                "level {level} should add {hp_bonus} hp"
+            );
+            assert_eq!(
+                with_confluence.sheet.vitals.drain_resistance, drain_resistance,
+                "level {level} should record {drain_resistance} drain resistance"
+            );
+            assert_eq!(
+                summary.derived.drain_resistance, drain_resistance,
+                "level {level} summary should record {drain_resistance} drain resistance"
             );
         }
     }

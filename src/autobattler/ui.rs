@@ -639,6 +639,10 @@ impl AutobattlerApp {
                                 summary.derived.health_mult
                             ));
                             ui.label(format!("Total HP: {}", summary.derived.hit_points));
+                            ui.label(format!(
+                                "Drain resistance: {}",
+                                summary.derived.drain_resistance
+                            ));
                         }
                         CreationStep::DerivedStats => {
                             ui.heading("Record Derived Statistics");
@@ -663,6 +667,10 @@ impl AutobattlerApp {
                                 initiative_die_label(summary.derived.initiative_die)
                             ));
                             ui.label(format!("Speed mod: {}", summary.derived.speed_mod));
+                            ui.label(format!(
+                                "Drain resistance: {}",
+                                summary.derived.drain_resistance
+                            ));
                             ui.label(format!("Armor DR: {}", summary.derived.armor_dr));
                             ui.label(format!("Sprint duration: {} sec", sprint_duration));
                             if self.creation.player.called_shot {

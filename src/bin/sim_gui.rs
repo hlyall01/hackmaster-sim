@@ -2274,6 +2274,7 @@ fn render_player_editor(
                 "Hit points: {} (x{:.1})",
                 derived.hit_points, derived.health_mult
             ));
+            ui.label(format!("Drain resistance: {}", derived.drain_resistance));
             ui.label(format!(
                 "Threshold of Pain: {}",
                 combatant.sheet.vitals.threshold_of_pain

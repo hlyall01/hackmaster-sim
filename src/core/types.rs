@@ -232,6 +232,7 @@ pub enum TalentEffect {
     HitPointBonus {
         amount: i32,
     },
+    EssenceAdvancement,
     ArmorDrBonus {
         amount: i32,
     },
