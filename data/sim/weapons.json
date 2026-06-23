@@ -743,7 +743,7 @@
       "str_required": 10,
       "skill_level": "high",
       "damage": "2d6p and 4d3p^2",
-      "shield_damage": "d6p+3 and 3d3p^2",
+      "shield_damage": "d6p+3 and 3d3p",
       "speed": "13",
       "jab_speed": "9",
       "size": "L",

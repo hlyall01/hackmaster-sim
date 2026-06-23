@@ -2,6 +2,9 @@
 
 use character::{Progression, ProgressionTier, WeaponGroup};
 use eframe::egui::{self, Color32, Pos2, Rect};
+use egui_plot::{
+    GridInput, GridMark, HLine, Legend, Line, Plot, PlotPoint, PlotPoints, Points, Text, VLine,
+};
 use game_logic::{
     ArmorCatalog, ArmorEntry, ArmorId, FighterMasteries, FighterPreset, FighterPresetCatalog,
     FighterProgression, NpcPresetCatalog, PlayerConfig, ShieldCatalog, ShieldId, TalentCatalog,
@@ -12,6 +15,8 @@ use hackmaster_sim::core::gameplay::run::{Wound, heal_wounds, required_healing_s
 use hackmaster_sim::core::types::{RaceSpec, TalentSelection, TalentSpec};
 use hackmaster_sim::ui_widgets::searchable_select;
 use hackmaster_sim::{character, data, game_logic, sim};
+use rand::SeedableRng;
+use rand::rngs::StdRng;
 use sim::{BulkSimResult, SimConfig, SimState, bulk_simulate_with_seed};
 use std::{collections::BTreeMap, time::Instant};
 
@@ -57,6 +62,7 @@ enum PlayerEditorTab {
     Stats,
     Talents,
     Derived,
+    Tools,
 }
 
 impl PlayerEditorTab {
@@ -68,21 +74,24 @@ impl PlayerEditorTab {
             PlayerEditorTab::Stats => "Stats",
             PlayerEditorTab::Talents => "Talents",
             PlayerEditorTab::Derived => "Derived",
+            PlayerEditorTab::Tools => "Tools",
         }
     }
 }
 
-const PLAYER_EDITOR_TABS: [PlayerEditorTab; 6] = [
+const PLAYER_EDITOR_TABS: [PlayerEditorTab; 7] = [
     PlayerEditorTab::Core,
     PlayerEditorTab::Gear,
     PlayerEditorTab::CombatManeuvers,
     PlayerEditorTab::Stats,
     PlayerEditorTab::Talents,
     PlayerEditorTab::Derived,
+    PlayerEditorTab::Tools,
 ];
 
 const FIGHTER_PRESETS_PATH: &str = "data/sim/fighter_presets.json";
 const BULK_SIM_MAX_SECONDS: u32 = u32::MAX;
+const MAX_DAMAGE_PLOT_ITERATIONS: usize = 1_000_000;
 const TALENT_TAB_ALL: &str = "All";
 const TALENT_TAB_LEARNED: &str = "Learned Talents";
 const TALENT_TAB_RACIALS: &str = "Racials";
@@ -129,6 +138,25 @@ struct SimGuiApp {
     wound_tool_days: u32,
     wound_tool_tended: bool,
     wound_tool_fast_healer: bool,
+    damage_plot_iterations: [String; 2],
+    damage_roll_plots: [Option<DamageRollPlotData>; 2],
+}
+
+#[derive(Clone, Debug)]
+struct DamageRollLine {
+    name: String,
+    color: Color32,
+    points: Vec<[f64; 2]>,
+    values: Vec<f64>,
+    average: f64,
+}
+
+#[derive(Clone, Debug)]
+struct DamageRollPlotData {
+    lines: Vec<DamageRollLine>,
+    iterations: usize,
+    x_max: usize,
+    y_max: f64,
 }
 
 impl SimGuiApp {
@@ -208,6 +236,8 @@ impl SimGuiApp {
             wound_tool_days: 1,
             wound_tool_tended: true,
             wound_tool_fast_healer: false,
+            damage_plot_iterations: ["10000".to_string(), "10000".to_string()],
+            damage_roll_plots: [None, None],
         };
         app.apply_default_fighter_preset(0, "Arthur Du Randt");
         app.apply_default_fighter_preset(1, "Zorya");
@@ -1229,6 +1259,8 @@ impl eframe::App for SimGuiApp {
                 .show(ctx, |ui| {
                     let id_prefix = if idx == 0 { "p1" } else { "p2" };
                     let fighter_preset_name = &mut self.fighter_preset_names[idx];
+                    let damage_plot_iterations = &mut self.damage_plot_iterations[idx];
+                    let damage_roll_plot = &mut self.damage_roll_plots[idx];
                     let (player, opponent) = if idx == 0 {
                         let (left, right) = self.players.split_at_mut(1);
                         (&mut left[0], &right[0])
@@ -1252,6 +1284,8 @@ impl eframe::App for SimGuiApp {
                         fighter_preset_name,
                         &mut self.player_editor_tabs[idx],
                         &mut self.talent_category_tabs[idx],
+                        damage_plot_iterations,
+                        damage_roll_plot,
                     );
                 });
             self.show_player_editor[idx] = open;
@@ -1349,6 +1383,8 @@ fn render_player_editor(
     fighter_preset_name: &mut String,
     active_tab: &mut PlayerEditorTab,
     talent_category_tab: &mut String,
+    damage_plot_iterations: &mut String,
+    damage_roll_plot: &mut Option<DamageRollPlotData>,
 ) {
     if weapon_catalog.is_empty() {
         ui.label("Weapon catalog is empty.");
@@ -2451,7 +2487,334 @@ fn render_player_editor(
                 ));
             }
         }
+        PlayerEditorTab::Tools => {
+            render_player_tools_tab(
+                ui,
+                id_prefix,
+                player,
+                weapon_catalog,
+                armor_catalog,
+                shield_catalog,
+                npc_presets,
+                talent_catalog,
+                damage_plot_iterations,
+                damage_roll_plot,
+            );
+        }
     }
+}
+
+fn render_player_tools_tab(
+    ui: &mut egui::Ui,
+    id_prefix: &str,
+    player: &PlayerConfig,
+    weapon_catalog: &WeaponCatalog,
+    armor_catalog: &ArmorCatalog,
+    shield_catalog: &ShieldCatalog,
+    npc_presets: &NpcPresetCatalog,
+    talent_catalog: &TalentCatalog,
+    damage_plot_iterations: &mut String,
+    damage_roll_plot: &mut Option<DamageRollPlotData>,
+) {
+    ui.heading("Tools");
+    ui.separator();
+    ui.horizontal(|ui| {
+        let iterations = parse_damage_plot_iterations(damage_plot_iterations);
+        let plot_enabled = iterations.is_some();
+        if ui
+            .add_enabled(
+                plot_enabled,
+                egui::Button::new("Plot damage rolls (pre opponent DR)"),
+            )
+            .clicked()
+        {
+            if let Some(iterations) = iterations {
+                let iterations = iterations.clamp(1, MAX_DAMAGE_PLOT_ITERATIONS);
+                *damage_roll_plot = Some(build_damage_roll_plot(
+                    player,
+                    weapon_catalog,
+                    armor_catalog,
+                    shield_catalog,
+                    npc_presets,
+                    talent_catalog,
+                    iterations,
+                ));
+            }
+        }
+        ui.label("Iterations");
+        ui.add(
+            egui::TextEdit::singleline(damage_plot_iterations)
+                .id_source(format!("{id_prefix}_damage_plot_iterations"))
+                .desired_width(90.0),
+        );
+    });
+
+    match parse_damage_plot_iterations(damage_plot_iterations) {
+        Some(iterations) if iterations > MAX_DAMAGE_PLOT_ITERATIONS => {
+            ui.small(format!(
+                "Iterations will be capped at {}.",
+                MAX_DAMAGE_PLOT_ITERATIONS
+            ));
+        }
+        None => {
+            ui.small("Enter a positive whole number of iterations.");
+        }
+        Some(_) => {}
+    }
+
+    ui.separator();
+    if let Some(plot) = damage_roll_plot {
+        show_damage_roll_plot(ui, &format!("{id_prefix}_damage_roll_plot"), plot);
+    } else {
+        ui.label("No damage roll plot yet.");
+    }
+}
+
+fn parse_damage_plot_iterations(input: &str) -> Option<usize> {
+    let cleaned = input
+        .chars()
+        .filter(|ch| *ch != ',' && *ch != '_')
+        .collect::<String>();
+    let value = cleaned.trim().parse::<usize>().ok()?;
+    (value > 0).then_some(value)
+}
+
+fn build_damage_roll_plot(
+    player: &PlayerConfig,
+    weapon_catalog: &WeaponCatalog,
+    armor_catalog: &ArmorCatalog,
+    shield_catalog: &ShieldCatalog,
+    npc_presets: &NpcPresetCatalog,
+    talent_catalog: &TalentCatalog,
+    iterations: usize,
+) -> DamageRollPlotData {
+    let combatant = game_logic::build_combatant(
+        player,
+        weapon_catalog,
+        armor_catalog,
+        shield_catalog,
+        npc_presets,
+        talent_catalog,
+    );
+    let mut rng = StdRng::from_entropy();
+    let mut entries = vec![(
+        format!("Mainhand: {}", combatant.sheet.offense.weapon.name),
+        combatant.sheet.offense.weapon.clone(),
+        combatant.sheet.offense.strength_damage,
+        0,
+        Color32::from_rgb(214, 93, 69),
+    )];
+    if let Some(offhand) = combatant.sheet.offense.offhand.as_ref() {
+        entries.push((
+            format!("Offhand: {}", offhand.weapon.name),
+            offhand.weapon.clone(),
+            offhand.strength_damage,
+            combatant.sheet.maneuvers.dualwield_offhand_damage_penalty,
+            Color32::from_rgb(70, 140, 210),
+        ));
+    }
+
+    let mut lines = Vec::with_capacity(entries.len());
+    let mut x_max = 0usize;
+    let mut y_max = 0.0f64;
+
+    for (name, weapon, strength_damage, damage_penalty, color) in entries {
+        let mut counts = Vec::<usize>::new();
+        let mut total = 0i64;
+        for _ in 0..iterations {
+            let raw =
+                roll_weapon_raw_damage(weapon.as_ref(), strength_damage, damage_penalty, &mut rng);
+            let raw_idx = raw.max(0) as usize;
+            if raw_idx >= counts.len() {
+                counts.resize(raw_idx + 1, 0);
+            }
+            counts[raw_idx] += 1;
+            total += i64::from(raw);
+        }
+
+        let mut points = Vec::with_capacity(counts.len());
+        let mut values = Vec::with_capacity(counts.len());
+        let denom = iterations.max(1) as f64;
+        for (damage, count) in counts.into_iter().enumerate() {
+            let frequency = count as f64 / denom;
+            points.push([damage as f64, frequency]);
+            values.push(frequency);
+            y_max = y_max.max(frequency);
+            x_max = x_max.max(damage);
+        }
+
+        lines.push(DamageRollLine {
+            name,
+            color,
+            points,
+            values,
+            average: total as f64 / denom,
+        });
+    }
+
+    DamageRollPlotData {
+        lines,
+        iterations,
+        x_max: x_max.max(1),
+        y_max: y_max.max(0.01),
+    }
+}
+
+fn roll_weapon_raw_damage(
+    weapon: &sim::WeaponProfile,
+    strength_damage: i32,
+    damage_penalty: i32,
+    rng: &mut impl rand::Rng,
+) -> i32 {
+    let nonpenetrating = if weapon.use_jab {
+        true
+    } else {
+        weapon.force_nonpenetrating_damage
+    };
+    let rolled_damage = weapon
+        .damage_expr_cache_for_attack()
+        .roll(rng, nonpenetrating);
+    let mut raw = rolled_damage + strength_damage;
+    if weapon.halves_damage_for_attack() {
+        raw /= 2;
+    }
+    if weapon.halve_damage {
+        raw /= 2;
+    }
+    raw += damage_penalty;
+    raw.max(0)
+}
+
+fn show_damage_roll_plot(ui: &mut egui::Ui, plot_id: &str, plot: &DamageRollPlotData) {
+    ui.heading(format!("Damage Rolls ({} iterations)", plot.iterations));
+    if plot.lines.is_empty() {
+        ui.label("No damage profiles available.");
+        return;
+    }
+
+    let x_max = plot.x_max as f64 + 2.0;
+    let y_view = (plot.y_max * 1.2).max(0.05);
+    let y_floor = -y_view * 0.12;
+    let mut hovered_damage = None;
+    let mut hovered_values = Vec::new();
+
+    let response = Plot::new(plot_id)
+        .legend(Legend::default())
+        .include_x(-1.0)
+        .include_x(x_max)
+        .include_y(y_floor)
+        .include_y(y_view)
+        .view_aspect(16.0 / 9.0)
+        .allow_scroll(false)
+        .allow_boxed_zoom(false)
+        .x_grid_spacer(integer_grid_marks)
+        .x_axis_label("Damage roll")
+        .y_axis_label("Frequency")
+        .x_axis_formatter(|mark, _, _| format!("{:.0}", mark.value))
+        .show(ui, |plot_space| {
+            let pointer = plot_space.pointer_coordinate();
+            let snapped = if plot_space.response().hovered() {
+                pointer.map(|pos| pos.x.round().clamp(0.0, plot.x_max as f64))
+            } else {
+                None
+            };
+
+            plot_space.hline(HLine::new(0.0).color(Color32::LIGHT_GRAY));
+            let tick_step = damage_axis_tick_step(plot.x_max);
+            let tick_label_y = y_floor * 0.45;
+            for damage in (0..=plot.x_max).step_by(tick_step) {
+                plot_space.vline(VLine::new(damage as f64).color(Color32::from_gray(60)));
+                plot_space.text(
+                    Text::new(
+                        PlotPoint::new(damage as f64, tick_label_y),
+                        damage.to_string(),
+                    )
+                    .color(Color32::from_gray(210))
+                    .anchor(egui::Align2::CENTER_CENTER),
+                );
+            }
+            if plot.x_max % tick_step != 0 {
+                plot_space.vline(VLine::new(plot.x_max as f64).color(Color32::from_gray(60)));
+                plot_space.text(
+                    Text::new(
+                        PlotPoint::new(plot.x_max as f64, tick_label_y),
+                        plot.x_max.to_string(),
+                    )
+                    .color(Color32::from_gray(210))
+                    .anchor(egui::Align2::CENTER_CENTER),
+                );
+            }
+
+            for line in &plot.lines {
+                let points = PlotPoints::from_iter(line.points.iter().copied());
+                plot_space.line(
+                    Line::new(points)
+                        .name(line.name.clone())
+                        .color(line.color)
+                        .highlight(true),
+                );
+            }
+
+            if let Some(snapped_x) = snapped {
+                plot_space.vline(VLine::new(snapped_x).color(Color32::LIGHT_GRAY));
+                for line in &plot.lines {
+                    if let Some(&value) = line.values.get(snapped_x as usize) {
+                        plot_space.points(
+                            Points::new(vec![[snapped_x, value]])
+                                .radius(4.0)
+                                .color(line.color)
+                                .name(line.name.clone()),
+                        );
+                    }
+                }
+            }
+
+            snapped
+        });
+
+    if let Some(damage) = response.inner {
+        let damage_idx = damage as usize;
+        hovered_damage = Some(damage_idx);
+        for line in &plot.lines {
+            if let Some(&frequency) = line.values.get(damage_idx) {
+                hovered_values.push((line.color, line.name.as_str(), frequency));
+            }
+        }
+    }
+
+    ui.horizontal_wrapped(|ui| {
+        for line in &plot.lines {
+            ui.colored_label(line.color, format!("{} avg {:.2}", line.name, line.average));
+        }
+    });
+
+    if let Some(damage) = hovered_damage {
+        ui.label(format!("Damage {damage}"));
+        for (color, name, frequency) in hovered_values {
+            ui.colored_label(color, format!("{name}: {:.2}%", frequency * 100.0));
+        }
+    } else {
+        ui.label("Hover inside the chart to inspect a damage result.");
+    }
+}
+
+fn damage_axis_tick_step(x_max: usize) -> usize {
+    if x_max <= 24 {
+        1
+    } else {
+        x_max.div_ceil(12).max(1)
+    }
+}
+
+fn integer_grid_marks(input: GridInput) -> Vec<GridMark> {
+    let min = input.bounds.0.floor() as i32;
+    let max = input.bounds.1.ceil() as i32;
+    (min..=max)
+        .map(|value| GridMark {
+            value: value as f64,
+            step_size: 1.0,
+        })
+        .collect()
 }
 
 fn apply_fighter_preset(

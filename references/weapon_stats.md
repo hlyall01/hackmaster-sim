@@ -94,7 +94,7 @@ Notation for parsing:
 | Dual scytheD | 12 | high | 2d6[p] and 2d6[p] | d6[p] and d6[p] | 16 | L | 4 feet | H/P and H/P | 12 lbs |
 | Hooked hammerD | 12 | high | d8[p]+d10[p]^1 and 3d4[p]^2 | d10[p] and 2d4[p] | 14 | L | 3 feet | C and P | 9 lbs |
 | Monk's SpadeD | 8 | high | 2d4[p] and 2d4[p] | d4[p] and d4[p] | 9 | L | 3 feet | H and H | 5 lbs |
-| Spear-axeD | 10 | high | 2d6[p] and 4d3[p]^2 | d6[p]+3 and 3d3[p]^2 | 13 (9) | L | 6.5 feet | P and H | 9.5 lbs |
+| Spear-axeD | 10 | high | 2d6[p] and 4d3[p]^2 | d6[p]+3 and 3d3[p] | 13 (9) | L | 6.5 feet | P and H | 9.5 lbs |
 | Two-bladed swordD | 10 | high | 2d8[p] and 2d8[p] | d8[p] and d8[p] | 11 (9) | L | 4 feet | H/P and H/P | 8 lbs |
 
 ---
