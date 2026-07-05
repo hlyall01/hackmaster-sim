@@ -1416,6 +1416,7 @@ mod tests {
             },
             mobility: MobilityProfile { move_speed },
             vitals: Vitals {
+                infinite_hp: false,
                 max_hp: 12,
                 ..Vitals::default()
             },

@@ -508,6 +508,9 @@ impl SimState {
 
     fn move_tiles(&self, idx: usize) -> i32 {
         let combatant = &self.combatants[idx];
+        if combatant.sheet.maneuvers.passive {
+            return 0;
+        }
         if combatant.state.trauma_remaining_seconds > 0
             || combatant.state.knockback_immobile_seconds > 0
         {
@@ -782,6 +785,10 @@ impl SimState {
             order.swap(0, 1);
         }
         for (attacker_idx, defender_idx) in order {
+            if self.combatants[attacker_idx].sheet.maneuvers.passive {
+                self.combatants[attacker_idx].state.clear_attack_timers();
+                continue;
+            }
             let snapshot_next_attack_primary = state_snapshot
                 .as_ref()
                 .and_then(|snapshot| snapshot.get(attacker_idx))
@@ -1191,11 +1198,19 @@ impl SimState {
                     .maneuvers
                     .offensive_dualwielding
                 {
-                    speed += self.combatants[attacker_idx]
+                    let mut recovery_penalty = self.combatants[attacker_idx]
                         .sheet
                         .maneuvers
                         .dualwield_primary_recovery_penalty
                         .max(0.0);
+                    if self.combatants[attacker_idx]
+                        .sheet
+                        .maneuvers
+                        .storm_of_blades
+                    {
+                        recovery_penalty = (recovery_penalty - 1.0).max(0.0);
+                    }
+                    speed += recovery_penalty;
                 }
                 if self.combatants[defender_idx].state.trauma_remaining_seconds > 0 {
                     speed = (speed / 2.0).ceil().max(1.0);
@@ -1271,7 +1286,15 @@ impl SimState {
                     let primary_anchor = primary_attack_time
                         .or_else(|| self.combatants[attacker_idx].state.next_attack_time_primary)
                         .unwrap_or(now);
-                    let offset = 2.0 + (primary_speed_base / 2.0).ceil();
+                    let offset = if self.combatants[attacker_idx]
+                        .sheet
+                        .maneuvers
+                        .storm_of_blades
+                    {
+                        2.0
+                    } else {
+                        2.0 + (primary_speed_base / 2.0).ceil()
+                    };
                     let called_shot_delay = called_shot_delay_seconds(
                         &self.combatants[attacker_idx],
                         &self.combatants[defender_idx],
@@ -1473,14 +1496,22 @@ impl SimState {
                             self.combat_events.push(counter_event);
                         }
                     }
+                    let mut recovery_penalty = self.combatants[attacker_idx]
+                        .sheet
+                        .maneuvers
+                        .dualwield_secondary_recovery_penalty
+                        .max(0.0);
+                    if self.combatants[attacker_idx]
+                        .sheet
+                        .maneuvers
+                        .storm_of_blades
+                    {
+                        recovery_penalty = (recovery_penalty - 1.0).max(0.0);
+                    }
                     let mut speed = self.combatants[attacker_idx]
                         .apply_f32(StatIdF32::WeaponSpeed, weapon.speed)
                         .max(1.0)
-                        + self.combatants[attacker_idx]
-                            .sheet
-                            .maneuvers
-                            .dualwield_secondary_recovery_penalty
-                            .max(0.0);
+                        + recovery_penalty;
                     if self.combatants[defender_idx].state.trauma_remaining_seconds > 0 {
                         speed = (speed / 2.0).ceil().max(1.0);
                     }

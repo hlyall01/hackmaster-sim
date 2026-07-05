@@ -908,9 +908,24 @@ pub fn has_other_weapon_style_selected(
         selection.id != spec.id
             && selection.rank.max(1) > 0
             && find_talent(talent_catalog, &selection.id)
-                .map(|other| is_weapon_style_category(&other.category))
+                .map(|other| {
+                    is_weapon_style_category(&other.category)
+                        && !weapon_styles_can_stack(player, &selection.id, &spec.id)
+                })
                 .unwrap_or(false)
     })
+}
+
+fn is_storm_shield_pair(left: &str, right: &str) -> bool {
+    matches!(
+        (left, right),
+        (TALENT_ID_STORM_OF_BLADES, TALENT_ID_SHIELD_OF_BLADES)
+            | (TALENT_ID_SHIELD_OF_BLADES, TALENT_ID_STORM_OF_BLADES)
+    )
+}
+
+fn weapon_styles_can_stack(player: &PlayerConfig, left: &str, right: &str) -> bool {
+    has_perfect_two_weapon_fighting_effect(player) && is_storm_shield_pair(left, right)
 }
 
 pub fn talent_requires_weapon(spec: &TalentSpec) -> bool {
@@ -1748,11 +1763,11 @@ fn style_effects_active(
     !blocked && talent_effects_active(spec, player) && selection.rank.max(1) > 0
 }
 
-fn active_weapon_style_spec<'a>(
+fn active_weapon_style_specs<'a>(
     player: &PlayerConfig,
     talent_catalog: &'a TalentCatalog,
     weapon_catalog: Option<&WeaponCatalog>,
-) -> Option<&'a TalentSpec> {
+) -> Vec<&'a TalentSpec> {
     let stats = ability_set_from_player(player);
     let context = TalentContext {
         level: player.level,
@@ -1761,6 +1776,7 @@ fn active_weapon_style_spec<'a>(
         proficiencies: &player.proficiencies,
         weapon_catalog,
     };
+    let mut active_styles: Vec<&TalentSpec> = Vec::new();
     for selection in &player.talents {
         let Some(spec) = find_talent(talent_catalog, &selection.id) else {
             continue;
@@ -1769,10 +1785,16 @@ fn active_weapon_style_spec<'a>(
             continue;
         }
         if style_effects_active(selection, spec, &context, player) {
-            return Some(spec);
+            if active_styles.is_empty()
+                || active_styles
+                    .iter()
+                    .any(|active| weapon_styles_can_stack(player, &active.id, &spec.id))
+            {
+                active_styles.push(spec);
+            }
         }
     }
-    None
+    active_styles
 }
 
 fn has_large_sword_shield_style_effect(spec: &TalentSpec) -> bool {
@@ -1848,6 +1870,14 @@ fn hammerer_style_active(modifiers: &TalentModifiers, weapon: &WeaponPreset) -> 
 
 fn hobbler_style_active(modifiers: &TalentModifiers, weapon: &WeaponPreset) -> bool {
     modifiers.hobbler_style && matches!(weapon.group, WeaponGroup::Polearms | WeaponGroup::Spears)
+}
+
+fn is_one_handed_sword(weapon: &WeaponPreset) -> bool {
+    weapon.handedness == WeaponHandedness::OneHanded
+        && matches!(
+            weapon.group,
+            WeaponGroup::SmallSwords | WeaponGroup::LargeSwords
+        )
 }
 
 fn quiet_river_style_active(
@@ -1950,6 +1980,7 @@ fn resolve_talent_modifiers(
     weapon_catalog: &WeaponCatalog,
 ) -> TalentModifiers {
     let mut modifiers = TalentModifiers::default();
+    modifiers.perfect_two_weapon_fighting = has_perfect_two_weapon_fighting_effect(player);
     let stats = ability_set_from_player(player);
     let context = TalentContext {
         level: player.level,
@@ -1966,15 +1997,17 @@ fn resolve_talent_modifiers(
     }
     let weapon_id_by_name_cached =
         |name: &str| weapon_id_lookup.get(&name.to_ascii_lowercase()).copied();
-    let active_weapon_style_id =
-        active_weapon_style_spec(player, talent_catalog, Some(weapon_catalog))
-            .map(|spec| spec.id.as_str());
+    let active_weapon_style_ids: HashSet<&str> =
+        active_weapon_style_specs(player, talent_catalog, Some(weapon_catalog))
+            .into_iter()
+            .map(|spec| spec.id.as_str())
+            .collect();
     for selection in &player.talents {
         let Some(spec) = find_talent(talent_catalog, &selection.id) else {
             continue;
         };
         if is_weapon_style_category(&spec.category)
-            && active_weapon_style_id != Some(spec.id.as_str())
+            && !active_weapon_style_ids.contains(spec.id.as_str())
         {
             continue;
         }
@@ -3103,7 +3136,7 @@ pub fn shield_equipped_with_catalog(
     can_equip_shield(player, weapon, shield, talent_catalog, weapon_catalog)
 }
 
-fn has_perfect_two_weapon_fighting_effect(player: &PlayerConfig) -> bool {
+pub fn has_perfect_two_weapon_fighting_effect(player: &PlayerConfig) -> bool {
     player_has_talent(player, TALENT_ID_PERFECT_TWO_WEAPON_FIGHTING)
 }
 
@@ -3139,6 +3172,26 @@ pub fn defensive_dualwielding_active(player: &PlayerConfig, weapon: &WeaponPrese
 
 pub fn offensive_dualwielding_active(player: &PlayerConfig, weapon: &WeaponPreset) -> bool {
     dualwield_mode_flags(player, weapon).1
+}
+
+pub fn default_offhand_weapon_id(
+    player: &PlayerConfig,
+    primary_weapon: &WeaponPreset,
+    weapon_catalog: &WeaponCatalog,
+) -> Option<WeaponId> {
+    if primary_weapon.handedness != WeaponHandedness::OneHanded || player.two_hand_grip {
+        return None;
+    }
+    if let Some(offhand_id) = player.offhand_weapon_id {
+        if weapon_catalog
+            .get(offhand_id)
+            .map(|weapon| weapon.handedness == WeaponHandedness::OneHanded)
+            .unwrap_or(false)
+        {
+            return Some(offhand_id);
+        }
+    }
+    Some(player.weapon_id)
 }
 
 pub fn effective_attack_mastery(player: &PlayerConfig) -> i32 {
@@ -4144,10 +4197,14 @@ pub fn build_combatant(
     let knockback_step =
         bump_knockback_step(player.knockback_step.max(1), modifiers.knockback_step_bumps);
     let mut offhand_profile = None;
+    let mut storm_of_blades = false;
     if offensive_dualwielding {
         if let Some(offhand_id) = player.offhand_weapon_id {
             if let Some(offhand_preset) = weapon_catalog.get(offhand_id) {
                 if offhand_preset.handedness == WeaponHandedness::OneHanded {
+                    storm_of_blades = modifiers.storm_of_blades_style
+                        && is_one_handed_sword(weapon_preset)
+                        && is_one_handed_sword(offhand_preset);
                     let offhand_is_ranged = is_ranged_weapon(offhand_preset);
                     let offhand_uses_projectiles =
                         uses_projectiles(&offhand_preset.name, offhand_preset.ammunition.is_some());
@@ -4464,6 +4521,7 @@ pub fn build_combatant(
         },
         vitals: Vitals {
             max_hp,
+            infinite_hp: false,
             constitution: player.constitution,
             drain_resistance: modifiers.drain_resistance,
             threshold_of_pain,
@@ -4498,6 +4556,8 @@ pub fn build_combatant(
             dualwield_offhand_damage_penalty,
             dualwield_primary_recovery_penalty,
             dualwield_secondary_recovery_penalty,
+            storm_of_blades,
+            passive: false,
         },
         modifiers: sheet_modifiers,
     };
@@ -4571,9 +4631,9 @@ pub fn shield_option_allowed(
     if weapon.group != WeaponGroup::LargeSwords || weapon.size != WeaponSize::Large {
         return false;
     }
-    active_weapon_style_spec(player, talent_catalog, Some(weapon_catalog))
-        .map(has_large_sword_shield_style_effect)
-        .unwrap_or(false)
+    active_weapon_style_specs(player, talent_catalog, Some(weapon_catalog))
+        .iter()
+        .any(|spec| has_large_sword_shield_style_effect(spec))
 }
 
 fn can_equip_shield(
@@ -4710,6 +4770,15 @@ mod tests {
             .entries()
             .iter()
             .position(|weapon| weapon.handedness == WeaponHandedness::OneHanded)
+            .and_then(|idx| weapons.id_from_index(idx))
+            .unwrap_or(WeaponId::new(0))
+    }
+
+    fn one_handed_sword_weapon_id(weapons: &WeaponCatalog) -> WeaponId {
+        weapons
+            .entries()
+            .iter()
+            .position(is_one_handed_sword)
             .and_then(|idx| weapons.id_from_index(idx))
             .unwrap_or(WeaponId::new(0))
     }
@@ -6246,6 +6315,61 @@ mod tests {
             perfect_summary.defense.melee_roll_label.contains("d20p"),
             "perfect two-weapon fighting should keep d20p melee defense die"
         );
+    }
+
+    #[test]
+    fn force_selected_perfect_two_weapon_fighting_combines_modes_below_level_nine() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npc_presets = sample_npc_presets();
+        let weapon_id = one_handed_weapon_id(&weapons);
+
+        let mut player = base_player(weapon_id);
+        player.level = 7;
+        player.defensive_dualwielding = true;
+        player.offensive_dualwielding = true;
+        player.offhand_weapon_id = Some(weapon_id);
+        add_talent(&mut player, TALENT_ID_TWO_WEAPON_FIGHTING, None);
+        add_talent(&mut player, TALENT_ID_IMPROVED_TWO_WEAPON_FIGHTING, None);
+        add_talent(&mut player, TALENT_ID_GREATER_TWO_WEAPON_FIGHTING, None);
+        add_talent(&mut player, TALENT_ID_PERFECT_TWO_WEAPON_FIGHTING, None);
+
+        let combatant =
+            build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
+
+        assert!(combatant.sheet.maneuvers.offensive_dualwielding);
+        assert!(combatant.sheet.maneuvers.defensive_dualwielding);
+        assert!(
+            !combatant
+                .sheet
+                .maneuvers
+                .offensive_dualwielding_defense_penalty
+        );
+    }
+
+    #[test]
+    fn default_offhand_weapon_restores_primary_for_one_handed_dualwielding() {
+        let (weapons, _armor, _shields) = sample_catalogs();
+        let primary_id = one_handed_weapon_id(&weapons);
+        let primary = weapons.get(primary_id).expect("missing primary weapon");
+        let two_handed_id = weapon_id_matching(&weapons, |weapon| {
+            weapon.handedness == WeaponHandedness::TwoHanded
+        });
+        let mut player = base_player(primary_id);
+
+        assert_eq!(
+            default_offhand_weapon_id(&player, primary, &weapons),
+            Some(primary_id)
+        );
+
+        player.offhand_weapon_id = Some(two_handed_id);
+        assert_eq!(
+            default_offhand_weapon_id(&player, primary, &weapons),
+            Some(primary_id)
+        );
+
+        player.two_hand_grip = true;
+        assert_eq!(default_offhand_weapon_id(&player, primary, &weapons), None);
     }
 
     #[test]
@@ -7798,6 +7922,57 @@ mod tests {
             second_active.sheet.defense.shield_defense_bonus,
             shield.defense_bonus + 4
         );
+    }
+
+    #[test]
+    fn storm_and_shield_of_blades_selection_requires_perfect_two_weapon_fighting() {
+        let talents = sample_talents();
+        let shield = find_talent(&talents, TALENT_ID_SHIELD_OF_BLADES).expect("missing shield");
+        let other_style = find_talent(&talents, TALENT_ID_THREE_MOUNTAINS).expect("missing style");
+        let (weapons, _armor, _shields) = sample_catalogs();
+        let weapon_id = one_handed_weapon_id(&weapons);
+
+        let mut player = base_player(weapon_id);
+        add_talent(&mut player, TALENT_ID_STORM_OF_BLADES, None);
+
+        assert!(has_other_weapon_style_selected(&player, shield, &talents));
+
+        add_talent(&mut player, TALENT_ID_PERFECT_TWO_WEAPON_FIGHTING, None);
+
+        assert!(!has_other_weapon_style_selected(&player, shield, &talents));
+        assert!(has_other_weapon_style_selected(
+            &player,
+            other_style,
+            &talents
+        ));
+    }
+
+    #[test]
+    fn storm_and_shield_of_blades_both_apply_with_perfect_two_weapon_fighting() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let weapon_id = one_handed_sword_weapon_id(&weapons);
+        let mut player = base_player(weapon_id);
+        player.level = 9;
+        player.offhand_weapon_id = Some(weapon_id);
+        player.offensive_dualwielding = true;
+        add_talent(&mut player, TALENT_ID_TWO_WEAPON_FIGHTING, None);
+        add_talent(&mut player, TALENT_ID_IMPROVED_TWO_WEAPON_FIGHTING, None);
+        add_talent(&mut player, TALENT_ID_GREATER_TWO_WEAPON_FIGHTING, None);
+        add_talent(&mut player, TALENT_ID_PERFECT_TWO_WEAPON_FIGHTING, None);
+        add_talent(&mut player, TALENT_ID_STORM_OF_BLADES, None);
+        add_talent(&mut player, TALENT_ID_SHIELD_OF_BLADES, None);
+
+        let modifiers = resolve_talent_modifiers(&player, &talents, &weapons);
+
+        assert!(modifiers.perfect_two_weapon_fighting);
+        assert!(modifiers.storm_of_blades_style);
+        assert!(modifiers.shield_of_blades_style);
+
+        let npc_presets = Catalog::new(Vec::new());
+        let combatant =
+            build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
+        assert!(combatant.sheet.maneuvers.storm_of_blades);
     }
 
     #[test]

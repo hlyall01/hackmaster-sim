@@ -222,6 +222,7 @@ fn main() {
         mobility: MobilityProfile { move_speed: 5.0 },
         vitals: Vitals {
             max_hp: derived.hit_points as i32,
+            infinite_hp: false,
             constitution: character.abilities.constitution,
             drain_resistance: derived.drain_resistance,
             threshold_of_pain: game_logic::threshold_of_pain(
@@ -259,6 +260,8 @@ fn main() {
             dualwield_offhand_damage_penalty: -2,
             dualwield_primary_recovery_penalty: 2.0,
             dualwield_secondary_recovery_penalty: 2.0,
+            storm_of_blades: false,
+            passive: false,
         },
         modifiers: sim::ModifierStack::default(),
     };

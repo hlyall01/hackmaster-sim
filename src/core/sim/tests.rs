@@ -110,6 +110,7 @@ fn combatant_basic(
         },
         mobility: MobilityProfile { move_speed },
         vitals: Vitals {
+            infinite_hp: false,
             trauma_die_sides: 20,
             trauma_die_penetrating: false,
             max_hp,
@@ -1776,6 +1777,7 @@ fn ranged_weapons_cannot_hold_at_bay() {
         },
         mobility: MobilityProfile { move_speed: 5.0 },
         vitals: Vitals {
+            infinite_hp: false,
             trauma_die_sides: 20,
             trauma_die_penetrating: false,
             max_hp: 100,
@@ -1813,6 +1815,7 @@ fn ranged_weapons_cannot_hold_at_bay() {
         },
         mobility: MobilityProfile { move_speed: 5.0 },
         vitals: Vitals {
+            infinite_hp: false,
             trauma_die_sides: 20,
             trauma_die_penetrating: false,
             max_hp: 100,
@@ -1962,6 +1965,7 @@ fn equal_reach_trauma_does_not_block_simultaneous_attacks() {
         },
         mobility: MobilityProfile { move_speed: 0.0 },
         vitals: Vitals {
+            infinite_hp: false,
             trauma_die_sides: 20,
             trauma_die_penetrating: false,
             max_hp: 10,
@@ -2135,6 +2139,207 @@ fn offensive_dualwielding_recovery_penalties_follow_maneuver_profile() {
         sim.combatants[0].state.next_attack_time_secondary,
         Some(14.0)
     );
+}
+
+#[test]
+fn storm_of_blades_schedules_offhand_two_seconds_after_primary_and_reduces_recovery() {
+    let mut attacker = combatant_basic(
+        "Attacker".to_string(),
+        "Short Sword".to_string(),
+        0,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        20,
+    );
+    let mut weapon = attacker.sheet.offense.weapon.as_ref().clone();
+    weapon.crit_min_roll = 21;
+    attacker.sheet.offense.weapon = Arc::new(weapon);
+    let mut offhand_weapon = attacker.sheet.offense.weapon.as_ref().clone();
+    offhand_weapon.name = "Offhand".to_string();
+    offhand_weapon.speed = 6.0;
+    attacker.sheet.offense.offhand = Some(OffhandProfile {
+        attack_bonus: attacker.sheet.offense.attack_bonus,
+        strength_damage: attacker.sheet.offense.strength_damage,
+        weapon: Arc::new(offhand_weapon),
+    });
+    attacker.sheet.maneuvers.offensive_dualwielding = true;
+    attacker.sheet.maneuvers.storm_of_blades = true;
+
+    let defender = combatant_basic(
+        "Defender".to_string(),
+        "Fist".to_string(),
+        0,
+        -1000,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        200,
+    );
+    let mut sim = SimState::new(SimConfig::new(1.0, 1.0));
+    let mut attacker = attacker;
+    let mut defender = defender;
+    attacker.team_id = 0;
+    defender.team_id = 1;
+    sim.reset_with_combatants(vec![attacker, defender]);
+    sim.set_rng(SimRng::from_seed(3));
+
+    sim.tick();
+    assert_eq!(sim.combatants[0].state.next_attack_time_primary, Some(11.0));
+    assert_eq!(
+        sim.combatants[0].state.next_attack_time_secondary,
+        Some(2.0)
+    );
+
+    for _ in 0..2 {
+        sim.tick();
+    }
+    assert_eq!(
+        sim.combatants[0].state.next_attack_time_secondary,
+        Some(9.0)
+    );
+}
+
+#[test]
+fn passive_combatant_does_not_attack_or_counter() {
+    let attacker = combatant_basic(
+        "Attacker".to_string(),
+        "Short Sword".to_string(),
+        1000,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        1.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        100,
+    );
+    let mut defender = combatant_basic(
+        "Passive".to_string(),
+        "Short Sword".to_string(),
+        1000,
+        1000,
+        0,
+        false,
+        0,
+        "10d1".to_string(),
+        0,
+        1.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        100,
+    );
+    defender.sheet.maneuvers.passive = true;
+    defender.sheet.vitals.infinite_hp = true;
+
+    let mut sim = SimState::new(SimConfig::new(1.0, 1.0));
+    let mut attacker = attacker;
+    attacker.team_id = 0;
+    defender.team_id = 1;
+    sim.reset_with_combatants(vec![attacker, defender]);
+    sim.set_rng(SimRng::from_seed(4));
+    for _ in 0..10 {
+        sim.tick();
+    }
+
+    assert_eq!(
+        sim.combatants[0].state.hp,
+        sim.combatants[0].sheet.vitals.max_hp
+    );
+    assert_eq!(sim.combatants[1].state.total_hp_damage_dealt, 0);
+    assert!(sim.combatants[0].state.total_hp_damage_dealt > 0);
+}
+
+#[test]
+fn infinite_hp_target_records_damage_without_losing_hp_or_ending_fight() {
+    let attacker = combatant_basic(
+        "Attacker".to_string(),
+        "Short Sword".to_string(),
+        1000,
+        0,
+        0,
+        false,
+        0,
+        "20d1".to_string(),
+        0,
+        1.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        100,
+    );
+    let mut defender = combatant_basic(
+        "Dummy".to_string(),
+        "Fist".to_string(),
+        0,
+        -1000,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        1.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        10,
+    );
+    defender.sheet.maneuvers.passive = true;
+    defender.sheet.vitals.infinite_hp = true;
+
+    let mut sim = SimState::new(SimConfig::new(1.0, 1.0));
+    let mut attacker = attacker;
+    attacker.team_id = 0;
+    defender.team_id = 1;
+    sim.reset_with_combatants(vec![attacker, defender]);
+    sim.set_rng(SimRng::from_seed(5));
+    sim.tick();
+
+    assert_eq!(sim.combatants[1].state.hp, 10);
+    assert!(sim.combatants[0].state.total_hp_damage_dealt > 10);
+    assert!(!sim.done);
 }
 
 #[test]
@@ -2696,6 +2901,7 @@ fn equal_reach_knockback_does_not_block_simultaneous_attacks() {
         },
         mobility: MobilityProfile { move_speed: 0.0 },
         vitals: Vitals {
+            infinite_hp: false,
             trauma_die_sides: 20,
             trauma_die_penetrating: false,
             max_hp: 100,
@@ -4162,8 +4368,8 @@ fn arthur_vs_arthur_charges_on_first_contact() {
     let stop_distance =
         game_logic::stop_distance_for_players(&players, &weapon_catalog, &talent_catalog);
     assert!(
-        (stop_distance - 8.0).abs() < 0.01,
-        "expected stop distance ~8ft, got {stop_distance}"
+        (stop_distance - 7.0).abs() < 0.01,
+        "expected stop distance ~7ft, got {stop_distance}"
     );
     let combatants = game_logic::build_combatants(
         &players,
@@ -4238,7 +4444,7 @@ fn arthur_knockback_10ft_no_charge_and_reengage() {
 fn arthur_knockback_20ft_thresholds_and_charges() {
     let mut sim = arthur_duel_sim(60, 1, 0.0, 20.0, 100, -100, 100, -100);
 
-    // Force a 20ft gap without resetting charge, then close it in one tick.
+    // Force a 20ft gap without resetting charge, then close back to Halberd reach.
     set_distance_no_reset(&mut sim, 28.0);
     sim.tick();
     assert!(
@@ -4246,8 +4452,12 @@ fn arthur_knockback_20ft_thresholds_and_charges() {
         "expected Arthur 2 to have 20ft charge distance, got {}",
         sim.combatants[1].state.charge_distance_ft
     );
-    // Next tick should allow the charge attack.
-    sim.tick();
+    for _ in 0..3 {
+        sim.tick();
+        if first_attack_by(&sim, 1, 1).is_some() {
+            break;
+        }
+    }
     let attack = first_attack_by(&sim, 1, 1).unwrap_or_else(|| {
             let times: Vec<u32> = sim
                 .combat_events
@@ -4295,7 +4505,7 @@ fn arthur_both_knockback_10ft_should_not_charge_after_10ft_move_each() {
     let mut sim = arthur_duel_sim(30, 30, 10.0, 10.0, 100, 100, -100, -100);
 
     // Force a 20ft gap (10ft each knockback), then have each close 10ft.
-    set_distance_no_reset(&mut sim, 28.0);
+    set_distance_no_reset(&mut sim, 27.0);
     sim.tick(); // movement only, no attacks yet
     sim.tick(); // re-engage attacks
 
@@ -6028,6 +6238,7 @@ fn throwing_axe_switches_to_melee_at_close_range() {
         },
         mobility: MobilityProfile { move_speed: 10.0 },
         vitals: Vitals {
+            infinite_hp: false,
             trauma_die_sides: 20,
             trauma_die_penetrating: false,
             max_hp: 1000,
@@ -6065,6 +6276,7 @@ fn throwing_axe_switches_to_melee_at_close_range() {
         },
         mobility: MobilityProfile { move_speed: 10.0 },
         vitals: Vitals {
+            infinite_hp: false,
             trauma_die_sides: 20,
             trauma_die_penetrating: false,
             max_hp: 1000,
@@ -6213,6 +6425,7 @@ fn throwing_axe_cooldown_resets_on_melee_engagement() {
         },
         mobility: MobilityProfile { move_speed: 20.0 },
         vitals: Vitals {
+            infinite_hp: false,
             trauma_die_sides: 20,
             trauma_die_penetrating: false,
             max_hp: 1000,
@@ -6250,6 +6463,7 @@ fn throwing_axe_cooldown_resets_on_melee_engagement() {
         },
         mobility: MobilityProfile { move_speed: 0.0 },
         vitals: Vitals {
+            infinite_hp: false,
             trauma_die_sides: 20,
             trauma_die_penetrating: false,
             max_hp: 1000,
@@ -6578,6 +6792,37 @@ fn wren_preset_builds_with_power_attack_and_kanian_impaler() {
 }
 
 #[test]
+fn named_fighter_preset_weapon_and_mastery_overrides_are_preserved() {
+    let fighter_presets = data::load_fighter_presets("data/fighter_presets.json")
+        .expect("failed to load fighter presets");
+
+    let arthur = find_fighter_preset(&fighter_presets, "Arthur Du Randt")
+        .expect("missing Arthur Du Randt preset");
+    assert_eq!(arthur.level, 8);
+    assert_eq!(arthur.strength_pct, 94);
+    assert_eq!(arthur.dex_pct, 80);
+    assert_eq!(arthur.constitution, 14);
+    assert_eq!(arthur.weapon, "Halberd");
+    assert_eq!(arthur.weapon_material_tier, 5);
+    assert_eq!(arthur.masteries.damage, 4);
+    assert!(
+        arthur
+            .proficiencies
+            .iter()
+            .any(|proficiency| proficiency == "Halberd")
+    );
+
+    for name in ["Volfango Drakos", "Volfango Drakos (Perfect Two-Weapon)"] {
+        let preset = find_fighter_preset(&fighter_presets, name)
+            .unwrap_or_else(|| panic!("missing {name} preset"));
+        assert_eq!(preset.weapon, "Short sword");
+        assert_eq!(preset.weapon_material_tier, 5);
+        assert_eq!(preset.offhand_weapon.as_deref(), Some("Short sword"));
+        assert_eq!(preset.offhand_weapon_material_tier, 2);
+    }
+}
+
+#[test]
 fn fighter_presets_do_not_select_multiple_weapon_styles() {
     let fighter_presets = data::load_fighter_presets("data/fighter_presets.json")
         .expect("failed to load fighter presets");
@@ -6596,11 +6841,77 @@ fn fighter_presets_do_not_select_multiple_weapon_styles() {
             })
             .collect();
 
+        let allowed_perfect_blades_pair = style_ids.len() == 2
+            && preset
+                .talents
+                .iter()
+                .any(|selection| selection.id == "perfect_two_weapon_fighting")
+            && style_ids.contains(&"shield_of_blades")
+            && style_ids.contains(&"storm_of_blades");
         assert!(
-            style_ids.len() <= 1,
+            style_ids.len() <= 1 || allowed_perfect_blades_pair,
             "{} has multiple weapon styles selected: {:?}",
             preset.name,
             style_ids
         );
     }
+}
+
+#[test]
+fn volfango_perfect_two_weapon_preset_is_level_seven_and_combines_dualwield_modes() {
+    let (weapon_catalog, armor_catalog, shield_catalog) =
+        data::load_catalogs().expect("failed to load catalogs");
+    let race_catalog = data::load_races("data/races.json").expect("failed to load races");
+    let fighter_presets = data::load_fighter_presets("data/fighter_presets.json")
+        .expect("failed to load fighter presets");
+    let talent_catalog = data::load_talents(data::TALENTS_PATH).expect("failed to load talents");
+    let npc_presets =
+        data::load_npc_presets("data/npc_presets.json").expect("failed to load NPC presets");
+    let preset = find_fighter_preset(&fighter_presets, "Volfango Drakos (Perfect Two-Weapon)")
+        .expect("missing Volfango perfect two-weapon preset");
+
+    let player = player_config_from_preset(
+        preset,
+        &weapon_catalog,
+        &armor_catalog,
+        &shield_catalog,
+        &race_catalog,
+    );
+    let combatant = game_logic::build_combatant(
+        &player,
+        &weapon_catalog,
+        &armor_catalog,
+        &shield_catalog,
+        &npc_presets,
+        &talent_catalog,
+    );
+
+    assert_eq!(preset.level, 7);
+    for talent_id in [
+        "two_weapon_fighting",
+        "improved_two_weapon_fighting",
+        "greater_two_weapon_fighting",
+        "perfect_two_weapon_fighting",
+        "shield_of_blades",
+        "storm_of_blades",
+    ] {
+        assert!(
+            preset
+                .talents
+                .iter()
+                .any(|selection| selection.id == talent_id),
+            "preset should include {talent_id}"
+        );
+    }
+    assert!(preset.defensive_dualwielding);
+    assert!(preset.offensive_dualwielding);
+    assert!(combatant.sheet.maneuvers.defensive_dualwielding);
+    assert!(combatant.sheet.maneuvers.offensive_dualwielding);
+    assert!(combatant.sheet.maneuvers.storm_of_blades);
+    assert!(
+        !combatant
+            .sheet
+            .maneuvers
+            .offensive_dualwielding_defense_penalty
+    );
 }

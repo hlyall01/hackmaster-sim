@@ -669,6 +669,7 @@ fn resolve_counter_attack(
 ) -> CounterAttackOutcome {
     let defender_state = combatants[defender_idx].state.clone();
     let defender = &combatants[defender_idx];
+    let defender_infinite_hp = defender.sheet.vitals.infinite_hp;
     let damage_multiplier = damage_multiplier.max(1);
     let attacker_hammerer = combatants[attacker_idx].apply_i32(StatIdI32::FlagHammererStyle, 0) > 0;
     let attacker_hobbler = combatants[attacker_idx].apply_i32(StatIdI32::FlagHobblerStyle, 0) > 0;
@@ -1032,6 +1033,7 @@ fn resolve_counter_attack(
             .as_ref()
             .map(|crit| crit.instant_kill)
             .unwrap_or(false)
+            && !defender_infinite_hp
         {
             combatants[defender_idx].state.hp = 0;
             damage = defender_hp_before.max(0);
@@ -1044,7 +1046,9 @@ fn resolve_counter_attack(
                     .map(|weapon| weapon.internal_hemorrhage_damage.max(0))
                     .unwrap_or(0);
             }
-            combatants[defender_idx].state.hp -= damage;
+            if !defender_infinite_hp {
+                combatants[defender_idx].state.hp -= damage;
+            }
             knockback_ft = knockback_distance_ft(
                 raw,
                 defender_knockback_step + defender_knockback_step_adjustment,
@@ -1111,7 +1115,9 @@ fn resolve_counter_attack(
             };
             let hp_damage = (shield_after_dr - effective_dr).max(0);
             if hp_damage > 0 {
-                combatants[defender_idx].state.hp -= hp_damage;
+                if !defender_infinite_hp {
+                    combatants[defender_idx].state.hp -= hp_damage;
+                }
                 trauma_seconds = maybe_apply_trauma(combatants, defender_idx, hp_damage, rng);
             }
             let breakage_raw = if defender_unbreakable_wall {
@@ -1210,6 +1216,7 @@ pub(crate) fn resolve_attack(
         .and_then(|snapshot| snapshot.get(attacker_idx))
         .cloned()
         .unwrap_or_else(|| combatants[attacker_idx].state.clone());
+    let defender_infinite_hp = combatants[defender_idx].sheet.vitals.infinite_hp;
     let attack_profile = {
         let attacker = &combatants[attacker_idx];
         attack_profile_for_slot(attacker, weapon_slot).expect("weapon slot missing for attack")
@@ -1691,7 +1698,9 @@ pub(crate) fn resolve_attack(
             if damage > 0 {
                 damage += weapon.internal_hemorrhage_damage.max(0);
             }
-            combatants[defender_idx].state.hp -= damage;
+            if !defender_infinite_hp {
+                combatants[defender_idx].state.hp -= damage;
+            }
             let knockback_raw = if attack_mode == AttackMode::Charge {
                 raw.saturating_mul(2)
             } else {
@@ -1704,8 +1713,10 @@ pub(crate) fn resolve_attack(
 
             if let Some(effect) = crit_effect {
                 if effect.instant_kill {
-                    combatants[defender_idx].state.hp = 0;
-                    damage = defender_hp_before.max(0);
+                    if !defender_infinite_hp {
+                        combatants[defender_idx].state.hp = 0;
+                        damage = defender_hp_before.max(0);
+                    }
                     critical = Some(CriticalHit {
                         severity: effect.severity,
                         extra_dice: if attacker_hobbler {
@@ -1810,7 +1821,9 @@ pub(crate) fn resolve_attack(
             }
             let hp_damage = (shield_after_dr - effective_dr).max(0);
             if hp_damage > 0 {
-                combatants[defender_idx].state.hp -= hp_damage;
+                if !defender_infinite_hp {
+                    combatants[defender_idx].state.hp -= hp_damage;
+                }
                 trauma_seconds = maybe_apply_trauma(combatants, defender_idx, hp_damage, rng);
             }
 
@@ -1866,6 +1879,7 @@ pub(crate) fn resolve_attack(
     if !hit
         && combatants[attacker_idx].state.hp > 0
         && combatants[defender_idx].state.hp > 0
+        && !combatants[defender_idx].sheet.maneuvers.passive
         && defense_roll > attack_roll
     {
         let defender_reach = combatants[defender_idx]
@@ -1936,6 +1950,7 @@ pub(crate) fn resolve_attack(
         && combatants[defender_idx].state.trauma_remaining_seconds <= 0
         && combatants[attacker_idx].state.hp > 0
         && combatants[defender_idx].state.hp > 0
+        && !combatants[defender_idx].sheet.maneuvers.passive
     {
         let defender_reach = combatants[defender_idx]
             .apply_f32(

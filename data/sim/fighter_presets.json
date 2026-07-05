@@ -2,7 +2,7 @@
   "presets": [
     {
       "name": "Arthur Du Randt",
-      "level": 7,
+      "level": 8,
       "progression": {
         "attack": "IV",
         "speed": "III",
@@ -12,7 +12,7 @@
       "masteries": {
         "attack": 4,
         "defense": 3,
-        "damage": 3,
+        "damage": 4,
         "speed": 4,
         "shield_defense": 0,
         "shield_speed": 0
@@ -20,18 +20,18 @@
       "base_hp": 10,
       "move_speed": 20.0,
       "strength_base": 17,
-      "strength_pct": 65,
+      "strength_pct": 94,
       "dex_base": 15,
-      "dex_pct": 71,
+      "dex_pct": 80,
       "intelligence": 10,
       "wisdom": 12,
-      "constitution": 13,
+      "constitution": 14,
       "looks": 8,
       "charisma": 9,
-      "weapon": "Glaive",
+      "weapon": "Halberd",
       "armor": "Platemail",
       "shield": "None",
-      "weapon_material_tier": 2,
+      "weapon_material_tier": 5,
       "armor_material_tier": 1,
       "projectile_material_tier": 0,
       "shield_material_tier": 0,
@@ -44,6 +44,7 @@
       "proficiencies": [
         "Fist",
         "Glaive",
+        "Halberd",
         "Poleaxe",
         "Lance",
         "Polehammer",
@@ -84,6 +85,21 @@
           "id": "weapon_specialization",
           "rank": 1,
           "weapon": "Polearms"
+        },
+        {
+          "id": "swift",
+          "rank": 1,
+          "weapon": "Halberd"
+        },
+        {
+          "id": "cleave",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "great_cleave",
+          "rank": 1,
+          "weapon": null
         },
         {
           "id": "solid",
@@ -763,7 +779,7 @@
       "offhand_weapon": "Short sword",
       "armor": "Gambeson",
       "shield": "None",
-      "weapon_material_tier": 2,
+      "weapon_material_tier": 5,
       "offhand_weapon_material_tier": 2,
       "armor_material_tier": 2,
       "projectile_material_tier": 0,
@@ -826,6 +842,167 @@
         },
         {
           "id": "shield_of_blades",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "improved_awareness",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "backstab",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "devious",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "hide_in_shadows",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "rearward_strike",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "contender",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "duelist",
+          "rank": 1,
+          "weapon": null
+        }
+      ]
+    },
+    {
+      "name": "Volfango Drakos (Perfect Two-Weapon)",
+      "level": 7,
+      "progression": {
+        "attack": "III",
+        "speed": "II",
+        "initiative": "III",
+        "health": "IV"
+      },
+      "masteries": {
+        "attack": 2,
+        "defense": 2,
+        "damage": 2,
+        "speed": 2,
+        "shield_defense": 0,
+        "shield_speed": 0
+      },
+      "base_hp": 10,
+      "move_speed": 20.0,
+      "strength_base": 11,
+      "strength_pct": 34,
+      "dex_base": 20,
+      "dex_pct": 84,
+      "intelligence": 15,
+      "wisdom": 12,
+      "constitution": 11,
+      "looks": 8,
+      "charisma": 5,
+      "weapon": "Short sword",
+      "offhand_weapon": "Short sword",
+      "armor": "Gambeson",
+      "shield": "None",
+      "weapon_material_tier": 5,
+      "offhand_weapon_material_tier": 2,
+      "armor_material_tier": 2,
+      "projectile_material_tier": 0,
+      "shield_material_tier": 0,
+      "two_hand_grip": false,
+      "maneuvers": {
+        "fight_defensively": true,
+        "fight_defensively_penalty": 8
+      },
+      "defensive_dualwielding": true,
+      "offensive_dualwielding": true,
+      "race_id": "ithican",
+      "proficiencies": [
+        "Short sword",
+        "Light armor",
+        "Seaman's Cant",
+        "Trilingual",
+        "Hiking",
+        "Roadmarching"
+      ],
+      "talents": [
+        {
+          "id": "dodge",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "deceptive_defender",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "precision_combatant",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "combat_expertise",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "defense_bonus_weapon",
+          "rank": 1,
+          "weapon": "Short sword"
+        },
+        {
+          "id": "swift",
+          "rank": 1,
+          "weapon": "Short sword"
+        },
+        {
+          "id": "damage_bonus_weapon",
+          "rank": 1,
+          "weapon": "Short sword"
+        },
+        {
+          "id": "light_armor_optimization",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "two_weapon_fighting",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "improved_two_weapon_fighting",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "greater_two_weapon_fighting",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "perfect_two_weapon_fighting",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "shield_of_blades",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "storm_of_blades",
           "rank": 1,
           "weapon": null
         },

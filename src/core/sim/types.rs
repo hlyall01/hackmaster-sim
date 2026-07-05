@@ -187,6 +187,8 @@ pub struct ManeuverProfile {
     pub dualwield_offhand_damage_penalty: i32,
     pub dualwield_primary_recovery_penalty: f32,
     pub dualwield_secondary_recovery_penalty: f32,
+    pub storm_of_blades: bool,
+    pub passive: bool,
 }
 
 impl Default for ManeuverProfile {
@@ -219,6 +221,8 @@ impl Default for ManeuverProfile {
             dualwield_offhand_damage_penalty: -2,
             dualwield_primary_recovery_penalty: 2.0,
             dualwield_secondary_recovery_penalty: 2.0,
+            storm_of_blades: false,
+            passive: false,
         }
     }
 }
@@ -265,6 +269,7 @@ pub struct MobilityProfile {
 #[derive(Clone, Copy, Debug)]
 pub struct Vitals {
     pub max_hp: i32,
+    pub infinite_hp: bool,
     pub constitution: u8,
     pub drain_resistance: i32,
     pub threshold_of_pain: i32,
@@ -524,6 +529,7 @@ impl Default for Vitals {
     fn default() -> Self {
         Self {
             max_hp: 10,
+            infinite_hp: false,
             constitution: 10,
             drain_resistance: 0,
             threshold_of_pain: 3,

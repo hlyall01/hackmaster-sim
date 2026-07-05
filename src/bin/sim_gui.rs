@@ -12,6 +12,7 @@ use game_logic::{
 };
 use hackmaster_sim::core::catalog::Catalog;
 use hackmaster_sim::core::gameplay::run::{Wound, heal_wounds, required_healing_steps};
+use hackmaster_sim::core::rng::SimRng;
 use hackmaster_sim::core::types::{RaceSpec, TalentSelection, TalentSpec};
 use hackmaster_sim::ui_widgets::searchable_select;
 use hackmaster_sim::{character, data, game_logic, sim};
@@ -133,8 +134,16 @@ struct SimGuiApp {
     bulk_seed: u64,
     bulk_result: Option<BulkSimResult>,
     bulk_sim_duration: Option<std::time::Duration>,
+    dps_attacker_idx: usize,
+    dps_defender_idx: usize,
+    dps_iterations: u32,
+    dps_duration_seconds: u32,
+    dps_seed: u64,
+    dps_result: Option<DpsTestResult>,
+    dps_sim_duration: Option<std::time::Duration>,
     active_tab: MainTab,
     wound_tool_damage: u32,
+    wound_tool_days_until_point_healed: f32,
     wound_tool_days: u32,
     wound_tool_tended: bool,
     wound_tool_fast_healer: bool,
@@ -157,6 +166,26 @@ struct DamageRollPlotData {
     iterations: usize,
     x_max: usize,
     y_max: f64,
+}
+
+#[derive(Clone, Debug)]
+struct DpsTestResult {
+    attacker_idx: usize,
+    defender_idx: usize,
+    iterations: u32,
+    duration_seconds: u32,
+    total_damage: u64,
+    total_landed_damage: i64,
+    total_rolled_damage: i64,
+    damage_rolls: u64,
+    attacks: u64,
+    highest_crit_hit: i32,
+    highest_noncrit_hit: i32,
+    highest_shield_hit: i32,
+    instakills: u32,
+    dps: f64,
+    avg_damage_per_run: f64,
+    avg_attacks_per_run: f64,
 }
 
 impl SimGuiApp {
@@ -231,8 +260,16 @@ impl SimGuiApp {
             bulk_seed: 1,
             bulk_result: None,
             bulk_sim_duration: None,
+            dps_attacker_idx: 0,
+            dps_defender_idx: 1,
+            dps_iterations: 1000,
+            dps_duration_seconds: 60,
+            dps_seed: 1,
+            dps_result: None,
+            dps_sim_duration: None,
             active_tab: MainTab::Simulator,
             wound_tool_damage: 7,
+            wound_tool_days_until_point_healed: required_healing_steps(7, false) as f32 / 4.0,
             wound_tool_days: 1,
             wound_tool_tended: true,
             wound_tool_fast_healer: false,
@@ -310,6 +347,109 @@ impl SimGuiApp {
         );
         self.bulk_result = Some(result);
         self.bulk_sim_duration = Some(start.elapsed());
+    }
+
+    fn run_dps_test(&mut self) {
+        self.dps_result = None;
+        self.dps_sim_duration = None;
+        self.sanitize_players();
+
+        let attacker_idx = self.dps_attacker_idx.min(1);
+        let mut defender_idx = self.dps_defender_idx.min(1);
+        if defender_idx == attacker_idx {
+            defender_idx = 1usize.saturating_sub(attacker_idx);
+        }
+        self.dps_attacker_idx = attacker_idx;
+        self.dps_defender_idx = defender_idx;
+        let iterations = self.dps_iterations.max(1);
+        let duration_seconds = self.dps_duration_seconds.max(1);
+        self.dps_iterations = iterations;
+        self.dps_duration_seconds = duration_seconds;
+
+        let mut combatants = game_logic::build_combatants(
+            &self.players,
+            &self.weapon_catalog,
+            &self.armor_catalog,
+            &self.shield_catalog,
+            &self.npc_presets,
+            &self.talent_catalog,
+        );
+        if let Some(defender) = combatants.get_mut(defender_idx) {
+            defender.sheet.maneuvers.passive = true;
+            defender.sheet.vitals.infinite_hp = true;
+        }
+
+        let config = SimConfig::new(
+            self.sim.config.start_distance,
+            game_logic::stop_distance_for_players(
+                &self.players,
+                &self.weapon_catalog,
+                &self.talent_catalog,
+            ),
+        );
+        let seed = self.dps_seed;
+        self.dps_seed = self.dps_seed.wrapping_add(1).max(1);
+
+        let start = Instant::now();
+        let mut total_damage = 0u64;
+        let mut total_landed_damage = 0i64;
+        let mut total_rolled_damage = 0i64;
+        let mut damage_rolls = 0u64;
+        let mut attacks = 0u64;
+        let mut highest_crit_hit = 0i32;
+        let mut highest_noncrit_hit = 0i32;
+        let mut highest_shield_hit = 0i32;
+        let mut instakills = 0u32;
+
+        for run_idx in 0..iterations {
+            let run_seed = seed.wrapping_add(u64::from(run_idx));
+            let mut sim = SimState::with_rng(config, SimRng::from_seed(run_seed));
+            sim.log_events = true;
+            sim.reset_with_combatants(combatants.clone());
+            while sim.elapsed_seconds < duration_seconds {
+                sim.tick();
+            }
+
+            let attacker_state = &sim.combatants[attacker_idx].state;
+            total_damage =
+                total_damage.saturating_add(u64::from(attacker_state.total_hp_damage_dealt));
+            total_landed_damage += attacker_state.total_damage_landed_dealt;
+            total_rolled_damage += attacker_state.total_damage_rolled_dealt;
+            damage_rolls =
+                damage_rolls.saturating_add(u64::from(attacker_state.damage_rolls_dealt));
+            highest_crit_hit = highest_crit_hit.max(attacker_state.max_crit_hit_dealt);
+            highest_noncrit_hit = highest_noncrit_hit.max(attacker_state.max_noncrit_hit_dealt);
+            highest_shield_hit = highest_shield_hit.max(attacker_state.max_shield_hit_dealt);
+            instakills = instakills.saturating_add(attacker_state.total_instakills_dealt);
+            attacks = attacks.saturating_add(
+                sim.combat_events
+                    .iter()
+                    .filter(|event| event.attacker_idx == attacker_idx)
+                    .count() as u64,
+            );
+        }
+
+        let total_seconds = iterations as f64 * duration_seconds as f64;
+        let dps = total_damage as f64 / total_seconds.max(1.0);
+        self.dps_result = Some(DpsTestResult {
+            attacker_idx,
+            defender_idx,
+            iterations,
+            duration_seconds,
+            total_damage,
+            total_landed_damage,
+            total_rolled_damage,
+            damage_rolls,
+            attacks,
+            highest_crit_hit,
+            highest_noncrit_hit,
+            highest_shield_hit,
+            instakills,
+            dps,
+            avg_damage_per_run: total_damage as f64 / iterations as f64,
+            avg_attacks_per_run: attacks as f64 / iterations as f64,
+        });
+        self.dps_sim_duration = Some(start.elapsed());
     }
 
     fn sanitize_players(&mut self) {
@@ -959,6 +1099,7 @@ impl eframe::App for SimGuiApp {
                 render_tools_tab(
                     ui,
                     &mut self.wound_tool_damage,
+                    &mut self.wound_tool_days_until_point_healed,
                     &mut self.wound_tool_days,
                     &mut self.wound_tool_tended,
                     &mut self.wound_tool_fast_healer,
@@ -1249,8 +1390,10 @@ impl eframe::App for SimGuiApp {
 
         for idx in 0..self.players.len() {
             let name = self.players[idx].name.clone();
+            let player_names = [self.players[0].name.clone(), self.players[1].name.clone()];
             let mut open = self.show_player_editor[idx];
             let title = format!("Customize {name}");
+            let mut run_dps_test = false;
             egui::Window::new(title)
                 .id(egui::Id::new(format!("player_editor_{idx}")))
                 .open(&mut open)
@@ -1286,9 +1429,22 @@ impl eframe::App for SimGuiApp {
                         &mut self.talent_category_tabs[idx],
                         damage_plot_iterations,
                         damage_roll_plot,
+                        &player_names,
+                        &mut self.dps_attacker_idx,
+                        &mut self.dps_defender_idx,
+                        &mut self.dps_iterations,
+                        &mut self.dps_duration_seconds,
+                        &mut self.dps_seed,
+                        &self.dps_result,
+                        self.dps_sim_duration,
+                        &mut run_dps_test,
                     );
                 });
             self.show_player_editor[idx] = open;
+            if run_dps_test {
+                self.running = false;
+                self.run_dps_test();
+            }
         }
 
         if self.running {
@@ -1311,6 +1467,7 @@ fn render_player_editor_tabs(ui: &mut egui::Ui, id_prefix: &str, active_tab: &mu
 fn render_tools_tab(
     ui: &mut egui::Ui,
     wound_damage: &mut u32,
+    days_until_point_healed: &mut f32,
     days: &mut u32,
     tended: &mut bool,
     fast_healer: &mut bool,
@@ -1318,6 +1475,137 @@ fn render_tools_tab(
     ui.heading("Tools");
     ui.separator();
     ui.heading("Wound Calculator");
+    render_wound_calculator(
+        ui,
+        wound_damage,
+        days_until_point_healed,
+        days,
+        tended,
+        fast_healer,
+    );
+}
+
+fn render_dps_test_tool(
+    ui: &mut egui::Ui,
+    player_names: &[String; 2],
+    dps_attacker_idx: &mut usize,
+    dps_defender_idx: &mut usize,
+    dps_iterations: &mut u32,
+    dps_duration_seconds: &mut u32,
+    dps_seed: &mut u64,
+    dps_result: &Option<DpsTestResult>,
+    dps_sim_duration: Option<std::time::Duration>,
+    run_dps_test: &mut bool,
+) {
+    ui.heading("DPS Test");
+    *dps_attacker_idx = (*dps_attacker_idx).min(1);
+    *dps_defender_idx = (*dps_defender_idx).min(1);
+    if *dps_defender_idx == *dps_attacker_idx {
+        *dps_defender_idx = 1usize.saturating_sub(*dps_attacker_idx);
+    }
+    let selected_attacker_idx = *dps_attacker_idx;
+    let selected_defender_idx = *dps_defender_idx;
+    ui.horizontal(|ui| {
+        ui.label("Attacker");
+        egui::ComboBox::from_id_source("dps_attacker")
+            .selected_text(player_names[selected_attacker_idx].as_str())
+            .show_ui(ui, |ui| {
+                ui.selectable_value(dps_attacker_idx, 0, player_names[0].as_str());
+                ui.selectable_value(dps_attacker_idx, 1, player_names[1].as_str());
+            });
+        if *dps_defender_idx == *dps_attacker_idx {
+            *dps_defender_idx = 1usize.saturating_sub(*dps_attacker_idx);
+        }
+        ui.label("Defender");
+        egui::ComboBox::from_id_source("dps_defender")
+            .selected_text(player_names[selected_defender_idx].as_str())
+            .show_ui(ui, |ui| {
+                ui.selectable_value(dps_defender_idx, 0, player_names[0].as_str());
+                ui.selectable_value(dps_defender_idx, 1, player_names[1].as_str());
+            });
+        if *dps_defender_idx == *dps_attacker_idx {
+            *dps_attacker_idx = 1usize.saturating_sub(*dps_defender_idx);
+        }
+    });
+    ui.small("Defender uses normal defense rolls, DR, shield blocks, and shield breakage, but does not attack and cannot die.");
+    ui.horizontal(|ui| {
+        ui.label("Iterations");
+        ui.add(
+            egui::DragValue::new(dps_iterations)
+                .clamp_range(1..=u32::MAX)
+                .speed(100.0),
+        );
+        ui.label("Duration (s)");
+        ui.add(
+            egui::DragValue::new(dps_duration_seconds)
+                .clamp_range(1..=u32::MAX)
+                .speed(5.0),
+        );
+        ui.label("Seed");
+        ui.add(egui::DragValue::new(dps_seed).clamp_range(1..=u64::MAX));
+    });
+    if ui.button("Run DPS test").clicked() {
+        *run_dps_test = true;
+    }
+    if let Some(result) = dps_result {
+        let attacker_name = player_names[result.attacker_idx].as_str();
+        let defender_name = player_names[result.defender_idx].as_str();
+        ui.separator();
+        ui.label(format!(
+            "{attacker_name} attacking passive infinite-HP {defender_name}"
+        ));
+        ui.label(format!(
+            "DPS: {:.2} over {} x {}s",
+            result.dps, result.iterations, result.duration_seconds
+        ));
+        ui.label(format!(
+            "Avg damage/run: {:.1} | Total damage: {}",
+            result.avg_damage_per_run, result.total_damage
+        ));
+        ui.label(format!(
+            "Avg attacks/run: {:.1} | Total attacks: {}",
+            result.avg_attacks_per_run, result.attacks
+        ));
+        ui.label(format!(
+            "Damage rolls: {} | Rolled avg: {:.1} | Landed avg: {:.1}",
+            result.damage_rolls,
+            if result.damage_rolls == 0 {
+                0.0
+            } else {
+                result.total_rolled_damage as f64 / result.damage_rolls as f64
+            },
+            if result.damage_rolls == 0 {
+                0.0
+            } else {
+                result.total_landed_damage as f64 / result.damage_rolls as f64
+            }
+        ));
+        ui.label(format!(
+            "Highest crit: {} | Highest non-crit: {} | Highest shield hit: {}",
+            result.highest_crit_hit, result.highest_noncrit_hit, result.highest_shield_hit
+        ));
+        if result.instakills > 0 {
+            ui.label(format!(
+                "Instant-kill crits rolled: {} (target stayed alive)",
+                result.instakills
+            ));
+        }
+        if let Some(duration) = dps_sim_duration {
+            ui.label(format!("Sim time: {:.2}s", duration.as_secs_f64()));
+        }
+    } else {
+        ui.label("No DPS result yet.");
+    }
+}
+
+fn render_wound_calculator(
+    ui: &mut egui::Ui,
+    wound_damage: &mut u32,
+    days_until_point_healed: &mut f32,
+    days: &mut u32,
+    tended: &mut bool,
+    fast_healer: &mut bool,
+) {
     ui.horizontal(|ui| {
         ui.label("Wound");
         ui.add(
@@ -1325,7 +1613,21 @@ fn render_tools_tab(
                 .clamp_range(0..=u32::MAX)
                 .speed(1.0),
         );
-        ui.label("Days");
+        let current_required_steps = if *wound_damage == 0 {
+            0
+        } else {
+            required_healing_steps(*wound_damage, *fast_healer)
+        };
+        let steps_per_day = healing_steps_per_day(*tended);
+        let current_required_days = current_required_steps as f32 / steps_per_day as f32;
+        ui.label("Days until point healed");
+        ui.add(
+            egui::DragValue::new(days_until_point_healed)
+                .clamp_range(0.0..=current_required_days)
+                .speed(0.25)
+                .fixed_decimals(2),
+        );
+        ui.label("Additional days");
         ui.add(
             egui::DragValue::new(days)
                 .clamp_range(0..=u32::MAX)
@@ -1338,14 +1640,24 @@ fn render_tools_tab(
     });
     ui.small("Being tended/resting gives 4 healing steps per day. Untended activity gives half progress: 2 steps per day.");
     ui.small("Fast Healer reduces the time for each wound point by half a day; the final wound point heals in 1 step.");
+    ui.small("For a 9 point wound with 2 tended days left before it drops to 8, enter wound 9 and days until point healed 2.");
     ui.separator();
 
     let mut wounds = if *wound_damage == 0 {
         Vec::new()
     } else {
+        let required_steps = required_healing_steps(*wound_damage, *fast_healer);
+        let steps_per_day = healing_steps_per_day(*tended);
+        let max_days_until_point_healed = required_steps as f32 / steps_per_day as f32;
+        *days_until_point_healed =
+            (*days_until_point_healed).clamp(0.0, max_days_until_point_healed);
+        let remaining_steps =
+            ((*days_until_point_healed * steps_per_day as f32).round() as u32)
+                .min(required_steps);
+        let healing_progress_steps = required_steps.saturating_sub(remaining_steps);
         vec![Wound {
             damage: *wound_damage,
-            healing_progress_steps: 0,
+            healing_progress_steps,
         }]
     };
     heal_wounds(&mut wounds, *days, *fast_healer, *tended);
@@ -1358,13 +1670,37 @@ fn render_tools_tab(
         let required_steps = required_healing_steps(wound.damage, *fast_healer);
         let progress_steps = wound.healing_progress_steps.min(required_steps);
         let next_heal = required_steps.saturating_sub(progress_steps);
+        let steps_per_day = healing_steps_per_day(*tended);
+        let progress_days = progress_steps as f32 / steps_per_day as f32;
+        let required_days = required_steps as f32 / steps_per_day as f32;
+        let next_heal_days = next_heal as f32 / steps_per_day as f32;
         ui.label(format!(
-            "Current progress: {progress_steps} / {required_steps} steps"
+            "Current progress: {} / {} days",
+            format_healing_days(progress_days),
+            format_healing_days(required_days)
         ));
-        ui.label(format!("Next point heals in {next_heal} steps"));
+        ui.label(format!(
+            "Next point heals in {} days",
+            format_healing_days(next_heal_days)
+        ));
     } else {
         ui.label("The wound is fully healed.");
     }
+}
+
+fn healing_steps_per_day(tended: bool) -> u32 {
+    if tended { 4 } else { 2 }
+}
+
+fn format_healing_days(days: f32) -> String {
+    let mut formatted = format!("{days:.2}");
+    while formatted.contains('.') && formatted.ends_with('0') {
+        formatted.pop();
+    }
+    if formatted.ends_with('.') {
+        formatted.pop();
+    }
+    formatted
 }
 
 fn render_player_editor(
@@ -1385,6 +1721,15 @@ fn render_player_editor(
     talent_category_tab: &mut String,
     damage_plot_iterations: &mut String,
     damage_roll_plot: &mut Option<DamageRollPlotData>,
+    player_names: &[String; 2],
+    dps_attacker_idx: &mut usize,
+    dps_defender_idx: &mut usize,
+    dps_iterations: &mut u32,
+    dps_duration_seconds: &mut u32,
+    dps_seed: &mut u64,
+    dps_result: &Option<DpsTestResult>,
+    dps_sim_duration: Option<std::time::Duration>,
+    run_dps_test: &mut bool,
 ) {
     if weapon_catalog.is_empty() {
         ui.label("Weapon catalog is empty.");
@@ -1698,17 +2043,25 @@ fn render_player_editor(
             }
             let can_dualwield =
                 weapon.handedness == WeaponHandedness::OneHanded && !player.two_hand_grip;
-            let can_defensive_dualwield = can_dualwield && !player.offensive_dualwielding;
-            let can_offensive_dualwield = can_dualwield && !player.defensive_dualwielding;
+            let has_perfect_two_weapon_fighting =
+                game_logic::has_perfect_two_weapon_fighting_effect(player);
+            let was_offensive_dualwielding = player.offensive_dualwielding;
+            let can_defensive_dualwield = can_dualwield
+                && (has_perfect_two_weapon_fighting || !player.offensive_dualwielding);
+            let can_offensive_dualwield = can_dualwield
+                && (has_perfect_two_weapon_fighting || !player.defensive_dualwielding);
             if !can_dualwield {
                 player.defensive_dualwielding = false;
                 player.offensive_dualwielding = false;
+                player.offhand_weapon_id = None;
             }
-            if player.defensive_dualwielding {
-                player.offensive_dualwielding = false;
-            }
-            if player.offensive_dualwielding {
-                player.defensive_dualwielding = false;
+            if !has_perfect_two_weapon_fighting {
+                if player.defensive_dualwielding {
+                    player.offensive_dualwielding = false;
+                }
+                if player.offensive_dualwielding {
+                    player.defensive_dualwielding = false;
+                }
             }
             let jab_label = weapon
                 .jab_speed_label
@@ -1756,6 +2109,10 @@ fn render_player_editor(
             }
             if player.offensive_dualwielding {
                 ui.label("Offensive dualwielding: alternate primary/offhand attacks");
+            }
+            if player.offensive_dualwielding && !was_offensive_dualwielding {
+                player.offhand_weapon_id =
+                    game_logic::default_offhand_weapon_id(player, weapon, weapon_catalog);
             }
 
             let npc_active = player.npc_preset.is_some();
@@ -1874,10 +2231,10 @@ fn render_player_editor(
                 });
                 ui.horizontal(|ui| {
                     ui.label("Offhand weapon");
-                    let can_use_offhand = player.offensive_dualwielding
-                        && weapon.handedness == WeaponHandedness::OneHanded
-                        && !player.two_hand_grip;
-                    if !can_use_offhand {
+                    let offhand_loadout_possible =
+                        weapon.handedness == WeaponHandedness::OneHanded && !player.two_hand_grip;
+                    let can_use_offhand = player.offensive_dualwielding && offhand_loadout_possible;
+                    if !offhand_loadout_possible {
                         player.offhand_weapon_id = None;
                     }
                     ui.add_enabled_ui(can_use_offhand, |ui| {
@@ -2499,6 +2856,15 @@ fn render_player_editor(
                 talent_catalog,
                 damage_plot_iterations,
                 damage_roll_plot,
+                player_names,
+                dps_attacker_idx,
+                dps_defender_idx,
+                dps_iterations,
+                dps_duration_seconds,
+                dps_seed,
+                dps_result,
+                dps_sim_duration,
+                run_dps_test,
             );
         }
     }
@@ -2515,8 +2881,30 @@ fn render_player_tools_tab(
     talent_catalog: &TalentCatalog,
     damage_plot_iterations: &mut String,
     damage_roll_plot: &mut Option<DamageRollPlotData>,
+    player_names: &[String; 2],
+    dps_attacker_idx: &mut usize,
+    dps_defender_idx: &mut usize,
+    dps_iterations: &mut u32,
+    dps_duration_seconds: &mut u32,
+    dps_seed: &mut u64,
+    dps_result: &Option<DpsTestResult>,
+    dps_sim_duration: Option<std::time::Duration>,
+    run_dps_test: &mut bool,
 ) {
     ui.heading("Tools");
+    ui.separator();
+    render_dps_test_tool(
+        ui,
+        player_names,
+        dps_attacker_idx,
+        dps_defender_idx,
+        dps_iterations,
+        dps_duration_seconds,
+        dps_seed,
+        dps_result,
+        dps_sim_duration,
+        run_dps_test,
+    );
     ui.separator();
     ui.horizontal(|ui| {
         let iterations = parse_damage_plot_iterations(damage_plot_iterations);
