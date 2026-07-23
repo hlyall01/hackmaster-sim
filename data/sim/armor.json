@@ -47,6 +47,28 @@
       "price_gp": 62
     },
     {
+      "name": "Raurosi Leather?",
+      "region": "Southern",
+      "damage_reduction": 2,
+      "defense_adjustment": -1,
+      "initiative_modifier": 1,
+      "speed_modifier": 0,
+      "type": "Light",
+      "weight_lbs": 10.0,
+      "price_gp": 0
+    },
+    {
+      "name": "Manica",
+      "region": "Southern",
+      "damage_reduction": 3,
+      "defense_adjustment": -4,
+      "initiative_modifier": 1,
+      "speed_modifier": 0,
+      "type": "Light",
+      "weight_lbs": 15.0,
+      "price_gp": 0
+    },
+    {
       "name": "Chainshirt",
       "region": "Northern",
       "damage_reduction": 3,

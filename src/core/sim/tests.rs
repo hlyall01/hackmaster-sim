@@ -570,38 +570,38 @@ fn volfango_hardcoded_player(
     let short_sword = find_weapon_id_by_name(weapon_catalog, "Short sword")
         .expect("missing Short sword weapon for Volfango fixture");
     let mut player = game_logic::PlayerConfig::new("Volfango Drakos", short_sword);
-    player.level = 7;
+    player.level = 8;
     player.progression = Progression::new(
         ProgressionTier::III,
-        ProgressionTier::II,
+        ProgressionTier::III,
         ProgressionTier::III,
         ProgressionTier::IV,
     );
     player.base_hp = 10;
     player.move_speed = 20.0;
     player.strength_base = 11;
-    player.strength_pct = 34;
+    player.strength_pct = 38;
     player.dex_base = 20;
-    player.dex_pct = 84;
+    player.dex_pct = 85;
     player.intelligence = 15;
     player.wisdom = 12;
-    player.constitution = 11;
+    player.constitution = 12;
     player.looks = 8;
-    player.charisma = 5;
+    player.charisma = 6;
     player.weapon_id = short_sword;
     player.offhand_weapon_id = Some(short_sword);
-    player.armor_id = find_armor_id_by_name(armor_catalog, "Gambeson")
-        .expect("missing Gambeson armor for Volfango fixture");
+    player.armor_id = find_armor_id_by_name(armor_catalog, "Raurosi Leather?")
+        .expect("missing Raurosi Leather? armor for Volfango fixture");
     player.shield_id =
         find_shield_id_by_name(shield_catalog, "None").expect("missing None shield entry");
     player.weapon_material_tier = 2;
     player.offhand_weapon_material_tier = 2;
-    player.armor_material_tier = 2;
+    player.armor_material_tier = 3;
     player.projectile_material_tier = 0;
     player.offhand_projectile_material_tier = 0;
     player.shield_material_tier = 0;
     player.mastery_attack = 2;
-    player.mastery_defense = 2;
+    player.mastery_defense = 3;
     player.mastery_damage = 2;
     player.mastery_speed = 2;
     player.shield_mastery_defense = 0;
@@ -617,6 +617,8 @@ fn volfango_hardcoded_player(
         game_logic::knockback_step_for_race_id(player.race_id.as_deref(), race_catalog);
     player.proficiencies = vec![
         "Short sword".to_string(),
+        "Dueling sword".to_string(),
+        "Throwing Knife".to_string(),
         "Light armor".to_string(),
         "Seaman's Cant".to_string(),
         "Trilingual".to_string(),
@@ -845,14 +847,14 @@ fn volfango_dual_wield_talent_timelines_match_snapshot() {
         &race_catalog,
     );
     assert_eq!(fixture.name, "Volfango Drakos");
-    assert_eq!(fixture.level, 7);
+    assert_eq!(fixture.level, 8);
     assert_eq!(fixture.strength_base, 11);
-    assert_eq!(fixture.strength_pct, 34);
+    assert_eq!(fixture.strength_pct, 38);
     assert_eq!(fixture.dex_base, 20);
-    assert_eq!(fixture.dex_pct, 84);
+    assert_eq!(fixture.dex_pct, 85);
     assert_eq!(fixture.intelligence, 15);
     assert_eq!(fixture.wisdom, 12);
-    assert_eq!(fixture.constitution, 11);
+    assert_eq!(fixture.constitution, 12);
     assert_eq!(fixture.talents.len(), 16);
 
     let modes = [
@@ -860,10 +862,26 @@ fn volfango_dual_wield_talent_timelines_match_snapshot() {
             "1h",
             VolfangoMode::OneHanded,
             VolfangoSpeedSnapshot {
-                primary_speed: 4,
+                primary_speed: 3,
                 offhand_speed: None,
                 offensive_dualwielding: false,
                 defensive_dualwielding: false,
+                offhand_damage_penalty: -2,
+                primary_recovery_penalty: 2,
+                secondary_recovery_penalty: 2,
+            },
+            vec![
+                "1main", "4main", "7main", "10main", "13main", "16main", "19main", "22main",
+            ],
+        ),
+        (
+            "def twf",
+            VolfangoMode::DefensiveTwf,
+            VolfangoSpeedSnapshot {
+                primary_speed: 4,
+                offhand_speed: None,
+                offensive_dualwielding: false,
+                defensive_dualwielding: true,
                 offhand_damage_penalty: -2,
                 primary_recovery_penalty: 2,
                 secondary_recovery_penalty: 2,
@@ -873,27 +891,11 @@ fn volfango_dual_wield_talent_timelines_match_snapshot() {
             ],
         ),
         (
-            "def twf",
-            VolfangoMode::DefensiveTwf,
-            VolfangoSpeedSnapshot {
-                primary_speed: 5,
-                offhand_speed: None,
-                offensive_dualwielding: false,
-                defensive_dualwielding: true,
-                offhand_damage_penalty: -2,
-                primary_recovery_penalty: 2,
-                secondary_recovery_penalty: 2,
-            },
-            vec![
-                "1main", "6main", "11main", "16main", "21main", "26main", "31main", "36main",
-            ],
-        ),
-        (
             "off twf",
             VolfangoMode::OffensiveTwf,
             VolfangoSpeedSnapshot {
-                primary_speed: 5,
-                offhand_speed: Some(5),
+                primary_speed: 4,
+                offhand_speed: Some(4),
                 offensive_dualwielding: true,
                 defensive_dualwielding: false,
                 offhand_damage_penalty: -2,
@@ -901,15 +903,15 @@ fn volfango_dual_wield_talent_timelines_match_snapshot() {
                 secondary_recovery_penalty: 2,
             },
             vec![
-                "1main", "6off", "8main", "13off", "15main", "20off", "22main", "27off",
+                "1main", "5off", "7main", "11off", "13main", "17off", "19main", "23off",
             ],
         ),
         (
             "off iwtf",
             VolfangoMode::OffensiveIwtf,
             VolfangoSpeedSnapshot {
-                primary_speed: 5,
-                offhand_speed: Some(5),
+                primary_speed: 4,
+                offhand_speed: Some(4),
                 offensive_dualwielding: true,
                 defensive_dualwielding: false,
                 offhand_damage_penalty: 0,
@@ -917,15 +919,15 @@ fn volfango_dual_wield_talent_timelines_match_snapshot() {
                 secondary_recovery_penalty: 2,
             },
             vec![
-                "1main", "6off", "7main", "13off", "13main", "19main", "20off", "25main",
+                "1main", "5off", "6main", "11off", "11main", "16main", "17off", "21main",
             ],
         ),
         (
             "off gtwf",
             VolfangoMode::OffensiveGtwf,
             VolfangoSpeedSnapshot {
-                primary_speed: 5,
-                offhand_speed: Some(5),
+                primary_speed: 4,
+                offhand_speed: Some(4),
                 offensive_dualwielding: true,
                 defensive_dualwielding: false,
                 offhand_damage_penalty: 0,
@@ -933,7 +935,7 @@ fn volfango_dual_wield_talent_timelines_match_snapshot() {
                 secondary_recovery_penalty: 1,
             },
             vec![
-                "1main", "6off", "7main", "12off", "13main", "18off", "19main", "24off",
+                "1main", "5off", "6main", "10off", "11main", "15off", "16main", "20off",
             ],
         ),
     ];
@@ -4879,6 +4881,9 @@ fn bulk_shield_metrics_report_presence_without_combat() {
     assert!(result.shields_present);
     assert_eq!(result.shield_breaks, 0);
     assert_eq!(result.avg_hits_shield_survived, 0.0);
+    assert_eq!(result.detailed.teams[0].attack_attempts, 0);
+    assert_eq!(result.detailed.teams[1].shield_fights, 1);
+    assert_eq!(result.detailed.teams[1].shield_break_rate, Some(0.0));
 }
 
 #[test]
@@ -4966,6 +4971,37 @@ fn bulk_average_damage_splits_rolled_and_landed_hit_damage() {
             .unwrap_or(0.0),
         0.0
     );
+
+    let attacker_stats = &result.detailed.teams[0];
+    let defender_stats = &result.detailed.teams[1];
+    assert_eq!(attacker_stats.attack_attempts, 1);
+    assert_eq!(attacker_stats.direct_hits, 1);
+    assert_eq!(attacker_stats.shield_blocks, 0);
+    assert_eq!(attacker_stats.misses, 0);
+    assert_eq!(attacker_stats.hp_hits, 1);
+    assert_eq!(attacker_stats.hp_damage_p50, 10);
+    assert_eq!(attacker_stats.hp_damage_p90, 10);
+    assert_eq!(attacker_stats.hp_damage_p99, 10);
+    assert_eq!(attacker_stats.avg_hp_damage_per_fight, 10.0);
+    assert_eq!(
+        attacker_stats.avg_winning_duration_seconds,
+        Some(result.avg_duration)
+    );
+    assert_eq!(
+        attacker_stats.median_winning_duration_seconds,
+        Some(result.detailed.duration_p50)
+    );
+    assert_eq!(defender_stats.avg_winning_duration_seconds, None);
+    assert_eq!(defender_stats.median_winning_duration_seconds, None);
+    assert_eq!(defender_stats.incoming_raw_damage_per_fight, 15.0);
+    assert_eq!(defender_stats.armor_prevented_per_fight, 5.0);
+    assert_eq!(defender_stats.shield_prevented_per_fight, 0.0);
+    assert_eq!(defender_stats.hp_damage_taken_per_fight, 10.0);
+    assert!(result.detailed.duration_p10 <= result.detailed.duration_p50);
+    assert!(result.detailed.duration_p50 <= result.detailed.duration_p90);
+    assert!(result.detailed.duration_p90 <= result.detailed.duration_p99);
+    assert!(attacker_stats.win_rate_ci_low <= attacker_stats.win_rate);
+    assert!(attacker_stats.win_rate <= attacker_stats.win_rate_ci_high);
 }
 
 #[test]
@@ -6768,7 +6804,13 @@ fn wren_preset_builds_with_power_attack_and_kanian_impaler() {
         &talent_catalog,
     );
 
-    assert_eq!(wren.level, 7);
+    assert_eq!(wren.level, 8);
+    assert_eq!(wren_preset.strength_pct, 31);
+    assert_eq!(wren_preset.dex_pct, 20);
+    assert_eq!(wren.strength_pct, 1);
+    assert_eq!(wren.dex_pct, 1);
+    assert_eq!(wren.constitution, 14);
+    assert_eq!(wren.mastery_defense, 2);
     assert!(
         wren.talents
             .iter()
@@ -6780,10 +6822,23 @@ fn wren_preset_builds_with_power_attack_and_kanian_impaler() {
             .iter()
             .any(|talent| talent.id == "unbreakable_wall")
     );
-    assert_eq!(combatant.sheet.vitals.max_hp, 41);
-    assert_eq!(combatant.sheet.vitals.threshold_of_pain, 16);
+    assert!(
+        wren.talents
+            .iter()
+            .any(|talent| talent.id == "voice_of_the_commander")
+    );
+    assert!(
+        wren.proficiencies
+            .iter()
+            .any(|proficiency| proficiency == "Pike")
+    );
+    assert_eq!(combatant.sheet.vitals.max_hp, 46);
+    assert_eq!(combatant.sheet.vitals.threshold_of_pain, 18);
     assert_eq!(combatant.sheet.vitals.trauma_die_sides, 12);
     assert!(combatant.sheet.maneuvers.power_attack);
+    assert_eq!(combatant.sheet.offense.attack_bonus, 7);
+    assert_eq!(combatant.sheet.offense.strength_damage, 12);
+    assert_eq!(combatant.sheet.defense.armor_dr, 10);
     assert_eq!(
         combatant.sheet.defense.shield_name.as_deref(),
         Some("Large metallic shield")
@@ -6815,10 +6870,32 @@ fn named_fighter_preset_weapon_and_mastery_overrides_are_preserved() {
     for name in ["Volfango Drakos", "Volfango Drakos (Perfect Two-Weapon)"] {
         let preset = find_fighter_preset(&fighter_presets, name)
             .unwrap_or_else(|| panic!("missing {name} preset"));
+        assert_eq!(preset.level, 8);
+        assert_eq!(preset.progression.speed, "III");
+        assert_eq!(preset.strength_base, 11);
+        assert_eq!(preset.strength_pct, 38);
+        assert_eq!(preset.dex_base, 20);
+        assert_eq!(preset.dex_pct, 85);
+        assert_eq!(preset.constitution, 12);
+        assert_eq!(preset.charisma, 6);
+        assert_eq!(preset.masteries.defense, 3);
         assert_eq!(preset.weapon, "Short sword");
         assert_eq!(preset.weapon_material_tier, 5);
         assert_eq!(preset.offhand_weapon.as_deref(), Some("Short sword"));
         assert_eq!(preset.offhand_weapon_material_tier, 2);
+        assert_eq!(preset.armor, "Raurosi Leather?");
+        assert_eq!(preset.armor_material_tier, 3);
+        assert!(preset.maneuvers.fight_defensively);
+        assert_eq!(preset.maneuvers.fight_defensively_penalty, 8);
+        for proficiency in ["Short sword", "Dueling sword", "Throwing Knife"] {
+            assert!(
+                preset
+                    .proficiencies
+                    .iter()
+                    .any(|known| known == proficiency),
+                "{name} is missing {proficiency} proficiency"
+            );
+        }
     }
 }
 
@@ -6858,7 +6935,7 @@ fn fighter_presets_do_not_select_multiple_weapon_styles() {
 }
 
 #[test]
-fn volfango_perfect_two_weapon_preset_is_level_seven_and_combines_dualwield_modes() {
+fn volfango_perfect_two_weapon_preset_is_level_eight_and_combines_dualwield_modes() {
     let (weapon_catalog, armor_catalog, shield_catalog) =
         data::load_catalogs().expect("failed to load catalogs");
     let race_catalog = data::load_races("data/races.json").expect("failed to load races");
@@ -6886,7 +6963,7 @@ fn volfango_perfect_two_weapon_preset_is_level_seven_and_combines_dualwield_mode
         &talent_catalog,
     );
 
-    assert_eq!(preset.level, 7);
+    assert_eq!(preset.level, 8);
     for talent_id in [
         "two_weapon_fighting",
         "improved_two_weapon_fighting",

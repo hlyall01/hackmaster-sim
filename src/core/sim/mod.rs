@@ -6,7 +6,10 @@ mod modifiers;
 mod movement;
 mod types;
 
-pub use engine::{BulkSimResult, SimState, bulk_simulate, bulk_simulate_with_seed};
+pub use engine::{
+    BulkSimResult, DetailedSimStats, DetailedTeamStats, SimState, bulk_simulate,
+    bulk_simulate_with_seed,
+};
 pub use modifiers::{
     ModifierOpF32, ModifierOpI32, ModifierStack, StatIdF32, StatIdI32, TemporaryEffect,
     modifiers_for_magic_item,

@@ -2,18 +2,41 @@ use crate::core::rng::SimRng;
 use crate::core::rules::roll_damage_expr;
 use rand::RngCore;
 
-use super::combat::{AttackMode, resolve_attack, resolve_knock_aside};
+use super::combat::{
+    AttackMode, AttackOutcome, CounterAttackOutcome, resolve_attack, resolve_knock_aside,
+};
 use super::modifiers::{StatIdF32, StatIdI32};
 use super::movement::{max_range_for_weapon, range_modifier_for_weapon_with_scale};
 use super::types::{
-    AttackEvent, CalledShotDelayProfile, CombatEvent, CombatEventKind, Combatant, GridPos,
-    KnockAsideEvent, SimActor, SimConfig, WeaponSlot,
+    AttackEvent, CalledShotDelayProfile, CombatEvent, CombatEventKind, Combatant, DamageBreakdown,
+    GridPos, KnockAsideEvent, ShieldDamageBreakdown, SimActor, SimConfig, WeaponSlot,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 const CHARGE_MIN_DISTANCE_FT: f32 = 20.0;
 const SHIELD_STRIKE_SPEEDUP_SECONDS: f32 = 2.0;
 const SIX_PATHS_FOLLOWUP_SECONDS: f32 = 1.0;
+
+fn damage_prevented(
+    damage: Option<&DamageBreakdown>,
+    shield_damage: Option<&ShieldDamageBreakdown>,
+) -> (u32, u32) {
+    if let Some(damage) = damage {
+        let armor = damage
+            .raw_damage
+            .max(0)
+            .min(damage.effective_armor_dr.max(0)) as u32;
+        return (armor, 0);
+    }
+    if let Some(damage) = shield_damage {
+        let raw = damage.raw_damage.max(0);
+        let shield = raw.min(damage.shield_dr.max(0));
+        let after_shield = (raw - shield).max(0);
+        let armor = after_shield.min(damage.effective_armor_dr.max(0));
+        return (armor as u32, shield as u32);
+    }
+    (0, 0)
+}
 
 fn called_shot_delay_seconds(
     attacker: &Combatant,
@@ -54,9 +77,141 @@ pub struct SimState {
     pub first_attack_time: Option<u32>,
     pub trauma_first_exchange: bool,
     pub charges_started_within_20ft: u32,
+    attack_metrics: Vec<AttackMetricSample>,
     rng: SimRng,
     tick_accum: f32,
     hold_at_bay: HoldAtBayState,
+}
+
+#[derive(Clone, Debug)]
+struct AttackMetricSample {
+    time: u32,
+    attacker_idx: usize,
+    defender_idx: usize,
+    direct_hit: bool,
+    shield_block: bool,
+    hp_damage: u32,
+    critical: bool,
+    killing_blow: bool,
+    raw_damage: u32,
+    armor_prevented: u32,
+    shield_prevented: u32,
+    trauma_applied: bool,
+    shield_broken: bool,
+    shield_hits_survived_before_break: u32,
+}
+
+struct RecordedAttackMetrics {
+    attacker_idx: usize,
+    defender_idx: usize,
+    hp_damage: i32,
+    damage_rolled: Option<i32>,
+    damage_landed: Option<i32>,
+    highest_hit_bucket: Option<bool>,
+    instant_kill: bool,
+    shield_block: bool,
+    shield_broken: bool,
+    shield_damage: i32,
+    knockback_ft: f32,
+    attempted: bool,
+    direct_hit: bool,
+    critical: bool,
+    trauma_applied: bool,
+    defender_hp_after: i32,
+    armor_prevented: u32,
+    shield_prevented: u32,
+}
+
+impl RecordedAttackMetrics {
+    fn from_attack(event: &AttackOutcome) -> Self {
+        let (armor_prevented, shield_prevented) = damage_prevented(
+            event.damage_breakdown.as_ref(),
+            event.shield_damage_breakdown.as_ref(),
+        );
+        Self {
+            attacker_idx: event.attacker_idx,
+            defender_idx: event.defender_idx,
+            hp_damage: event.damage,
+            damage_rolled: event
+                .damage_breakdown
+                .as_ref()
+                .map(|breakdown| breakdown.raw_damage),
+            damage_landed: event
+                .damage_breakdown
+                .as_ref()
+                .map(|breakdown| (breakdown.raw_damage - breakdown.effective_armor_dr).max(0)),
+            highest_hit_bucket: match event.critical.as_ref() {
+                Some(crit) if crit.instant_kill => None,
+                Some(_) => Some(true),
+                None => Some(false),
+            },
+            instant_kill: event
+                .critical
+                .as_ref()
+                .map(|crit| crit.instant_kill)
+                .unwrap_or(false),
+            shield_block: event.shield_block,
+            shield_broken: event
+                .shield_damage_breakdown
+                .as_ref()
+                .map(|breakdown| breakdown.shield_broken)
+                .unwrap_or(false),
+            shield_damage: event.shield_damage,
+            knockback_ft: event.knockback_ft,
+            attempted: event.roll.attack_die > 0,
+            direct_hit: event.hit,
+            critical: event.critical.is_some(),
+            trauma_applied: event.trauma_applied,
+            defender_hp_after: event.defender_hp_after,
+            armor_prevented,
+            shield_prevented,
+        }
+    }
+
+    fn from_counter(event: &CounterAttackOutcome) -> Self {
+        let (armor_prevented, shield_prevented) = damage_prevented(
+            event.damage_breakdown.as_ref(),
+            event.shield_damage_breakdown.as_ref(),
+        );
+        Self {
+            attacker_idx: event.attacker_idx,
+            defender_idx: event.defender_idx,
+            hp_damage: event.damage,
+            damage_rolled: event
+                .damage_breakdown
+                .as_ref()
+                .map(|breakdown| breakdown.raw_damage),
+            damage_landed: event
+                .damage_breakdown
+                .as_ref()
+                .map(|breakdown| (breakdown.raw_damage - breakdown.effective_armor_dr).max(0)),
+            highest_hit_bucket: match event.critical.as_ref() {
+                Some(crit) if crit.instant_kill => None,
+                Some(_) => Some(true),
+                None => Some(false),
+            },
+            instant_kill: event
+                .critical
+                .as_ref()
+                .map(|crit| crit.instant_kill)
+                .unwrap_or(false),
+            shield_block: event.shield_block,
+            shield_broken: event
+                .shield_damage_breakdown
+                .as_ref()
+                .map(|breakdown| breakdown.shield_broken)
+                .unwrap_or(false),
+            shield_damage: event.shield_damage,
+            knockback_ft: event.knockback_ft,
+            attempted: event.roll.attack_die > 0,
+            direct_hit: event.hit,
+            critical: event.critical.is_some(),
+            trauma_applied: event.trauma_applied,
+            defender_hp_after: event.defender_hp_after,
+            armor_prevented,
+            shield_prevented,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -93,6 +248,7 @@ impl SimState {
             first_attack_time: None,
             trauma_first_exchange: false,
             charges_started_within_20ft: 0,
+            attack_metrics: Vec::new(),
             rng,
             tick_accum: 0.0,
             hold_at_bay: HoldAtBayState::default(),
@@ -108,6 +264,7 @@ impl SimState {
         self.first_attack_time = None;
         self.trauma_first_exchange = false;
         self.charges_started_within_20ft = 0;
+        self.attack_metrics.clear();
         for combatant in &mut self.combatants {
             combatant.reset_state();
         }
@@ -228,23 +385,54 @@ impl SimState {
         }
     }
 
-    fn record_attack_metrics(
-        &mut self,
-        attacker_idx: usize,
-        defender_idx: usize,
-        hp_damage: i32,
-        damage_rolled: Option<i32>,
-        damage_landed: Option<i32>,
-        highest_hit_bucket: Option<bool>,
-        instant_kill: bool,
-        shield_block: bool,
-        shield_broken: bool,
-        shield_damage: i32,
-        knockback_ft: f32,
-    ) {
+    fn record_attack_metrics(&mut self, metrics: RecordedAttackMetrics) {
+        let RecordedAttackMetrics {
+            attacker_idx,
+            defender_idx,
+            hp_damage,
+            damage_rolled,
+            damage_landed,
+            highest_hit_bucket,
+            instant_kill,
+            shield_block,
+            shield_broken,
+            shield_damage,
+            knockback_ft,
+            attempted,
+            direct_hit,
+            critical,
+            trauma_applied,
+            defender_hp_after,
+            armor_prevented,
+            shield_prevented,
+        } = metrics;
         let hp_damage_u32 = hp_damage.max(0) as u32;
         let shield_damage_u32 = shield_damage.max(0) as u32;
         let knockback = knockback_ft.max(0.0);
+
+        if attempted {
+            let shield_hits_survived_before_break = if shield_broken {
+                self.combatants[defender_idx].state.shield_blocks_taken
+            } else {
+                0
+            };
+            self.attack_metrics.push(AttackMetricSample {
+                time: self.elapsed_seconds,
+                attacker_idx,
+                defender_idx,
+                direct_hit,
+                shield_block,
+                hp_damage: hp_damage_u32,
+                critical,
+                killing_blow: defender_hp_after <= 0,
+                raw_damage: damage_rolled.unwrap_or(shield_damage.max(0)).max(0) as u32,
+                armor_prevented,
+                shield_prevented,
+                trauma_applied,
+                shield_broken,
+                shield_hits_survived_before_break,
+            });
+        }
 
         {
             let attacker = &mut self.combatants[attacker_idx].state;
@@ -320,6 +508,10 @@ impl SimState {
             combatant.state.knockback_applied_this_tick = false;
             combatant.state.tick_effects();
             if combatant.state.trauma_remaining_seconds > 0 {
+                combatant.state.total_trauma_seconds_suffered = combatant
+                    .state
+                    .total_trauma_seconds_suffered
+                    .saturating_add(1);
                 combatant.state.trauma_remaining_seconds -= 1;
             }
             if combatant.state.knockback_immobile_seconds > 0 {
@@ -1035,36 +1227,7 @@ impl SimState {
                 if event.shield_block {
                     self.apply_shield_strike_speedup(event.defender_idx, now);
                 }
-                self.record_attack_metrics(
-                    event.attacker_idx,
-                    event.defender_idx,
-                    event.damage,
-                    event
-                        .damage_breakdown
-                        .as_ref()
-                        .map(|breakdown| breakdown.raw_damage),
-                    event.damage_breakdown.as_ref().map(|breakdown| {
-                        (breakdown.raw_damage - breakdown.effective_armor_dr).max(0)
-                    }),
-                    match event.critical.as_ref() {
-                        Some(crit) if crit.instant_kill => None,
-                        Some(_) => Some(true),
-                        None => Some(false),
-                    },
-                    event
-                        .critical
-                        .as_ref()
-                        .map(|crit| crit.instant_kill)
-                        .unwrap_or(false),
-                    event.shield_block,
-                    event
-                        .shield_damage_breakdown
-                        .as_ref()
-                        .map(|breakdown| breakdown.shield_broken)
-                        .unwrap_or(false),
-                    event.shield_damage,
-                    event.knockback_ft,
-                );
+                self.record_attack_metrics(RecordedAttackMetrics::from_attack(&event));
                 self.apply_knockback(event.attacker_idx, event.defender_idx, event.knockback_ft);
                 if self.first_attack_time.is_none() {
                     self.first_attack_time = Some(self.elapsed_seconds);
@@ -1114,36 +1277,7 @@ impl SimState {
                     if counter.hit && !counter.is_ranged {
                         self.apply_six_paths_followup(counter.attacker_idx, now);
                     }
-                    self.record_attack_metrics(
-                        counter.attacker_idx,
-                        counter.defender_idx,
-                        counter.damage,
-                        counter
-                            .damage_breakdown
-                            .as_ref()
-                            .map(|breakdown| breakdown.raw_damage),
-                        counter.damage_breakdown.as_ref().map(|breakdown| {
-                            (breakdown.raw_damage - breakdown.effective_armor_dr).max(0)
-                        }),
-                        match counter.critical.as_ref() {
-                            Some(crit) if crit.instant_kill => None,
-                            Some(_) => Some(true),
-                            None => Some(false),
-                        },
-                        counter
-                            .critical
-                            .as_ref()
-                            .map(|crit| crit.instant_kill)
-                            .unwrap_or(false),
-                        counter.shield_block,
-                        counter
-                            .shield_damage_breakdown
-                            .as_ref()
-                            .map(|breakdown| breakdown.shield_broken)
-                            .unwrap_or(false),
-                        counter.shield_damage,
-                        counter.knockback_ft,
-                    );
+                    self.record_attack_metrics(RecordedAttackMetrics::from_counter(&counter));
                     self.apply_knockback(
                         counter.attacker_idx,
                         counter.defender_idx,
@@ -1335,36 +1469,7 @@ impl SimState {
                     if event.shield_block {
                         self.apply_shield_strike_speedup(event.defender_idx, now);
                     }
-                    self.record_attack_metrics(
-                        event.attacker_idx,
-                        event.defender_idx,
-                        event.damage,
-                        event
-                            .damage_breakdown
-                            .as_ref()
-                            .map(|breakdown| breakdown.raw_damage),
-                        event.damage_breakdown.as_ref().map(|breakdown| {
-                            (breakdown.raw_damage - breakdown.effective_armor_dr).max(0)
-                        }),
-                        match event.critical.as_ref() {
-                            Some(crit) if crit.instant_kill => None,
-                            Some(_) => Some(true),
-                            None => Some(false),
-                        },
-                        event
-                            .critical
-                            .as_ref()
-                            .map(|crit| crit.instant_kill)
-                            .unwrap_or(false),
-                        event.shield_block,
-                        event
-                            .shield_damage_breakdown
-                            .as_ref()
-                            .map(|breakdown| breakdown.shield_broken)
-                            .unwrap_or(false),
-                        event.shield_damage,
-                        event.knockback_ft,
-                    );
+                    self.record_attack_metrics(RecordedAttackMetrics::from_attack(&event));
                     self.apply_knockback(
                         event.attacker_idx,
                         event.defender_idx,
@@ -1418,36 +1523,7 @@ impl SimState {
                         if counter.hit && !counter.is_ranged {
                             self.apply_six_paths_followup(counter.attacker_idx, now);
                         }
-                        self.record_attack_metrics(
-                            counter.attacker_idx,
-                            counter.defender_idx,
-                            counter.damage,
-                            counter
-                                .damage_breakdown
-                                .as_ref()
-                                .map(|breakdown| breakdown.raw_damage),
-                            counter.damage_breakdown.as_ref().map(|breakdown| {
-                                (breakdown.raw_damage - breakdown.effective_armor_dr).max(0)
-                            }),
-                            match counter.critical.as_ref() {
-                                Some(crit) if crit.instant_kill => None,
-                                Some(_) => Some(true),
-                                None => Some(false),
-                            },
-                            counter
-                                .critical
-                                .as_ref()
-                                .map(|crit| crit.instant_kill)
-                                .unwrap_or(false),
-                            counter.shield_block,
-                            counter
-                                .shield_damage_breakdown
-                                .as_ref()
-                                .map(|breakdown| breakdown.shield_broken)
-                                .unwrap_or(false),
-                            counter.shield_damage,
-                            counter.knockback_ft,
-                        );
+                        self.record_attack_metrics(RecordedAttackMetrics::from_counter(&counter));
                         self.apply_knockback(
                             counter.attacker_idx,
                             counter.defender_idx,
@@ -1649,6 +1725,235 @@ fn max_range_cached(
 }
 
 #[derive(Clone, Debug, Default)]
+pub struct DetailedSimStats {
+    pub duration_p10: u32,
+    pub duration_p50: u32,
+    pub duration_p90: u32,
+    pub duration_p99: u32,
+    pub teams: Vec<DetailedTeamStats>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct DetailedTeamStats {
+    pub team_id: u8,
+    pub wins: u32,
+    pub win_rate: f32,
+    pub win_rate_ci_low: f32,
+    pub win_rate_ci_high: f32,
+    pub avg_winning_hp: Option<f32>,
+    pub median_winning_hp: Option<u32>,
+    pub avg_winning_duration_seconds: Option<f32>,
+    pub median_winning_duration_seconds: Option<u32>,
+    pub attack_attempts: u64,
+    pub direct_hits: u64,
+    pub shield_blocks: u64,
+    pub misses: u64,
+    pub hp_hits: u64,
+    pub critical_hits: u64,
+    pub kills: u64,
+    pub avg_attacks_per_fight: f32,
+    pub direct_hit_rate: f32,
+    pub contact_rate: f32,
+    pub shield_block_rate: f32,
+    pub hp_hit_rate: f32,
+    pub critical_rate_per_attack: f32,
+    pub critical_rate_per_direct_hit: f32,
+    pub avg_hp_damage_per_fight: f32,
+    pub combat_dps: f32,
+    pub hp_damage_per_attack: f32,
+    pub hp_damage_per_hp_hit: f32,
+    pub hp_damage_p50: u32,
+    pub hp_damage_p90: u32,
+    pub hp_damage_p99: u32,
+    pub avg_first_attack_seconds: Option<f32>,
+    pub avg_attack_interval_seconds: Option<f32>,
+    pub incoming_raw_damage_per_fight: f32,
+    pub armor_prevented_per_fight: f32,
+    pub shield_prevented_per_fight: f32,
+    pub hp_damage_taken_per_fight: f32,
+    pub damage_prevention_rate: f32,
+    pub fights_with_trauma_inflicted: u32,
+    pub trauma_events_inflicted: u64,
+    pub trauma_chance_per_fight: f32,
+    pub avg_trauma_downtime_seconds: f32,
+    pub shield_fights: u32,
+    pub fights_with_shield_break: u32,
+    pub shield_break_rate: Option<f32>,
+    pub avg_hits_shield_survived_before_break: Option<f32>,
+    pub median_hits_shield_survived_before_break: Option<u32>,
+    pub avg_shield_break_seconds: Option<f32>,
+    pub median_shield_break_seconds: Option<u32>,
+}
+
+#[derive(Default)]
+struct DetailedTeamAccumulator {
+    team_id: u8,
+    wins: u32,
+    attack_attempts: u64,
+    direct_hits: u64,
+    shield_blocks: u64,
+    hp_hits: u64,
+    critical_hits: u64,
+    kills: u64,
+    total_hp_damage: u64,
+    total_incoming_raw_damage: u64,
+    total_armor_prevented: u64,
+    total_shield_prevented: u64,
+    total_hp_damage_taken: u64,
+    first_attack_seconds_total: u64,
+    fights_with_attack: u32,
+    attack_interval_seconds_total: u64,
+    attack_intervals: u64,
+    fights_with_trauma_inflicted: u32,
+    trauma_events_inflicted: u64,
+    total_trauma_downtime_seconds: u64,
+    shield_fights: u32,
+    fights_with_shield_break: u32,
+    total_hits_shield_survived_before_break: u64,
+    shield_breaks: u64,
+    shield_hits_before_break_histogram: BTreeMap<u64, u64>,
+    shield_break_seconds_total: u64,
+    shield_break_time_histogram: BTreeMap<u64, u64>,
+    winning_hp_total: u64,
+    winning_hp_histogram: BTreeMap<u64, u64>,
+    winning_duration_seconds_total: u64,
+    winning_duration_seconds_histogram: BTreeMap<u64, u64>,
+    hp_damage_histogram: BTreeMap<u64, u64>,
+}
+
+fn add_histogram_sample(histogram: &mut BTreeMap<u64, u64>, value: u64) {
+    *histogram.entry(value).or_insert(0) += 1;
+}
+
+fn histogram_count(histogram: &BTreeMap<u64, u64>) -> u64 {
+    histogram.values().copied().sum()
+}
+
+fn histogram_percentile(histogram: &BTreeMap<u64, u64>, percentile: f64) -> u64 {
+    let count = histogram_count(histogram);
+    if count == 0 {
+        return 0;
+    }
+    let target = ((count as f64 * percentile.clamp(0.0, 1.0)).ceil() as u64).max(1);
+    let mut seen = 0u64;
+    for (value, occurrences) in histogram {
+        seen = seen.saturating_add(*occurrences);
+        if seen >= target {
+            return *value;
+        }
+    }
+    histogram.keys().next_back().copied().unwrap_or(0)
+}
+
+fn rate(numerator: u64, denominator: u64) -> f32 {
+    if denominator == 0 {
+        0.0
+    } else {
+        numerator as f32 / denominator as f32
+    }
+}
+
+fn wilson_interval(successes: u32, trials: u32) -> (f32, f32) {
+    if trials == 0 {
+        return (0.0, 0.0);
+    }
+    let n = f64::from(trials);
+    let p = f64::from(successes) / n;
+    let z = 1.96f64;
+    let z2 = z * z;
+    let denominator = 1.0 + z2 / n;
+    let center = (p + z2 / (2.0 * n)) / denominator;
+    let margin = z * ((p * (1.0 - p) / n + z2 / (4.0 * n * n)).sqrt()) / denominator;
+    (
+        (center - margin).max(0.0) as f32,
+        (center + margin).min(1.0) as f32,
+    )
+}
+
+impl DetailedTeamAccumulator {
+    fn finish(self, runs: u32, total_seconds: u64) -> DetailedTeamStats {
+        let attempts = self.attack_attempts;
+        let misses = attempts.saturating_sub(self.direct_hits + self.shield_blocks);
+        let (win_rate_ci_low, win_rate_ci_high) = wilson_interval(self.wins, runs);
+        let winning_hp_count = histogram_count(&self.winning_hp_histogram);
+        let winning_duration_count = histogram_count(&self.winning_duration_seconds_histogram);
+        let prevented = self.total_armor_prevented + self.total_shield_prevented;
+        DetailedTeamStats {
+            team_id: self.team_id,
+            wins: self.wins,
+            win_rate: rate(u64::from(self.wins), u64::from(runs)),
+            win_rate_ci_low,
+            win_rate_ci_high,
+            avg_winning_hp: (winning_hp_count > 0)
+                .then_some(self.winning_hp_total as f32 / winning_hp_count as f32),
+            median_winning_hp: (winning_hp_count > 0)
+                .then_some(histogram_percentile(&self.winning_hp_histogram, 0.50) as u32),
+            avg_winning_duration_seconds: (winning_duration_count > 0).then_some(
+                self.winning_duration_seconds_total as f32 / winning_duration_count as f32,
+            ),
+            median_winning_duration_seconds: (winning_duration_count > 0).then_some(
+                histogram_percentile(&self.winning_duration_seconds_histogram, 0.50) as u32,
+            ),
+            attack_attempts: attempts,
+            direct_hits: self.direct_hits,
+            shield_blocks: self.shield_blocks,
+            misses,
+            hp_hits: self.hp_hits,
+            critical_hits: self.critical_hits,
+            kills: self.kills,
+            avg_attacks_per_fight: rate(attempts, u64::from(runs)),
+            direct_hit_rate: rate(self.direct_hits, attempts),
+            contact_rate: rate(self.direct_hits + self.shield_blocks, attempts),
+            shield_block_rate: rate(self.shield_blocks, attempts),
+            hp_hit_rate: rate(self.hp_hits, attempts),
+            critical_rate_per_attack: rate(self.critical_hits, attempts),
+            critical_rate_per_direct_hit: rate(self.critical_hits, self.direct_hits),
+            avg_hp_damage_per_fight: rate(self.total_hp_damage, u64::from(runs)),
+            combat_dps: rate(self.total_hp_damage, total_seconds),
+            hp_damage_per_attack: rate(self.total_hp_damage, attempts),
+            hp_damage_per_hp_hit: rate(self.total_hp_damage, self.hp_hits),
+            hp_damage_p50: histogram_percentile(&self.hp_damage_histogram, 0.50) as u32,
+            hp_damage_p90: histogram_percentile(&self.hp_damage_histogram, 0.90) as u32,
+            hp_damage_p99: histogram_percentile(&self.hp_damage_histogram, 0.99) as u32,
+            avg_first_attack_seconds: (self.fights_with_attack > 0)
+                .then_some(self.first_attack_seconds_total as f32 / self.fights_with_attack as f32),
+            avg_attack_interval_seconds: (self.attack_intervals > 0).then_some(
+                self.attack_interval_seconds_total as f32 / self.attack_intervals as f32,
+            ),
+            incoming_raw_damage_per_fight: rate(self.total_incoming_raw_damage, u64::from(runs)),
+            armor_prevented_per_fight: rate(self.total_armor_prevented, u64::from(runs)),
+            shield_prevented_per_fight: rate(self.total_shield_prevented, u64::from(runs)),
+            hp_damage_taken_per_fight: rate(self.total_hp_damage_taken, u64::from(runs)),
+            damage_prevention_rate: rate(prevented, self.total_incoming_raw_damage),
+            fights_with_trauma_inflicted: self.fights_with_trauma_inflicted,
+            trauma_events_inflicted: self.trauma_events_inflicted,
+            trauma_chance_per_fight: rate(
+                u64::from(self.fights_with_trauma_inflicted),
+                u64::from(runs),
+            ),
+            avg_trauma_downtime_seconds: rate(self.total_trauma_downtime_seconds, u64::from(runs)),
+            shield_fights: self.shield_fights,
+            fights_with_shield_break: self.fights_with_shield_break,
+            shield_break_rate: (self.shield_fights > 0).then_some(rate(
+                u64::from(self.fights_with_shield_break),
+                u64::from(self.shield_fights),
+            )),
+            avg_hits_shield_survived_before_break: (self.shield_breaks > 0).then_some(rate(
+                self.total_hits_shield_survived_before_break,
+                self.shield_breaks,
+            )),
+            median_hits_shield_survived_before_break: (self.shield_breaks > 0).then_some(
+                histogram_percentile(&self.shield_hits_before_break_histogram, 0.50) as u32,
+            ),
+            avg_shield_break_seconds: (self.shield_breaks > 0)
+                .then_some(rate(self.shield_break_seconds_total, self.shield_breaks)),
+            median_shield_break_seconds: (self.shield_breaks > 0)
+                .then_some(histogram_percentile(&self.shield_break_time_histogram, 0.50) as u32),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
 #[allow(dead_code)]
 pub struct BulkSimResult {
     pub wins: Vec<u32>,
@@ -1679,6 +1984,7 @@ pub struct BulkSimResult {
     pub avg_remaining_hp_by_team: Vec<f32>,
     pub max_total_knockback_one_side_ft: f32,
     pub avg_max_knockback_one_side_ft: f32,
+    pub detailed: DetailedSimStats,
 }
 
 #[allow(dead_code)]
@@ -1715,6 +2021,14 @@ pub fn bulk_simulate_with_seed(
     for (idx, team_id) in team_ids.iter().enumerate() {
         team_index.insert(*team_id, idx);
     }
+    let team_has_shield: Vec<bool> = team_ids
+        .iter()
+        .map(|team_id| {
+            combatants.iter().any(|combatant| {
+                combatant.team_id == *team_id && combatant.sheet.defense.shield_name.is_some()
+            })
+        })
+        .collect();
     let mut sim = SimState::with_rng(config, SimRng::from_seed(seed));
     sim.log_events = false;
     sim.reset_with_combatants(combatants);
@@ -1746,15 +2060,27 @@ pub fn bulk_simulate_with_seed(
     let mut shield_breaks = 0u32;
     let mut total_hits_shield_survived = 0u64;
     let mut total_seconds = 0u64;
+    let mut duration_histogram = BTreeMap::new();
+    let mut detailed_accumulators: Vec<DetailedTeamAccumulator> = team_ids
+        .iter()
+        .enumerate()
+        .map(|(idx, team_id)| DetailedTeamAccumulator {
+            team_id: *team_id,
+            shield_fights: if team_has_shield[idx] { runs } else { 0 },
+            ..DetailedTeamAccumulator::default()
+        })
+        .collect();
     for _ in 0..runs {
         sim.reset_preserve_rng();
         while !sim.done && sim.elapsed_seconds < max_seconds {
             sim.update(1.0);
         }
         let duration = sim.elapsed_seconds;
+        add_histogram_sample(&mut duration_histogram, u64::from(duration));
         total_seconds += duration as u64;
         shortest_duration = shortest_duration.min(duration);
         longest_duration = longest_duration.max(duration);
+        let mut winning_team_idx = None;
         if sim.done {
             let mut alive_teams = HashSet::new();
             for combatant in &sim.combatants {
@@ -1766,6 +2092,8 @@ pub fn bulk_simulate_with_seed(
                 if let Some(team_id) = alive_teams.iter().next() {
                     if let Some(&idx) = team_index.get(team_id) {
                         wins[idx] += 1;
+                        detailed_accumulators[idx].wins += 1;
+                        winning_team_idx = Some(idx);
                     } else {
                         ties += 1;
                     }
@@ -1809,7 +2137,115 @@ pub fn bulk_simulate_with_seed(
         {
             fights_with_charge_within_20ft += 1;
         }
+        let mut first_attack_by_team = vec![None::<u32>; team_ids.len()];
+        let mut last_attack_by_combatant = vec![None::<u32>; sim.combatants.len()];
+        let mut trauma_inflicted_by_team = vec![false; team_ids.len()];
+        for sample in &sim.attack_metrics {
+            let Some(attacker) = sim.combatants.get(sample.attacker_idx) else {
+                continue;
+            };
+            let Some(defender) = sim.combatants.get(sample.defender_idx) else {
+                continue;
+            };
+            let Some(&attacker_team_idx) = team_index.get(&attacker.team_id) else {
+                continue;
+            };
+            let Some(&defender_team_idx) = team_index.get(&defender.team_id) else {
+                continue;
+            };
+            let attacker_stats = &mut detailed_accumulators[attacker_team_idx];
+            attacker_stats.attack_attempts = attacker_stats.attack_attempts.saturating_add(1);
+            if sample.direct_hit {
+                attacker_stats.direct_hits = attacker_stats.direct_hits.saturating_add(1);
+            }
+            if sample.shield_block {
+                attacker_stats.shield_blocks = attacker_stats.shield_blocks.saturating_add(1);
+            }
+            if sample.hp_damage > 0 {
+                attacker_stats.hp_hits = attacker_stats.hp_hits.saturating_add(1);
+                add_histogram_sample(
+                    &mut attacker_stats.hp_damage_histogram,
+                    u64::from(sample.hp_damage),
+                );
+            }
+            if sample.critical {
+                attacker_stats.critical_hits = attacker_stats.critical_hits.saturating_add(1);
+            }
+            if sample.killing_blow {
+                attacker_stats.kills = attacker_stats.kills.saturating_add(1);
+            }
+            attacker_stats.total_hp_damage = attacker_stats
+                .total_hp_damage
+                .saturating_add(u64::from(sample.hp_damage));
+            if sample.trauma_applied {
+                attacker_stats.trauma_events_inflicted =
+                    attacker_stats.trauma_events_inflicted.saturating_add(1);
+                trauma_inflicted_by_team[attacker_team_idx] = true;
+            }
+            first_attack_by_team[attacker_team_idx] = Some(
+                first_attack_by_team[attacker_team_idx]
+                    .map_or(sample.time, |current| current.min(sample.time)),
+            );
+            if let Some(last_time) = last_attack_by_combatant[sample.attacker_idx] {
+                attacker_stats.attack_interval_seconds_total = attacker_stats
+                    .attack_interval_seconds_total
+                    .saturating_add(u64::from(sample.time.saturating_sub(last_time)));
+                attacker_stats.attack_intervals = attacker_stats.attack_intervals.saturating_add(1);
+            }
+            last_attack_by_combatant[sample.attacker_idx] = Some(sample.time);
+
+            let defender_stats = &mut detailed_accumulators[defender_team_idx];
+            defender_stats.total_incoming_raw_damage = defender_stats
+                .total_incoming_raw_damage
+                .saturating_add(u64::from(sample.raw_damage));
+            defender_stats.total_armor_prevented = defender_stats
+                .total_armor_prevented
+                .saturating_add(u64::from(sample.armor_prevented));
+            defender_stats.total_shield_prevented = defender_stats
+                .total_shield_prevented
+                .saturating_add(u64::from(sample.shield_prevented));
+            defender_stats.total_hp_damage_taken = defender_stats
+                .total_hp_damage_taken
+                .saturating_add(u64::from(sample.hp_damage));
+            if sample.shield_broken {
+                defender_stats.shield_breaks = defender_stats.shield_breaks.saturating_add(1);
+                defender_stats.total_hits_shield_survived_before_break = defender_stats
+                    .total_hits_shield_survived_before_break
+                    .saturating_add(u64::from(sample.shield_hits_survived_before_break));
+                add_histogram_sample(
+                    &mut defender_stats.shield_hits_before_break_histogram,
+                    u64::from(sample.shield_hits_survived_before_break),
+                );
+                defender_stats.shield_break_seconds_total = defender_stats
+                    .shield_break_seconds_total
+                    .saturating_add(u64::from(sample.time));
+                add_histogram_sample(
+                    &mut defender_stats.shield_break_time_histogram,
+                    u64::from(sample.time),
+                );
+            }
+        }
+        for team_idx in 0..team_ids.len() {
+            if let Some(first_attack) = first_attack_by_team[team_idx] {
+                detailed_accumulators[team_idx].first_attack_seconds_total = detailed_accumulators
+                    [team_idx]
+                    .first_attack_seconds_total
+                    .saturating_add(u64::from(first_attack));
+                detailed_accumulators[team_idx].fights_with_attack = detailed_accumulators
+                    [team_idx]
+                    .fights_with_attack
+                    .saturating_add(1);
+            }
+            if trauma_inflicted_by_team[team_idx] {
+                detailed_accumulators[team_idx].fights_with_trauma_inflicted =
+                    detailed_accumulators[team_idx]
+                        .fights_with_trauma_inflicted
+                        .saturating_add(1);
+            }
+        }
         let mut fight_max_knockback_side = 0.0f32;
+        let mut remaining_hp_by_team = vec![0u64; team_ids.len()];
+        let mut shield_broke_by_team = vec![false; team_ids.len()];
         for combatant in &sim.combatants {
             let Some(&team_idx) = team_index.get(&combatant.team_id) else {
                 continue;
@@ -1841,7 +2277,42 @@ pub fn bulk_simulate_with_seed(
                 .saturating_add(u64::from(state.damage_rolls_dealt));
             total_remaining_hp_by_team[team_idx] =
                 total_remaining_hp_by_team[team_idx].saturating_add(state.hp.max(0) as u64);
+            remaining_hp_by_team[team_idx] =
+                remaining_hp_by_team[team_idx].saturating_add(state.hp.max(0) as u64);
+            detailed_accumulators[team_idx].total_trauma_downtime_seconds = detailed_accumulators
+                [team_idx]
+                .total_trauma_downtime_seconds
+                .saturating_add(u64::from(state.total_trauma_seconds_suffered));
+            if state.total_shield_breaks_taken > 0 {
+                shield_broke_by_team[team_idx] = true;
+            }
             fight_max_knockback_side = fight_max_knockback_side.max(state.total_knockback_taken_ft);
+        }
+        for (team_idx, shield_broke) in shield_broke_by_team.into_iter().enumerate() {
+            if shield_broke {
+                detailed_accumulators[team_idx].fights_with_shield_break = detailed_accumulators
+                    [team_idx]
+                    .fights_with_shield_break
+                    .saturating_add(1);
+            }
+        }
+        if let Some(team_idx) = winning_team_idx {
+            let remaining_hp = remaining_hp_by_team[team_idx];
+            detailed_accumulators[team_idx].winning_hp_total = detailed_accumulators[team_idx]
+                .winning_hp_total
+                .saturating_add(remaining_hp);
+            add_histogram_sample(
+                &mut detailed_accumulators[team_idx].winning_hp_histogram,
+                remaining_hp,
+            );
+            detailed_accumulators[team_idx].winning_duration_seconds_total = detailed_accumulators
+                [team_idx]
+                .winning_duration_seconds_total
+                .saturating_add(u64::from(duration));
+            add_histogram_sample(
+                &mut detailed_accumulators[team_idx].winning_duration_seconds_histogram,
+                u64::from(duration),
+            );
         }
         max_total_knockback_one_side_ft =
             max_total_knockback_one_side_ft.max(fight_max_knockback_side);
@@ -1888,6 +2359,16 @@ pub fn bulk_simulate_with_seed(
     } else {
         0.0
     };
+    let detailed = DetailedSimStats {
+        duration_p10: histogram_percentile(&duration_histogram, 0.10) as u32,
+        duration_p50: histogram_percentile(&duration_histogram, 0.50) as u32,
+        duration_p90: histogram_percentile(&duration_histogram, 0.90) as u32,
+        duration_p99: histogram_percentile(&duration_histogram, 0.99) as u32,
+        teams: detailed_accumulators
+            .into_iter()
+            .map(|accumulator| accumulator.finish(runs, total_seconds))
+            .collect(),
+    };
     BulkSimResult {
         wins,
         ties,
@@ -1921,6 +2402,7 @@ pub fn bulk_simulate_with_seed(
         avg_remaining_hp_by_team,
         max_total_knockback_one_side_ft,
         avg_max_knockback_one_side_ft: total_max_knockback_one_side_ft / runs as f32,
+        detailed,
     }
 }
 

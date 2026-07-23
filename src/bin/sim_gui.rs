@@ -43,6 +43,7 @@ enum WeaponIcon {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MainTab {
     Simulator,
+    DetailedStats,
     Tools,
 }
 
@@ -50,7 +51,23 @@ impl MainTab {
     fn label(self) -> &'static str {
         match self {
             MainTab::Simulator => "Simulator",
+            MainTab::DetailedStats => "Detailed Stats",
             MainTab::Tools => "Tools",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ToolTab {
+    WoundHealing,
+    EssenceWounds,
+}
+
+impl ToolTab {
+    fn label(self) -> &'static str {
+        match self {
+            ToolTab::WoundHealing => "Wound Healing",
+            ToolTab::EssenceWounds => "Essence Wounds",
         }
     }
 }
@@ -132,6 +149,7 @@ struct SimGuiApp {
     last_screen_size: egui::Vec2,
     bulk_runs: u32,
     bulk_seed: u64,
+    bulk_last_seed: Option<u64>,
     bulk_result: Option<BulkSimResult>,
     bulk_sim_duration: Option<std::time::Duration>,
     dps_attacker_idx: usize,
@@ -142,11 +160,15 @@ struct SimGuiApp {
     dps_result: Option<DpsTestResult>,
     dps_sim_duration: Option<std::time::Duration>,
     active_tab: MainTab,
+    active_tool_tab: ToolTab,
     wound_tool_damage: u32,
     wound_tool_days_until_point_healed: f32,
     wound_tool_days: u32,
     wound_tool_tended: bool,
     wound_tool_fast_healer: bool,
+    essence_tool_maximum: u32,
+    essence_tool_starting: u32,
+    essence_tool_change: i64,
     damage_plot_iterations: [String; 2],
     damage_roll_plots: [Option<DamageRollPlotData>; 2],
 }
@@ -258,6 +280,7 @@ impl SimGuiApp {
             last_screen_size: egui::vec2(0.0, 0.0),
             bulk_runs: 1000,
             bulk_seed: 1,
+            bulk_last_seed: None,
             bulk_result: None,
             bulk_sim_duration: None,
             dps_attacker_idx: 0,
@@ -268,11 +291,15 @@ impl SimGuiApp {
             dps_result: None,
             dps_sim_duration: None,
             active_tab: MainTab::Simulator,
+            active_tool_tab: ToolTab::WoundHealing,
             wound_tool_damage: 7,
             wound_tool_days_until_point_healed: required_healing_steps(7, false) as f32 / 4.0,
             wound_tool_days: 1,
             wound_tool_tended: true,
             wound_tool_fast_healer: false,
+            essence_tool_maximum: 1000,
+            essence_tool_starting: 500,
+            essence_tool_change: 0,
             damage_plot_iterations: ["10000".to_string(), "10000".to_string()],
             damage_roll_plots: [None, None],
         };
@@ -336,6 +363,7 @@ impl SimGuiApp {
             self.sim.config.stop_distance,
         );
         let seed = self.bulk_seed;
+        self.bulk_last_seed = Some(seed);
         self.bulk_seed = self.bulk_seed.wrapping_add(1).max(1);
         let start = Instant::now();
         let result = bulk_simulate_with_seed(
@@ -1051,6 +1079,11 @@ impl eframe::App for SimGuiApp {
                     MainTab::Simulator,
                     MainTab::Simulator.label(),
                 );
+                ui.selectable_value(
+                    &mut self.active_tab,
+                    MainTab::DetailedStats,
+                    MainTab::DetailedStats.label(),
+                );
                 ui.selectable_value(&mut self.active_tab, MainTab::Tools, MainTab::Tools.label());
                 if self.active_tab == MainTab::Simulator {
                     ui.separator();
@@ -1098,13 +1131,39 @@ impl eframe::App for SimGuiApp {
             egui::CentralPanel::default().show(ctx, |ui| {
                 render_tools_tab(
                     ui,
+                    &mut self.active_tool_tab,
                     &mut self.wound_tool_damage,
                     &mut self.wound_tool_days_until_point_healed,
                     &mut self.wound_tool_days,
                     &mut self.wound_tool_tended,
                     &mut self.wound_tool_fast_healer,
+                    &mut self.essence_tool_maximum,
+                    &mut self.essence_tool_starting,
+                    &mut self.essence_tool_change,
                 );
             });
+            return;
+        }
+
+        if self.active_tab == MainTab::DetailedStats {
+            let mut run_bulk = false;
+            egui::CentralPanel::default().show(ctx, |ui| {
+                render_detailed_stats_tab(
+                    ui,
+                    &self.players,
+                    self.sim.config.start_distance,
+                    &mut self.bulk_runs,
+                    &mut self.bulk_seed,
+                    self.bulk_last_seed,
+                    &self.bulk_result,
+                    self.bulk_sim_duration,
+                    &mut run_bulk,
+                );
+            });
+            if run_bulk {
+                self.running = false;
+                self.run_bulk_sim();
+            }
             return;
         }
 
@@ -1466,23 +1525,342 @@ fn render_player_editor_tabs(ui: &mut egui::Ui, id_prefix: &str, active_tab: &mu
 
 fn render_tools_tab(
     ui: &mut egui::Ui,
+    active_tool_tab: &mut ToolTab,
     wound_damage: &mut u32,
     days_until_point_healed: &mut f32,
     days: &mut u32,
     tended: &mut bool,
     fast_healer: &mut bool,
+    maximum_essence: &mut u32,
+    starting_essence: &mut u32,
+    essence_change: &mut i64,
 ) {
     ui.heading("Tools");
+    ui.horizontal(|ui| {
+        ui.selectable_value(
+            active_tool_tab,
+            ToolTab::WoundHealing,
+            ToolTab::WoundHealing.label(),
+        );
+        ui.selectable_value(
+            active_tool_tab,
+            ToolTab::EssenceWounds,
+            ToolTab::EssenceWounds.label(),
+        );
+    });
     ui.separator();
-    ui.heading("Wound Calculator");
-    render_wound_calculator(
-        ui,
-        wound_damage,
-        days_until_point_healed,
-        days,
-        tended,
-        fast_healer,
+    match *active_tool_tab {
+        ToolTab::WoundHealing => {
+            ui.heading("Wound Calculator");
+            render_wound_calculator(
+                ui,
+                wound_damage,
+                days_until_point_healed,
+                days,
+                tended,
+                fast_healer,
+            );
+        }
+        ToolTab::EssenceWounds => {
+            ui.heading("Essence Wound Calculator");
+            render_essence_wound_calculator(
+                ui,
+                maximum_essence,
+                starting_essence,
+                essence_change,
+            );
+        }
+    }
+}
+
+fn render_detailed_stats_tab(
+    ui: &mut egui::Ui,
+    players: &[PlayerConfig; 2],
+    start_distance: f32,
+    bulk_runs: &mut u32,
+    bulk_seed: &mut u64,
+    bulk_last_seed: Option<u64>,
+    bulk_result: &Option<BulkSimResult>,
+    bulk_sim_duration: Option<std::time::Duration>,
+    run_bulk: &mut bool,
+) {
+    ui.heading("Detailed simulation statistics");
+    ui.horizontal(|ui| {
+        ui.label("Runs");
+        ui.add(
+            egui::DragValue::new(bulk_runs)
+                .clamp_range(1..=u32::MAX)
+                .speed(100.0),
+        );
+        ui.label("Seed");
+        ui.add(egui::DragValue::new(bulk_seed).clamp_range(1..=u64::MAX));
+        if ui.button("Run detailed simulation").clicked() {
+            *run_bulk = true;
+        }
+        ui.separator();
+        ui.label(format!("Start distance: {start_distance:.0} ft"));
+    });
+    ui.small(
+        "The seed advances after each run. Enter an earlier seed to reproduce that exact batch.",
     );
+    ui.separator();
+
+    let Some(result) = bulk_result else {
+        ui.label("No detailed result yet.");
+        ui.label("Run the simulation to generate outcome, accuracy, damage, durability, trauma, and shield statistics.");
+        return;
+    };
+
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        let total_runs = result.wins.iter().copied().sum::<u32>() + result.ties;
+        ui.horizontal_wrapped(|ui| {
+            ui.strong(format!("{total_runs} fights"));
+            if let Some(seed) = bulk_last_seed {
+                ui.label(format!("Seed {seed}"));
+            }
+            if let Some(duration) = bulk_sim_duration {
+                ui.label(format!("Computed in {:.2}s", duration.as_secs_f64()));
+            }
+            if result.ties > 0 {
+                ui.label(format!(
+                    "Ties/timeouts: {} ({:.1}%)",
+                    result.ties,
+                    percent(u64::from(result.ties), u64::from(total_runs))
+                ));
+            }
+        });
+        ui.label(format!(
+            "Fight duration — average {:.1}s | p10 {}s | median {}s | p90 {}s | p99 {}s",
+            result.avg_duration,
+            result.detailed.duration_p10,
+            result.detailed.duration_p50,
+            result.detailed.duration_p90,
+            result.detailed.duration_p99,
+        ));
+        ui.small("Percentiles are more stable comparison points than shortest/longest-fight extremes.");
+        ui.separator();
+
+        ui.columns(2, |columns| {
+            for idx in 0..2 {
+                let ui = &mut columns[idx];
+                ui.heading(players[idx].name.as_str());
+                if let Some(stats) = result.detailed.teams.get(idx) {
+                    render_detailed_team_stats(ui, stats, total_runs);
+                } else {
+                    ui.label("No team statistics available.");
+                }
+            }
+        });
+
+        ui.separator();
+        egui::CollapsingHeader::new("Rare-event and movement diagnostics")
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.label(format!(
+                    "Fights with trauma on first exchange: {} ({:.1}%)",
+                    result.fights_with_trauma_first_exchange,
+                    percent(
+                        u64::from(result.fights_with_trauma_first_exchange),
+                        u64::from(total_runs),
+                    )
+                ));
+                ui.label(format!(
+                    "Fights with 2+ charges: {} ({:.1}%)",
+                    result.fights_with_second_charge,
+                    percent(
+                        u64::from(result.fights_with_second_charge),
+                        u64::from(total_runs),
+                    )
+                ));
+                ui.label(format!(
+                    "Fights with a charge begun inside 20 ft: {} ({:.1}%)",
+                    result.fights_with_charge_within_20ft,
+                    percent(
+                        u64::from(result.fights_with_charge_within_20ft),
+                        u64::from(total_runs),
+                    )
+                ));
+                ui.label(format!(
+                    "Fights with 20+ ft knockback: {} ({:.1}%)",
+                    result.fights_with_knockback_20ft,
+                    percent(
+                        u64::from(result.fights_with_knockback_20ft),
+                        u64::from(total_runs),
+                    )
+                ));
+                ui.label(format!(
+                    "Average maximum one-side knockback: {:.1} ft | observed maximum: {:.1} ft",
+                    result.avg_max_knockback_one_side_ft,
+                    result.max_total_knockback_one_side_ft,
+                ));
+                ui.label(format!("Instant-kill criticals: {}", result.instakills));
+            });
+
+        ui.separator();
+        ui.small("Definitions: direct hits beat the defence roll; shield blocks are attacks caught by the shield window; HP hits are attacks that remove at least 1 HP through either branch. Combat DPS divides total HP damage by total fight time, including closing time.");
+    });
+}
+
+fn render_detailed_team_stats(ui: &mut egui::Ui, stats: &sim::DetailedTeamStats, total_runs: u32) {
+    ui.strong("Outcome");
+    ui.label(format!(
+        "Wins: {} / {} ({:.1}%)",
+        stats.wins,
+        total_runs,
+        stats.win_rate * 100.0,
+    ));
+    ui.label(format!(
+        "95% confidence interval: {:.1}% – {:.1}%",
+        stats.win_rate_ci_low * 100.0,
+        stats.win_rate_ci_high * 100.0,
+    ));
+    match (stats.avg_winning_hp, stats.median_winning_hp) {
+        (Some(average), Some(median)) => {
+            ui.label(format!(
+                "Winning HP: average {average:.1} | median {median}"
+            ));
+        }
+        _ => {
+            ui.label("Winning HP: n/a (no wins)");
+        }
+    }
+    match (
+        stats.avg_winning_duration_seconds,
+        stats.median_winning_duration_seconds,
+    ) {
+        (Some(average), Some(median)) => {
+            ui.label(format!(
+                "Winning duration: average {average:.1}s | median {median}s"
+            ));
+        }
+        _ => {
+            ui.label("Winning duration: n/a (no wins)");
+        }
+    }
+
+    ui.add_space(8.0);
+    ui.strong("Offensive funnel");
+    ui.label(format!(
+        "Attacks: {} ({:.2} / fight)",
+        stats.attack_attempts, stats.avg_attacks_per_fight,
+    ));
+    ui.label(format!(
+        "Defence beaten: {} ({:.1}%)",
+        stats.direct_hits,
+        stats.direct_hit_rate * 100.0,
+    ));
+    ui.label(format!(
+        "Shield blocks: {} ({:.1}%)",
+        stats.shield_blocks,
+        stats.shield_block_rate * 100.0,
+    ));
+    ui.label(format!(
+        "Contact: {:.1}% | clean misses: {}",
+        stats.contact_rate * 100.0,
+        stats.misses,
+    ));
+    ui.label(format!(
+        "HP-damaging hits: {} ({:.1}% of attacks)",
+        stats.hp_hits,
+        stats.hp_hit_rate * 100.0,
+    ));
+    ui.label(format!(
+        "Criticals: {} ({:.2}% / attack, {:.2}% / direct hit)",
+        stats.critical_hits,
+        stats.critical_rate_per_attack * 100.0,
+        stats.critical_rate_per_direct_hit * 100.0,
+    ));
+    ui.label(format!("Killing blows: {}", stats.kills));
+
+    ui.add_space(8.0);
+    ui.strong("Damage output");
+    ui.label(format!(
+        "HP damage: {:.2} / fight | combat DPS: {:.3}",
+        stats.avg_hp_damage_per_fight, stats.combat_dps,
+    ));
+    ui.label(format!(
+        "HP damage: {:.2} / attack | {:.2} / damaging hit",
+        stats.hp_damage_per_attack, stats.hp_damage_per_hp_hit,
+    ));
+    ui.label(format!(
+        "Damaging-hit distribution: median {} | p90 {} | p99 {}",
+        stats.hp_damage_p50, stats.hp_damage_p90, stats.hp_damage_p99,
+    ));
+
+    ui.add_space(8.0);
+    ui.strong("Timing and control");
+    ui.label(format!(
+        "First attack: {}",
+        optional_seconds(stats.avg_first_attack_seconds),
+    ));
+    ui.label(format!(
+        "Attack interval: {}",
+        optional_seconds(stats.avg_attack_interval_seconds),
+    ));
+    ui.label(format!(
+        "Trauma inflicted: {} fights ({:.1}%), {} events",
+        stats.fights_with_trauma_inflicted,
+        stats.trauma_chance_per_fight * 100.0,
+        stats.trauma_events_inflicted,
+    ));
+    ui.label(format!(
+        "Trauma downtime suffered: {:.2}s / fight",
+        stats.avg_trauma_downtime_seconds,
+    ));
+
+    ui.add_space(8.0);
+    ui.strong("Durability pipeline (per fight)");
+    ui.label(format!(
+        "Incoming raw {:.2} → armour prevented {:.2} → shield prevented {:.2} → HP lost {:.2}",
+        stats.incoming_raw_damage_per_fight,
+        stats.armor_prevented_per_fight,
+        stats.shield_prevented_per_fight,
+        stats.hp_damage_taken_per_fight,
+    ));
+    ui.label(format!(
+        "Raw damage prevented: {:.1}%",
+        stats.damage_prevention_rate * 100.0,
+    ));
+    if let Some(break_rate) = stats.shield_break_rate {
+        ui.label(format!(
+            "Shield broke: {} / {} fights ({:.1}%)",
+            stats.fights_with_shield_break,
+            stats.shield_fights,
+            break_rate * 100.0,
+        ));
+        if let (Some(average_hits), Some(median_hits)) = (
+            stats.avg_hits_shield_survived_before_break,
+            stats.median_hits_shield_survived_before_break,
+        ) {
+            ui.label(format!(
+                "Hits survived before break: average {average_hits:.2} | median {median_hits}"
+            ));
+        }
+        if let (Some(average_seconds), Some(median_seconds)) = (
+            stats.avg_shield_break_seconds,
+            stats.median_shield_break_seconds,
+        ) {
+            ui.label(format!(
+                "Time until break: average {average_seconds:.2}s | median {median_seconds}s"
+            ));
+        }
+    } else {
+        ui.label("Shield break chance: n/a (no shield equipped)");
+    }
+}
+
+fn percent(numerator: u64, denominator: u64) -> f32 {
+    if denominator == 0 {
+        0.0
+    } else {
+        numerator as f32 * 100.0 / denominator as f32
+    }
+}
+
+fn optional_seconds(value: Option<f32>) -> String {
+    value
+        .map(|seconds| format!("{seconds:.2}s"))
+        .unwrap_or_else(|| "n/a".to_string())
 }
 
 fn render_dps_test_tool(
@@ -1652,8 +2030,7 @@ fn render_wound_calculator(
         *days_until_point_healed =
             (*days_until_point_healed).clamp(0.0, max_days_until_point_healed);
         let remaining_steps =
-            ((*days_until_point_healed * steps_per_day as f32).round() as u32)
-                .min(required_steps);
+            ((*days_until_point_healed * steps_per_day as f32).round() as u32).min(required_steps);
         let healing_progress_steps = required_steps.saturating_sub(remaining_steps);
         vec![Wound {
             damage: *wound_damage,
@@ -1688,6 +2065,101 @@ fn render_wound_calculator(
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct EssenceWoundResult {
+    current_essence: u32,
+    disorder_wound: u32,
+    solar_wound: u32,
+    lunar_wound: u32,
+}
+
+fn render_essence_wound_calculator(
+    ui: &mut egui::Ui,
+    maximum_essence: &mut u32,
+    starting_essence: &mut u32,
+    essence_change: &mut i64,
+) {
+    ui.horizontal(|ui| {
+        ui.label("Maximum Essence");
+        ui.add(
+            egui::DragValue::new(maximum_essence)
+                .clamp_range(0..=u32::MAX)
+                .speed(10.0),
+        );
+        *starting_essence = (*starting_essence).min(*maximum_essence);
+        ui.label("Starting Essence");
+        ui.add(
+            egui::DragValue::new(starting_essence)
+                .clamp_range(0..=*maximum_essence)
+                .speed(10.0),
+        );
+        ui.label("Change");
+        ui.add(egui::DragValue::new(essence_change).speed(10.0));
+    });
+
+    let result = calculate_essence_wounds(*maximum_essence, *starting_essence, *essence_change);
+    ui.small(format!(
+        "Equilibrium: {}. Disorder Wound increases by 1 for each full 50 Essence from equilibrium.",
+        format_equilibrium(*maximum_essence)
+    ));
+    ui.small("The resulting Current Essence is limited to the range from 0 to Maximum Essence.");
+    ui.separator();
+
+    ui.label(format!("Current Essence: {}", result.current_essence));
+    ui.label(format!("Current Disorder Wound: {}", result.disorder_wound));
+    if result.solar_wound > 0 {
+        ui.label(format!("Solar Wound caused: {}", result.solar_wound));
+    } else if result.lunar_wound > 0 {
+        ui.label(format!("Lunar Wound caused: {}", result.lunar_wound));
+    } else {
+        ui.label("No Solar or Lunar Wound caused.");
+    }
+}
+
+fn calculate_essence_wounds(
+    maximum_essence: u32,
+    starting_essence: u32,
+    change: i64,
+) -> EssenceWoundResult {
+    let starting_essence = starting_essence.min(maximum_essence);
+    let current_essence = (i128::from(starting_essence) + i128::from(change))
+        .clamp(0, i128::from(maximum_essence)) as u32;
+    let starting_disorder = disorder_wound(maximum_essence, starting_essence);
+    let current_disorder = disorder_wound(maximum_essence, current_essence);
+    let disorder_change = starting_disorder.abs_diff(current_disorder);
+    let starts_below_equilibrium = u64::from(starting_essence) * 2 < u64::from(maximum_essence);
+    let starts_above_equilibrium = u64::from(starting_essence) * 2 > u64::from(maximum_essence);
+
+    EssenceWoundResult {
+        current_essence,
+        disorder_wound: current_disorder,
+        solar_wound: if starts_below_equilibrium && current_essence > starting_essence {
+            disorder_change
+        } else {
+            0
+        },
+        lunar_wound: if starts_above_equilibrium && current_essence < starting_essence {
+            disorder_change
+        } else {
+            0
+        },
+    }
+}
+
+fn disorder_wound(maximum_essence: u32, essence: u32) -> u32 {
+    let doubled_distance = (u64::from(essence.min(maximum_essence)) * 2)
+        .abs_diff(u64::from(maximum_essence));
+    (doubled_distance / 100) as u32
+}
+
+fn format_equilibrium(maximum_essence: u32) -> String {
+    if maximum_essence % 2 == 0 {
+        (maximum_essence / 2).to_string()
+    } else {
+        format!("{}.5", maximum_essence / 2)
+    }
+}
+
 fn healing_steps_per_day(tended: bool) -> u32 {
     if tended { 4 } else { 2 }
 }
@@ -1701,6 +2173,70 @@ fn format_healing_days(days: f32) -> String {
         formatted.pop();
     }
     formatted
+}
+
+fn derived_breakdown_icon(ui: &mut egui::Ui, breakdown: Option<&game_logic::StatBreakdown>) {
+    let Some(breakdown) = breakdown else {
+        return;
+    };
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(12.0, 12.0),
+        egui::Sense::hover(),
+    );
+    let visuals = ui.style().interact(&response);
+    ui.painter().circle_stroke(
+        rect.center(),
+        5.5,
+        egui::Stroke::new(1.0, visuals.fg_stroke.color),
+    );
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        "?",
+        egui::FontId::proportional(9.0),
+        visuals.fg_stroke.color,
+    );
+    if response.hovered() {
+        egui::show_tooltip_for(
+            ui.ctx(),
+            response.id.with("__derived_breakdown"),
+            &response.rect,
+            |ui| {
+                ui.set_max_width(420.0);
+                ui.label(egui::RichText::new(format!("Result: {}", breakdown.result)).strong());
+                if !breakdown.lines.is_empty() {
+                    ui.separator();
+                    egui::Grid::new(ui.next_auto_id())
+                        .num_columns(2)
+                        .spacing([10.0, 3.0])
+                        .show(ui, |ui| {
+                            for line in &breakdown.lines {
+                                ui.monospace(&line.value);
+                                ui.label(&line.source);
+                                ui.end_row();
+                            }
+                        });
+                }
+                if !breakdown.notes.is_empty() {
+                    ui.separator();
+                    for note in &breakdown.notes {
+                        ui.label(note);
+                    }
+                }
+            }
+        );
+    }
+}
+
+fn derived_stat_line(
+    ui: &mut egui::Ui,
+    text: impl Into<egui::WidgetText>,
+    breakdown: Option<&game_logic::StatBreakdown>,
+) {
+    ui.horizontal(|ui| {
+        ui.label(text);
+        derived_breakdown_icon(ui, breakdown);
+    });
 }
 
 fn render_player_editor(
@@ -2661,11 +3197,7 @@ fn render_player_editor(
                 ui.label("Derived stats ignored while NPC preset is active.");
                 return;
             }
-            let game_logic::PlayerSummary {
-                derived,
-                roll,
-                defense,
-            } = game_logic::player_summary(
+            let summary = game_logic::player_summary(
                 player,
                 weapon_catalog,
                 armor_catalog,
@@ -2680,27 +3212,65 @@ fn render_player_editor(
                 npc_presets,
                 talent_catalog,
             );
+            let breakdowns = game_logic::derived_stat_breakdowns(
+                player,
+                weapon_catalog,
+                armor_catalog,
+                shield_catalog,
+                talent_catalog,
+                &summary,
+                &combatant,
+            );
+            let derived = &summary.derived;
+            let roll = &summary.roll;
+            let defense = &summary.defense;
             ui.label("Derived");
-            ui.label(format!(
-                "Hit points: {} (x{:.1})",
-                derived.hit_points, derived.health_mult
-            ));
-            ui.label(format!("Drain resistance: {}", derived.drain_resistance));
-            ui.label(format!(
-                "Threshold of Pain: {}",
-                combatant.sheet.vitals.threshold_of_pain
-            ));
-            ui.label(format!("Attack bonus: {}", derived.attack_bonus));
-            ui.label(format!("Attack bonus (effective): {}", roll.attack_bonus));
-            ui.label(format!(
-                "Damage bonus (effective): {}",
-                roll.strength_damage
-            ));
-            ui.label(format!("Speed mod: {}", derived.speed_mod));
-            ui.label(format!(
-                "Weapon speed: {:.1}",
-                combatant.sheet.offense.weapon.speed
-            ));
+            derived_stat_line(
+                ui,
+                format!(
+                    "Hit points: {} (x{:.1})",
+                    derived.hit_points, derived.health_mult
+                ),
+                breakdowns.get(game_logic::DerivedStatId::HitPoints),
+            );
+            derived_stat_line(
+                ui,
+                format!("Drain resistance: {}", derived.drain_resistance),
+                breakdowns.get(game_logic::DerivedStatId::DrainResistance),
+            );
+            derived_stat_line(
+                ui,
+                format!(
+                    "Threshold of Pain: {}",
+                    combatant.sheet.vitals.threshold_of_pain
+                ),
+                breakdowns.get(game_logic::DerivedStatId::ThresholdOfPain),
+            );
+            derived_stat_line(
+                ui,
+                format!("Attack bonus: {}", derived.attack_bonus),
+                breakdowns.get(game_logic::DerivedStatId::AttackBonus),
+            );
+            derived_stat_line(
+                ui,
+                format!("Attack bonus (effective): {}", roll.attack_bonus),
+                breakdowns.get(game_logic::DerivedStatId::EffectiveAttackBonus),
+            );
+            derived_stat_line(
+                ui,
+                format!("Damage bonus (effective): {}", roll.strength_damage),
+                breakdowns.get(game_logic::DerivedStatId::EffectiveDamageBonus),
+            );
+            derived_stat_line(
+                ui,
+                format!("Speed mod: {}", derived.speed_mod),
+                breakdowns.get(game_logic::DerivedStatId::SpeedModifier),
+            );
+            derived_stat_line(
+                ui,
+                format!("Weapon speed: {:.1}", combatant.sheet.offense.weapon.speed),
+                breakdowns.get(game_logic::DerivedStatId::MainhandWeaponSpeed),
+            );
             if player.called_shot {
                 let (called_shot_light_bonus, called_shot_medium_bonus, called_shot_heavy_bonus) =
                     game_logic::called_shot_target_defense_bonuses_for_player(player);
@@ -2727,17 +3297,38 @@ fn render_player_editor(
             if player.power_attack {
                 ui.label("Power attack: positive INT/DEX attack bonuses ignored, Strength damage doubled");
             }
-            ui.label(format!("Initiative mod: {}", derived.initiative_mod));
-            ui.label(format!("Base DV: {}", derived.base_dv));
+            derived_stat_line(
+                ui,
+                format!("Initiative mod: {}", derived.initiative_mod),
+                breakdowns.get(game_logic::DerivedStatId::InitiativeModifier),
+            );
+            derived_stat_line(
+                ui,
+                format!("Base DV: {}", derived.base_dv),
+                breakdowns.get(game_logic::DerivedStatId::BaseDefense),
+            );
             if let Some(dv_with_shield) = defense.melee_with_shield_dv {
-                ui.label(format!("DV (melee + shield): {}", dv_with_shield));
+                derived_stat_line(
+                    ui,
+                    format!("DV (melee + shield): {}", dv_with_shield),
+                    breakdowns.get(game_logic::DerivedStatId::MeleeDefense),
+                );
             }
-            ui.label(format!("Armor DR: {}", derived.armor_dr));
-            ui.label(format!(
-                "Carry (none/light/med/heavy): {:?}",
-                derived.carry_capacity
-            ));
-            ui.label(format!("Load: {}", derived.load_category));
+            derived_stat_line(
+                ui,
+                format!("Armor DR: {}", derived.armor_dr),
+                breakdowns.get(game_logic::DerivedStatId::ArmorDr),
+            );
+            derived_stat_line(
+                ui,
+                format!("Carry (none/light/med/heavy): {:?}", derived.carry_capacity),
+                breakdowns.get(game_logic::DerivedStatId::CarryCapacity),
+            );
+            derived_stat_line(
+                ui,
+                format!("Load: {}", derived.load_category),
+                breakdowns.get(game_logic::DerivedStatId::LoadCategory),
+            );
 
             let attack_bonus = roll.attack_bonus;
             let strength_damage = roll.strength_damage;
@@ -2772,9 +3363,17 @@ fn render_player_editor(
             ui.separator();
             ui.label("Defense");
             if roll.is_ranged_weapon {
-                ui.label(defense.ranged_roll_label.as_str());
+                derived_stat_line(
+                    ui,
+                    defense.ranged_roll_label.as_str(),
+                    breakdowns.get(game_logic::DerivedStatId::RangedDefense),
+                );
             } else {
-                ui.label(defense.melee_roll_label.as_str());
+                derived_stat_line(
+                    ui,
+                    defense.melee_roll_label.as_str(),
+                    breakdowns.get(game_logic::DerivedStatId::MeleeDefense),
+                );
             }
             ui.separator();
             ui.label("Mainhand");
@@ -2786,17 +3385,26 @@ fn render_player_editor(
                 .as_deref()
                 .unwrap_or("-");
             if player.called_shot {
-                ui.label(format!(
-                    "Weapon speed: {} + {} (called shot)",
-                    combatant.sheet.offense.weapon.speed, called_shot_mainhand_delay_expr
-                ));
+                derived_stat_line(
+                    ui,
+                    format!(
+                        "Weapon speed: {} + {} (called shot)",
+                        combatant.sheet.offense.weapon.speed, called_shot_mainhand_delay_expr
+                    ),
+                    breakdowns.get(game_logic::DerivedStatId::MainhandWeaponSpeed),
+                );
             } else {
-                ui.label(format!(
-                    "Weapon speed: {}",
-                    combatant.sheet.offense.weapon.speed
-                ));
+                derived_stat_line(
+                    ui,
+                    format!("Weapon speed: {}", combatant.sheet.offense.weapon.speed),
+                    breakdowns.get(game_logic::DerivedStatId::MainhandWeaponSpeed),
+                );
             }
-            ui.label(format!("Weapon shield damage: {}", weapon_shield_damage));
+            derived_stat_line(
+                ui,
+                format!("Weapon shield damage: {}", weapon_shield_damage),
+                breakdowns.get(game_logic::DerivedStatId::MainhandShieldDamage),
+            );
             let mainhand_weapon = &combatant.sheet.offense.weapon;
             let effective_damage_expr = mainhand_weapon.damage_expr_for_attack();
             let damage_roll = if mainhand_weapon.halves_damage_for_attack() {
@@ -2805,43 +3413,76 @@ fn render_player_editor(
                 format!("{effective_damage_expr} + {strength_damage}")
             };
             if player.called_shot {
-                ui.label(format!(
-                    "Attack roll: d20p + {} (called shot: hit if > defense; precise at defense +{} vs current target armor, light/medium/heavy +{}/+{}/+{})",
-                    attack_bonus,
-                    called_shot_target_bonus_vs_opponent,
-                    called_shot_light_bonus,
-                    called_shot_medium_bonus,
-                    called_shot_heavy_bonus
-                ));
-                ui.label(format!(
-                    "Damage roll: {} vs target DR {} on precise called shot (near-miss DR {}, AP {})",
-                    damage_roll,
-                    target_natural_dr,
-                    target_armor_dr,
-                    mainhand_weapon.armor_penetration
-                ));
+                derived_stat_line(
+                    ui,
+                    format!(
+                        "Attack roll: d20p + {} (called shot: hit if > defense; precise at defense +{} vs current target armor, light/medium/heavy +{}/+{}/+{})",
+                        attack_bonus,
+                        called_shot_target_bonus_vs_opponent,
+                        called_shot_light_bonus,
+                        called_shot_medium_bonus,
+                        called_shot_heavy_bonus
+                    ),
+                    breakdowns.get(game_logic::DerivedStatId::MainhandAttackRoll),
+                );
+                derived_stat_line(
+                    ui,
+                    format!(
+                        "Damage roll: {} vs target DR {} on precise called shot (near-miss DR {}, AP {})",
+                        damage_roll,
+                        target_natural_dr,
+                        target_armor_dr,
+                        mainhand_weapon.armor_penetration
+                    ),
+                    breakdowns.get(game_logic::DerivedStatId::MainhandDamageRoll),
+                );
             } else {
-                ui.label(format!("Attack roll: d20p + {}", attack_bonus));
-                ui.label(format!(
-                    "Damage roll: {} vs target DR {} (AP {})",
-                    damage_roll, target_armor_dr, mainhand_weapon.armor_penetration
-                ));
+                derived_stat_line(
+                    ui,
+                    format!("Attack roll: d20p + {}", attack_bonus),
+                    breakdowns.get(game_logic::DerivedStatId::MainhandAttackRoll),
+                );
+                derived_stat_line(
+                    ui,
+                    format!(
+                        "Damage roll: {} vs target DR {} (AP {})",
+                        damage_roll, target_armor_dr, mainhand_weapon.armor_penetration
+                    ),
+                    breakdowns.get(game_logic::DerivedStatId::MainhandDamageRoll),
+                );
             }
             if let Some(offhand) = combatant.sheet.offense.offhand.as_ref() {
                 ui.separator();
                 ui.label("Offhand");
-                ui.label(format!("Weapon speed: {}", offhand.weapon.speed));
+                derived_stat_line(
+                    ui,
+                    format!("Weapon speed: {}", offhand.weapon.speed),
+                    breakdowns.get(game_logic::DerivedStatId::OffhandWeaponSpeed),
+                );
                 let offhand_shield_damage =
                     offhand.weapon.shield_damage_expr.as_deref().unwrap_or("-");
-                ui.label(format!("Weapon shield damage: {}", offhand_shield_damage));
-                ui.label(format!("Attack roll: d20p + {}", offhand.attack_bonus));
-                ui.label(format!(
-                    "Damage roll: {} + {} - 2 vs target DR {} (AP {})",
-                    offhand.weapon.damage_expr,
-                    offhand.strength_damage,
-                    target_armor_dr,
-                    offhand.weapon.armor_penetration
-                ));
+                derived_stat_line(
+                    ui,
+                    format!("Weapon shield damage: {}", offhand_shield_damage),
+                    breakdowns.get(game_logic::DerivedStatId::OffhandShieldDamage),
+                );
+                derived_stat_line(
+                    ui,
+                    format!("Attack roll: d20p + {}", offhand.attack_bonus),
+                    breakdowns.get(game_logic::DerivedStatId::OffhandAttackRoll),
+                );
+                derived_stat_line(
+                    ui,
+                    format!(
+                        "Damage roll: {} + {} {:+} vs target DR {} (AP {})",
+                        offhand.weapon.damage_expr,
+                        offhand.strength_damage,
+                        combatant.sheet.maneuvers.dualwield_offhand_damage_penalty,
+                        target_armor_dr,
+                        offhand.weapon.armor_penetration
+                    ),
+                    breakdowns.get(game_logic::DerivedStatId::OffhandDamageRoll),
+                );
             }
         }
         PlayerEditorTab::Tools => {
@@ -4133,4 +4774,67 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(|_cc| Box::new(SimGuiApp::new())),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disorder_wound_counts_complete_fifty_essence_bands() {
+        assert_eq!(disorder_wound(1000, 549), 0);
+        assert_eq!(disorder_wound(1000, 550), 1);
+        assert_eq!(disorder_wound(1000, 450), 1);
+        assert_eq!(disorder_wound(501, 300), 0);
+        assert_eq!(disorder_wound(501, 301), 1);
+    }
+
+    #[test]
+    fn upward_movement_from_below_equilibrium_causes_solar_wound() {
+        assert_eq!(
+            calculate_essence_wounds(1000, 350, 100),
+            EssenceWoundResult {
+                current_essence: 450,
+                disorder_wound: 1,
+                solar_wound: 2,
+                lunar_wound: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn downward_movement_from_above_equilibrium_causes_lunar_wound() {
+        assert_eq!(
+            calculate_essence_wounds(1000, 650, -100),
+            EssenceWoundResult {
+                current_essence: 550,
+                disorder_wound: 1,
+                solar_wound: 0,
+                lunar_wound: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn direction_or_unchanged_disorder_can_prevent_solar_and_lunar_wounds() {
+        let moving_down_from_below = calculate_essence_wounds(1000, 400, -100);
+        assert_eq!(moving_down_from_below.solar_wound, 0);
+        assert_eq!(moving_down_from_below.lunar_wound, 0);
+
+        let same_disorder_band = calculate_essence_wounds(1000, 420, 10);
+        assert_eq!(same_disorder_band.solar_wound, 0);
+        assert_eq!(same_disorder_band.lunar_wound, 0);
+    }
+
+    #[test]
+    fn current_essence_is_clamped_to_the_valid_range() {
+        assert_eq!(
+            calculate_essence_wounds(1000, 900, i64::MAX).current_essence,
+            1000
+        );
+        assert_eq!(
+            calculate_essence_wounds(1000, 100, i64::MIN).current_essence,
+            0
+        );
+    }
 }
