@@ -13,6 +13,11 @@ use game_logic::{
 use hackmaster_sim::core::catalog::Catalog;
 use hackmaster_sim::core::gameplay::run::{Wound, heal_wounds, required_healing_steps};
 use hackmaster_sim::core::rng::SimRng;
+use hackmaster_sim::core::tactics::{
+    MAX_TACTICAL_CONDITIONS, NumericComparison, RelativeComparison, SpeedComparison,
+    TacticalAction, TacticalCondition, TacticalPolicy, TacticalPreset, TacticalRule,
+    validate_policy,
+};
 use hackmaster_sim::core::types::{RaceSpec, TalentSelection, TalentSpec};
 use hackmaster_sim::ui_widgets::searchable_select;
 use hackmaster_sim::{character, data, game_logic, sim};
@@ -77,6 +82,7 @@ enum PlayerEditorTab {
     Core,
     Gear,
     CombatManeuvers,
+    Tactics,
     Stats,
     Talents,
     Derived,
@@ -89,6 +95,7 @@ impl PlayerEditorTab {
             PlayerEditorTab::Core => "Core",
             PlayerEditorTab::Gear => "Gear",
             PlayerEditorTab::CombatManeuvers => "Combat Maneuvers",
+            PlayerEditorTab::Tactics => "Tactics",
             PlayerEditorTab::Stats => "Stats",
             PlayerEditorTab::Talents => "Talents",
             PlayerEditorTab::Derived => "Derived",
@@ -97,10 +104,11 @@ impl PlayerEditorTab {
     }
 }
 
-const PLAYER_EDITOR_TABS: [PlayerEditorTab; 7] = [
+const PLAYER_EDITOR_TABS: [PlayerEditorTab; 8] = [
     PlayerEditorTab::Core,
     PlayerEditorTab::Gear,
     PlayerEditorTab::CombatManeuvers,
+    PlayerEditorTab::Tactics,
     PlayerEditorTab::Stats,
     PlayerEditorTab::Talents,
     PlayerEditorTab::Derived,
@@ -108,7 +116,9 @@ const PLAYER_EDITOR_TABS: [PlayerEditorTab; 7] = [
 ];
 
 const FIGHTER_PRESETS_PATH: &str = "data/sim/fighter_presets.json";
+const TACTICAL_PRESETS_PATH: &str = "data/sim/tactical_presets.json";
 const BULK_SIM_MAX_SECONDS: u32 = u32::MAX;
+const MAX_START_DISTANCE_FT: f32 = 4_000.0;
 const MAX_DAMAGE_PLOT_ITERATIONS: usize = 1_000_000;
 const TALENT_TAB_ALL: &str = "All";
 const TALENT_TAB_LEARNED: &str = "Learned Talents";
@@ -142,6 +152,14 @@ struct SimGuiApp {
     npc_presets: NpcPresetCatalog,
     fighter_presets: FighterPresetCatalog,
     fighter_preset_names: [String; 2],
+    tactical_presets: Vec<TacticalPreset>,
+    tactical_drafts: [TacticalPolicy; 2],
+    tactical_preset_indices: [usize; 2],
+    tactical_preset_names: [String; 2],
+    tactical_messages: [Option<String>; 2],
+    tactical_pending_loads: [Option<usize>; 2],
+    tactical_confirm_overwrites: [bool; 2],
+    tactical_confirm_deletes: [bool; 2],
     time_scale: f32,
     show_player_editor: [bool; 2],
     player_editor_tabs: [PlayerEditorTab; 2],
@@ -228,6 +246,14 @@ impl SimGuiApp {
                 Catalog::new(Vec::new())
             }
         };
+        let (tactical_presets, tactical_load_error) =
+            match data::load_tactical_presets(TACTICAL_PRESETS_PATH) {
+                Ok(presets) => (presets, None),
+                Err(err) => {
+                    eprintln!("Failed to load tactical presets: {err}");
+                    (Vec::new(), Some(err))
+                }
+            };
         let talent_catalog = match data::load_talents(data::TALENTS_PATH) {
             Ok(talents) => talents,
             Err(err) => {
@@ -273,6 +299,14 @@ impl SimGuiApp {
             npc_presets,
             fighter_presets,
             fighter_preset_names: ["Arthur Du Randt".to_string(), "Zorya".to_string()],
+            tactical_presets,
+            tactical_drafts: [TacticalPolicy::default(), TacticalPolicy::default()],
+            tactical_preset_indices: [0, 0],
+            tactical_preset_names: [String::new(), String::new()],
+            tactical_messages: [tactical_load_error.clone(), tactical_load_error],
+            tactical_pending_loads: [None, None],
+            tactical_confirm_overwrites: [false, false],
+            tactical_confirm_deletes: [false, false],
             time_scale: 1.0,
             show_player_editor: [false, false],
             player_editor_tabs: [PlayerEditorTab::Core, PlayerEditorTab::Core],
@@ -305,6 +339,10 @@ impl SimGuiApp {
         };
         app.apply_default_fighter_preset(0, "Arthur Du Randt");
         app.apply_default_fighter_preset(1, "Zorya");
+        app.tactical_drafts = [
+            app.players[0].tactical_policy.clone(),
+            app.players[1].tactical_policy.clone(),
+        ];
         app.reset_positions();
         app
     }
@@ -1059,6 +1097,7 @@ fn draw_weapon_icon(painter: &egui::Painter, pos: Pos2, facing: f32, icon: Weapo
 
 impl eframe::App for SimGuiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let player_editors_were_open = self.show_player_editor;
         let dt = ctx.input(|i| i.unstable_dt).min(0.05) * self.time_scale;
         let screen_rect = ctx.input(|i| i.screen_rect);
         if screen_rect.size() != self.last_screen_size {
@@ -1110,13 +1149,15 @@ impl eframe::App for SimGuiApp {
                     }
                     ui.separator();
                     ui.label("Start distance (ft)");
+                    let mut start_distance = self.sim.config.start_distance;
                     if ui
                         .add(
-                            egui::Slider::new(&mut self.sim.config.start_distance, 0.0..=400.0)
+                            egui::Slider::new(&mut start_distance, 0.0..=MAX_START_DISTANCE_FT)
                                 .step_by(5.0),
                         )
                         .changed()
                     {
+                        self.sim.config.set_start_distance(start_distance);
                         if !self.running {
                             self.reset_positions();
                         }
@@ -1402,6 +1443,19 @@ impl eframe::App for SimGuiApp {
                     "{} HP: {}",
                     self.sim.combatants[1].sheet.name, self.sim.combatants[1].state.hp
                 ));
+                for combatant in &self.sim.combatants {
+                    if combatant.tactical_policy.enabled {
+                        let styles = if combatant.active_style_ids.is_empty() {
+                            "No style".to_string()
+                        } else {
+                            combatant.active_style_ids.join(" + ")
+                        };
+                        ui.label(format!("{} style: {styles}", combatant.sheet.name));
+                        if let Some(directive) = combatant.last_tactical_directive.as_ref() {
+                            ui.small(format!("Last: {directive}"));
+                        }
+                    }
+                }
                 if let Some(event) = &self.sim.last_event {
                     ui.separator();
                     ui.label(sim::format_combat_event_line(event, &self.sim.combatants));
@@ -1448,11 +1502,22 @@ impl eframe::App for SimGuiApp {
         });
 
         for idx in 0..self.players.len() {
+            if sync_tactical_draft_on_open(
+                player_editors_were_open[idx],
+                self.show_player_editor[idx],
+                &self.players[idx].tactical_policy,
+                &mut self.tactical_drafts[idx],
+            ) {
+                self.tactical_pending_loads[idx] = None;
+                self.tactical_confirm_overwrites[idx] = false;
+                self.tactical_confirm_deletes[idx] = false;
+            }
             let name = self.players[idx].name.clone();
             let player_names = [self.players[0].name.clone(), self.players[1].name.clone()];
             let mut open = self.show_player_editor[idx];
             let title = format!("Customize {name}");
             let mut run_dps_test = false;
+            let mut tactics_applied = false;
             egui::Window::new(title)
                 .id(egui::Id::new(format!("player_editor_{idx}")))
                 .open(&mut open)
@@ -1463,6 +1528,13 @@ impl eframe::App for SimGuiApp {
                     let fighter_preset_name = &mut self.fighter_preset_names[idx];
                     let damage_plot_iterations = &mut self.damage_plot_iterations[idx];
                     let damage_roll_plot = &mut self.damage_roll_plots[idx];
+                    let tactical_draft = &mut self.tactical_drafts[idx];
+                    let tactical_preset_index = &mut self.tactical_preset_indices[idx];
+                    let tactical_preset_name = &mut self.tactical_preset_names[idx];
+                    let tactical_message = &mut self.tactical_messages[idx];
+                    let tactical_pending_load = &mut self.tactical_pending_loads[idx];
+                    let tactical_confirm_overwrite = &mut self.tactical_confirm_overwrites[idx];
+                    let tactical_confirm_delete = &mut self.tactical_confirm_deletes[idx];
                     let (player, opponent) = if idx == 0 {
                         let (left, right) = self.players.split_at_mut(1);
                         (&mut left[0], &right[0])
@@ -1497,12 +1569,26 @@ impl eframe::App for SimGuiApp {
                         &self.dps_result,
                         self.dps_sim_duration,
                         &mut run_dps_test,
+                        tactical_draft,
+                        &mut self.tactical_presets,
+                        tactical_preset_index,
+                        tactical_preset_name,
+                        tactical_message,
+                        tactical_pending_load,
+                        tactical_confirm_overwrite,
+                        tactical_confirm_delete,
+                        self.sim.elapsed_seconds > 0,
+                        &mut tactics_applied,
                     );
                 });
             self.show_player_editor[idx] = open;
             if run_dps_test {
                 self.running = false;
                 self.run_dps_test();
+            }
+            if tactics_applied {
+                self.running = false;
+                self.reset_positions();
             }
         }
 
@@ -1514,13 +1600,52 @@ impl eframe::App for SimGuiApp {
 
 fn render_player_editor_tabs(ui: &mut egui::Ui, id_prefix: &str, active_tab: &mut PlayerEditorTab) {
     ui.push_id(format!("{id_prefix}_tabs"), |ui| {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             for tab in PLAYER_EDITOR_TABS {
                 ui.selectable_value(active_tab, tab, tab.label());
             }
         });
     });
     ui.separator();
+}
+
+fn sync_tactical_draft_on_open(
+    was_open: bool,
+    is_open: bool,
+    active: &TacticalPolicy,
+    draft: &mut TacticalPolicy,
+) -> bool {
+    if is_open && !was_open {
+        *draft = active.clone();
+        true
+    } else {
+        false
+    }
+}
+
+fn apply_tactical_enabled_toggle(
+    active: &mut TacticalPolicy,
+    draft: &TacticalPolicy,
+) -> Result<(), Vec<String>> {
+    if draft.enabled {
+        validate_policy(draft)?;
+        *active = draft.clone();
+    } else {
+        active.enabled = false;
+    }
+    Ok(())
+}
+
+fn apply_tactical_ui_policy(
+    active: &mut TacticalPolicy,
+    draft: &TacticalPolicy,
+) -> Result<bool, Vec<String>> {
+    if active == draft {
+        return Ok(false);
+    }
+    validate_policy(draft)?;
+    *active = draft.clone();
+    Ok(true)
 }
 
 fn render_tools_tab(
@@ -1563,12 +1688,7 @@ fn render_tools_tab(
         }
         ToolTab::EssenceWounds => {
             ui.heading("Essence Wound Calculator");
-            render_essence_wound_calculator(
-                ui,
-                maximum_essence,
-                starting_essence,
-                essence_change,
-            );
+            render_essence_wound_calculator(ui, maximum_essence, starting_essence, essence_change);
         }
     }
 }
@@ -1771,6 +1891,9 @@ fn render_detailed_team_stats(ui: &mut egui::Ui, stats: &sim::DetailedTeamStats,
         stats.critical_rate_per_direct_hit * 100.0,
     ));
     ui.label(format!("Killing blows: {}", stats.kills));
+    if stats.eyesmite_available {
+        ui.label(format!("Eyes smote: {}", stats.eyes_smote));
+    }
 
     ui.add_space(8.0);
     ui.strong("Damage output");
@@ -2147,8 +2270,8 @@ fn calculate_essence_wounds(
 }
 
 fn disorder_wound(maximum_essence: u32, essence: u32) -> u32 {
-    let doubled_distance = (u64::from(essence.min(maximum_essence)) * 2)
-        .abs_diff(u64::from(maximum_essence));
+    let doubled_distance =
+        (u64::from(essence.min(maximum_essence)) * 2).abs_diff(u64::from(maximum_essence));
     (doubled_distance / 100) as u32
 }
 
@@ -2179,10 +2302,7 @@ fn derived_breakdown_icon(ui: &mut egui::Ui, breakdown: Option<&game_logic::Stat
     let Some(breakdown) = breakdown else {
         return;
     };
-    let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(12.0, 12.0),
-        egui::Sense::hover(),
-    );
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
     let visuals = ui.style().interact(&response);
     ui.painter().circle_stroke(
         rect.center(),
@@ -2223,7 +2343,7 @@ fn derived_breakdown_icon(ui: &mut egui::Ui, breakdown: Option<&game_logic::Stat
                         ui.label(note);
                     }
                 }
-            }
+            },
         );
     }
 }
@@ -2239,6 +2359,916 @@ fn derived_stat_line(
     });
 }
 
+fn numeric_comparison_editor(
+    ui: &mut egui::Ui,
+    id: impl std::hash::Hash,
+    comparison: &mut NumericComparison,
+) {
+    egui::ComboBox::from_id_source(id)
+        .selected_text(comparison.label())
+        .show_ui(ui, |ui| {
+            for option in NumericComparison::ALL {
+                ui.selectable_value(comparison, option, option.label());
+            }
+        });
+}
+
+fn boolean_condition_editor(ui: &mut egui::Ui, id: impl std::hash::Hash, value: &mut bool) {
+    egui::ComboBox::from_id_source(id)
+        .selected_text(if *value { "True" } else { "False" })
+        .show_ui(ui, |ui| {
+            ui.selectable_value(value, true, "True");
+            ui.selectable_value(value, false, "False");
+        });
+}
+
+fn tactical_condition_editor(
+    ui: &mut egui::Ui,
+    id_prefix: &str,
+    condition: &mut TacticalCondition,
+    style_options: &[String],
+) -> bool {
+    let mut remove = false;
+    ui.horizontal_wrapped(|ui| {
+        let mut kind = match condition {
+            TacticalCondition::Always => 0,
+            TacticalCondition::MyHpPercent { .. } => 1,
+            TacticalCondition::EnemyHpPercent { .. } => 2,
+            TacticalCondition::DistanceFt { .. } => 3,
+            TacticalCondition::ReachComparedToEnemy { .. } => 4,
+            TacticalCondition::RetreatSpaceAvailable { .. } => 5,
+            TacticalCondition::MyWeaponCanJab { .. } => 6,
+            TacticalCondition::MyHasActiveShield { .. } => 7,
+            TacticalCondition::EnemyWeaponGroup { .. } => 8,
+            TacticalCondition::EnemyHasActiveShield { .. } => 9,
+            TacticalCondition::EnemyArmorType { .. } => 10,
+            TacticalCondition::EnemyCharging { .. } => 11,
+            TacticalCondition::MyHasAttacked { .. } => 12,
+            TacticalCondition::EnemyTimeToReachSeconds { .. } => 13,
+            TacticalCondition::MyActiveStyle { .. } => 14,
+            TacticalCondition::EnemyActiveStyle { .. } => 15,
+            TacticalCondition::EnemyDr { .. } => 16,
+            TacticalCondition::EnemyAttackSpeedSeconds { .. } => 17,
+            TacticalCondition::EnemyAttackSpeedComparedToMine { .. } => 18,
+        };
+        let old_kind = kind;
+        let labels = [
+            "Always",
+            "My HP %",
+            "Enemy HP %",
+            "Distance (ft)",
+            "My reach vs enemy",
+            "Retreat space",
+            "My weapon can Jab",
+            "My shield active",
+            "Enemy weapon group",
+            "Enemy shield active",
+            "Enemy armor type",
+            "Enemy charging",
+            "I have attacked this combat",
+            "Enemy time to reach (seconds)",
+            "My active style",
+            "Enemy active style",
+            "Enemy DR",
+            "Enemy attack speed (seconds)",
+            "Enemy speed vs mine",
+        ];
+        egui::ComboBox::from_id_source(format!("{id_prefix}_kind"))
+            .selected_text(labels[kind])
+            .show_ui(ui, |ui| {
+                for (idx, label) in labels.iter().enumerate() {
+                    ui.selectable_value(&mut kind, idx, *label);
+                }
+            });
+        if kind != old_kind {
+            *condition = match kind {
+                1 => TacticalCondition::MyHpPercent {
+                    comparison: NumericComparison::LessOrEqual,
+                    value: 50.0,
+                },
+                2 => TacticalCondition::EnemyHpPercent {
+                    comparison: NumericComparison::LessOrEqual,
+                    value: 50.0,
+                },
+                3 => TacticalCondition::DistanceFt {
+                    comparison: NumericComparison::LessOrEqual,
+                    value: 10.0,
+                },
+                4 => TacticalCondition::ReachComparedToEnemy {
+                    comparison: RelativeComparison::Greater,
+                },
+                5 => TacticalCondition::RetreatSpaceAvailable { value: true },
+                6 => TacticalCondition::MyWeaponCanJab { value: true },
+                7 => TacticalCondition::MyHasActiveShield { value: true },
+                8 => TacticalCondition::EnemyWeaponGroup {
+                    value: "Polearms".to_string(),
+                    negated: false,
+                },
+                9 => TacticalCondition::EnemyHasActiveShield { value: true },
+                10 => TacticalCondition::EnemyArmorType {
+                    value: "Heavy".to_string(),
+                    negated: false,
+                },
+                11 => TacticalCondition::EnemyCharging { value: true },
+                12 => TacticalCondition::MyHasAttacked { value: true },
+                13 => TacticalCondition::EnemyTimeToReachSeconds {
+                    comparison: NumericComparison::Greater,
+                    value: 3.0,
+                },
+                14 => TacticalCondition::MyActiveStyle {
+                    style_id: String::new(),
+                    negated: false,
+                },
+                15 => TacticalCondition::EnemyActiveStyle {
+                    style_id: String::new(),
+                    negated: false,
+                },
+                16 => TacticalCondition::EnemyDr {
+                    comparison: NumericComparison::GreaterOrEqual,
+                    value: 5.0,
+                },
+                17 => TacticalCondition::EnemyAttackSpeedSeconds {
+                    comparison: NumericComparison::LessOrEqual,
+                    value: 8.0,
+                },
+                18 => TacticalCondition::EnemyAttackSpeedComparedToMine {
+                    comparison: SpeedComparison::Faster,
+                },
+                _ => TacticalCondition::Always,
+            };
+        }
+        match condition {
+            TacticalCondition::Always => {}
+            TacticalCondition::MyHpPercent { comparison, value }
+            | TacticalCondition::EnemyHpPercent { comparison, value } => {
+                numeric_comparison_editor(ui, format!("{id_prefix}_cmp"), comparison);
+                ui.add(
+                    egui::DragValue::new(value)
+                        .clamp_range(0.0..=100.0)
+                        .suffix("%"),
+                );
+            }
+            TacticalCondition::DistanceFt { comparison, value }
+            | TacticalCondition::EnemyDr { comparison, value }
+            | TacticalCondition::EnemyAttackSpeedSeconds { comparison, value }
+            | TacticalCondition::EnemyTimeToReachSeconds { comparison, value } => {
+                numeric_comparison_editor(ui, format!("{id_prefix}_cmp"), comparison);
+                ui.add(egui::DragValue::new(value).clamp_range(0.0..=1000.0));
+            }
+            TacticalCondition::ReachComparedToEnemy { comparison } => {
+                egui::ComboBox::from_id_source(format!("{id_prefix}_relative"))
+                    .selected_text(match comparison {
+                        RelativeComparison::Less => "shorter",
+                        RelativeComparison::Equal => "equal",
+                        RelativeComparison::Greater => "longer",
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(comparison, RelativeComparison::Less, "shorter");
+                        ui.selectable_value(comparison, RelativeComparison::Equal, "equal");
+                        ui.selectable_value(comparison, RelativeComparison::Greater, "longer");
+                    });
+            }
+            TacticalCondition::RetreatSpaceAvailable { value }
+            | TacticalCondition::MyWeaponCanJab { value }
+            | TacticalCondition::MyHasActiveShield { value }
+            | TacticalCondition::EnemyHasActiveShield { value }
+            | TacticalCondition::EnemyCharging { value }
+            | TacticalCondition::MyHasAttacked { value } => {
+                boolean_condition_editor(ui, format!("{id_prefix}_bool"), value);
+            }
+            TacticalCondition::EnemyWeaponGroup { value, negated } => {
+                ui.checkbox(negated, "not");
+                const GROUPS: [&str; 13] = [
+                    "Unarmed",
+                    "Axes",
+                    "Basic",
+                    "Blunt",
+                    "Bows",
+                    "Crossbows",
+                    "Double",
+                    "Ensnaring",
+                    "Lashes",
+                    "LargeSwords",
+                    "SmallSwords",
+                    "Polearms",
+                    "Spears",
+                ];
+                egui::ComboBox::from_id_source(format!("{id_prefix}_weapon_group"))
+                    .selected_text(value.as_str())
+                    .show_ui(ui, |ui| {
+                        for group in GROUPS {
+                            ui.selectable_value(value, group.to_string(), group);
+                        }
+                    });
+            }
+            TacticalCondition::EnemyArmorType { value, negated } => {
+                ui.checkbox(negated, "not");
+                egui::ComboBox::from_id_source(format!("{id_prefix}_armor_type"))
+                    .selected_text(value.as_str())
+                    .show_ui(ui, |ui| {
+                        for armor_type in ["None", "Light", "Medium", "Heavy"] {
+                            ui.selectable_value(value, armor_type.to_string(), armor_type);
+                        }
+                    });
+            }
+            TacticalCondition::MyActiveStyle { style_id, negated }
+            | TacticalCondition::EnemyActiveStyle { style_id, negated } => {
+                ui.checkbox(negated, "not");
+                egui::ComboBox::from_id_source(format!("{id_prefix}_active_style"))
+                    .selected_text(if style_id.is_empty() {
+                        "Select style"
+                    } else {
+                        style_id.as_str()
+                    })
+                    .show_ui(ui, |ui| {
+                        for style in style_options {
+                            ui.selectable_value(style_id, style.clone(), style);
+                        }
+                    });
+            }
+            TacticalCondition::EnemyAttackSpeedComparedToMine { comparison } => {
+                egui::ComboBox::from_id_source(format!("{id_prefix}_speed_relative"))
+                    .selected_text(match comparison {
+                        SpeedComparison::Faster => "faster",
+                        SpeedComparison::Equal => "equal",
+                        SpeedComparison::Slower => "slower",
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(comparison, SpeedComparison::Faster, "faster");
+                        ui.selectable_value(comparison, SpeedComparison::Equal, "equal");
+                        ui.selectable_value(comparison, SpeedComparison::Slower, "slower");
+                    });
+            }
+        }
+        if ui.small_button("Remove condition").clicked() {
+            remove = true;
+        }
+    });
+    remove
+}
+
+fn tactical_action_editor(
+    ui: &mut egui::Ui,
+    id_prefix: &str,
+    action: &mut TacticalAction,
+    learned_styles: &[String],
+    compatible_styles: &[String],
+    pair_allowed: bool,
+) {
+    let mut kind = match action {
+        TacticalAction::RetainWeaponStyle => 0,
+        TacticalAction::NeutralWeaponStyle => 1,
+        TacticalAction::UseWeaponStyle { .. } => 2,
+        TacticalAction::NormalAttack => 3,
+        TacticalAction::Jab => 4,
+        TacticalAction::NeutralStance => 5,
+        TacticalAction::FightDefensively { .. } => 6,
+        TacticalAction::StandGround => 7,
+        TacticalAction::GiveGround => 8,
+    };
+    let old_kind = kind;
+    let labels = [
+        "Retain style",
+        "No weapon style",
+        "Use learned style",
+        "Normal attack",
+        "Jab",
+        "Neutral stance",
+        "Fight defensively",
+        "Stand ground",
+        "Give Ground",
+    ];
+    egui::ComboBox::from_id_source(format!("{id_prefix}_action"))
+        .selected_text(labels[kind])
+        .show_ui(ui, |ui| {
+            for (idx, label) in labels.iter().enumerate() {
+                ui.selectable_value(&mut kind, idx, *label);
+            }
+        });
+    if kind != old_kind {
+        *action = match kind {
+            0 => TacticalAction::RetainWeaponStyle,
+            1 => TacticalAction::NeutralWeaponStyle,
+            2 => TacticalAction::UseWeaponStyle {
+                style_ids: compatible_styles.first().cloned().into_iter().collect(),
+            },
+            3 => TacticalAction::NormalAttack,
+            4 => TacticalAction::Jab,
+            5 => TacticalAction::NeutralStance,
+            6 => TacticalAction::FightDefensively { penalty: 2 },
+            7 => TacticalAction::StandGround,
+            _ => TacticalAction::GiveGround,
+        };
+    }
+    match action {
+        TacticalAction::FightDefensively { penalty } => {
+            egui::ComboBox::from_id_source(format!("{id_prefix}_stance_penalty"))
+                .selected_text(format!("-{penalty}/+{}", *penalty / 2))
+                .show_ui(ui, |ui| {
+                    for option in [2, 4, 6, 8] {
+                        ui.selectable_value(penalty, option, format!("-{option}/+{}", option / 2));
+                    }
+                });
+        }
+        TacticalAction::UseWeaponStyle { style_ids } => {
+            let mut selected = style_ids.join(" + ");
+            egui::ComboBox::from_id_source(format!("{id_prefix}_style"))
+                .selected_text(if selected.is_empty() {
+                    "No compatible learned style"
+                } else {
+                    selected.as_str()
+                })
+                .show_ui(ui, |ui| {
+                    for style in learned_styles {
+                        let compatible = compatible_styles
+                            .iter()
+                            .any(|available| available.eq_ignore_ascii_case(style));
+                        ui.add_enabled_ui(compatible, |ui| {
+                            let label = if compatible {
+                                style.clone()
+                            } else {
+                                format!("{style} — unavailable with current equipment")
+                            };
+                            ui.selectable_value(&mut selected, style.clone(), label);
+                        });
+                    }
+                    if pair_allowed {
+                        ui.selectable_value(
+                            &mut selected,
+                            "shield_of_blades + storm_of_blades".to_string(),
+                            "shield_of_blades + storm_of_blades",
+                        );
+                    }
+                });
+            *style_ids = if selected.contains(" + ") {
+                selected.split(" + ").map(str::to_string).collect()
+            } else if selected.is_empty() {
+                Vec::new()
+            } else {
+                vec![selected]
+            };
+        }
+        _ => {}
+    }
+}
+
+fn tactical_compatibility_warning(
+    action: &TacticalAction,
+    learned_styles: &[String],
+    compatible_styles: &[String],
+    pair_allowed: bool,
+    weapon_can_jab: bool,
+) -> Option<String> {
+    match action {
+        TacticalAction::Jab if !weapon_can_jab => {
+            Some("Current weapon cannot Jab; this rule will be skipped.".to_string())
+        }
+        TacticalAction::UseWeaponStyle { style_ids }
+            if style_ids.is_empty()
+                || style_ids.iter().any(|style| {
+                    !learned_styles
+                        .iter()
+                        .any(|learned| learned.eq_ignore_ascii_case(style))
+                })
+                || style_ids.iter().any(|style| {
+                    !compatible_styles
+                        .iter()
+                        .any(|available| available.eq_ignore_ascii_case(style))
+                })
+                || (style_ids.len() == 2 && !pair_allowed) =>
+        {
+            Some(
+                "Style is not compatible with this character; the rule is preserved but skipped."
+                    .to_string(),
+            )
+        }
+        _ => None,
+    }
+}
+
+fn weapon_style_display_name(style_id: &str, talent_catalog: &TalentCatalog) -> String {
+    talent_catalog
+        .entries()
+        .iter()
+        .find(|talent| talent.id.eq_ignore_ascii_case(style_id))
+        .map(|talent| talent.name.clone())
+        .unwrap_or_else(|| style_id.to_string())
+}
+
+fn weapon_style_selection_label(style_ids: &[String], talent_catalog: &TalentCatalog) -> String {
+    if style_ids.is_empty() {
+        "No weapon style".to_string()
+    } else {
+        style_ids
+            .iter()
+            .map(|style| weapon_style_display_name(style, talent_catalog))
+            .collect::<Vec<_>>()
+            .join(" + ")
+    }
+}
+
+fn render_default_weapon_style_selector(
+    ui: &mut egui::Ui,
+    id_prefix: &str,
+    player: &mut PlayerConfig,
+    weapon_catalog: &WeaponCatalog,
+    armor_catalog: &ArmorCatalog,
+    shield_catalog: &ShieldCatalog,
+    talent_catalog: &TalentCatalog,
+) {
+    let learned = game_logic::learned_weapon_style_ids(player, talent_catalog);
+    let compatible = game_logic::compatible_weapon_style_ids(
+        player,
+        talent_catalog,
+        weapon_catalog,
+        armor_catalog,
+        shield_catalog,
+    );
+    let effective = game_logic::effective_default_weapon_style_ids(
+        player,
+        talent_catalog,
+        weapon_catalog,
+        armor_catalog,
+        shield_catalog,
+    );
+    let inferred =
+        game_logic::inferred_legacy_weapon_style_ids(player, talent_catalog, weapon_catalog);
+    let selected = player
+        .default_weapon_style_ids
+        .clone()
+        .map(hackmaster_sim::core::tactics::canonicalize_style_selection)
+        .unwrap_or_else(|| inferred.clone());
+    let pair_learned = learned
+        .iter()
+        .any(|style| style.eq_ignore_ascii_case("shield_of_blades"))
+        && learned
+            .iter()
+            .any(|style| style.eq_ignore_ascii_case("storm_of_blades"))
+        && game_logic::has_perfect_two_weapon_fighting_effect(player);
+    let pair_compatible = game_logic::tactical_style_pair_allowed(player, &compatible);
+    let selected_compatible = selected == effective;
+    let selector_label = if player.tactical_policy.enabled {
+        "Opening style"
+    } else {
+        "Default style"
+    };
+
+    ui.group(|ui| {
+        ui.strong("Weapon Style");
+        ui.horizontal_wrapped(|ui| {
+            ui.label(selector_label);
+            egui::ComboBox::from_id_source(format!("{id_prefix}_default_weapon_style"))
+                .selected_text(weapon_style_selection_label(&selected, talent_catalog))
+                .show_ui(ui, |ui| {
+                    if ui
+                        .selectable_label(selected.is_empty(), "No weapon style")
+                        .clicked()
+                    {
+                        player.default_weapon_style_ids = Some(Vec::new());
+                    }
+                    for style in &learned {
+                        let available = compatible
+                            .iter()
+                            .any(|candidate| candidate.eq_ignore_ascii_case(style));
+                        let is_selected = selected.len() == 1
+                            && selected[0].eq_ignore_ascii_case(style);
+                        let name = weapon_style_display_name(style, talent_catalog);
+                        ui.add_enabled_ui(available, |ui| {
+                            let label = if available {
+                                name
+                            } else {
+                                format!("{name} — unavailable with current equipment")
+                            };
+                            if ui.selectable_label(is_selected, label).clicked() {
+                                player.default_weapon_style_ids = Some(vec![style.clone()]);
+                            }
+                        });
+                    }
+                    if pair_learned {
+                        let pair = vec![
+                            "shield_of_blades".to_string(),
+                            "storm_of_blades".to_string(),
+                        ];
+                        let is_selected = selected == pair;
+                        ui.add_enabled_ui(pair_compatible, |ui| {
+                            let label = if pair_compatible {
+                                "Shield of Blades + Storm of Blades"
+                            } else {
+                                "Shield of Blades + Storm of Blades — unavailable"
+                            };
+                            if ui.selectable_label(is_selected, label).clicked() {
+                                player.default_weapon_style_ids = Some(pair);
+                            }
+                        });
+                    }
+                });
+        });
+        if player.tactical_policy.enabled {
+            ui.small(
+                "This style is active before combat and remains active until a directive changes it at an attack opportunity.",
+            );
+        } else {
+            ui.small("This style remains active throughout combat.");
+        }
+        if player.default_weapon_style_ids.is_none() && !inferred.is_empty() {
+            ui.small(format!(
+                "Legacy preset default: {}. Choosing an option will save it explicitly.",
+                weapon_style_selection_label(&inferred, talent_catalog)
+            ));
+        }
+        if !selected_compatible {
+            ui.colored_label(
+                Color32::YELLOW,
+                "The selected style is learned but incompatible with the current equipment. Combat falls back to no style.",
+            );
+        }
+        if learned.is_empty() {
+            ui.small("Learn weapon styles from the Talents tab to make them available here.");
+        }
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_tactics_editor(
+    ui: &mut egui::Ui,
+    id_prefix: &str,
+    player: &mut PlayerConfig,
+    weapon_catalog: &WeaponCatalog,
+    armor_catalog: &ArmorCatalog,
+    shield_catalog: &ShieldCatalog,
+    talent_catalog: &TalentCatalog,
+    draft: &mut TacticalPolicy,
+    presets: &mut Vec<TacticalPreset>,
+    preset_index: &mut usize,
+    preset_name: &mut String,
+    message: &mut Option<String>,
+    pending_load: &mut Option<usize>,
+    confirm_overwrite: &mut bool,
+    confirm_delete: &mut bool,
+    locked: bool,
+    applied: &mut bool,
+) {
+    let learned_styles = game_logic::learned_weapon_style_ids(player, talent_catalog);
+    let compatible_styles = game_logic::compatible_weapon_style_ids(
+        player,
+        talent_catalog,
+        weapon_catalog,
+        armor_catalog,
+        shield_catalog,
+    );
+    let style_options = talent_catalog
+        .entries()
+        .iter()
+        .filter(|talent| game_logic::is_weapon_style_category(&talent.category))
+        .map(|talent| talent.id.clone())
+        .collect::<Vec<_>>();
+    let pair_allowed = game_logic::tactical_style_pair_allowed(player, &compatible_styles);
+    let weapon_can_jab = weapon_catalog
+        .get(player.weapon_id)
+        .map(|weapon| weapon.jab_speed.is_some())
+        .unwrap_or(false);
+
+    ui.heading("Tactical Directives");
+    ui.label("Rules are checked in order. The first legal match in each channel wins.");
+    ui.small("Attack speed is measured in seconds: lower values are faster.");
+    ui.small(
+        "Enemy time to reach uses current distance, enemy melee reach, and current movement speed.",
+    );
+    if locked {
+        ui.colored_label(
+            Color32::YELLOW,
+            "Editing is locked after combat begins. Reset the simulation to edit tactics.",
+        );
+    }
+    if let Some(text) = message.as_ref() {
+        ui.colored_label(Color32::LIGHT_RED, text);
+    }
+
+    ui.add_enabled_ui(!locked, |ui| {
+        let enabled_changed = ui
+            .checkbox(&mut draft.enabled, "Enable Tactical Directives")
+            .changed();
+        if enabled_changed {
+            match apply_tactical_enabled_toggle(&mut player.tactical_policy, draft) {
+                Ok(()) => {
+                    *message = Some(if draft.enabled {
+                        "Tactical directives enabled and applied. Existing simulation results were kept."
+                            .to_string()
+                    } else {
+                        "Tactical directives disabled immediately. Existing simulation results were kept."
+                            .to_string()
+                    });
+                    *applied = true;
+                }
+                Err(errors) => {
+                    draft.enabled = player.tactical_policy.enabled;
+                    *message = Some(errors.join(" "));
+                }
+            }
+        }
+        ui.small(format!(
+            "Live combat state: {}",
+            if player.tactical_policy.enabled {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        ));
+        ui.separator();
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Preset");
+            if presets.is_empty() {
+                ui.label("No presets available");
+            } else {
+                *preset_index = (*preset_index).min(presets.len() - 1);
+                egui::ComboBox::from_id_source(format!("{id_prefix}_tactical_preset"))
+                    .selected_text(&presets[*preset_index].name)
+                    .show_ui(ui, |ui| {
+                        for (idx, preset) in presets.iter().enumerate() {
+                            ui.selectable_value(preset_index, idx, &preset.name);
+                        }
+                    });
+                if ui.button("Load").clicked() {
+                    if *draft != player.tactical_policy {
+                        *pending_load = Some(*preset_index);
+                    } else {
+                        let preset = &presets[*preset_index];
+                        draft.rules = preset.rules.clone();
+                        if let Some(opening_style_ids) = &preset.opening_style_ids {
+                            player.default_weapon_style_ids = Some(opening_style_ids.clone());
+                        }
+                        *message = Some(format!(
+                            "Loaded preset '{}'. Its tactics apply immediately.",
+                            preset.name
+                        ));
+                        *applied = true;
+                    }
+                }
+            }
+        });
+        if let Some(load_index) = *pending_load {
+            ui.horizontal(|ui| {
+                ui.colored_label(Color32::YELLOW, "Discard unsaved draft and load preset?");
+                if ui.button("Discard & Load").clicked() {
+                    if let Some(preset) = presets.get(load_index) {
+                        draft.rules = preset.rules.clone();
+                        if let Some(opening_style_ids) = &preset.opening_style_ids {
+                            player.default_weapon_style_ids = Some(opening_style_ids.clone());
+                        }
+                        *message = Some(format!(
+                            "Loaded preset '{}'. Its tactics apply immediately.",
+                            preset.name
+                        ));
+                        *applied = true;
+                    }
+                    *pending_load = None;
+                }
+                if ui.button("Keep Draft").clicked() {
+                    *pending_load = None;
+                }
+            });
+        }
+
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Save as");
+            ui.text_edit_singleline(preset_name);
+            if ui.button("Save preset").clicked() {
+                let name = preset_name.trim();
+                if let Err(errors) = validate_policy(draft) {
+                    *message = Some(errors.join(" "));
+                } else if name.is_empty() {
+                    *message = Some("Enter a preset name.".to_string());
+                } else if presets
+                    .iter()
+                    .any(|preset| preset.name.eq_ignore_ascii_case(name))
+                {
+                    *confirm_overwrite = true;
+                } else {
+                    let previous = presets.clone();
+                    presets.push(TacticalPreset {
+                        name: name.to_string(),
+                        opening_style_ids: Some(
+                            player.default_weapon_style_ids.clone().unwrap_or_else(|| {
+                                game_logic::inferred_legacy_weapon_style_ids(
+                                    player,
+                                    talent_catalog,
+                                    weapon_catalog,
+                                )
+                            }),
+                        ),
+                        rules: draft.rules.clone(),
+                    });
+                    match data::save_tactical_presets(TACTICAL_PRESETS_PATH, presets) {
+                        Ok(()) => {
+                            *preset_index = presets.len() - 1;
+                            *message = Some(format!("Saved preset '{name}'."));
+                        }
+                        Err(err) => {
+                            *presets = previous;
+                            *message = Some(format!("Could not save preset: {err}"));
+                        }
+                    }
+                }
+            }
+            if !presets.is_empty() && ui.button("Rename selected").clicked() {
+                let name = preset_name.trim();
+                let duplicate = presets.iter().enumerate().any(|(idx, preset)| {
+                    idx != *preset_index && preset.name.eq_ignore_ascii_case(name)
+                });
+                if name.is_empty() || duplicate {
+                    *message = Some("Rename needs a non-empty, unique name.".to_string());
+                } else {
+                    let previous = presets.clone();
+                    presets[*preset_index].name = name.to_string();
+                    if let Err(err) = data::save_tactical_presets(TACTICAL_PRESETS_PATH, presets) {
+                        *presets = previous;
+                        *message = Some(format!("Could not rename preset: {err}"));
+                    } else {
+                        *message = Some(format!("Renamed preset to '{name}'."));
+                    }
+                }
+            }
+            if !presets.is_empty() && ui.button("Delete selected").clicked() {
+                *confirm_delete = true;
+            }
+        });
+        if *confirm_overwrite {
+            ui.horizontal(|ui| {
+                ui.colored_label(Color32::YELLOW, "Overwrite the existing preset?");
+                if ui.button("Overwrite").clicked() {
+                    let previous = presets.clone();
+                    if let Some(existing) = presets
+                        .iter_mut()
+                        .find(|preset| preset.name.eq_ignore_ascii_case(preset_name.trim()))
+                    {
+                        existing.opening_style_ids =
+                            Some(player.default_weapon_style_ids.clone().unwrap_or_else(|| {
+                                game_logic::inferred_legacy_weapon_style_ids(
+                                    player,
+                                    talent_catalog,
+                                    weapon_catalog,
+                                )
+                            }));
+                        existing.rules = draft.rules.clone();
+                    }
+                    match data::save_tactical_presets(TACTICAL_PRESETS_PATH, presets) {
+                        Ok(()) => *message = Some("Preset overwritten.".to_string()),
+                        Err(err) => {
+                            *presets = previous;
+                            *message = Some(format!("Could not overwrite preset: {err}"));
+                        }
+                    }
+                    *confirm_overwrite = false;
+                }
+                if ui.button("Cancel").clicked() {
+                    *confirm_overwrite = false;
+                }
+            });
+        }
+        if *confirm_delete && !presets.is_empty() {
+            ui.horizontal(|ui| {
+                ui.colored_label(Color32::YELLOW, "Delete the selected preset?");
+                if ui.button("Delete permanently").clicked() {
+                    let previous = presets.clone();
+                    let removed_name = presets[*preset_index].name.clone();
+                    presets.remove(*preset_index);
+                    match data::save_tactical_presets(TACTICAL_PRESETS_PATH, presets) {
+                        Ok(()) => {
+                            *preset_index = (*preset_index).min(presets.len().saturating_sub(1));
+                            *message = Some(format!("Deleted preset '{removed_name}'."));
+                        }
+                        Err(err) => {
+                            *presets = previous;
+                            *message = Some(format!("Could not delete preset: {err}"));
+                        }
+                    }
+                    *confirm_delete = false;
+                }
+                if ui.button("Cancel").clicked() {
+                    *confirm_delete = false;
+                }
+            });
+        }
+
+        ui.separator();
+        enum RuleEdit {
+            MoveUp(usize),
+            MoveDown(usize),
+            Duplicate(usize),
+            Delete(usize),
+        }
+        let mut edit = None;
+        for index in 0..draft.rules.len() {
+            ui.push_id(format!("{id_prefix}_tactical_rule_{index}"), |ui| {
+                let rule = &mut draft.rules[index];
+                ui.group(|ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.checkbox(&mut rule.enabled, "");
+                        ui.strong(format!(
+                            "{}. {} - {}",
+                            index + 1,
+                            rule.decision.label().to_ascii_uppercase(),
+                            rule.action.channel().label().to_ascii_uppercase()
+                        ));
+                        if ui.small_button("Up").clicked() {
+                            edit = Some(RuleEdit::MoveUp(index));
+                        }
+                        if ui.small_button("Down").clicked() {
+                            edit = Some(RuleEdit::MoveDown(index));
+                        }
+                        if ui.small_button("Duplicate").clicked() {
+                            edit = Some(RuleEdit::Duplicate(index));
+                        }
+                        if ui.small_button("Delete").clicked() {
+                            edit = Some(RuleEdit::Delete(index));
+                        }
+                    });
+                    let mut remove_condition = None;
+                    for condition_index in 0..rule.conditions.len() {
+                        let prefix = format!("{id_prefix}_r{index}_c{condition_index}");
+                        if tactical_condition_editor(
+                            ui,
+                            &prefix,
+                            &mut rule.conditions[condition_index],
+                            &style_options,
+                        ) {
+                            remove_condition = Some(condition_index);
+                        }
+                    }
+                    if let Some(condition_index) = remove_condition {
+                        rule.conditions.remove(condition_index);
+                    }
+                    if rule.conditions.len() < MAX_TACTICAL_CONDITIONS
+                        && ui.small_button("+ Add AND condition").clicked()
+                    {
+                        rule.conditions.push(TacticalCondition::Always);
+                    }
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("THEN");
+                        tactical_action_editor(
+                            ui,
+                            &format!("{id_prefix}_r{index}"),
+                            &mut rule.action,
+                            &learned_styles,
+                            &compatible_styles,
+                            pair_allowed,
+                        );
+                        rule.decision = rule.action.decision_point();
+                    });
+                    if let Some(warning) = tactical_compatibility_warning(
+                        &rule.action,
+                        &learned_styles,
+                        &compatible_styles,
+                        pair_allowed,
+                        weapon_can_jab,
+                    ) {
+                        ui.colored_label(Color32::YELLOW, warning);
+                    }
+                });
+            });
+        }
+        if let Some(edit) = edit {
+            match edit {
+                RuleEdit::MoveUp(index) if index > 0 => draft.rules.swap(index, index - 1),
+                RuleEdit::MoveDown(index) if index + 1 < draft.rules.len() => {
+                    draft.rules.swap(index, index + 1)
+                }
+                RuleEdit::Duplicate(index) => {
+                    let rule = draft.rules[index].clone();
+                    draft.rules.insert(index + 1, rule);
+                }
+                RuleEdit::Delete(index) => {
+                    draft.rules.remove(index);
+                }
+                _ => {}
+            }
+        }
+        if ui.button("+ Add rule").clicked() {
+            draft.rules.push(TacticalRule::new(
+                TacticalAction::NormalAttack,
+                vec![TacticalCondition::Always],
+            ));
+        }
+        ui.separator();
+        match apply_tactical_ui_policy(&mut player.tactical_policy, draft) {
+            Ok(true) => {
+                *message = Some(if draft.enabled {
+                    "Tactical changes applied immediately.".to_string()
+                } else {
+                    "Tactical changes saved; directives are currently disabled.".to_string()
+                });
+                *applied = true;
+            }
+            Ok(false) => {}
+            Err(errors) => {
+                *message = Some(errors.join(" "));
+            }
+        }
+        ui.small("Changes are applied immediately. Presets are only needed to reuse a setup.");
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
 fn render_player_editor(
     ui: &mut egui::Ui,
     id_prefix: &str,
@@ -2266,6 +3296,16 @@ fn render_player_editor(
     dps_result: &Option<DpsTestResult>,
     dps_sim_duration: Option<std::time::Duration>,
     run_dps_test: &mut bool,
+    tactical_draft: &mut TacticalPolicy,
+    tactical_presets: &mut Vec<TacticalPreset>,
+    tactical_preset_index: &mut usize,
+    tactical_preset_name: &mut String,
+    tactical_message: &mut Option<String>,
+    tactical_pending_load: &mut Option<usize>,
+    tactical_confirm_overwrite: &mut bool,
+    tactical_confirm_delete: &mut bool,
+    tactics_locked: bool,
+    tactics_applied: &mut bool,
 ) {
     if weapon_catalog.is_empty() {
         ui.label("Weapon catalog is empty.");
@@ -2857,15 +3897,34 @@ fn render_player_editor(
                     .first()
                     .expect("weapon catalog empty")
             });
+            render_default_weapon_style_selector(
+                ui,
+                id_prefix,
+                player,
+                weapon_catalog,
+                armor_catalog,
+                shield_catalog,
+                talent_catalog,
+            );
+            ui.separator();
             let has_jab = weapon.jab_speed.is_some();
+            let tactics_controlled = player.tactical_policy.enabled;
             ui.label("Toggle to always attempt maneuvers when eligible.");
+            if tactics_controlled {
+                ui.colored_label(
+                    Color32::LIGHT_BLUE,
+                    "Jab, Fight Defensively, and Give Ground are controlled by Tactical Directives.",
+                );
+            }
             ui.separator();
             ui.horizontal(|ui| {
-                ui.add_enabled_ui(has_jab, |ui| {
+                ui.add_enabled_ui(has_jab && !tactics_controlled, |ui| {
                     ui.checkbox(&mut player.use_jab, "Jab");
                 });
                 if !has_jab {
                     ui.label("Unavailable");
+                } else if tactics_controlled {
+                    ui.label("Controlled by Tactical Directives");
                 }
             });
             if player.use_jab {
@@ -2920,26 +3979,30 @@ fn render_player_editor(
                 ui.checkbox(&mut player.tactical_move, "Tactical move (NYI)");
             });
             ui.horizontal(|ui| {
-                ui.checkbox(&mut player.fight_defensively, "Fight defensively");
+                ui.add_enabled_ui(!tactics_controlled, |ui| {
+                    ui.checkbox(&mut player.fight_defensively, "Fight defensively");
+                });
                 let mut penalty = game_logic::normalize_fight_defensively_penalty(
                     player.fight_defensively_penalty,
                 );
-                searchable_select(
-                    ui,
-                    format!("{id_prefix}_fight_defensively_penalty"),
-                    format!("-{penalty}/+{}", penalty / 2),
-                    &mut penalty,
-                    game_logic::FIGHT_DEFENSIVELY_PENALTY_OPTIONS
-                        .into_iter()
-                        .map(|option| (option, format!("-{option}/+{}", option / 2), true)),
-                );
+                ui.add_enabled_ui(!tactics_controlled, |ui| {
+                    searchable_select(
+                        ui,
+                        format!("{id_prefix}_fight_defensively_penalty"),
+                        format!("-{penalty}/+{}", penalty / 2),
+                        &mut penalty,
+                        game_logic::FIGHT_DEFENSIVELY_PENALTY_OPTIONS
+                            .into_iter()
+                            .map(|option| (option, format!("-{option}/+{}", option / 2), true)),
+                    );
+                });
                 player.fight_defensively_penalty = penalty;
             });
             ui.add_enabled_ui(false, |ui| {
                 ui.checkbox(&mut player.full_parry, "Full parry (NYI)");
             });
             ui.add_enabled_ui(false, |ui| {
-                ui.checkbox(&mut player.give_ground, "Give ground (NYI)");
+                ui.checkbox(&mut player.give_ground, "Give ground (Tactics only)");
             });
             ui.add_enabled_ui(false, |ui| {
                 ui.checkbox(&mut player.scamper_back, "Scamper back (NYI)");
@@ -2951,6 +4014,29 @@ fn render_player_editor(
                 ui.checkbox(&mut player.flee, "Flee (NYI)");
             });
             ui.checkbox(&mut player.mounted, "Mounted");
+        }
+        PlayerEditorTab::Tactics => {
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                render_tactics_editor(
+                    ui,
+                    id_prefix,
+                    player,
+                    weapon_catalog,
+                    armor_catalog,
+                    shield_catalog,
+                    talent_catalog,
+                    tactical_draft,
+                    tactical_presets,
+                    tactical_preset_index,
+                    tactical_preset_name,
+                    tactical_message,
+                    tactical_pending_load,
+                    tactical_confirm_overwrite,
+                    tactical_confirm_delete,
+                    tactics_locked,
+                    tactics_applied,
+                );
+            });
         }
         PlayerEditorTab::Stats => {
             let npc_active = player.npc_preset.is_some();
@@ -3908,6 +4994,7 @@ fn apply_fighter_preset(
     player.misc_modifiers = game_logic::MiscRollModifiers::default();
     player.proficiencies = preset.proficiencies.clone();
     player.talents = preset.talents.clone();
+    player.default_weapon_style_ids = preset.default_weapon_style_ids.clone();
     player.weapon_id = find_weapon_id_by_name(weapon_catalog, &preset.weapon)
         .or_else(|| weapon_catalog.first_id())
         .unwrap_or(WeaponId::new(0));
@@ -4017,6 +5104,7 @@ fn fighter_preset_from_player(
         race_id: player.race_id.clone(),
         proficiencies: player.proficiencies.clone(),
         talents: player.talents.clone(),
+        default_weapon_style_ids: player.default_weapon_style_ids.clone(),
     }
 }
 
@@ -4521,12 +5609,10 @@ fn render_talent_entry(
     let locked = !requirement_failures.is_empty();
     let is_nyi = !game_logic::talent_is_implemented(spec);
     let requires_group = game_logic::talent_requires_weapon_group(spec);
-    let style_conflict = selected_index.is_none()
-        && game_logic::has_other_weapon_style_selected(player, spec, talent_catalog);
     let muted_color = ui.visuals().weak_text_color();
     let can_adjust = !locked && (!is_nyi || requires_group);
-    let allow_add = !locked && (!is_nyi || requires_group) && !style_conflict;
-    let allow_force_add = locked && (!is_nyi || requires_group) && !style_conflict;
+    let allow_add = !locked && (!is_nyi || requires_group);
+    let allow_force_add = locked && (!is_nyi || requires_group);
     ui.group(|ui| {
         ui.horizontal(|ui| {
             if is_nyi {
@@ -4610,13 +5696,6 @@ fn render_talent_entry(
                 ));
             }
         }
-        if style_conflict {
-            ui.colored_label(
-                Color32::from_rgb(180, 70, 70),
-                "Only one weapon style can be active at a time.",
-            );
-        }
-
         if let Some(index) = selected_index {
             let selection = &mut player.talents[index];
             let max_rank = spec.max_rank.max(1);
@@ -4779,6 +5858,179 @@ fn main() -> eframe::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reopening_customize_refreshes_tactical_draft_from_live_policy() {
+        let active = TacticalPolicy {
+            enabled: true,
+            rules: vec![TacticalRule::new(
+                TacticalAction::NormalAttack,
+                vec![TacticalCondition::Always],
+            )],
+        };
+        let mut draft = TacticalPolicy::default();
+
+        assert!(sync_tactical_draft_on_open(
+            false, true, &active, &mut draft
+        ));
+        assert_eq!(draft, active);
+        assert!(!sync_tactical_draft_on_open(
+            true, true, &active, &mut draft
+        ));
+    }
+
+    #[test]
+    fn tactical_enable_checkbox_updates_live_policy() {
+        let mut active = TacticalPolicy {
+            enabled: true,
+            rules: vec![TacticalRule::new(
+                TacticalAction::Jab,
+                vec![TacticalCondition::MyWeaponCanJab { value: true }],
+            )],
+        };
+        let saved_rules = active.rules.clone();
+        let mut draft = active.clone();
+        draft.enabled = false;
+
+        apply_tactical_enabled_toggle(&mut active, &draft).expect("disable should be valid");
+        assert!(!active.enabled);
+        assert_eq!(active.rules, saved_rules);
+
+        draft.enabled = true;
+        draft.rules = vec![TacticalRule::new(
+            TacticalAction::NormalAttack,
+            vec![TacticalCondition::Always],
+        )];
+        apply_tactical_enabled_toggle(&mut active, &draft).expect("enable should be valid");
+        assert_eq!(active, draft);
+    }
+
+    #[test]
+    fn tactical_rule_edits_immediately_replace_live_policy_and_survive_reopen() {
+        let mut active = TacticalPolicy {
+            enabled: true,
+            rules: vec![
+                TacticalRule::new(
+                    TacticalAction::Jab,
+                    vec![TacticalCondition::MyWeaponCanJab { value: true }],
+                ),
+                TacticalRule::new(
+                    TacticalAction::NormalAttack,
+                    vec![TacticalCondition::Always],
+                ),
+            ],
+        };
+        let mut draft = active.clone();
+        draft.rules[0].enabled = false;
+        draft.rules.remove(1);
+
+        assert!(
+            apply_tactical_ui_policy(&mut active, &draft).expect("edited policy should be valid")
+        );
+        assert_eq!(active, draft);
+        assert!(!active.rules[0].enabled);
+        assert_eq!(active.rules.len(), 1);
+
+        let mut reopened_draft = TacticalPolicy::default();
+        assert!(sync_tactical_draft_on_open(
+            false,
+            true,
+            &active,
+            &mut reopened_draft,
+        ));
+        assert_eq!(reopened_draft, draft);
+    }
+
+    #[test]
+    fn deleting_every_tactical_rule_immediately_clears_live_policy() {
+        let mut active = TacticalPolicy {
+            enabled: true,
+            rules: vec![TacticalRule::new(
+                TacticalAction::NormalAttack,
+                vec![TacticalCondition::Always],
+            )],
+        };
+        let draft = TacticalPolicy {
+            enabled: true,
+            rules: Vec::new(),
+        };
+
+        assert!(
+            apply_tactical_ui_policy(&mut active, &draft).expect("empty policy should be valid")
+        );
+        assert!(active.rules.is_empty());
+    }
+
+    #[test]
+    fn simulation_rebuild_uses_policy_applied_from_tactical_ui() {
+        let mut app = SimGuiApp::new();
+        let draft = TacticalPolicy {
+            enabled: true,
+            rules: vec![TacticalRule::new(
+                TacticalAction::NormalAttack,
+                vec![TacticalCondition::Always],
+            )],
+        };
+
+        assert!(
+            apply_tactical_ui_policy(&mut app.players[0].tactical_policy, &draft)
+                .expect("UI policy should be valid")
+        );
+        app.reset_positions();
+
+        assert_eq!(app.players[0].tactical_policy, draft);
+        assert_eq!(app.sim.combatants[0].tactical_policy, draft);
+    }
+
+    #[test]
+    fn maximum_start_distance_builds_a_valid_simulation_grid() {
+        let config = SimConfig::new(MAX_START_DISTANCE_FT, 1.0);
+
+        assert_eq!(config.start_distance, 4_000.0);
+        assert!(config.grid_width > 4_000);
+    }
+
+    #[test]
+    fn changing_start_distance_resizes_grid_and_respawns_at_requested_distance() {
+        let mut app = SimGuiApp::new();
+
+        app.sim.config.set_start_distance(MAX_START_DISTANCE_FT);
+        app.reset_positions();
+
+        assert_eq!(app.sim.distance(), MAX_START_DISTANCE_FT);
+        assert!(app.sim.config.grid_width > MAX_START_DISTANCE_FT as i32);
+    }
+
+    #[test]
+    fn every_tactical_policy_change_preserves_cached_winrate() {
+        let mut app = SimGuiApp::new();
+        app.bulk_runs = 1;
+        app.run_bulk_sim();
+        assert!(app.bulk_result.is_some());
+
+        let enabled_draft = TacticalPolicy {
+            enabled: true,
+            rules: vec![TacticalRule::new(
+                TacticalAction::NormalAttack,
+                vec![TacticalCondition::Always],
+            )],
+        };
+        assert!(
+            apply_tactical_ui_policy(&mut app.players[0].tactical_policy, &enabled_draft)
+                .expect("UI policy should be valid")
+        );
+        app.reset_positions();
+        assert!(app.bulk_result.is_some());
+        assert!(app.bulk_last_seed.is_some());
+
+        let mut disabled_draft = enabled_draft;
+        disabled_draft.enabled = false;
+        apply_tactical_enabled_toggle(&mut app.players[0].tactical_policy, &disabled_draft)
+            .expect("disabling tactics should be valid");
+        app.reset_positions();
+        assert!(app.bulk_result.is_some());
+        assert!(app.bulk_last_seed.is_some());
+    }
 
     #[test]
     fn disorder_wound_counts_complete_fifty_essence_bands() {

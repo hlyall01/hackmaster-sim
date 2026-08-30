@@ -9,4 +9,5 @@ pub mod rng;
 pub mod rules;
 pub mod sim;
 pub mod skills;
+pub mod tactics;
 pub mod types;

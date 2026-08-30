@@ -126,6 +126,7 @@ pub fn format_combat_event(event: &CombatEvent, combatants: &[Combatant]) -> Str
             let details = format_knock_aside_roll(&knock.roll);
             format!("{base} [{details}]")
         }
+        CombatEventKind::Tactical(tactical) => tactical.message.clone(),
     }
 }
 

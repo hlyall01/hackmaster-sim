@@ -27,6 +27,7 @@ const SIX_PATHS_SHIELD_BLOCK_WINDOW: i32 = 5;
 const DEFAULT_SHIELD_BLOCK_WINDOW: i32 = 10;
 const DECEPTIVE_DEFENDER_CALLED_SHOT_DEFENSE_BONUS: i32 = 4;
 const CALLED_SHOT_PRECISION_BONUS_SCALE_BASE: i32 = 8;
+const TWELVE_PATHS_DAMAGE_PENALTY: i32 = 3;
 
 struct AttackProfile {
     weapon: Arc<super::types::WeaponProfile>,
@@ -48,7 +49,13 @@ fn attack_profile_for_slot(attacker: &Combatant, slot: WeaponSlot) -> Option<Att
             strength_damage: attacker.apply_i32(
                 StatIdI32::StrengthDamage,
                 attacker.sheet.offense.strength_damage,
-            ),
+            ) + if !attacker.state.shield_intact
+                && attacker.apply_i32(StatIdI32::FlagLargeSwordShieldStyle, 0) > 0
+            {
+                TWELVE_PATHS_DAMAGE_PENALTY
+            } else {
+                0
+            },
             armor_penetration: attacker.apply_i32(
                 StatIdI32::ArmorPenetration,
                 attacker.sheet.offense.weapon.armor_penetration,
@@ -109,7 +116,7 @@ fn fight_defensively_attack_penalty(combatant: &Combatant) -> i32 {
 }
 
 fn fight_defensively_defense_bonus(combatant: &Combatant) -> i32 {
-    if combatant.sheet.maneuvers.fight_defensively {
+    let stance_bonus = if combatant.sheet.maneuvers.fight_defensively {
         combatant
             .sheet
             .maneuvers
@@ -117,7 +124,8 @@ fn fight_defensively_defense_bonus(combatant: &Combatant) -> i32 {
             .max(0)
     } else {
         0
-    }
+    };
+    stance_bonus + combatant.state.tactical_give_ground_defense_bonus.max(0)
 }
 
 fn called_shot_active(combatant: &Combatant) -> bool {
@@ -192,6 +200,7 @@ pub(crate) struct AttackOutcome {
     pub(super) shield_damage_breakdown: Option<ShieldDamageBreakdown>,
     pub(super) defender_hp_after: i32,
     pub(super) critical: Option<CriticalHit>,
+    pub(super) precognition_triggered: bool,
     pub(super) counter_attack: Option<CounterAttackOutcome>,
 }
 
@@ -213,6 +222,7 @@ pub(crate) struct CounterAttackOutcome {
     pub(super) shield_damage_breakdown: Option<ShieldDamageBreakdown>,
     pub(super) defender_hp_after: i32,
     pub(super) critical: Option<CriticalHit>,
+    pub(super) precognition_triggered: bool,
 }
 
 pub(crate) struct KnockAsideOutcome {
@@ -653,6 +663,161 @@ fn apply_trauma_duration(combatants: &mut [Combatant], defender_idx: usize, dura
     new_duration
 }
 
+fn feat_of_agility_succeeds(combatant: &Combatant, difficulty: i32, rng: &mut impl Rng) -> bool {
+    let roll = penetrating_roll(20, rng);
+    let total = roll + combatant.sheet.defense.feat_of_agility
+        - combatant.sheet.defense.armor_feat_of_agility_penalty.max(0);
+    total >= difficulty.max(0)
+}
+
+fn is_buckler_or_small_shield(name: &str) -> bool {
+    let normalized = name.trim().to_ascii_lowercase();
+    normalized == "buckler" || (normalized.starts_with("small ") && normalized.contains("shield"))
+}
+
+fn resolve_eyesmite(
+    combatants: &mut [Combatant],
+    attacker_idx: usize,
+    defender_idx: usize,
+    now: f32,
+    rng: &mut impl Rng,
+) -> CounterAttackOutcome {
+    let drops_shield = combatants[attacker_idx].state.shield_intact
+        && combatants[attacker_idx]
+            .sheet
+            .defense
+            .shield_name
+            .as_deref()
+            .map(is_buckler_or_small_shield)
+            .unwrap_or(false);
+    if drops_shield {
+        combatants[attacker_idx].state.shield_intact = false;
+    }
+    combatants[attacker_idx].state.has_attacked = true;
+
+    let attack_bonus = combatants[attacker_idx].apply_i32(
+        StatIdI32::AttackBonusBase,
+        combatants[attacker_idx].sheet.offense.attack_bonus_base,
+    );
+    let strength_damage = combatants[attacker_idx].apply_i32(
+        StatIdI32::StrengthDamageBase,
+        combatants[attacker_idx].sheet.offense.strength_damage_base,
+    ) + combatants[attacker_idx].apply_i32(
+        StatIdI32::UnarmedDamageBonus,
+        combatants[attacker_idx].sheet.offense.unarmed_damage_bonus,
+    );
+
+    let defender_state = combatants[defender_idx].state.clone();
+    let defender = &combatants[defender_idx];
+    let defender_infinite_hp = defender.sheet.vitals.infinite_hp;
+    let defender_total_dr = defender.sheet.defense.armor_dr + defender.sheet.defense.natural_dr;
+    let shield_active = defender_state.shield_intact;
+    let defense_mod = defender.apply_i32(StatIdI32::DefenseMod, defender.sheet.defense.defense_mod)
+        + fight_defensively_defense_bonus(defender)
+        - called_shot_defense_penalty(defender);
+    let defense_ready = defense_plus_four_ready_at(&defender.sheet, &defender_state, now);
+    let weapon_defense_bonus =
+        if defender.sheet.offense.weapon.defense_bonus_always || defense_ready {
+            4
+        } else {
+            0
+        };
+    let shield_defense_bonus = if shield_active {
+        4 + defender.apply_i32(
+            StatIdI32::ShieldDefenseBonus,
+            defender.sheet.defense.shield_defense_bonus,
+        )
+    } else {
+        0
+    };
+    let defense_sides = defense_die_sides(
+        false,
+        defender_state.moved_last_tick,
+        shield_active,
+        defender_state.trauma_remaining_seconds > 0,
+        defender
+            .sheet
+            .maneuvers
+            .offensive_dualwielding_defense_penalty,
+    );
+    let attack_die = penetrating_roll(20, rng);
+    let defense_die = penetrating_roll(defense_sides, rng);
+    let attack_roll = attack_die + attack_bonus;
+    let defense_roll = defense_die + defense_mod + weapon_defense_bonus + shield_defense_bonus;
+    let eye_target = defense_roll
+        + defender
+            .sheet
+            .maneuvers
+            .called_shot_target_defense_bonus_base
+            .max(1);
+    let hit = attack_roll >= eye_target;
+    let roll = AttackRollBreakdown {
+        attack_die,
+        defense_die,
+        attack_bonus,
+        range_mod: 0,
+        defense_base: defense_mod,
+        weapon_defense_bonus,
+        shield_defense_bonus,
+        attack_total: attack_roll,
+        defense_total: defense_roll,
+    };
+
+    let mut damage = 0;
+    let mut trauma_seconds = None;
+    let mut damage_breakdown = None;
+    if hit {
+        let rolled_damage = roll_damage_expr("2d4p", rng, false);
+        let raw_damage = (rolled_damage + strength_damage).max(0);
+        damage = raw_damage;
+        combatants[attacker_idx].state.total_eyes_smote = combatants[attacker_idx]
+            .state
+            .total_eyes_smote
+            .saturating_add(1);
+        if !defender_infinite_hp {
+            combatants[defender_idx].state.hp -= damage;
+        }
+        if damage > 0 {
+            trauma_seconds = Some(apply_trauma_duration(
+                combatants,
+                defender_idx,
+                damage.saturating_mul(10),
+            ));
+        }
+        damage_breakdown = Some(DamageBreakdown {
+            rolled_damage,
+            strength_damage,
+            raw_damage,
+            armor_dr: defender_total_dr,
+            armor_penetration: 0,
+            effective_armor_dr: 0,
+            final_damage: damage,
+        });
+    }
+    update_regenstat_on_exchange(combatants, attacker_idx, defender_idx, hit);
+
+    CounterAttackOutcome {
+        attacker_idx,
+        defender_idx,
+        knockback_ft: 0.0,
+        hit,
+        shield_block: false,
+        damage,
+        shield_damage: 0,
+        weapon_slot: WeaponSlot::Primary,
+        use_jab: false,
+        is_ranged: false,
+        trauma_applied: trauma_seconds.is_some(),
+        trauma_seconds,
+        roll,
+        damage_breakdown,
+        shield_damage_breakdown: None,
+        defender_hp_after: combatants[defender_idx].state.hp,
+        critical: None,
+        precognition_triggered: false,
+    }
+}
+
 fn resolve_counter_attack(
     combatants: &mut [Combatant],
     attacker_idx: usize,
@@ -667,6 +832,12 @@ fn resolve_counter_attack(
     damage_multiplier: i32,
     rng: &mut impl Rng,
 ) -> CounterAttackOutcome {
+    combatants[attacker_idx].state.has_attacked = true;
+    let tactical_attack_penalty = combatants[attacker_idx]
+        .state
+        .tactical_next_attack_penalty
+        .max(0);
+    combatants[attacker_idx].state.tactical_next_attack_penalty = 0;
     let defender_state = combatants[defender_idx].state.clone();
     let defender = &combatants[defender_idx];
     let defender_infinite_hp = defender.sheet.vitals.infinite_hp;
@@ -852,8 +1023,9 @@ fn resolve_counter_attack(
     } else {
         penetrating_roll_with_first(defense_sides, rng)
     };
-    let attack_bonus_total =
-        attack_bonus + attacker_regenstat_bonus - attacker_fight_defensively_penalty;
+    let attack_bonus_total = attack_bonus + attacker_regenstat_bonus
+        - attacker_fight_defensively_penalty
+        - tactical_attack_penalty;
     let attack_roll = attack_die + attack_bonus_total;
     let defense_roll = defense_die + defense_mod + weapon_defense_bonus + shield_defense_bonus;
     let roll = AttackRollBreakdown {
@@ -876,6 +1048,10 @@ fn resolve_counter_attack(
             hit = true;
         }
     }
+    let precognition_triggered = hit
+        && defender.sheet.defense.precognition
+        && combatants[defender_idx].state.precognition_space_available
+        && feat_of_agility_succeeds(defender, attack_roll - defense_roll, rng);
 
     let mut damage = 0;
     let mut shield_block = false;
@@ -1046,6 +1222,9 @@ fn resolve_counter_attack(
                     .map(|weapon| weapon.internal_hemorrhage_damage.max(0))
                     .unwrap_or(0);
             }
+            if precognition_triggered {
+                damage /= 2;
+            }
             if !defender_infinite_hp {
                 combatants[defender_idx].state.hp -= damage;
             }
@@ -1192,6 +1371,7 @@ fn resolve_counter_attack(
         shield_damage_breakdown,
         defender_hp_after,
         critical,
+        precognition_triggered,
     }
 }
 
@@ -1208,6 +1388,11 @@ pub(crate) fn resolve_attack(
     state_snapshot: Option<&[CombatantState]>,
     rng: &mut impl Rng,
 ) -> AttackOutcome {
+    let tactical_attack_penalty = combatants[attacker_idx]
+        .state
+        .tactical_next_attack_penalty
+        .max(0);
+    combatants[attacker_idx].state.tactical_next_attack_penalty = 0;
     let defender_state = state_snapshot
         .and_then(|snapshot| snapshot.get(defender_idx))
         .cloned()
@@ -1289,9 +1474,11 @@ pub(crate) fn resolve_attack(
             shield_damage_breakdown: None,
             defender_hp_after: combatants[defender_idx].state.hp,
             critical: None,
+            precognition_triggered: false,
             counter_attack: None,
         };
     }
+    combatants[attacker_idx].state.has_attacked = true;
     let defender_initial_attack_bonus = if combatants[defender_idx]
         .sheet
         .maneuvers
@@ -1350,6 +1537,7 @@ pub(crate) fn resolve_attack(
     }
     attack_bonus += attacker_regenstat_bonus;
     attack_bonus -= attacker_fight_defensively_penalty;
+    attack_bonus -= tactical_attack_penalty;
     let strength_damage = attack_profile.strength_damage;
     let armor_penetration = attack_profile.armor_penetration;
     let use_jab = attack_profile.use_jab;
@@ -1555,6 +1743,20 @@ pub(crate) fn resolve_attack(
                 attacker_called_shot && attack_roll >= called_shot_precision_target;
         }
     }
+    if attack_hits && is_ranged && combatants[defender_idx].sheet.defense.prescience {
+        let passive_defense_roll =
+            penetrating_roll(20, rng) + defense_mod + defender_fight_defensively_bonus;
+        let difficulty = attack_roll - passive_defense_roll;
+        if feat_of_agility_succeeds(&combatants[defender_idx], difficulty, rng) {
+            attack_hits = false;
+            called_shot_precise_hit = false;
+        }
+    }
+    let precognition_triggered = attack_hits
+        && !is_ranged
+        && combatants[defender_idx].sheet.defense.precognition
+        && combatants[defender_idx].state.precognition_space_available
+        && feat_of_agility_succeeds(&combatants[defender_idx], attack_roll - defense_roll, rng);
     let armeroci_opening = attacker_armeroci
         && !is_ranged
         && combatants[attacker_idx]
@@ -1697,6 +1899,9 @@ pub(crate) fn resolve_attack(
             damage = (raw - effective_dr).max(0);
             if damage > 0 {
                 damage += weapon.internal_hemorrhage_damage.max(0);
+            }
+            if precognition_triggered {
+                damage /= 2;
             }
             if !defender_infinite_hp {
                 combatants[defender_idx].state.hp -= damage;
@@ -1907,41 +2112,51 @@ pub(crate) fn resolve_attack(
                 rng,
             ));
         } else if defense_first >= near_perfect_min && defense_first < 20 && near_in_reach {
-            let defender_weapon = &combatants[defender_idx].sheet.offense.weapon;
-            let offhand_small = combatants[defender_idx]
-                .sheet
-                .maneuvers
-                .offensive_dualwielding
-                && combatants[defender_idx]
-                    .sheet
-                    .offense
-                    .offhand
-                    .as_ref()
-                    .map(|offhand| offhand.weapon.is_small_weapon && !offhand.weapon.is_unarmed)
-                    .unwrap_or(false);
-            let (use_weapon, weapon_slot) = if offhand_small {
-                (true, WeaponSlot::Secondary)
+            if combatants[defender_idx].sheet.defense.eyesmite {
+                counter_attack = Some(resolve_eyesmite(
+                    combatants,
+                    defender_idx,
+                    attacker_idx,
+                    now,
+                    rng,
+                ));
             } else {
-                (
-                    defender_weapon.is_small_weapon && !defender_weapon.is_unarmed,
-                    WeaponSlot::Primary,
-                )
-            };
-            let superior_unarmed = defender_superior_defense && !use_weapon;
-            counter_attack = Some(resolve_counter_attack(
-                combatants,
-                defender_idx,
-                attacker_idx,
-                now,
-                weapon_slot,
-                use_weapon,
-                !use_weapon,
-                use_weapon,
-                false,
-                superior_unarmed,
-                1,
-                rng,
-            ));
+                let defender_weapon = &combatants[defender_idx].sheet.offense.weapon;
+                let offhand_small = combatants[defender_idx]
+                    .sheet
+                    .maneuvers
+                    .offensive_dualwielding
+                    && combatants[defender_idx]
+                        .sheet
+                        .offense
+                        .offhand
+                        .as_ref()
+                        .map(|offhand| offhand.weapon.is_small_weapon && !offhand.weapon.is_unarmed)
+                        .unwrap_or(false);
+                let (use_weapon, weapon_slot) = if offhand_small {
+                    (true, WeaponSlot::Secondary)
+                } else {
+                    (
+                        defender_weapon.is_small_weapon && !defender_weapon.is_unarmed,
+                        WeaponSlot::Primary,
+                    )
+                };
+                let superior_unarmed = defender_superior_defense && !use_weapon;
+                counter_attack = Some(resolve_counter_attack(
+                    combatants,
+                    defender_idx,
+                    attacker_idx,
+                    now,
+                    weapon_slot,
+                    use_weapon,
+                    !use_weapon,
+                    use_weapon,
+                    false,
+                    superior_unarmed,
+                    1,
+                    rng,
+                ));
+            }
         }
     }
     if counter_attack.is_none()
@@ -2028,6 +2243,7 @@ pub(crate) fn resolve_attack(
         shield_damage_breakdown,
         defender_hp_after,
         critical,
+        precognition_triggered,
         counter_attack,
     }
 }
@@ -2060,6 +2276,11 @@ pub(crate) fn resolve_knock_aside(
     state_snapshot: Option<&[CombatantState]>,
     rng: &mut impl Rng,
 ) -> KnockAsideOutcome {
+    let tactical_attack_penalty = combatants[attacker_idx]
+        .state
+        .tactical_next_attack_penalty
+        .max(0);
+    combatants[attacker_idx].state.tactical_next_attack_penalty = 0;
     let defender_state = state_snapshot
         .and_then(|snapshot| snapshot.get(defender_idx))
         .unwrap_or(&combatants[defender_idx].state);
@@ -2069,7 +2290,9 @@ pub(crate) fn resolve_knock_aside(
     let defender_fight_defensively_bonus = fight_defensively_defense_bonus(defender);
     let defender_called_shot_penalty = called_shot_defense_penalty(defender);
     let attack_die = penetrating_roll(20, rng);
-    let attack_bonus = attacker.sheet.offense.attack_bonus - attacker_fight_defensively_penalty;
+    let attack_bonus = attacker.sheet.offense.attack_bonus
+        - attacker_fight_defensively_penalty
+        - tactical_attack_penalty;
     let attack_roll = attack_die + attack_bonus;
     let defense_die = penetrating_roll(
         defense_die_sides(

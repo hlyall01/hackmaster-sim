@@ -10,8 +10,8 @@
         "health": "IV"
       },
       "masteries": {
-        "attack": 4,
-        "defense": 3,
+        "attack": 5,
+        "defense": 4,
         "damage": 4,
         "speed": 4,
         "shield_defense": 0,
@@ -37,7 +37,7 @@
       "shield_material_tier": 0,
       "two_hand_grip": true,
       "maneuvers": {
-        "charge": true
+        "charge": false
       },
       "defensive_dualwielding": false,
       "race_id": "midlander",
@@ -115,12 +115,23 @@
           "id": "tough_as_nails",
           "rank": 1,
           "weapon": null
+        },
+        {
+          "id": "armeroci_pole",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "rohavalan_bridge",
+          "rank": 1,
+          "weapon": null
         }
-      ]
+      ],
+      "default_weapon_style_ids": []
     },
     {
       "name": "Zorya",
-      "level": 7,
+      "level": 8,
       "progression": {
         "attack": "II",
         "speed": "V",
@@ -129,18 +140,18 @@
       },
       "masteries": {
         "attack": 3,
-        "defense": 4,
-        "damage": 3,
+        "defense": 3,
+        "damage": 2,
         "speed": 3,
-        "shield_defense": 0,
+        "shield_defense": 1,
         "shield_speed": 1
       },
       "base_hp": 10,
       "move_speed": 20.0,
       "strength_base": 12,
-      "strength_pct": 27,
+      "strength_pct": 32,
       "dex_base": 17,
-      "dex_pct": 41,
+      "dex_pct": 51,
       "intelligence": 11,
       "wisdom": 16,
       "constitution": 14,
@@ -148,11 +159,11 @@
       "charisma": 8,
       "weapon": "Throwing axe",
       "armor": "Gambeson",
-      "shield": "Medium wooden shield",
+      "shield": "Large wooden shield",
       "weapon_material_tier": 2,
       "armor_material_tier": 2,
       "projectile_material_tier": 0,
-      "shield_material_tier": 2,
+      "shield_material_tier": 3,
       "two_hand_grip": false,
       "maneuvers": {
         "charge": true
@@ -164,6 +175,8 @@
         "Shortbow",
         "Battle axe",
         "Greataxe",
+        "Blunt weapons",
+        "Large swords",
         "Light armor",
         "Shields",
         "Hiking",
@@ -180,16 +193,6 @@
           "id": "weapon_focus",
           "rank": 1,
           "weapon": "Axes"
-        },
-        {
-          "id": "swift",
-          "rank": 1,
-          "weapon": "Throwing axe"
-        },
-        {
-          "id": "shield_focus",
-          "rank": 1,
-          "weapon": null
         },
         {
           "id": "advanced_sighting",
@@ -212,11 +215,6 @@
           "weapon": null
         },
         {
-          "id": "improved_awareness",
-          "rank": 1,
-          "weapon": null
-        },
-        {
           "id": "hibernate",
           "rank": 1,
           "weapon": null
@@ -235,11 +233,6 @@
           "id": "heat_adaptation",
           "rank": 1,
           "weapon": null
-        },
-        {
-          "id": "damage_bonus_weapon",
-          "rank": 1,
-          "weapon": "Throwing axe"
         }
       ]
     },
@@ -442,7 +435,7 @@
     },
     {
       "name": "Errit",
-      "level": 7,
+      "level": 8,
       "progression": {
         "attack": "IV",
         "speed": "II",
@@ -453,16 +446,16 @@
         "attack": 2,
         "defense": 2,
         "damage": 2,
-        "speed": 1,
-        "shield_defense": 1,
+        "speed": 2,
+        "shield_defense": 2,
         "shield_speed": 1
       },
       "base_hp": 10,
       "move_speed": 20.0,
       "strength_base": 14,
-      "strength_pct": 23,
+      "strength_pct": 57,
       "dex_base": 12,
-      "dex_pct": 24,
+      "dex_pct": 28,
       "intelligence": 8,
       "wisdom": 10,
       "constitution": 16,
@@ -470,11 +463,11 @@
       "charisma": 14,
       "weapon": "Flamberge",
       "armor": "Platemail",
-      "shield": "Small metallic shield",
+      "shield": "Buckler",
       "weapon_material_tier": 2,
       "armor_material_tier": 1,
       "projectile_material_tier": 0,
-      "shield_material_tier": 1,
+      "shield_material_tier": 5,
       "two_hand_grip": false,
       "maneuvers": {},
       "defensive_dualwielding": false,
@@ -482,6 +475,7 @@
       "proficiencies": [
         "Flamberge",
         "Lance",
+        "Two-handed sword",
         "Shields",
         "Light armor",
         "Medium armor",
@@ -522,12 +516,12 @@
           "weapon": "Large swords"
         },
         {
-          "id": "improved_awareness",
+          "id": "twelve_paths",
           "rank": 1,
           "weapon": null
         },
         {
-          "id": "twelve_paths",
+          "id": "falling_sun",
           "rank": 1,
           "weapon": null
         },
@@ -558,6 +552,11 @@
         },
         {
           "id": "destined",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "eyesmite",
           "rank": 1,
           "weapon": null
         }
@@ -887,6 +886,16 @@
           "id": "duelist",
           "rank": 1,
           "weapon": null
+        },
+        {
+          "id": "precognition",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "prescience",
+          "rank": 1,
+          "weapon": null
         }
       ]
     },
@@ -1048,6 +1057,16 @@
         },
         {
           "id": "duelist",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "precognition",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "prescience",
           "rank": 1,
           "weapon": null
         }

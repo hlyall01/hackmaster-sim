@@ -7,6 +7,7 @@ mod fighter_presets;
 mod materials;
 mod npc_presets;
 mod races;
+mod tactical_presets;
 mod talents;
 mod weapons;
 
@@ -22,6 +23,9 @@ pub use fighter_presets::{load_fighter_presets, save_fighter_presets};
 pub use materials::load_materials;
 pub use npc_presets::load_npc_presets;
 pub use races::load_races;
+pub use tactical_presets::{
+    TACTICAL_PRESET_SCHEMA_VERSION, load_tactical_presets, save_tactical_presets,
+};
 pub use talents::load_talents;
 pub use weapons::{load_shield_catalog, load_weapon_catalog};
 

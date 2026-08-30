@@ -1,5 +1,8 @@
 use crate::core::rng::SimRng;
 use crate::core::rules::roll_damage_expr;
+use crate::core::tactics::{
+    TacticalAction, TacticalChannel, TacticalContext, TacticalDecisionPoint, evaluate_channel,
+};
 use rand::RngCore;
 
 use super::combat::{
@@ -9,7 +12,8 @@ use super::modifiers::{StatIdF32, StatIdI32};
 use super::movement::{max_range_for_weapon, range_modifier_for_weapon_with_scale};
 use super::types::{
     AttackEvent, CalledShotDelayProfile, CombatEvent, CombatEventKind, Combatant, DamageBreakdown,
-    GridPos, KnockAsideEvent, ShieldDamageBreakdown, SimActor, SimConfig, WeaponSlot,
+    GridPos, KnockAsideEvent, ShieldDamageBreakdown, SimActor, SimConfig, TacticalEvent,
+    WeaponSlot,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -543,7 +547,7 @@ impl SimState {
                     self.combatants[b_idx].sheet.offense.weapon.reach_ft,
                 )
                 .max(1.0);
-            let max_reach = self.config.stop_distance.max(1.0);
+            let max_reach = reach_a.max(reach_b);
             let min_reach = reach_a.min(reach_b);
             let weapon_a = self.combatants[a_idx].sheet.offense.weapon.clone();
             let weapon_b = self.combatants[b_idx].sheet.offense.weapon.clone();
@@ -564,6 +568,8 @@ impl SimState {
             let ranged_projectile_a = ranged_a && ranged_projectile_a;
             let ranged_projectile_b = ranged_b && ranged_projectile_b;
             let any_ranged = ranged_a || ranged_b;
+            let eyesmite_a = self.combatants[a_idx].sheet.defense.eyesmite;
+            let eyesmite_b = self.combatants[b_idx].sheet.defense.eyesmite;
 
             if distance_before_combat > max_reach && !any_ranged {
                 let step_a = self.move_tiles(a_idx);
@@ -596,9 +602,17 @@ impl SimState {
                 let step_a = self.move_tiles(a_idx);
                 let step_b = self.move_tiles(b_idx);
                 if any_ranged {
+                    if eyesmite_a && distance > 5.0 && !self.hold_at_bay.blocks_advance(a_idx) {
+                        self.move_toward(a_idx, b_idx, step_a, 5.0);
+                    }
+                    let distance = self.distance_between(a_idx, b_idx).unwrap_or(0.0);
+                    if eyesmite_b && distance > 5.0 && !self.hold_at_bay.blocks_advance(b_idx) {
+                        self.move_toward(b_idx, a_idx, step_b, 5.0);
+                    }
+                    let distance = self.distance_between(a_idx, b_idx).unwrap_or(0.0);
                     let engaged = distance <= min_reach;
                     if !engaged {
-                        if ranged_projectile_a {
+                        if !eyesmite_a && ranged_projectile_a {
                             if let Some(max_range) = max_range_a {
                                 if distance <= max_range {
                                     self.move_away(a_idx, b_idx, step_a);
@@ -606,10 +620,11 @@ impl SimState {
                                     self.move_toward(a_idx, b_idx, step_a, max_reach);
                                 }
                             }
-                        } else if distance > reach_a {
+                        } else if !eyesmite_a && distance > reach_a {
                             self.move_toward(a_idx, b_idx, step_a, max_reach);
                         }
-                        if ranged_projectile_b {
+                        let distance = self.distance_between(a_idx, b_idx).unwrap_or(0.0);
+                        if !eyesmite_b && ranged_projectile_b {
                             if let Some(max_range) = max_range_b {
                                 if distance <= max_range {
                                     self.move_away(b_idx, a_idx, step_b);
@@ -617,9 +632,17 @@ impl SimState {
                                     self.move_toward(b_idx, a_idx, step_b, max_reach);
                                 }
                             }
-                        } else if distance > reach_b {
+                        } else if !eyesmite_b && distance > reach_b {
                             self.move_toward(b_idx, a_idx, step_b, max_reach);
                         }
+                    }
+                } else if distance > 5.0 && (eyesmite_a || eyesmite_b) {
+                    if eyesmite_a && !self.hold_at_bay.blocks_advance(a_idx) {
+                        self.move_toward(a_idx, b_idx, step_a, 5.0);
+                    }
+                    let distance = self.distance_between(a_idx, b_idx).unwrap_or(0.0);
+                    if eyesmite_b && distance > 5.0 && !self.hold_at_bay.blocks_advance(b_idx) {
+                        self.move_toward(b_idx, a_idx, step_b, 5.0);
                     }
                 } else if distance > min_reach {
                     if reach_a < reach_b {
@@ -690,6 +713,277 @@ impl SimState {
     pub fn distance_between(&self, a_idx: usize, b_idx: usize) -> Option<f32> {
         let tiles = self.grid_distance_tiles(a_idx, b_idx)?;
         Some(tiles as f32 * self.config.tile_size_ft)
+    }
+
+    fn tactical_context(&self, my_idx: usize, enemy_idx: usize) -> TacticalContext {
+        let mine = &self.combatants[my_idx];
+        let enemy = &self.combatants[enemy_idx];
+        let hp_percent = |combatant: &Combatant| {
+            if combatant.sheet.vitals.max_hp <= 0 {
+                0.0
+            } else {
+                combatant.state.hp.max(0) as f32 / combatant.sheet.vitals.max_hp as f32 * 100.0
+            }
+        };
+        let reach = |combatant: &Combatant| {
+            combatant
+                .apply_f32(
+                    StatIdF32::WeaponReach,
+                    combatant.sheet.offense.weapon.reach_ft,
+                )
+                .max(1.0)
+        };
+        let attack_speed = |combatant: &Combatant| {
+            combatant
+                .apply_f32(StatIdF32::WeaponSpeed, combatant.sheet.offense.weapon.speed)
+                .max(1.0)
+        };
+        let move_speed = |combatant: &Combatant| {
+            combatant
+                .apply_f32(StatIdF32::MoveSpeed, combatant.sheet.mobility.move_speed)
+                .max(0.0)
+        };
+        let retreat_space_available = self
+            .actors
+            .get(my_idx)
+            .zip(self.actors.get(enemy_idx))
+            .map(|(mine, enemy)| {
+                let next = Self::step_away(mine.position, enemy.position)
+                    .clamp(self.config.grid_width, self.config.grid_height);
+                next != mine.position
+            })
+            .unwrap_or(false);
+        let enemy_charging = enemy.sheet.maneuvers.charge
+            && enemy.state.charge_target_idx == Some(my_idx)
+            && enemy.state.charge_distance_ft > 0.0;
+        let give_ground_legal = retreat_space_available
+            && !enemy_charging
+            && move_speed(enemy) <= move_speed(mine)
+            && self.move_tiles(my_idx) > 0;
+        let distance_ft = self.distance_between(my_idx, enemy_idx).unwrap_or(0.0);
+        let enemy_reach_ft = reach(enemy);
+        let enemy_distance_to_reach_ft = (distance_ft - enemy_reach_ft).max(0.0);
+        let enemy_closure_per_second =
+            self.move_tiles(enemy_idx) as f32 * self.config.tile_size_ft.max(0.01);
+        let enemy_time_to_reach_seconds = if enemy_distance_to_reach_ft <= 0.0 {
+            0.0
+        } else if enemy_closure_per_second <= 0.0 {
+            f32::INFINITY
+        } else {
+            (enemy_distance_to_reach_ft / enemy_closure_per_second).ceil()
+        };
+
+        TacticalContext {
+            my_hp_percent: hp_percent(mine),
+            enemy_hp_percent: hp_percent(enemy),
+            distance_ft,
+            my_reach_ft: reach(mine),
+            enemy_reach_ft,
+            retreat_space_available,
+            my_weapon_can_jab: mine.tactical_jab_available(),
+            my_has_active_shield: mine.sheet.defense.shield_name.is_some()
+                && mine.state.shield_intact,
+            enemy_weapon_group: enemy.weapon_group.clone(),
+            enemy_has_active_shield: enemy.sheet.defense.shield_name.is_some()
+                && enemy.state.shield_intact,
+            enemy_armor_type: enemy.armor_type.clone(),
+            enemy_charging,
+            my_has_attacked: mine.state.has_attacked,
+            enemy_time_to_reach_seconds,
+            my_active_style_ids: mine.active_style_ids.clone(),
+            enemy_active_style_ids: enemy.active_style_ids.clone(),
+            available_style_ids: mine.available_tactical_style_ids(),
+            style_pair_allowed: mine.tactical_style_pair_allowed(),
+            enemy_dr: enemy
+                .apply_i32(StatIdI32::ArmorDr, enemy.sheet.defense.armor_dr)
+                .max(0) as f32,
+            my_attack_speed_seconds: attack_speed(mine),
+            enemy_attack_speed_seconds: attack_speed(enemy),
+            give_ground_legal,
+        }
+    }
+
+    fn record_tactical_directive(
+        &mut self,
+        actor_idx: usize,
+        target_idx: usize,
+        action: &TacticalAction,
+        rule_index: Option<usize>,
+        detail: Option<String>,
+    ) {
+        let rule_label = rule_index
+            .map(|index| format!("rule {}", index + 1))
+            .unwrap_or_else(|| "fallback".to_string());
+        let action_label = action.label();
+        let actor_name = self.combatants[actor_idx].sheet.name.clone();
+        let message = detail
+            .unwrap_or_else(|| format!("{actor_name} uses tactical {rule_label}: {action_label}"));
+        self.combatants[actor_idx].last_tactical_directive = Some(message.clone());
+        if self.log_events {
+            let event = CombatEvent {
+                time: self.elapsed_seconds,
+                attacker_idx: actor_idx,
+                defender_idx: target_idx,
+                kind: CombatEventKind::Tactical(TacticalEvent {
+                    rule_index,
+                    action: action_label,
+                    message,
+                }),
+            };
+            self.last_event = Some(event.clone());
+            self.combat_events.push(event);
+        }
+    }
+
+    fn apply_next_attack_tactics(&mut self, attacker_idx: usize, defender_idx: usize) {
+        if !self.combatants[attacker_idx].tactical_policy.enabled {
+            return;
+        }
+        let context = self.tactical_context(attacker_idx, defender_idx);
+        let policy = self.combatants[attacker_idx].tactical_policy.clone();
+
+        let style = evaluate_channel(
+            &policy,
+            TacticalDecisionPoint::NextAttackOpportunity,
+            TacticalChannel::WeaponStyle,
+            &context,
+        );
+        match &style.action {
+            TacticalAction::RetainWeaponStyle => {}
+            TacticalAction::NeutralWeaponStyle => {
+                self.combatants[attacker_idx].switch_tactical_style(Vec::new());
+            }
+            TacticalAction::UseWeaponStyle { style_ids } => {
+                self.combatants[attacker_idx].switch_tactical_style(style_ids.clone());
+            }
+            _ => {}
+        }
+        if style.matched_rule_index.is_some() {
+            self.record_tactical_directive(
+                attacker_idx,
+                defender_idx,
+                &style.action,
+                style.matched_rule_index,
+                None,
+            );
+        }
+
+        let stance_context = self.tactical_context(attacker_idx, defender_idx);
+        let stance = evaluate_channel(
+            &policy,
+            TacticalDecisionPoint::NextAttackOpportunity,
+            TacticalChannel::Stance,
+            &stance_context,
+        );
+        let old_stance = self.combatants[attacker_idx].active_fight_defensively_penalty;
+        let new_stance = match stance.action {
+            TacticalAction::FightDefensively { penalty } => Some(penalty),
+            _ => None,
+        };
+        if old_stance.is_some() && old_stance != new_stance {
+            let lingering = self.combatants[attacker_idx]
+                .sheet
+                .maneuvers
+                .fight_defensively_attack_penalty
+                .max(0);
+            self.combatants[attacker_idx]
+                .state
+                .tactical_next_attack_penalty += lingering;
+        }
+        self.combatants[attacker_idx].active_fight_defensively_penalty = new_stance;
+        self.combatants[attacker_idx].activate_tactical_profile(false);
+        if stance.matched_rule_index.is_some() {
+            self.record_tactical_directive(
+                attacker_idx,
+                defender_idx,
+                &stance.action,
+                stance.matched_rule_index,
+                None,
+            );
+        }
+
+        let attack_context = self.tactical_context(attacker_idx, defender_idx);
+        let attack = evaluate_channel(
+            &policy,
+            TacticalDecisionPoint::NextAttackOpportunity,
+            TacticalChannel::AttackMode,
+            &attack_context,
+        );
+        let use_jab = matches!(attack.action, TacticalAction::Jab);
+        self.combatants[attacker_idx].activate_tactical_profile(use_jab);
+        if attack.matched_rule_index.is_some() {
+            self.record_tactical_directive(
+                attacker_idx,
+                defender_idx,
+                &attack.action,
+                attack.matched_rule_index,
+                None,
+            );
+        }
+    }
+
+    fn apply_incoming_attack_tactics(
+        &mut self,
+        attacker_idx: usize,
+        defender_idx: usize,
+        attack_mode: AttackMode,
+    ) {
+        if !self.combatants[defender_idx].tactical_policy.enabled {
+            return;
+        }
+        let mut context = self.tactical_context(defender_idx, attacker_idx);
+        if attack_mode == AttackMode::Charge {
+            context.give_ground_legal = false;
+            context.enemy_charging = true;
+        }
+        let policy = self.combatants[defender_idx].tactical_policy.clone();
+        let reaction = evaluate_channel(
+            &policy,
+            TacticalDecisionPoint::IncomingAttackReaction,
+            TacticalChannel::Reaction,
+            &context,
+        );
+        if !matches!(reaction.action, TacticalAction::GiveGround) {
+            if reaction.matched_rule_index.is_some() {
+                self.record_tactical_directive(
+                    defender_idx,
+                    attacker_idx,
+                    &reaction.action,
+                    reaction.matched_rule_index,
+                    None,
+                );
+            }
+            return;
+        }
+
+        let before = self.actors[defender_idx].position;
+        let original_distance = self
+            .distance_between(attacker_idx, defender_idx)
+            .unwrap_or(0.0);
+        self.move_away(defender_idx, attacker_idx, self.move_tiles(defender_idx));
+        let after = self.actors[defender_idx].position;
+        let moved_tiles = before.manhattan_distance(after);
+        if moved_tiles <= 0 {
+            return;
+        }
+        self.move_toward(attacker_idx, defender_idx, moved_tiles, original_distance);
+        self.combatants[defender_idx]
+            .state
+            .tactical_give_ground_defense_bonus = 5;
+        self.combatants[defender_idx]
+            .state
+            .tactical_next_attack_penalty += 1;
+        let moved_ft = moved_tiles as f32 * self.config.tile_size_ft;
+        self.record_tactical_directive(
+            defender_idx,
+            attacker_idx,
+            &reaction.action,
+            reaction.matched_rule_index,
+            Some(format!(
+                "{} gives ground {:.0}ft (+5 Defense, -1 next Attack)",
+                self.combatants[defender_idx].sheet.name, moved_ft
+            )),
+        );
     }
 
     fn grid_distance_tiles(&self, a_idx: usize, b_idx: usize) -> Option<i32> {
@@ -845,6 +1139,62 @@ impl SimState {
         let tile_size_ft = self.config.tile_size_ft.max(0.01);
         let tiles = (knockback_ft / tile_size_ft).ceil() as i32;
         self.move_away(defender_idx, attacker_idx, tiles);
+    }
+
+    fn precognition_evasion_destination(
+        &self,
+        defender_idx: usize,
+        attacker_idx: usize,
+    ) -> Option<GridPos> {
+        let from = self.actors.get(defender_idx)?.position;
+        let attacker = self.actors.get(attacker_idx)?.position;
+        let dx = from.x - attacker.x;
+        let dy = from.y - attacker.y;
+        let away = if dx.abs() >= dy.abs() && dx != 0 {
+            (dx.signum(), 0)
+        } else if dy != 0 {
+            (0, dy.signum())
+        } else {
+            return None;
+        };
+        let directions = [away, (-away.1, away.0), (away.1, -away.0)];
+        let steps = (5.0 / self.config.tile_size_ft.max(0.01)).ceil() as i32;
+
+        for (step_x, step_y) in directions {
+            let mut current = from;
+            let mut valid = true;
+            for _ in 0..steps.max(1) {
+                let next = GridPos::new(current.x + step_x, current.y + step_y);
+                if next.x < 0
+                    || next.y < 0
+                    || next.x >= self.config.grid_width
+                    || next.y >= self.config.grid_height
+                    || self.actors.iter().enumerate().any(|(idx, actor)| {
+                        idx != defender_idx
+                            && self
+                                .combatants
+                                .get(idx)
+                                .map(|combatant| combatant.state.hp > 0)
+                                .unwrap_or(false)
+                            && actor.position == next
+                    })
+                {
+                    valid = false;
+                    break;
+                }
+                current = next;
+            }
+            if valid {
+                return Some(current);
+            }
+        }
+        None
+    }
+
+    fn apply_precognition_evasion(&mut self, defender_idx: usize, destination: Option<GridPos>) {
+        if let (Some(actor), Some(destination)) = (self.actors.get_mut(defender_idx), destination) {
+            actor.position = destination;
+        }
     }
 
     fn step_toward(from: GridPos, to: GridPos) -> GridPos {
@@ -1091,14 +1441,14 @@ impl SimState {
                 }
                 continue;
             }
-            let weapon = self.combatants[attacker_idx].sheet.offense.weapon.clone();
+            let mut weapon = self.combatants[attacker_idx].sheet.offense.weapon.clone();
             let max_range = max_range_cached(
                 &mut self.combatants[attacker_idx].state,
                 WeaponSlot::Primary,
                 weapon.as_ref(),
             );
-            let has_range = max_range.is_some();
-            let attacker_reach = weapon.reach_ft.max(1.0);
+            let mut has_range = max_range.is_some();
+            let mut attacker_reach = weapon.reach_ft.max(1.0);
             let mut use_ranged = if has_range && !weapon.uses_projectiles {
                 distance > attacker_reach
             } else {
@@ -1130,7 +1480,7 @@ impl SimState {
             {
                 attack_mode = AttackMode::Charge;
             }
-            let ranged_mod = if use_ranged {
+            let mut ranged_mod = if use_ranged {
                 let range_scale = self.combatants[attacker_idx].apply_f32(
                     StatIdF32::RangeDistanceMultiplier,
                     weapon.range_distance_multiplier,
@@ -1139,7 +1489,7 @@ impl SimState {
             } else {
                 None
             };
-            let primary_speed_base = self.combatants[attacker_idx]
+            let mut primary_speed_base = self.combatants[attacker_idx]
                 .apply_f32(StatIdF32::WeaponSpeed, weapon.speed)
                 .max(1.0);
             let mut primary_attack_time = None;
@@ -1185,6 +1535,43 @@ impl SimState {
             };
             if now + 0.0001 >= next_attack {
                 primary_attack_time = Some(next_attack);
+                self.apply_next_attack_tactics(attacker_idx, defender_idx);
+
+                // The due time is intentionally unchanged. The newly selected
+                // profile controls this attack and the recovery scheduled below.
+                weapon = self.combatants[attacker_idx].sheet.offense.weapon.clone();
+                let updated_max_range = max_range_cached(
+                    &mut self.combatants[attacker_idx].state,
+                    WeaponSlot::Primary,
+                    weapon.as_ref(),
+                );
+                has_range = updated_max_range.is_some();
+                attacker_reach = self.combatants[attacker_idx]
+                    .apply_f32(StatIdF32::WeaponReach, weapon.reach_ft)
+                    .max(1.0);
+                use_ranged = if has_range && !weapon.uses_projectiles {
+                    distance > attacker_reach
+                } else {
+                    has_range
+                };
+                ranged_mod = if use_ranged {
+                    let range_scale = self.combatants[attacker_idx].apply_f32(
+                        StatIdF32::RangeDistanceMultiplier,
+                        weapon.range_distance_multiplier,
+                    );
+                    range_modifier_for_weapon_with_scale(weapon.as_ref(), distance, range_scale)
+                } else {
+                    None
+                };
+                primary_speed_base = self.combatants[attacker_idx]
+                    .apply_f32(StatIdF32::WeaponSpeed, weapon.speed)
+                    .max(1.0);
+                if (!use_ranged && distance > attacker_reach)
+                    || (use_ranged && ranged_mod.is_none())
+                {
+                    self.combatants[attacker_idx].activate_tactical_profile(false);
+                    continue;
+                }
                 if attack_mode == AttackMode::Charge {
                     self.combatants[attacker_idx].state.charge_attacks = self.combatants
                         [attacker_idx]
@@ -1202,19 +1589,36 @@ impl SimState {
                             self.charges_started_within_20ft.saturating_add(1);
                     }
                 }
+                self.apply_incoming_attack_tactics(attacker_idx, defender_idx, attack_mode);
+                let defender_evasion =
+                    self.precognition_evasion_destination(defender_idx, attacker_idx);
+                let attacker_evasion =
+                    self.precognition_evasion_destination(attacker_idx, defender_idx);
+                self.combatants[defender_idx]
+                    .state
+                    .precognition_space_available = defender_evasion.is_some();
+                self.combatants[attacker_idx]
+                    .state
+                    .precognition_space_available = attacker_evasion.is_some();
+                let attack_distance = self
+                    .distance_between(attacker_idx, defender_idx)
+                    .unwrap_or(distance);
                 let mut event = resolve_attack(
                     &mut self.combatants,
                     attacker_idx,
                     defender_idx,
                     ranged_mod.unwrap_or(0),
                     use_ranged,
-                    distance,
+                    attack_distance,
                     attack_mode,
                     WeaponSlot::Primary,
                     now,
                     state_snapshot.as_deref(),
                     &mut self.rng,
                 );
+                self.combatants[defender_idx]
+                    .state
+                    .tactical_give_ground_defense_bonus = 0;
                 let six_paths_followup = event.hit && !event.is_ranged;
                 if attack_mode == AttackMode::HoldAtBay && self.hold_at_bay.pending {
                     if event.hit {
@@ -1228,6 +1632,9 @@ impl SimState {
                     self.apply_shield_strike_speedup(event.defender_idx, now);
                 }
                 self.record_attack_metrics(RecordedAttackMetrics::from_attack(&event));
+                if event.precognition_triggered {
+                    self.apply_precognition_evasion(event.defender_idx, defender_evasion);
+                }
                 self.apply_knockback(event.attacker_idx, event.defender_idx, event.knockback_ft);
                 if self.first_attack_time.is_none() {
                     self.first_attack_time = Some(self.elapsed_seconds);
@@ -1278,6 +1685,9 @@ impl SimState {
                         self.apply_six_paths_followup(counter.attacker_idx, now);
                     }
                     self.record_attack_metrics(RecordedAttackMetrics::from_counter(&counter));
+                    if counter.precognition_triggered {
+                        self.apply_precognition_evasion(counter.defender_idx, attacker_evasion);
+                    }
                     self.apply_knockback(
                         counter.attacker_idx,
                         counter.defender_idx,
@@ -1358,6 +1768,10 @@ impl SimState {
                 self.combatants[attacker_idx]
                     .state
                     .set_next_attack_time(WeaponSlot::Primary, Some(next_attack + speed));
+                self.combatants[attacker_idx]
+                    .state
+                    .tactical_next_attack_penalty = 0;
+                self.combatants[attacker_idx].activate_tactical_profile(false);
                 if six_paths_followup {
                     self.apply_six_paths_followup(attacker_idx, now);
                 }
@@ -1452,24 +1866,48 @@ impl SimState {
                         .unwrap_or(now)
                 };
                 if now + 0.0001 >= next_attack {
+                    self.apply_incoming_attack_tactics(
+                        attacker_idx,
+                        defender_idx,
+                        AttackMode::Normal,
+                    );
+                    let defender_evasion =
+                        self.precognition_evasion_destination(defender_idx, attacker_idx);
+                    let attacker_evasion =
+                        self.precognition_evasion_destination(attacker_idx, defender_idx);
+                    self.combatants[defender_idx]
+                        .state
+                        .precognition_space_available = defender_evasion.is_some();
+                    self.combatants[attacker_idx]
+                        .state
+                        .precognition_space_available = attacker_evasion.is_some();
+                    let attack_distance = self
+                        .distance_between(attacker_idx, defender_idx)
+                        .unwrap_or(distance);
                     let mut event = resolve_attack(
                         &mut self.combatants,
                         attacker_idx,
                         defender_idx,
                         ranged_mod.unwrap_or(0),
                         use_ranged,
-                        distance,
+                        attack_distance,
                         AttackMode::Normal,
                         WeaponSlot::Secondary,
                         now,
                         state_snapshot.as_deref(),
                         &mut self.rng,
                     );
+                    self.combatants[defender_idx]
+                        .state
+                        .tactical_give_ground_defense_bonus = 0;
                     let six_paths_followup = event.hit && !event.is_ranged;
                     if event.shield_block {
                         self.apply_shield_strike_speedup(event.defender_idx, now);
                     }
                     self.record_attack_metrics(RecordedAttackMetrics::from_attack(&event));
+                    if event.precognition_triggered {
+                        self.apply_precognition_evasion(event.defender_idx, defender_evasion);
+                    }
                     self.apply_knockback(
                         event.attacker_idx,
                         event.defender_idx,
@@ -1524,6 +1962,9 @@ impl SimState {
                             self.apply_six_paths_followup(counter.attacker_idx, now);
                         }
                         self.record_attack_metrics(RecordedAttackMetrics::from_counter(&counter));
+                        if counter.precognition_triggered {
+                            self.apply_precognition_evasion(counter.defender_idx, attacker_evasion);
+                        }
                         self.apply_knockback(
                             counter.attacker_idx,
                             counter.defender_idx,
@@ -1612,6 +2053,47 @@ impl SimState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::sim::{CombatantTacticalProfile, TacticalProfileKey};
+    use crate::core::sim::{ModifierOpF32, ModifierOpI32, TemporaryEffect};
+    use crate::core::tactics::{TacticalCondition, TacticalPolicy, TacticalRule};
+
+    fn tactical_profile(
+        base: &Combatant,
+        style_ids: Vec<String>,
+        use_jab: bool,
+        stance: Option<i32>,
+        speed: f32,
+    ) -> CombatantTacticalProfile {
+        let mut sheet = base.sheet.clone();
+        let mut weapon = (*sheet.offense.weapon).clone();
+        weapon.speed = speed;
+        weapon.use_jab = use_jab;
+        if use_jab {
+            weapon.force_nonpenetrating_damage = true;
+            weapon.halve_damage = true;
+        }
+        sheet.offense.weapon = std::sync::Arc::new(weapon);
+        sheet.maneuvers.fight_defensively = stance.is_some();
+        sheet.maneuvers.fight_defensively_attack_penalty = stance.unwrap_or(0);
+        sheet.maneuvers.fight_defensively_defense_bonus = stance.unwrap_or(0) / 2;
+        CombatantTacticalProfile {
+            key: TacticalProfileKey {
+                style_ids,
+                use_jab,
+                fight_defensively_penalty: stance,
+            },
+            sheet,
+            weapon_group: "Test".to_string(),
+            armor_type: "None".to_string(),
+        }
+    }
+
+    fn always_policy(action: TacticalAction) -> TacticalPolicy {
+        TacticalPolicy {
+            enabled: true,
+            rules: vec![TacticalRule::new(action, vec![TacticalCondition::Always])],
+        }
+    }
 
     #[test]
     fn called_shot_delay_requires_called_shot_toggle() {
@@ -1673,6 +2155,435 @@ mod tests {
             delay >= 4.0,
             "expected deceptive defender delay >= 4 (4d4p), got {delay}"
         );
+    }
+
+    #[test]
+    fn jab_directive_uses_jab_profile_for_attack_and_recovery() {
+        let mut attacker = Combatant::default();
+        attacker.team_id = 0;
+        attacker.sheet.vitals.max_hp = 1_000;
+        attacker.reset_state();
+        let profiles = vec![
+            tactical_profile(&attacker, Vec::new(), false, None, 9.0),
+            tactical_profile(&attacker, Vec::new(), true, None, 3.0),
+        ];
+        attacker.configure_tactical_profiles(always_policy(TacticalAction::Jab), profiles, vec![]);
+
+        let mut defender = Combatant::default();
+        defender.team_id = 1;
+        defender.sheet.vitals.max_hp = 1_000;
+        defender.sheet.maneuvers.passive = true;
+        defender.reset_state();
+
+        let mut sim = SimState::with_rng(SimConfig::new(1.0, 1.0), SimRng::from_seed(77));
+        sim.reset_with_combatants(vec![attacker, defender]);
+        sim.tick();
+
+        let attack = sim
+            .combat_events
+            .iter()
+            .find_map(|event| match &event.kind {
+                CombatEventKind::Attack(attack) if event.attacker_idx == 0 => Some(attack),
+                _ => None,
+            })
+            .expect("tactical attacker should attack");
+        assert!(attack.use_jab);
+        let next = sim.combatants[0]
+            .state
+            .next_attack_time_primary
+            .expect("recovery timer");
+        assert!(
+            (next - 3.0).abs() < 0.001,
+            "expected Jab recovery at 3s, got {next}"
+        );
+        assert!(!sim.combatants[0].sheet.offense.weapon.use_jab);
+    }
+
+    #[test]
+    fn style_switch_waits_for_already_scheduled_attack_opportunity() {
+        let mut attacker = Combatant::default();
+        attacker.team_id = 0;
+        attacker.sheet.vitals.max_hp = 1_000;
+        attacker.reset_state();
+        let profiles = vec![
+            tactical_profile(&attacker, Vec::new(), false, None, 9.0),
+            tactical_profile(&attacker, vec!["fast_style".to_string()], false, None, 2.0),
+        ];
+        attacker.configure_tactical_profiles(
+            always_policy(TacticalAction::UseWeaponStyle {
+                style_ids: vec!["fast_style".to_string()],
+            }),
+            profiles,
+            vec![],
+        );
+
+        let mut defender = Combatant::default();
+        defender.team_id = 1;
+        defender.sheet.vitals.max_hp = 1_000;
+        defender.sheet.maneuvers.passive = true;
+        defender.reset_state();
+        let mut sim = SimState::with_rng(SimConfig::new(1.0, 1.0), SimRng::from_seed(78));
+        sim.reset_with_combatants(vec![attacker, defender]);
+        sim.combatants[0]
+            .state
+            .set_next_attack_time(WeaponSlot::Primary, Some(5.0));
+
+        for _ in 0..4 {
+            sim.tick();
+        }
+        assert!(sim.combatants[0].active_style_ids.is_empty());
+        sim.tick();
+        assert!(sim.combatants[0].active_style_ids.is_empty());
+        sim.tick();
+        assert_eq!(
+            sim.combatants[0].active_style_ids,
+            vec!["fast_style".to_string()]
+        );
+        let next = sim.combatants[0]
+            .state
+            .next_attack_time_primary
+            .expect("recovery timer");
+        assert!(
+            (next - 7.0).abs() < 0.001,
+            "new style should set 2s recovery"
+        );
+    }
+
+    #[test]
+    fn style_switch_to_shorter_equal_reach_closes_to_live_engagement_distance() {
+        let mut attacker = Combatant::default();
+        attacker.team_id = 0;
+        attacker.sheet.vitals.max_hp = 1_000;
+        attacker.sheet.mobility.move_speed = 20.0;
+        let mut opening_weapon = (*attacker.sheet.offense.weapon).clone();
+        opening_weapon.reach_ft = 8.0;
+        attacker.sheet.offense.weapon = std::sync::Arc::new(opening_weapon);
+        attacker.reset_state();
+
+        let opening_profile =
+            tactical_profile(&attacker, vec!["long_style".to_string()], false, None, 9.0);
+        let mut short_profile =
+            tactical_profile(&attacker, vec!["short_style".to_string()], false, None, 2.0);
+        let mut short_weapon = (*short_profile.sheet.offense.weapon).clone();
+        short_weapon.reach_ft = 4.0;
+        short_profile.sheet.offense.weapon = std::sync::Arc::new(short_weapon);
+        attacker.configure_tactical_profiles(
+            TacticalPolicy::default(),
+            vec![opening_profile, short_profile],
+            vec!["long_style".to_string()],
+        );
+
+        let mut defender = Combatant::default();
+        defender.team_id = 1;
+        defender.sheet.vitals.max_hp = 1_000;
+        defender.sheet.mobility.move_speed = 20.0;
+        defender.sheet.maneuvers.passive = true;
+        let mut defender_weapon = (*defender.sheet.offense.weapon).clone();
+        defender_weapon.reach_ft = 4.0;
+        defender.sheet.offense.weapon = std::sync::Arc::new(defender_weapon);
+        defender.reset_state();
+
+        let mut sim = SimState::with_rng(SimConfig::new(8.0, 8.0), SimRng::from_seed(79));
+        sim.reset_with_combatants(vec![attacker, defender]);
+        assert!((sim.distance() - 8.0).abs() < 0.001);
+        assert!(sim.combatants[0].switch_tactical_style(vec!["short_style".to_string()]));
+
+        sim.tick();
+
+        assert!(
+            sim.distance() <= 4.0,
+            "fighters should close to their live 4ft reach after the style switch, got {}ft",
+            sim.distance()
+        );
+    }
+
+    #[test]
+    fn armeroci_opening_attack_precedes_rohavalan_switch() {
+        let mut attacker = Combatant::default();
+        attacker.team_id = 0;
+        attacker.sheet.vitals.max_hp = 1_000;
+        attacker.reset_state();
+        let mut armeroci_profile = tactical_profile(
+            &attacker,
+            vec!["armeroci_pole".to_string()],
+            false,
+            None,
+            9.0,
+        );
+        armeroci_profile
+            .sheet
+            .modifiers
+            .add_i32(StatIdI32::FlagArmerociPoleStyle, ModifierOpI32::Set(1));
+        let rohavalan_profile = tactical_profile(
+            &attacker,
+            vec!["rohavalan_bridge".to_string()],
+            false,
+            None,
+            2.0,
+        );
+        let rohavalan_jab_profile = tactical_profile(
+            &attacker,
+            vec!["rohavalan_bridge".to_string()],
+            true,
+            None,
+            1.0,
+        );
+        let policy = TacticalPolicy {
+            enabled: true,
+            rules: vec![
+                TacticalRule::new(
+                    TacticalAction::UseWeaponStyle {
+                        style_ids: vec!["rohavalan_bridge".to_string()],
+                    },
+                    vec![
+                        TacticalCondition::MyHasAttacked { value: true },
+                        TacticalCondition::MyActiveStyle {
+                            style_id: "armeroci_pole".to_string(),
+                            negated: false,
+                        },
+                    ],
+                ),
+                TacticalRule::new(
+                    TacticalAction::Jab,
+                    vec![
+                        TacticalCondition::MyActiveStyle {
+                            style_id: "rohavalan_bridge".to_string(),
+                            negated: false,
+                        },
+                        TacticalCondition::MyWeaponCanJab { value: true },
+                    ],
+                ),
+            ],
+        };
+        attacker.configure_tactical_profiles(
+            policy,
+            vec![armeroci_profile, rohavalan_profile, rohavalan_jab_profile],
+            vec!["armeroci_pole".to_string()],
+        );
+        attacker.state.armeroci_opening_strike_available = true;
+
+        let mut defender = Combatant::default();
+        defender.team_id = 1;
+        defender.sheet.vitals.max_hp = 1_000;
+        defender.sheet.maneuvers.passive = true;
+        defender.reset_state();
+
+        let mut sim = SimState::with_rng(SimConfig::new(1.0, 1.0), SimRng::from_seed(781));
+        sim.reset_with_combatants(vec![attacker, defender]);
+        sim.combatants[0].state.armeroci_opening_strike_available = true;
+
+        sim.tick();
+        assert_eq!(
+            sim.combatants[0].active_style_ids,
+            vec!["armeroci_pole".to_string()]
+        );
+        assert!(sim.combatants[0].state.has_attacked);
+        assert!(!sim.combatants[0].state.armeroci_opening_strike_available);
+
+        for _ in 0..12 {
+            sim.tick();
+            if sim.combatants[0].active_style_ids == ["rohavalan_bridge".to_string()] {
+                break;
+            }
+        }
+        assert_eq!(
+            sim.combatants[0].active_style_ids,
+            vec!["rohavalan_bridge".to_string()]
+        );
+        let switched_attack = sim
+            .combat_events
+            .iter()
+            .rev()
+            .find_map(|event| match &event.kind {
+                CombatEventKind::Attack(attack) if event.attacker_idx == 0 && event.time > 0 => {
+                    Some(attack)
+                }
+                _ => None,
+            })
+            .expect("expected an attack after switching to Rohavalan");
+        assert!(switched_attack.use_jab);
+
+        sim.combatants[0].activate_tactical_profile(false);
+        assert!(!sim.combatants[0].sheet.offense.weapon.use_jab);
+        sim.apply_next_attack_tactics(0, 1);
+        assert!(sim.combatants[0].sheet.offense.weapon.use_jab);
+        assert!((sim.combatants[0].sheet.offense.weapon.speed - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn tactical_context_reports_enemy_time_to_reach() {
+        let mut mine = Combatant::default();
+        mine.team_id = 0;
+        let mut enemy = Combatant::default();
+        enemy.team_id = 1;
+        enemy.sheet.mobility.move_speed = 5.0;
+        enemy.sheet.offense.weapon = {
+            let mut weapon = (*enemy.sheet.offense.weapon).clone();
+            weapon.reach_ft = 1.0;
+            std::sync::Arc::new(weapon)
+        };
+        let mut sim = SimState::with_rng(SimConfig::new(25.0, 1.0), SimRng::from_seed(782));
+        sim.reset_with_combatants(vec![mine, enemy]);
+
+        let context = sim.tactical_context(0, 1);
+        assert_eq!(context.enemy_time_to_reach_seconds, 5.0);
+
+        sim.combatants[1].sheet.maneuvers.passive = true;
+        assert!(
+            sim.tactical_context(0, 1)
+                .enemy_time_to_reach_seconds
+                .is_infinite()
+        );
+    }
+
+    #[test]
+    fn tactical_context_reports_when_my_shield_breaks() {
+        let mut mine = Combatant::default();
+        mine.team_id = 0;
+        mine.sheet.defense.shield_name = Some("Buckler".to_string());
+        mine.state.shield_intact = true;
+        let mut enemy = Combatant::default();
+        enemy.team_id = 1;
+        let mut sim = SimState::new(SimConfig::new(1.0, 1.0));
+        sim.reset_with_combatants(vec![mine, enemy]);
+
+        assert!(sim.tactical_context(0, 1).my_has_active_shield);
+        sim.combatants[0].state.shield_intact = false;
+        assert!(!sim.tactical_context(0, 1).my_has_active_shield);
+    }
+
+    #[test]
+    fn give_ground_moves_both_combatants_and_sets_roll_modifiers() {
+        let mut attacker = Combatant::default();
+        attacker.team_id = 0;
+        attacker.sheet.mobility.move_speed = 5.0;
+        let mut defender = Combatant::default();
+        defender.team_id = 1;
+        defender.sheet.mobility.move_speed = 10.0;
+        defender.tactical_policy = always_policy(TacticalAction::GiveGround);
+        let mut sim = SimState::with_rng(SimConfig::new(5.0, 1.0), SimRng::from_seed(79));
+        sim.reset_with_combatants(vec![attacker, defender]);
+        let attacker_before = sim.actors[0].position;
+        let defender_before = sim.actors[1].position;
+
+        sim.apply_incoming_attack_tactics(0, 1, AttackMode::Normal);
+
+        assert_ne!(sim.actors[1].position, defender_before);
+        assert_ne!(sim.actors[0].position, attacker_before);
+        assert_eq!(
+            sim.combatants[1].state.tactical_give_ground_defense_bonus,
+            5
+        );
+        assert_eq!(sim.combatants[1].state.tactical_next_attack_penalty, 1);
+        assert!(
+            sim.combat_events
+                .iter()
+                .any(|event| matches!(event.kind, CombatEventKind::Tactical(_)))
+        );
+    }
+
+    #[test]
+    fn dropping_defensive_stance_preserves_penalty_for_next_attack() {
+        let mut attacker = Combatant::default();
+        attacker.team_id = 0;
+        let profiles = vec![
+            tactical_profile(&attacker, Vec::new(), false, None, 8.0),
+            tactical_profile(&attacker, Vec::new(), false, Some(4), 8.0),
+        ];
+        attacker.configure_tactical_profiles(
+            always_policy(TacticalAction::FightDefensively { penalty: 4 }),
+            profiles,
+            vec![],
+        );
+        let mut defender = Combatant::default();
+        defender.team_id = 1;
+        let mut sim = SimState::new(SimConfig::new(1.0, 1.0));
+        sim.reset_with_combatants(vec![attacker, defender]);
+        sim.apply_next_attack_tactics(0, 1);
+        assert_eq!(sim.combatants[0].active_fight_defensively_penalty, Some(4));
+
+        sim.combatants[0].tactical_policy = always_policy(TacticalAction::NeutralStance);
+        sim.apply_next_attack_tactics(0, 1);
+        assert_eq!(sim.combatants[0].active_fight_defensively_penalty, None);
+        assert_eq!(sim.combatants[0].state.tactical_next_attack_penalty, 4);
+    }
+
+    #[test]
+    fn tactical_context_uses_temporary_dr_and_speed_modifiers() {
+        let mut mine = Combatant::default();
+        mine.team_id = 0;
+        let mut enemy = Combatant::default();
+        enemy.team_id = 1;
+        enemy.sheet.defense.armor_dr = 4;
+        let mut enemy_weapon = (*enemy.sheet.offense.weapon).clone();
+        enemy_weapon.speed = 10.0;
+        enemy.sheet.offense.weapon = std::sync::Arc::new(enemy_weapon);
+        let mut sim = SimState::new(SimConfig::new(1.0, 1.0));
+        sim.reset_with_combatants(vec![mine, enemy]);
+
+        let mut effect = TemporaryEffect::new("tactical_context_effect", 10);
+        effect
+            .modifiers
+            .add_i32(StatIdI32::ArmorDr, ModifierOpI32::Add(3));
+        effect
+            .modifiers
+            .add_f32(StatIdF32::WeaponSpeed, ModifierOpF32::Add(-4.0));
+        sim.combatants[1].state.active_effects.push(effect);
+        let context = sim.tactical_context(0, 1);
+        assert_eq!(context.enemy_dr, 7.0);
+        assert_eq!(
+            context.enemy_attack_speed_seconds,
+            sim.combatants[1].sheet.offense.weapon.speed - 4.0
+        );
+    }
+
+    #[test]
+    fn seeded_tactical_simulation_is_deterministic() {
+        let mut attacker = Combatant::default();
+        attacker.team_id = 0;
+        attacker.sheet.vitals.max_hp = 500;
+        attacker.reset_state();
+        let profiles = vec![
+            tactical_profile(&attacker, Vec::new(), false, None, 8.0),
+            tactical_profile(&attacker, Vec::new(), true, None, 3.0),
+        ];
+        attacker.configure_tactical_profiles(always_policy(TacticalAction::Jab), profiles, vec![]);
+        let mut defender = Combatant::default();
+        defender.team_id = 1;
+        defender.sheet.vitals.max_hp = 500;
+        defender.reset_state();
+
+        let run = |seed| {
+            let mut sim = SimState::with_rng(SimConfig::new(1.0, 1.0), SimRng::from_seed(seed));
+            sim.reset_with_combatants(vec![attacker.clone(), defender.clone()]);
+            for _ in 0..20 {
+                sim.tick();
+            }
+            let events = sim
+                .combat_events
+                .iter()
+                .map(|event| match &event.kind {
+                    CombatEventKind::Attack(attack) => format!(
+                        "{}:{}:{}:{}:{}",
+                        event.time, event.attacker_idx, attack.use_jab, attack.hit, attack.damage
+                    ),
+                    CombatEventKind::KnockAside(knock) => {
+                        format!("{}:knock:{}", event.time, knock.success)
+                    }
+                    CombatEventKind::Tactical(tactical) => {
+                        format!("{}:tactic:{}", event.time, tactical.action)
+                    }
+                })
+                .collect::<Vec<_>>();
+            (
+                sim.combatants
+                    .iter()
+                    .map(|combatant| combatant.state.hp)
+                    .collect::<Vec<_>>(),
+                events,
+            )
+        };
+        assert_eq!(run(4242), run(4242));
     }
 
     #[test]
@@ -1751,6 +2662,8 @@ pub struct DetailedTeamStats {
     pub hp_hits: u64,
     pub critical_hits: u64,
     pub kills: u64,
+    pub eyesmite_available: bool,
+    pub eyes_smote: u64,
     pub avg_attacks_per_fight: f32,
     pub direct_hit_rate: f32,
     pub contact_rate: f32,
@@ -1795,6 +2708,8 @@ struct DetailedTeamAccumulator {
     hp_hits: u64,
     critical_hits: u64,
     kills: u64,
+    eyesmite_available: bool,
+    eyes_smote: u64,
     total_hp_damage: u64,
     total_incoming_raw_damage: u64,
     total_armor_prevented: u64,
@@ -1901,6 +2816,8 @@ impl DetailedTeamAccumulator {
             hp_hits: self.hp_hits,
             critical_hits: self.critical_hits,
             kills: self.kills,
+            eyesmite_available: self.eyesmite_available,
+            eyes_smote: self.eyes_smote,
             avg_attacks_per_fight: rate(attempts, u64::from(runs)),
             direct_hit_rate: rate(self.direct_hits, attempts),
             contact_rate: rate(self.direct_hits + self.shield_blocks, attempts),
@@ -2029,6 +2946,14 @@ pub fn bulk_simulate_with_seed(
             })
         })
         .collect();
+    let team_has_eyesmite: Vec<bool> = team_ids
+        .iter()
+        .map(|team_id| {
+            combatants
+                .iter()
+                .any(|combatant| combatant.team_id == *team_id && combatant.sheet.defense.eyesmite)
+        })
+        .collect();
     let mut sim = SimState::with_rng(config, SimRng::from_seed(seed));
     sim.log_events = false;
     sim.reset_with_combatants(combatants);
@@ -2067,6 +2992,7 @@ pub fn bulk_simulate_with_seed(
         .map(|(idx, team_id)| DetailedTeamAccumulator {
             team_id: *team_id,
             shield_fights: if team_has_shield[idx] { runs } else { 0 },
+            eyesmite_available: team_has_eyesmite[idx],
             ..DetailedTeamAccumulator::default()
         })
         .collect();
@@ -2264,6 +3190,9 @@ pub fn bulk_simulate_with_seed(
             instakills = instakills.saturating_add(state.total_instakills_dealt);
             instakills_by_team[team_idx] =
                 instakills_by_team[team_idx].saturating_add(state.total_instakills_dealt);
+            detailed_accumulators[team_idx].eyes_smote = detailed_accumulators[team_idx]
+                .eyes_smote
+                .saturating_add(u64::from(state.total_eyes_smote));
             shield_breaks = shield_breaks.saturating_add(state.total_shield_breaks_taken);
             total_hits_shield_survived = total_hits_shield_survived
                 .saturating_add(u64::from(state.total_shield_hits_survived_before_break));

@@ -17,16 +17,19 @@ pub use modifiers::{
 pub use movement::{max_range_for_bands, max_range_for_weapon_name, range_bands_for_weapon_name};
 pub use types::{
     AttackEvent, AttackRollBreakdown, CalledShotDelayProfile, CombatEvent, CombatEventKind,
-    Combatant, CombatantCache, CombatantSheet, CombatantState, CriticalHit, DamageBreakdown,
-    DamageDie, DefenseProfile, GridPos, KnockAsideEvent, KnockAsideRollBreakdown, ManeuverProfile,
-    MobilityProfile, OffenseProfile, OffhandProfile, ShieldBreakageStep, ShieldDamageBreakdown,
-    SimActor, SimConfig, Vitals, WeaponCache, WeaponProfile, WeaponSlot,
+    Combatant, CombatantCache, CombatantSheet, CombatantState, CombatantTacticalProfile,
+    CriticalHit, DamageBreakdown, DamageDie, DefenseProfile, GridPos, KnockAsideEvent,
+    KnockAsideRollBreakdown, ManeuverProfile, MobilityProfile, OffenseProfile, OffhandProfile,
+    ShieldBreakageStep, ShieldDamageBreakdown, SimActor, SimConfig, TacticalEvent,
+    TacticalProfileKey, Vitals, WeaponCache, WeaponProfile, WeaponSlot,
 };
 
 #[derive(Clone, Debug)]
 pub(crate) struct BasicAttackResult {
     pub event: AttackEvent,
     pub counter_attack: Option<AttackEvent>,
+    pub precognition_triggered: bool,
+    pub counter_precognition_triggered: bool,
 }
 
 pub(crate) fn resolve_basic_attack(
@@ -52,6 +55,7 @@ pub(crate) fn resolve_basic_attack(
         None,
         rng,
     );
+    let precognition_triggered = outcome.precognition_triggered;
     let event = AttackEvent {
         hit: outcome.hit,
         shield_block: outcome.shield_block,
@@ -71,28 +75,34 @@ pub(crate) fn resolve_basic_attack(
         defender_hp_after: outcome.defender_hp_after,
         critical: outcome.critical,
     };
-    let counter_attack = outcome.counter_attack.map(|counter| AttackEvent {
-        hit: counter.hit,
-        shield_block: counter.shield_block,
-        damage: counter.damage,
-        shield_damage: counter.shield_damage,
-        knockback_ft: counter.knockback_ft,
-        hold_at_bay: false,
-        is_charge: false,
-        weapon_slot: counter.weapon_slot,
-        use_jab: counter.use_jab,
-        is_ranged: counter.is_ranged,
-        trauma_applied: counter.trauma_applied,
-        trauma_seconds: counter.trauma_seconds,
-        roll: counter.roll,
-        damage_breakdown: counter.damage_breakdown,
-        shield_damage_breakdown: counter.shield_damage_breakdown,
-        defender_hp_after: counter.defender_hp_after,
-        critical: counter.critical,
+    let mut counter_precognition_triggered = false;
+    let counter_attack = outcome.counter_attack.map(|counter| {
+        counter_precognition_triggered = counter.precognition_triggered;
+        AttackEvent {
+            hit: counter.hit,
+            shield_block: counter.shield_block,
+            damage: counter.damage,
+            shield_damage: counter.shield_damage,
+            knockback_ft: counter.knockback_ft,
+            hold_at_bay: false,
+            is_charge: false,
+            weapon_slot: counter.weapon_slot,
+            use_jab: counter.use_jab,
+            is_ranged: counter.is_ranged,
+            trauma_applied: counter.trauma_applied,
+            trauma_seconds: counter.trauma_seconds,
+            roll: counter.roll,
+            damage_breakdown: counter.damage_breakdown,
+            shield_damage_breakdown: counter.shield_damage_breakdown,
+            defender_hp_after: counter.defender_hp_after,
+            critical: counter.critical,
+        }
     });
     BasicAttackResult {
         event,
         counter_attack,
+        precognition_triggered,
+        counter_precognition_triggered,
     }
 }
 

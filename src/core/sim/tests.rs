@@ -98,6 +98,11 @@ fn combatant_basic(
             defense_mod,
             ranged_defense_mod: 0,
             dex_defense_bonus: 0,
+            feat_of_agility: 0,
+            armor_feat_of_agility_penalty: 0,
+            precognition: false,
+            prescience: false,
+            eyesmite: false,
             armor_dr,
             natural_dr: 0,
             knockback_step: 15,
@@ -257,13 +262,14 @@ fn arthur_duel_sim_with_distance(
 
     let arthur_preset = find_fighter_preset(&fighter_presets, "Arthur Du Randt")
         .expect("missing Arthur Du Randt preset");
-    let arthur = player_config_from_preset(
+    let mut arthur = player_config_from_preset(
         arthur_preset,
         &weapon_catalog,
         &armor_catalog,
         &shield_catalog,
         &race_catalog,
     );
+    arthur.charge = true;
     let players = [arthur.clone(), arthur];
     let stop_distance =
         game_logic::stop_distance_for_players(&players, &weapon_catalog, &talent_catalog);
@@ -455,6 +461,7 @@ fn player_config_from_preset(
     player.offensive_dualwielding = preset.offensive_dualwielding;
     player.proficiencies = preset.proficiencies.clone();
     player.talents = preset.talents.clone();
+    player.default_weapon_style_ids = preset.default_weapon_style_ids.clone();
     player.race_id = preset.race_id.clone();
     player.race_applied = false;
     player.knockback_step =
@@ -1767,6 +1774,11 @@ fn ranged_weapons_cannot_hold_at_bay() {
             ranged_defense_mod: 0,
             defense_mod: 0,
             dex_defense_bonus: 0,
+            feat_of_agility: 0,
+            armor_feat_of_agility_penalty: 0,
+            precognition: false,
+            prescience: false,
+            eyesmite: false,
             armor_dr: 0,
             natural_dr: 0,
             knockback_step: 15,
@@ -1805,6 +1817,11 @@ fn ranged_weapons_cannot_hold_at_bay() {
             ranged_defense_mod: 0,
             defense_mod: 0,
             dex_defense_bonus: 0,
+            feat_of_agility: 0,
+            armor_feat_of_agility_penalty: 0,
+            precognition: false,
+            prescience: false,
+            eyesmite: false,
             armor_dr: 0,
             natural_dr: 0,
             knockback_step: 15,
@@ -1955,6 +1972,11 @@ fn equal_reach_trauma_does_not_block_simultaneous_attacks() {
             ranged_defense_mod: 0,
             defense_mod: 0,
             dex_defense_bonus: 0,
+            feat_of_agility: 0,
+            armor_feat_of_agility_penalty: 0,
+            precognition: false,
+            prescience: false,
+            eyesmite: false,
             armor_dr: 0,
             natural_dr: 0,
             knockback_step: 15,
@@ -2891,6 +2913,11 @@ fn equal_reach_knockback_does_not_block_simultaneous_attacks() {
             ranged_defense_mod: 0,
             defense_mod: 0,
             dex_defense_bonus: 0,
+            feat_of_agility: 0,
+            armor_feat_of_agility_penalty: 0,
+            precognition: false,
+            prescience: false,
+            eyesmite: false,
             armor_dr: 0,
             natural_dr: 0,
             knockback_step: 15,
@@ -4359,13 +4386,14 @@ fn arthur_vs_arthur_charges_on_first_contact() {
 
     let arthur_preset = find_fighter_preset(&fighter_presets, "Arthur Du Randt")
         .expect("missing Arthur Du Randt preset");
-    let arthur = player_config_from_preset(
+    let mut arthur = player_config_from_preset(
         arthur_preset,
         &weapon_catalog,
         &armor_catalog,
         &shield_catalog,
         &race_catalog,
     );
+    arthur.charge = true;
     let players = [arthur.clone(), arthur];
     let stop_distance =
         game_logic::stop_distance_for_players(&players, &weapon_catalog, &talent_catalog);
@@ -4410,6 +4438,16 @@ fn arthur_vs_arthur_charges_on_first_contact() {
         t5_charges >= 2,
         "expected both Arthurs to charge on first contact, got {t5_charges}"
     );
+}
+
+#[test]
+fn arthur_charge_is_disabled_by_default() {
+    let fighter_presets = data::load_fighter_presets("data/fighter_presets.json")
+        .expect("failed to load fighter presets");
+    let arthur = find_fighter_preset(&fighter_presets, "Arthur Du Randt")
+        .expect("missing Arthur Du Randt preset");
+
+    assert!(!arthur.maneuvers.charge);
 }
 
 #[test]
@@ -5805,6 +5843,433 @@ fn edge_counter_forces_critical_on_perfect_defense_riposte() {
 }
 
 #[test]
+fn prescience_blocks_a_successful_ranged_hit_after_feat_of_agility() {
+    let attacker = combatant_basic(
+        "Archer".to_string(),
+        "Shortbow".to_string(),
+        30,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        9,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        50,
+    );
+    let mut defender = combatant_basic(
+        "Seer".to_string(),
+        "Fist".to_string(),
+        0,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        false,
+        false,
+        50,
+    );
+    defender.sheet.defense.prescience = true;
+    defender.sheet.defense.feat_of_agility = 100;
+
+    let mut baseline = make_state(attacker.clone(), {
+        let mut baseline = defender.clone();
+        baseline.sheet.defense.prescience = false;
+        baseline
+    });
+    let mut baseline_rng = rand::rngs::StdRng::seed_from_u64(91);
+    let baseline_outcome = resolve_attack(
+        &mut baseline.combatants,
+        0,
+        1,
+        0,
+        true,
+        20.0,
+        AttackMode::Normal,
+        WeaponSlot::Primary,
+        0.0,
+        None,
+        &mut baseline_rng,
+    );
+    assert!(baseline_outcome.hit);
+    assert!(baseline_outcome.damage > 0);
+
+    let mut state = make_state(attacker, defender);
+    let hp_before = state.combatants[1].state.hp;
+    let mut rng = rand::rngs::StdRng::seed_from_u64(91);
+    let outcome = resolve_attack(
+        &mut state.combatants,
+        0,
+        1,
+        0,
+        true,
+        20.0,
+        AttackMode::Normal,
+        WeaponSlot::Primary,
+        0.0,
+        None,
+        &mut rng,
+    );
+    assert!(!outcome.hit);
+    assert_eq!(outcome.damage, 0);
+    assert_eq!(state.combatants[1].state.hp, hp_before);
+}
+
+#[test]
+fn precognition_halves_final_melee_damage_and_requires_evasion_space() {
+    let attacker = combatant_basic(
+        "Attacker".to_string(),
+        "Sword".to_string(),
+        30,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        9,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        50,
+    );
+    let mut defender = combatant_basic(
+        "Seer".to_string(),
+        "Fist".to_string(),
+        0,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        false,
+        false,
+        50,
+    );
+    defender.sheet.defense.precognition = true;
+    defender.sheet.defense.feat_of_agility = 100;
+
+    let mut with_space = make_state(attacker.clone(), defender.clone());
+    with_space.combatants[1].state.precognition_space_available = true;
+    let mut rng = rand::rngs::StdRng::seed_from_u64(92);
+    let outcome = resolve_attack(
+        &mut with_space.combatants,
+        0,
+        1,
+        0,
+        false,
+        1.0,
+        AttackMode::Normal,
+        WeaponSlot::Primary,
+        0.0,
+        None,
+        &mut rng,
+    );
+    assert!(outcome.hit);
+    assert!(outcome.precognition_triggered);
+    assert_eq!(outcome.damage, 5);
+
+    let mut without_space = make_state(attacker, defender);
+    let mut rng = rand::rngs::StdRng::seed_from_u64(92);
+    let outcome = resolve_attack(
+        &mut without_space.combatants,
+        0,
+        1,
+        0,
+        false,
+        1.0,
+        AttackMode::Normal,
+        WeaponSlot::Primary,
+        0.0,
+        None,
+        &mut rng,
+    );
+    assert!(outcome.hit);
+    assert!(!outcome.precognition_triggered);
+    assert_eq!(outcome.damage, 10);
+}
+
+#[test]
+fn precognition_moves_the_defender_five_feet_when_space_is_open() {
+    let mut attacker = combatant_basic(
+        "Attacker".to_string(),
+        "Sword".to_string(),
+        30,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        9,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        50,
+    );
+    let mut defender = combatant_basic(
+        "Seer".to_string(),
+        "Fist".to_string(),
+        0,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        0.0,
+        false,
+        false,
+        None,
+        false,
+        false,
+        50,
+    );
+    defender.sheet.defense.precognition = true;
+    defender.sheet.defense.feat_of_agility = 100;
+    defender.sheet.maneuvers.passive = true;
+    attacker.team_id = 0;
+    defender.team_id = 1;
+
+    let mut sim = SimState::with_rng(SimConfig::new(1.0, 1.0), SimRng::from_seed(93));
+    sim.reset_with_combatants(vec![attacker, defender]);
+    let before = sim.actors[1].position;
+    for _ in 0..30 {
+        sim.tick();
+        if sim.combatants[1].state.hp < 50 {
+            break;
+        }
+    }
+    let after = sim.actors[1].position;
+    assert_eq!(before.manhattan_distance(after), 5);
+    assert_eq!(sim.combatants[1].state.hp, 45);
+}
+
+#[test]
+fn eyesmite_replaces_near_perfect_counter_drops_buckler_and_ignores_dr() {
+    let mut attacker = combatant_basic(
+        "Armored attacker".to_string(),
+        "Sword".to_string(),
+        -100,
+        0,
+        50,
+        true,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        100,
+    );
+    attacker.sheet.defense.natural_dr = 20;
+    let mut defender = combatant_basic(
+        "Eyesmite defender".to_string(),
+        "Sword".to_string(),
+        50,
+        100,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        100,
+    );
+    defender.sheet.defense.eyesmite = true;
+    defender.sheet.defense.shield_name = Some("Buckler".to_string());
+    defender.reset_state();
+
+    let mut verified = false;
+    for seed in 0..10_000u64 {
+        let mut state = make_state(attacker.clone(), defender.clone());
+        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+        let outcome = resolve_attack(
+            &mut state.combatants,
+            0,
+            1,
+            0,
+            false,
+            1.0,
+            AttackMode::Normal,
+            WeaponSlot::Primary,
+            0.0,
+            None,
+            &mut rng,
+        );
+        let Some(counter) = outcome.counter_attack else {
+            continue;
+        };
+        if state.combatants[1].state.shield_intact || !counter.hit {
+            continue;
+        }
+        let detail = counter
+            .damage_breakdown
+            .as_ref()
+            .expect("successful Eyesmite damage breakdown");
+        assert_eq!(detail.effective_armor_dr, 0);
+        assert!(detail.armor_dr >= 70);
+        assert_eq!(counter.trauma_seconds, Some(counter.damage * 10));
+        assert_eq!(state.combatants[0].state.hp, 100 - counter.damage);
+        assert_eq!(state.combatants[1].state.total_eyes_smote, 1);
+        verified = true;
+        break;
+    }
+    assert!(verified, "expected a near-perfect Eyesmite counter");
+}
+
+#[test]
+fn bulk_stats_show_eyes_smote_only_for_an_eyesmite_team() {
+    let mut attacker = combatant_basic(
+        "Attacker".to_string(),
+        "Sword".to_string(),
+        -100,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        1.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        1_000,
+    );
+    let mut defender = combatant_basic(
+        "Eyesmite defender".to_string(),
+        "Sword".to_string(),
+        100,
+        100,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        50,
+        100.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        1_000,
+    );
+    attacker.team_id = 0;
+    defender.team_id = 1;
+    defender.sheet.defense.eyesmite = true;
+
+    let result = bulk_simulate_with_seed(
+        SimConfig::new(1.0, 1.0),
+        vec![attacker, defender],
+        100,
+        20,
+        37,
+    );
+
+    assert!(!result.detailed.teams[0].eyesmite_available);
+    assert_eq!(result.detailed.teams[0].eyes_smote, 0);
+    assert!(result.detailed.teams[1].eyesmite_available);
+    assert!(result.detailed.teams[1].eyes_smote > 0);
+}
+
+#[test]
+fn eyesmite_user_closes_to_five_feet_inside_weapon_reach() {
+    let mut smiter = combatant_basic(
+        "Smiter".to_string(),
+        "Reach weapon".to_string(),
+        0,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        10.0,
+        10.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        100,
+    );
+    let mut opponent = smiter.clone();
+    smiter.sheet.name = "Smiter".to_string();
+    smiter.sheet.defense.eyesmite = true;
+    smiter.team_id = 0;
+    opponent.sheet.name = "Opponent".to_string();
+    opponent.sheet.defense.eyesmite = false;
+    opponent.sheet.maneuvers.passive = true;
+    opponent.team_id = 1;
+
+    let mut sim = SimState::with_rng(SimConfig::new(10.0, 10.0), SimRng::from_seed(17));
+    sim.reset_with_combatants(vec![smiter, opponent]);
+    assert_eq!(sim.distance(), 10.0);
+
+    sim.tick();
+
+    assert!(
+        sim.combat_events
+            .iter()
+            .any(|event| event.attacker_idx == 0),
+        "the reach weapon should attack at 10 feet before the user closes"
+    );
+    assert_eq!(sim.combatants[0].sheet.offense.weapon.reach_ft, 10.0);
+    assert_eq!(sim.distance(), 5.0);
+}
+
+#[test]
 fn two_hand_grip_bonus_ready_on_attack_timer() {
     let mut combatant = combatant_basic(
         "Attacker".to_string(),
@@ -6045,6 +6510,93 @@ fn offhand_attack_applies_damage_penalty() {
 }
 
 #[test]
+fn twelve_paths_damage_penalty_ends_when_shield_breaks() {
+    let mut attacker = combatant_basic(
+        "Errit".to_string(),
+        "Two-handed Sword".to_string(),
+        20,
+        0,
+        0,
+        false,
+        0,
+        "10".to_string(),
+        2,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        20,
+    );
+    attacker.sheet.defense.shield_name = Some("Buckler".to_string());
+    attacker
+        .sheet
+        .modifiers
+        .add_i32(StatIdI32::FlagLargeSwordShieldStyle, ModifierOpI32::Set(1));
+    attacker.state.shield_intact = true;
+    let defender = combatant_basic(
+        "Defender".to_string(),
+        "Fist".to_string(),
+        0,
+        -100,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        1.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        100,
+    );
+
+    let mut intact_state = make_state(attacker.clone(), defender.clone());
+    let mut rng = FixedRng(0);
+    let intact = resolve_attack(
+        &mut intact_state.combatants,
+        0,
+        1,
+        0,
+        false,
+        1.0,
+        AttackMode::Normal,
+        WeaponSlot::Primary,
+        0.0,
+        None,
+        &mut rng,
+    );
+
+    let mut broken_state = make_state(attacker, defender);
+    broken_state.combatants[0].state.shield_intact = false;
+    let mut rng = FixedRng(0);
+    let broken = resolve_attack(
+        &mut broken_state.combatants,
+        0,
+        1,
+        0,
+        false,
+        1.0,
+        AttackMode::Normal,
+        WeaponSlot::Primary,
+        0.0,
+        None,
+        &mut rng,
+    );
+
+    assert_eq!(intact.damage, 12);
+    assert_eq!(broken.damage, 15);
+    assert_eq!(broken.damage - intact.damage, 3);
+}
+
+#[test]
 fn offhand_attack_damage_penalty_can_be_removed() {
     let mut attacker = combatant_basic(
         "Attacker".to_string(),
@@ -6262,6 +6814,11 @@ fn throwing_axe_switches_to_melee_at_close_range() {
             ranged_defense_mod: 0,
             defense_mod: 0,
             dex_defense_bonus: 0,
+            feat_of_agility: 0,
+            armor_feat_of_agility_penalty: 0,
+            precognition: false,
+            prescience: false,
+            eyesmite: false,
             armor_dr: 0,
             natural_dr: 0,
             knockback_step: 15,
@@ -6300,6 +6857,11 @@ fn throwing_axe_switches_to_melee_at_close_range() {
             ranged_defense_mod: 0,
             defense_mod: 0,
             dex_defense_bonus: 0,
+            feat_of_agility: 0,
+            armor_feat_of_agility_penalty: 0,
+            precognition: false,
+            prescience: false,
+            eyesmite: false,
             armor_dr: 0,
             natural_dr: 0,
             knockback_step: 15,
@@ -6449,6 +7011,11 @@ fn throwing_axe_cooldown_resets_on_melee_engagement() {
             ranged_defense_mod: 0,
             defense_mod: 0,
             dex_defense_bonus: 0,
+            feat_of_agility: 0,
+            armor_feat_of_agility_penalty: 0,
+            precognition: false,
+            prescience: false,
+            eyesmite: false,
             armor_dr: 0,
             natural_dr: 0,
             knockback_step: 15,
@@ -6487,6 +7054,11 @@ fn throwing_axe_cooldown_resets_on_melee_engagement() {
             ranged_defense_mod: 0,
             defense_mod: 0,
             dex_defense_bonus: 0,
+            feat_of_agility: 0,
+            armor_feat_of_agility_penalty: 0,
+            precognition: false,
+            prescience: false,
+            eyesmite: false,
             armor_dr: 0,
             natural_dr: 0,
             knockback_step: 15,
@@ -6866,6 +7438,16 @@ fn named_fighter_preset_weapon_and_mastery_overrides_are_preserved() {
             .iter()
             .any(|proficiency| proficiency == "Halberd")
     );
+    for style_id in ["armeroci_pole", "rohavalan_bridge"] {
+        assert!(
+            arthur
+                .talents
+                .iter()
+                .any(|selection| selection.id == style_id),
+            "Arthur is missing {style_id}"
+        );
+    }
+    assert_eq!(arthur.default_weapon_style_ids, Some(Vec::new()));
 
     for name in ["Volfango Drakos", "Volfango Drakos (Perfect Two-Weapon)"] {
         let preset = find_fighter_preset(&fighter_presets, name)
@@ -6900,7 +7482,98 @@ fn named_fighter_preset_weapon_and_mastery_overrides_are_preserved() {
 }
 
 #[test]
-fn fighter_presets_do_not_select_multiple_weapon_styles() {
+fn always_give_ground_tactical_preset_has_one_unconditional_reaction() {
+    let presets = data::load_tactical_presets("data/sim/tactical_presets.json")
+        .expect("failed to load tactical presets");
+    let preset = presets
+        .iter()
+        .find(|preset| preset.name == "Always Give Ground")
+        .expect("missing Always Give Ground tactical preset");
+
+    assert_eq!(preset.rules.len(), 1);
+    let rule = &preset.rules[0];
+    assert!(rule.enabled);
+    assert_eq!(
+        rule.decision,
+        crate::core::tactics::TacticalDecisionPoint::IncomingAttackReaction
+    );
+    assert_eq!(
+        rule.conditions,
+        vec![crate::core::tactics::TacticalCondition::Always]
+    );
+    assert_eq!(
+        rule.action,
+        crate::core::tactics::TacticalAction::GiveGround
+    );
+}
+
+#[test]
+fn arthur_armeroci_bridge_tactical_preset_is_compatible() {
+    let (weapon_catalog, armor_catalog, shield_catalog) =
+        data::load_catalogs().expect("failed to load catalogs");
+    let race_catalog = data::load_races("data/races.json").expect("failed to load races");
+    let fighter_presets = data::load_fighter_presets("data/fighter_presets.json")
+        .expect("failed to load fighter presets");
+    let talent_catalog = data::load_talents(data::TALENTS_PATH).expect("failed to load talents");
+    let npc_presets =
+        data::load_npc_presets("data/npc_presets.json").expect("failed to load NPC presets");
+    let tactical_presets = data::load_tactical_presets("data/sim/tactical_presets.json")
+        .expect("failed to load tactical presets");
+    let arthur = find_fighter_preset(&fighter_presets, "Arthur Du Randt")
+        .expect("missing Arthur Du Randt preset");
+    let tactical = tactical_presets
+        .iter()
+        .find(|preset| preset.name == "Arthur - Armeroci Bridge")
+        .expect("missing Arthur tactical preset");
+    let mut player = player_config_from_preset(
+        arthur,
+        &weapon_catalog,
+        &armor_catalog,
+        &shield_catalog,
+        &race_catalog,
+    );
+    player.default_weapon_style_ids = tactical.opening_style_ids.clone();
+    player.tactical_policy.enabled = true;
+    player.tactical_policy.rules = tactical.rules.clone();
+
+    let combatant = game_logic::build_combatant(
+        &player,
+        &weapon_catalog,
+        &armor_catalog,
+        &shield_catalog,
+        &npc_presets,
+        &talent_catalog,
+    );
+
+    assert_eq!(
+        combatant.active_style_ids,
+        vec!["armeroci_pole".to_string()]
+    );
+    assert!(
+        combatant
+            .tactical_profiles
+            .iter()
+            .any(
+                |profile| profile.key.style_ids == ["rohavalan_bridge".to_string()]
+                    && profile.key.use_jab
+            )
+    );
+    assert!(tactical.rules.iter().any(|rule| {
+        matches!(rule.action, crate::core::tactics::TacticalAction::Jab)
+            && rule.conditions.iter().any(|condition| {
+                matches!(
+                    condition,
+                    crate::core::tactics::TacticalCondition::MyActiveStyle {
+                        style_id,
+                        negated: false,
+                    } if style_id == "rohavalan_bridge"
+                )
+            })
+    }));
+}
+
+#[test]
+fn fighter_presets_use_valid_default_weapon_style_selections() {
     let fighter_presets = data::load_fighter_presets("data/fighter_presets.json")
         .expect("failed to load fighter presets");
     let talent_catalog = data::load_talents(data::TALENTS_PATH).expect("failed to load talents");
@@ -6918,19 +7591,33 @@ fn fighter_presets_do_not_select_multiple_weapon_styles() {
             })
             .collect();
 
-        let allowed_perfect_blades_pair = style_ids.len() == 2
-            && preset
-                .talents
-                .iter()
-                .any(|selection| selection.id == "perfect_two_weapon_fighting")
-            && style_ids.contains(&"shield_of_blades")
-            && style_ids.contains(&"storm_of_blades");
-        assert!(
-            style_ids.len() <= 1 || allowed_perfect_blades_pair,
-            "{} has multiple weapon styles selected: {:?}",
-            preset.name,
-            style_ids
-        );
+        if let Some(default_style_ids) = &preset.default_weapon_style_ids {
+            assert!(
+                default_style_ids
+                    .iter()
+                    .all(|style| style_ids.contains(&style.as_str())),
+                "{} selects an unlearned default style: {:?}",
+                preset.name,
+                default_style_ids
+            );
+            let allowed_perfect_blades_pair = default_style_ids.len() == 2
+                && preset
+                    .talents
+                    .iter()
+                    .any(|selection| selection.id == "perfect_two_weapon_fighting")
+                && default_style_ids
+                    .iter()
+                    .any(|style| style == "shield_of_blades")
+                && default_style_ids
+                    .iter()
+                    .any(|style| style == "storm_of_blades");
+            assert!(
+                default_style_ids.len() <= 1 || allowed_perfect_blades_pair,
+                "{} has an invalid default style selection: {:?}",
+                preset.name,
+                default_style_ids
+            );
+        }
     }
 }
 
@@ -6971,6 +7658,8 @@ fn volfango_perfect_two_weapon_preset_is_level_eight_and_combines_dualwield_mode
         "perfect_two_weapon_fighting",
         "shield_of_blades",
         "storm_of_blades",
+        "precognition",
+        "prescience",
     ] {
         assert!(
             preset
@@ -6985,10 +7674,50 @@ fn volfango_perfect_two_weapon_preset_is_level_eight_and_combines_dualwield_mode
     assert!(combatant.sheet.maneuvers.defensive_dualwielding);
     assert!(combatant.sheet.maneuvers.offensive_dualwielding);
     assert!(combatant.sheet.maneuvers.storm_of_blades);
+    assert!(combatant.sheet.defense.precognition);
+    assert!(combatant.sheet.defense.prescience);
     assert!(
         !combatant
             .sheet
             .maneuvers
             .offensive_dualwielding_defense_penalty
     );
+}
+
+#[test]
+fn errit_preset_enables_eyesmite_with_feat_of_agility_data() {
+    let (weapon_catalog, armor_catalog, shield_catalog) =
+        data::load_catalogs().expect("failed to load catalogs");
+    let race_catalog = data::load_races("data/races.json").expect("failed to load races");
+    let fighter_presets = data::load_fighter_presets("data/fighter_presets.json")
+        .expect("failed to load fighter presets");
+    let talent_catalog = data::load_talents(data::TALENTS_PATH).expect("failed to load talents");
+    let npc_presets =
+        data::load_npc_presets("data/npc_presets.json").expect("failed to load NPC presets");
+    let preset = find_fighter_preset(&fighter_presets, "Errit").expect("missing Errit preset");
+    let player = player_config_from_preset(
+        preset,
+        &weapon_catalog,
+        &armor_catalog,
+        &shield_catalog,
+        &race_catalog,
+    );
+    let combatant = game_logic::build_combatant(
+        &player,
+        &weapon_catalog,
+        &armor_catalog,
+        &shield_catalog,
+        &npc_presets,
+        &talent_catalog,
+    );
+
+    assert!(
+        preset
+            .talents
+            .iter()
+            .any(|selection| selection.id == "eyesmite")
+    );
+    assert!(combatant.sheet.defense.eyesmite);
+    assert_eq!(combatant.sheet.defense.feat_of_agility, 1);
+    assert_eq!(combatant.sheet.defense.armor_feat_of_agility_penalty, 20);
 }

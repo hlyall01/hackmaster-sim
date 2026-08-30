@@ -3123,17 +3123,11 @@ fn render_talent_entry(
         .unwrap_or((0, None));
     let failures = game_logic::evaluate_talent_requirements(spec, context);
     let meets_requirements = failures.is_empty();
-    let style_conflict = current_rank == 0
-        && game_logic::has_other_weapon_style_selected(player, spec, talent_catalog);
     let max_rank = spec.max_rank.max(1);
     let available_rank = max_affordable_rank(spec, available_points);
-    let max_selectable = if style_conflict {
-        0
-    } else {
-        max_rank.min(available_rank)
-    };
-    let can_adjust = (meets_requirements || current_rank > 0) && !style_conflict;
-    let force_add_enabled = !meets_requirements && current_rank == 0 && !style_conflict;
+    let max_selectable = max_rank.min(available_rank);
+    let can_adjust = meets_requirements || current_rank > 0;
+    let force_add_enabled = !meets_requirements && current_rank == 0;
     let muted_color = ui.style().visuals.weak_text_color();
     let name_color = if meets_requirements {
         ui.style().visuals.text_color()
@@ -3170,13 +3164,6 @@ fn render_talent_entry(
                 force_add_requested = true;
             }
         }
-        if style_conflict {
-            ui.colored_label(
-                Color32::from_rgb(190, 90, 90),
-                "Only one weapon style can be active at a time.",
-            );
-        }
-
         let mut selection = TalentSelection {
             id: spec.id.clone(),
             rank: current_rank,

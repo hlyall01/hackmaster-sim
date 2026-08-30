@@ -8,12 +8,13 @@ pub use crate::core::ids::{
     ShieldTag, TalentId, TalentTag, WeaponId, WeaponTag,
 };
 use crate::core::rules::DamageExprCache;
+use crate::core::tactics::{SHIELD_OF_BLADES_STYLE_ID, STORM_OF_BLADES_STYLE_ID, TacticalPolicy};
 use crate::core::types::{
     AbilityKind, RaceSpec, TalentEffect, TalentRequirement, TalentSelection, TalentSpec,
 };
 use crate::sim::{
-    self, Combatant, CombatantSheet, DefenseProfile, MobilityProfile, OffenseProfile, Vitals,
-    WeaponProfile,
+    self, Combatant, CombatantSheet, CombatantTacticalProfile, DefenseProfile, MobilityProfile,
+    OffenseProfile, TacticalProfileKey, Vitals, WeaponProfile,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -347,6 +348,8 @@ pub struct FighterPreset {
     pub proficiencies: Vec<String>,
     #[serde(default)]
     pub talents: Vec<TalentSelection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_weapon_style_ids: Option<Vec<String>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -439,6 +442,13 @@ pub struct PlayerConfig {
     pub race_applied: bool,
     pub proficiencies: Vec<String>,
     pub talents: Vec<TalentSelection>,
+    pub tactical_policy: TacticalPolicy,
+    /// The style used for ordinary combat, and the opening style when tactics
+    /// are enabled. `None` preserves the prior first-learned-style behavior;
+    /// `Some(vec![])` explicitly selects no style.
+    pub default_weapon_style_ids: Option<Vec<String>>,
+    /// Internal profile-building override. This is not a learned-style list.
+    pub active_weapon_style_ids: Option<Vec<String>>,
 }
 
 impl PlayerConfig {
@@ -502,6 +512,9 @@ impl PlayerConfig {
             race_applied: false,
             proficiencies: Vec::new(),
             talents: Vec::new(),
+            tactical_policy: TacticalPolicy::default(),
+            default_weapon_style_ids: None,
+            active_weapon_style_ids: None,
         }
     }
 }
@@ -584,6 +597,9 @@ struct TalentModifiers {
     defiant: bool,
     superior_defense: bool,
     edge_counter: bool,
+    precognition: bool,
+    prescience: bool,
+    eyesmite: bool,
     fight_defensively_attack_penalty_divisor: i32,
     called_shot_delay_profile: Option<sim::CalledShotDelayProfile>,
     called_shot_target_defense_bonus_divisor: i32,
@@ -694,6 +710,9 @@ impl Default for TalentModifiers {
             defiant: false,
             superior_defense: false,
             edge_counter: false,
+            precognition: false,
+            prescience: false,
+            eyesmite: false,
             fight_defensively_attack_penalty_divisor: 1,
             called_shot_delay_profile: None,
             called_shot_target_defense_bonus_divisor: 1,
@@ -900,23 +919,13 @@ pub fn is_weapon_style_category(category: &str) -> bool {
 }
 
 pub fn has_other_weapon_style_selected(
-    player: &PlayerConfig,
-    spec: &TalentSpec,
-    talent_catalog: &TalentCatalog,
+    _player: &PlayerConfig,
+    _spec: &TalentSpec,
+    _talent_catalog: &TalentCatalog,
 ) -> bool {
-    if !is_weapon_style_category(&spec.category) {
-        return false;
-    }
-    player.talents.iter().any(|selection| {
-        selection.id != spec.id
-            && selection.rank.max(1) > 0
-            && find_talent(talent_catalog, &selection.id)
-                .map(|other| {
-                    is_weapon_style_category(&other.category)
-                        && !weapon_styles_can_stack(player, &selection.id, &spec.id)
-                })
-                .unwrap_or(false)
-    })
+    // Weapon styles are knowledge. The one-style restriction applies only to
+    // the selected/default style and runtime activation, never to learning.
+    false
 }
 
 fn is_storm_shield_pair(left: &str, right: &str) -> bool {
@@ -1779,6 +1788,42 @@ fn active_weapon_style_specs<'a>(
         proficiencies: &player.proficiencies,
         weapon_catalog,
     };
+    let requested_styles = player
+        .active_weapon_style_ids
+        .as_ref()
+        .or(player.default_weapon_style_ids.as_ref());
+    if let Some(requested) = requested_styles {
+        if requested.is_empty() {
+            return Vec::new();
+        }
+        if requested.len() > 2
+            || (requested.len() == 2
+                && !weapon_styles_can_stack(player, &requested[0], &requested[1]))
+        {
+            return Vec::new();
+        }
+        let mut active_styles = Vec::new();
+        for style_id in requested {
+            let Some(selection) = player
+                .talents
+                .iter()
+                .find(|selection| selection.id.eq_ignore_ascii_case(style_id))
+            else {
+                return Vec::new();
+            };
+            let Some(spec) = find_talent(talent_catalog, &selection.id) else {
+                return Vec::new();
+            };
+            if !is_weapon_style_category(&spec.category)
+                || !style_effects_active(selection, spec, &context, player)
+            {
+                return Vec::new();
+            }
+            active_styles.push(spec);
+        }
+        return active_styles;
+    }
+
     let mut active_styles: Vec<&TalentSpec> = Vec::new();
     for selection in &player.talents {
         let Some(spec) = find_talent(talent_catalog, &selection.id) else {
@@ -1798,6 +1843,251 @@ fn active_weapon_style_specs<'a>(
         }
     }
     active_styles
+}
+
+pub fn learned_weapon_style_ids(
+    player: &PlayerConfig,
+    talent_catalog: &TalentCatalog,
+) -> Vec<String> {
+    player
+        .talents
+        .iter()
+        .filter_map(|selection| {
+            let spec = find_talent(talent_catalog, &selection.id)?;
+            (is_weapon_style_category(&spec.category) && selection.rank.max(1) > 0)
+                .then(|| spec.id.clone())
+        })
+        .collect()
+}
+
+pub fn compatible_weapon_style_ids(
+    player: &PlayerConfig,
+    talent_catalog: &TalentCatalog,
+    weapon_catalog: &WeaponCatalog,
+    armor_catalog: &ArmorCatalog,
+    shield_catalog: &ShieldCatalog,
+) -> Vec<String> {
+    let stats = ability_set_from_player(player);
+    let context = TalentContext {
+        level: player.level,
+        stats: &stats,
+        talents: &player.talents,
+        proficiencies: &player.proficiencies,
+        weapon_catalog: Some(weapon_catalog),
+    };
+    player
+        .talents
+        .iter()
+        .filter_map(|selection| {
+            let spec = find_talent(talent_catalog, &selection.id)?;
+            (is_weapon_style_category(&spec.category)
+                && style_effects_active(selection, spec, &context, player)
+                && weapon_style_compatible_with_loadout(
+                    player,
+                    &spec.id,
+                    weapon_catalog,
+                    armor_catalog,
+                    shield_catalog,
+                ))
+            .then(|| spec.id.clone())
+        })
+        .collect()
+}
+
+pub fn weapon_style_compatible_with_loadout(
+    player: &PlayerConfig,
+    style_id: &str,
+    weapon_catalog: &WeaponCatalog,
+    armor_catalog: &ArmorCatalog,
+    shield_catalog: &ShieldCatalog,
+) -> bool {
+    let Some(weapon) = weapon_catalog.get(player.weapon_id) else {
+        return false;
+    };
+    let offhand = player
+        .offhand_weapon_id
+        .and_then(|weapon_id| weapon_catalog.get(weapon_id));
+    let armor = armor_catalog
+        .get(player.armor_id)
+        .and_then(|entry| entry.armor.as_ref());
+    let selected_shield = shield_catalog
+        .get(player.shield_id)
+        .and_then(|entry| entry.shield.as_ref());
+    let standard_shield = standard_shield_allowed(player, weapon)
+        .then_some(selected_shield)
+        .flatten();
+    let defensive_dualwielding = defensive_dualwielding_active(player, weapon) && offhand.is_some();
+    let offensive_dualwielding = offensive_dualwielding_active(player, weapon) && offhand.is_some();
+    let one_handed_offhand = offhand
+        .map(|weapon| weapon.handedness == WeaponHandedness::OneHanded)
+        .unwrap_or(false);
+    let sword_offhand = offhand.map(is_one_handed_sword).unwrap_or(false);
+
+    match style_id.trim().to_ascii_lowercase().as_str() {
+        TALENT_ID_TWELVE_PATHS => {
+            weapon.group == WeaponGroup::LargeSwords
+                && weapon.size == WeaponSize::Large
+                && selected_shield
+                    .map(|shield| is_small_shield_or_buckler_name(&shield.name))
+                    .unwrap_or(false)
+        }
+        TALENT_ID_ARMEROCI_POLE => {
+            matches!(
+                weapon.group,
+                WeaponGroup::LargeSwords | WeaponGroup::Polearms
+            ) && weapon.reach_ft >= 5.0
+        }
+        TALENT_ID_CRESCENT_MOON => {
+            defensive_dualwielding
+                && weapon.group == WeaponGroup::LargeSwords
+                && offhand
+                    .map(|weapon| weapon.group == WeaponGroup::SmallSwords)
+                    .unwrap_or(false)
+        }
+        TALENT_ID_DOOMRAZOR => !is_ranged_weapon(weapon) && weapon.hacking_or_piercing,
+        TALENT_ID_FALLING_SUN => matches!(
+            weapon.name.trim().to_ascii_lowercase().as_str(),
+            "flamberge" | "two-handed sword"
+        ),
+        TALENT_ID_FYMBLWNGER => matches!(
+            weapon.name.trim().to_ascii_lowercase().as_str(),
+            "battle axe" | "executioner's axe" | "greataxe"
+        ),
+        TALENT_ID_HAMMERER => matches!(
+            weapon.name.trim().to_ascii_lowercase().as_str(),
+            "greathammer" | "hammer" | "maul" | "warhammer"
+        ),
+        TALENT_ID_HOBBLER => {
+            matches!(weapon.group, WeaponGroup::Polearms | WeaponGroup::Spears)
+        }
+        TALENT_ID_ITHICAN_PRINCE => {
+            weapon.group == WeaponGroup::SmallSwords
+                && standard_shield
+                    .map(|shield| shield.name.trim().eq_ignore_ascii_case("buckler"))
+                    .unwrap_or(false)
+        }
+        TALENT_ID_QUIET_RIVER => {
+            weapon.name.trim().eq_ignore_ascii_case("fist")
+                && armor.is_none()
+                && standard_shield.is_none()
+        }
+        TALENT_ID_REGENSTAT => {
+            matches!(
+                weapon.group,
+                WeaponGroup::SmallSwords | WeaponGroup::LargeSwords
+            ) && weapon.size == WeaponSize::Medium
+                && (weapon.handedness == WeaponHandedness::TwoHanded
+                    || player.two_hand_grip
+                    || (offhand.is_none() && standard_shield.is_none()))
+        }
+        TALENT_ID_RETURNER => {
+            weapon.group == WeaponGroup::LargeSwords && weapon.size == WeaponSize::Large
+        }
+        TALENT_ID_RHDWNG_FLOW => weapon.range_bands_feet.is_some() && weapon.ammunition.is_none(),
+        TALENT_ID_ROHAVALAN_BRIDGE => {
+            weapon.group == WeaponGroup::Polearms
+                || weapon.name.trim().eq_ignore_ascii_case("staff")
+        }
+        TALENT_ID_SCORN_OF_THE_DISSENDRI => {
+            one_handed_offhand && (defensive_dualwielding || offensive_dualwielding)
+        }
+        TALENT_ID_SHIELD_OF_BLADES => {
+            defensive_dualwielding && is_one_handed_sword(weapon) && sword_offhand
+        }
+        TALENT_ID_SIX_PATHS => {
+            weapon.group == WeaponGroup::LargeSwords
+                && weapon.size == WeaponSize::Medium
+                && standard_shield
+                    .map(|shield| is_medium_or_small_shield_name(&shield.name))
+                    .unwrap_or(false)
+        }
+        TALENT_ID_STORM_OF_BLADES => {
+            offensive_dualwielding && is_one_handed_sword(weapon) && sword_offhand
+        }
+        TALENT_ID_THREE_MOUNTAINS => weapon.group == WeaponGroup::Blunt,
+        TALENT_ID_UNBREAKABLE_WALL => standard_shield
+            .map(|shield| is_large_or_tower_shield_name(&shield.name))
+            .unwrap_or(false),
+        TALENT_ID_KANIAN_IMPALER => {
+            weapon.group == WeaponGroup::Spears && weapon.size == WeaponSize::Large
+        }
+        // Data-driven or modded styles without a built-in equipment rule
+        // remain usable. Their effect filters still decide what they change.
+        _ => true,
+    }
+}
+
+pub fn effective_default_weapon_style_ids(
+    player: &PlayerConfig,
+    talent_catalog: &TalentCatalog,
+    weapon_catalog: &WeaponCatalog,
+    armor_catalog: &ArmorCatalog,
+    shield_catalog: &ShieldCatalog,
+) -> Vec<String> {
+    let compatible = compatible_weapon_style_ids(
+        player,
+        talent_catalog,
+        weapon_catalog,
+        armor_catalog,
+        shield_catalog,
+    );
+    let requested = player
+        .active_weapon_style_ids
+        .as_ref()
+        .or(player.default_weapon_style_ids.as_ref());
+    if let Some(requested) = requested {
+        let requested = crate::core::tactics::canonicalize_style_selection(requested.clone());
+        let valid_count = requested.len() <= 2;
+        let valid_pair =
+            requested.len() != 2 || weapon_styles_can_stack(player, &requested[0], &requested[1]);
+        let all_compatible = requested.iter().all(|style| {
+            compatible
+                .iter()
+                .any(|compatible| compatible.eq_ignore_ascii_case(style))
+        });
+        return if valid_count && valid_pair && all_compatible {
+            requested
+        } else {
+            Vec::new()
+        };
+    }
+
+    let inferred = inferred_legacy_weapon_style_ids(player, talent_catalog, weapon_catalog);
+    if inferred.iter().all(|style| {
+        compatible
+            .iter()
+            .any(|compatible| compatible.eq_ignore_ascii_case(style))
+    }) {
+        inferred
+    } else {
+        Vec::new()
+    }
+}
+
+pub fn inferred_legacy_weapon_style_ids(
+    player: &PlayerConfig,
+    talent_catalog: &TalentCatalog,
+    weapon_catalog: &WeaponCatalog,
+) -> Vec<String> {
+    let mut legacy_player = player.clone();
+    legacy_player.active_weapon_style_ids = None;
+    legacy_player.default_weapon_style_ids = None;
+    crate::core::tactics::canonicalize_style_selection(
+        active_weapon_style_specs(&legacy_player, talent_catalog, Some(weapon_catalog))
+            .into_iter()
+            .map(|style| style.id.clone())
+            .collect(),
+    )
+}
+
+pub fn tactical_style_pair_allowed(player: &PlayerConfig, learned_style_ids: &[String]) -> bool {
+    has_perfect_two_weapon_fighting_effect(player)
+        && learned_style_ids
+            .iter()
+            .any(|style| style == SHIELD_OF_BLADES_STYLE_ID)
+        && learned_style_ids
+            .iter()
+            .any(|style| style == STORM_OF_BLADES_STYLE_ID)
 }
 
 fn has_large_sword_shield_style_effect(spec: &TalentSpec) -> bool {
@@ -2571,6 +2861,15 @@ fn resolve_talent_modifiers(
                 }
                 TalentEffect::IncomingCritDamageRollTwiceTakeLower => {
                     modifiers.defiant = true;
+                }
+                TalentEffect::Precognition => {
+                    modifiers.precognition = true;
+                }
+                TalentEffect::Prescience => {
+                    modifiers.prescience = true;
+                }
+                TalentEffect::Eyesmite => {
+                    modifiers.eyesmite = true;
                 }
                 TalentEffect::NearPerfectDefenseMinRoll { roll } => {
                     if *roll <= 18 {
@@ -4791,7 +5090,7 @@ pub fn build_combatants(
     vec![first, second]
 }
 
-pub fn build_combatant(
+fn build_combatant_profile(
     player: &PlayerConfig,
     weapon_catalog: &WeaponCatalog,
     armor_catalog: &ArmorCatalog,
@@ -5570,6 +5869,16 @@ pub fn build_combatant(
             defense_mod,
             ranged_defense_mod,
             dex_defense_bonus,
+            feat_of_agility: character.ability_mods.dexterity.feat_of_agility,
+            armor_feat_of_agility_penalty: match armor_type {
+                ArmorType::None => 0,
+                ArmorType::Light => 10,
+                ArmorType::Medium => 15,
+                ArmorType::Heavy => 20,
+            },
+            precognition: modifiers.precognition,
+            prescience: modifiers.prescience,
+            eyesmite: modifiers.eyesmite,
             armor_dr,
             natural_dr,
             knockback_step,
@@ -5626,7 +5935,121 @@ pub fn build_combatant(
         modifiers: sheet_modifiers,
     };
 
-    Combatant::new(sheet)
+    let mut combatant = Combatant::new(sheet);
+    combatant.weapon_group = format!("{:?}", weapon_preset.group);
+    combatant.armor_type = format!("{armor_type:?}");
+    combatant
+}
+
+pub fn build_combatant(
+    player: &PlayerConfig,
+    weapon_catalog: &WeaponCatalog,
+    armor_catalog: &ArmorCatalog,
+    shield_catalog: &ShieldCatalog,
+    npc_presets: &NpcPresetCatalog,
+    talent_catalog: &TalentCatalog,
+) -> Combatant {
+    let compatible_style_ids = compatible_weapon_style_ids(
+        player,
+        talent_catalog,
+        weapon_catalog,
+        armor_catalog,
+        shield_catalog,
+    );
+    let initial_style_ids = effective_default_weapon_style_ids(
+        player,
+        talent_catalog,
+        weapon_catalog,
+        armor_catalog,
+        shield_catalog,
+    );
+    if !player.tactical_policy.enabled || player.npc_preset.is_some() {
+        let mut profile_player = player.clone();
+        profile_player.active_weapon_style_ids = Some(initial_style_ids);
+        return build_combatant_profile(
+            &profile_player,
+            weapon_catalog,
+            armor_catalog,
+            shield_catalog,
+            npc_presets,
+            talent_catalog,
+        );
+    }
+
+    let pair_allowed = tactical_style_pair_allowed(player, &compatible_style_ids);
+
+    let mut style_selections = vec![Vec::<String>::new()];
+    style_selections.extend(
+        compatible_style_ids
+            .iter()
+            .cloned()
+            .map(|style_id| vec![style_id]),
+    );
+    if pair_allowed {
+        style_selections.push(vec![
+            SHIELD_OF_BLADES_STYLE_ID.to_string(),
+            STORM_OF_BLADES_STYLE_ID.to_string(),
+        ]);
+    }
+
+    let mut profiles = Vec::new();
+    for style_ids in &style_selections {
+        for fight_defensively_penalty in [None, Some(2), Some(4), Some(6), Some(8)] {
+            for use_jab in [false, true] {
+                let mut profile_player = player.clone();
+                profile_player.tactical_policy.enabled = false;
+                profile_player.active_weapon_style_ids = Some(style_ids.clone());
+                profile_player.use_jab = use_jab;
+                profile_player.fight_defensively = fight_defensively_penalty.is_some();
+                profile_player.fight_defensively_penalty = fight_defensively_penalty.unwrap_or(2);
+                profile_player.give_ground = false;
+                let profile = build_combatant_profile(
+                    &profile_player,
+                    weapon_catalog,
+                    armor_catalog,
+                    shield_catalog,
+                    npc_presets,
+                    talent_catalog,
+                );
+                profiles.push(CombatantTacticalProfile {
+                    key: TacticalProfileKey {
+                        style_ids: style_ids.clone(),
+                        use_jab,
+                        fight_defensively_penalty,
+                    },
+                    sheet: profile.sheet,
+                    weapon_group: profile.weapon_group,
+                    armor_type: profile.armor_type,
+                });
+            }
+        }
+    }
+
+    let initial_style_ids = if style_selections
+        .iter()
+        .any(|selection| selection == &initial_style_ids)
+    {
+        initial_style_ids
+    } else {
+        Vec::new()
+    };
+    let initial_key = TacticalProfileKey {
+        style_ids: initial_style_ids.clone(),
+        use_jab: false,
+        fight_defensively_penalty: None,
+    };
+    let initial_sheet = profiles
+        .iter()
+        .find(|profile| profile.key == initial_key)
+        .map(|profile| profile.sheet.clone())
+        .unwrap_or_default();
+    let mut combatant = Combatant::new(initial_sheet);
+    combatant.configure_tactical_profiles(
+        player.tactical_policy.clone(),
+        profiles,
+        initial_style_ids,
+    );
+    combatant
 }
 
 pub fn stop_distance_for_players(
@@ -5681,7 +6104,7 @@ pub fn shield_option_allowed(
     weapon: &WeaponPreset,
     shield: Option<&ShieldPreset>,
     talent_catalog: &TalentCatalog,
-    weapon_catalog: &WeaponCatalog,
+    _weapon_catalog: &WeaponCatalog,
 ) -> bool {
     let Some(shield) = shield else {
         return true;
@@ -5695,9 +6118,12 @@ pub fn shield_option_allowed(
     if weapon.group != WeaponGroup::LargeSwords || weapon.size != WeaponSize::Large {
         return false;
     }
-    active_weapon_style_specs(player, talent_catalog, Some(weapon_catalog))
+    player
+        .talents
         .iter()
-        .any(|spec| has_large_sword_shield_style_effect(spec))
+        .filter(|selection| selection.rank.max(1) > 0)
+        .filter_map(|selection| find_talent(talent_catalog, &selection.id))
+        .any(has_large_sword_shield_style_effect)
 }
 
 fn can_equip_shield(
@@ -5707,8 +6133,16 @@ fn can_equip_shield(
     talent_catalog: &TalentCatalog,
     weapon_catalog: &WeaponCatalog,
 ) -> bool {
-    shield_option_allowed(player, weapon, shield, talent_catalog, weapon_catalog)
-        && shield.is_some()
+    let Some(shield) = shield else {
+        return false;
+    };
+    if !shield_option_allowed(player, weapon, Some(shield), talent_catalog, weapon_catalog) {
+        return false;
+    }
+    standard_shield_allowed(player, weapon)
+        || active_weapon_style_specs(player, talent_catalog, Some(weapon_catalog))
+            .iter()
+            .any(|spec| has_large_sword_shield_style_effect(spec))
 }
 
 fn apply_shield_material_tier(shield: ShieldPreset, tier: i32) -> Shield {
@@ -6044,6 +6478,34 @@ mod tests {
             &talents,
         );
         assert!(!no_jab_combatant.sheet.offense.weapon.use_jab);
+    }
+
+    #[test]
+    fn tactical_build_creates_normal_jab_and_stance_profiles_without_changing_legacy_builds() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npc_presets = sample_npc_presets();
+        let mut player = base_player(jab_weapon_id(&weapons));
+
+        let legacy = build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
+        assert!(legacy.tactical_profiles.is_empty());
+
+        player.tactical_policy.enabled = true;
+        let tactical = build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
+        assert_eq!(tactical.tactical_profiles.len(), 10);
+        for penalty in [None, Some(2), Some(4), Some(6), Some(8)] {
+            assert!(tactical.tactical_profiles.iter().any(|profile| {
+                profile.key.style_ids.is_empty()
+                    && !profile.key.use_jab
+                    && profile.key.fight_defensively_penalty == penalty
+            }));
+            assert!(tactical.tactical_profiles.iter().any(|profile| {
+                profile.key.style_ids.is_empty()
+                    && profile.key.use_jab
+                    && profile.key.fight_defensively_penalty == penalty
+                    && profile.sheet.offense.weapon.use_jab
+            }));
+        }
     }
 
     fn add_talent(player: &mut PlayerConfig, id: &str, weapon: Option<String>) {
@@ -8376,6 +8838,53 @@ mod tests {
     }
 
     #[test]
+    fn shield_option_allows_selecting_twelve_paths_loadout_before_style_is_active() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let weapon_id = weapons
+            .entries()
+            .iter()
+            .enumerate()
+            .find(|(_, weapon)| weapon.name.eq_ignore_ascii_case("Flamberge"))
+            .and_then(|(idx, _)| weapons.id_from_index(idx))
+            .expect("no flamberge found");
+        let (shield_id, shield) = find_shield(&shields, |shield| {
+            is_small_shield_or_buckler_name(&shield.name)
+        });
+        let mut player = base_player(weapon_id);
+        player.shield_id = shield_id;
+        add_talent(&mut player, TALENT_ID_TWELVE_PATHS, None);
+        add_talent(&mut player, TALENT_ID_FALLING_SUN, None);
+        player.default_weapon_style_ids = Some(vec![TALENT_ID_FALLING_SUN.to_string()]);
+        let weapon = weapons
+            .get(player.weapon_id)
+            .expect("selected weapon missing");
+
+        assert!(shield_option_allowed(
+            &player,
+            weapon,
+            Some(&shield),
+            &talents,
+            &weapons,
+        ));
+        assert!(
+            build_character(&player, &weapons, &armor, &shields, &talents)
+                .equipment
+                .shield
+                .is_none(),
+            "the editor may stage the shield, but combat must not equip it until Twelve Paths is active"
+        );
+
+        player.default_weapon_style_ids = Some(vec![TALENT_ID_TWELVE_PATHS.to_string()]);
+        assert!(
+            build_character(&player, &weapons, &armor, &shields, &talents)
+                .equipment
+                .shield
+                .is_some()
+        );
+    }
+
+    #[test]
     fn twelve_paths_limits_shields_to_small_or_buckler() {
         let (weapons, armor, shields) = sample_catalogs();
         let talents = sample_talents();
@@ -8936,7 +9445,7 @@ mod tests {
     }
 
     #[test]
-    fn weapon_styles_only_apply_the_first_active_style() {
+    fn weapon_style_default_selection_is_separate_from_learning() {
         let (weapons, armor, shields) = sample_catalogs();
         let weapon_id = one_handed_weapon_id(&weapons);
         let npc_presets = Catalog::new(Vec::new());
@@ -8985,6 +9494,16 @@ mod tests {
                 weapon: None,
             },
         ];
+        assert_eq!(
+            effective_default_weapon_style_ids(
+                &player,
+                &talent_catalog,
+                &weapons,
+                &armor,
+                &shields,
+            ),
+            vec!["style_one".to_string()]
+        );
         let first_active = build_combatant(
             &player,
             &weapons,
@@ -9011,10 +9530,76 @@ mod tests {
             second_active.sheet.defense.shield_defense_bonus,
             shield.defense_bonus + 4
         );
+
+        player.default_weapon_style_ids = Some(vec!["style_one".to_string()]);
+        let explicit_first = build_combatant(
+            &player,
+            &weapons,
+            &armor,
+            &shields,
+            &npc_presets,
+            &talent_catalog,
+        );
+        assert_eq!(
+            explicit_first.sheet.defense.shield_defense_bonus,
+            shield.defense_bonus + 1
+        );
+
+        player.default_weapon_style_ids = Some(Vec::new());
+        let explicit_none = build_combatant(
+            &player,
+            &weapons,
+            &armor,
+            &shields,
+            &npc_presets,
+            &talent_catalog,
+        );
+        assert_eq!(
+            explicit_none.sheet.defense.shield_defense_bonus,
+            shield.defense_bonus
+        );
+
+        player.default_weapon_style_ids = Some(vec!["missing_style".to_string()]);
+        let invalid_default = build_combatant(
+            &player,
+            &weapons,
+            &armor,
+            &shields,
+            &npc_presets,
+            &talent_catalog,
+        );
+        assert_eq!(
+            invalid_default.sheet.defense.shield_defense_bonus,
+            shield.defense_bonus
+        );
+        assert_eq!(
+            player.default_weapon_style_ids,
+            Some(vec!["missing_style".to_string()]),
+            "invalid selections must remain saved for the UI to explain"
+        );
+
+        player.default_weapon_style_ids = Some(vec!["style_two".to_string()]);
+        player.tactical_policy.enabled = true;
+        let tactical_opening = build_combatant(
+            &player,
+            &weapons,
+            &armor,
+            &shields,
+            &npc_presets,
+            &talent_catalog,
+        );
+        assert_eq!(
+            tactical_opening.sheet.defense.shield_defense_bonus,
+            shield.defense_bonus + 4
+        );
+        assert_eq!(
+            tactical_opening.active_style_ids,
+            vec!["style_two".to_string()]
+        );
     }
 
     #[test]
-    fn storm_and_shield_of_blades_selection_requires_perfect_two_weapon_fighting() {
+    fn learning_multiple_weapon_styles_is_never_blocked() {
         let talents = sample_talents();
         let shield = find_talent(&talents, TALENT_ID_SHIELD_OF_BLADES).expect("missing shield");
         let other_style = find_talent(&talents, TALENT_ID_THREE_MOUNTAINS).expect("missing style");
@@ -9024,12 +9609,12 @@ mod tests {
         let mut player = base_player(weapon_id);
         add_talent(&mut player, TALENT_ID_STORM_OF_BLADES, None);
 
-        assert!(has_other_weapon_style_selected(&player, shield, &talents));
+        assert!(!has_other_weapon_style_selected(&player, shield, &talents));
 
         add_talent(&mut player, TALENT_ID_PERFECT_TWO_WEAPON_FIGHTING, None);
 
         assert!(!has_other_weapon_style_selected(&player, shield, &talents));
-        assert!(has_other_weapon_style_selected(
+        assert!(!has_other_weapon_style_selected(
             &player,
             other_style,
             &talents
@@ -9039,11 +9624,41 @@ mod tests {
             find_talent(&talents, TALENT_ID_UNBREAKABLE_WALL).expect("missing Unbreakable Wall");
         let mut wren = base_player(weapon_id);
         add_talent(&mut wren, TALENT_ID_KANIAN_IMPALER, None);
-        assert!(has_other_weapon_style_selected(
+        assert!(!has_other_weapon_style_selected(
             &wren,
             unbreakable,
             &talents
         ));
+
+        player.tactical_policy.enabled = true;
+        assert!(
+            !has_other_weapon_style_selected(&player, other_style, &talents),
+            "Tactical Directives should allow multiple styles to be learned"
+        );
+    }
+
+    #[test]
+    fn learned_weapon_styles_remain_known_when_current_loadout_is_incompatible() {
+        let talents = sample_talents();
+        let (weapons, armor, shields) = sample_catalogs();
+        let sword_id = weapon_id_by_group(&weapons, WeaponGroup::SmallSwords);
+        let blunt_id = weapon_id_by_group(&weapons, WeaponGroup::Blunt);
+        let mut player = base_player(sword_id);
+        add_talent(&mut player, TALENT_ID_THREE_MOUNTAINS, None);
+
+        assert_eq!(
+            learned_weapon_style_ids(&player, &talents),
+            vec![TALENT_ID_THREE_MOUNTAINS.to_string()]
+        );
+        assert!(
+            compatible_weapon_style_ids(&player, &talents, &weapons, &armor, &shields).is_empty()
+        );
+
+        player.weapon_id = blunt_id;
+        assert_eq!(
+            compatible_weapon_style_ids(&player, &talents, &weapons, &armor, &shields),
+            vec![TALENT_ID_THREE_MOUNTAINS.to_string()]
+        );
     }
 
     #[test]
@@ -9115,8 +9730,7 @@ mod tests {
         let npc_presets = sample_npc_presets();
         let sword_id = one_handed_sword_weapon_id(&weapons);
         let sword_name = weapon_name(&weapons, sword_id);
-        let (raurosi_leather_id, _) =
-            find_armor(&armor, |entry| entry.name == "Raurosi Leather?");
+        let (raurosi_leather_id, _) = find_armor(&armor, |entry| entry.name == "Raurosi Leather?");
         let mut player = PlayerConfig::new("Volfango Drakos", sword_id);
         player.level = 8;
         player.dex_base = 20;
@@ -9925,6 +10539,9 @@ mod tests {
             "greater_two_weapon_fighting",
             "perfect_two_weapon_fighting",
             "power_attack",
+            "precognition",
+            "prescience",
+            "eyesmite",
         ] {
             let spec = talents
                 .entries()

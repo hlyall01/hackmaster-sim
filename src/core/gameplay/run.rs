@@ -573,6 +573,14 @@ mod tests {
                     knock.roll.attack_total,
                     knock.roll.defense_total
                 ),
+                CombatEventKind::Tactical(tactical) => format!(
+                    "t={} a={} d={} tactic={} rule={:?}",
+                    event.time,
+                    event.attacker_idx,
+                    event.defender_idx,
+                    tactical.action,
+                    tactical.rule_index
+                ),
             })
             .collect()
     }

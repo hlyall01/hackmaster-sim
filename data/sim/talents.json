@@ -28,6 +28,45 @@
       ]
     },
     {
+      "id": "precognition",
+      "name": "Precognition",
+      "description": "Received upon reaching Eternity Proficiency IV. After a successful melee hit, if five feet of open space exists to the defender's rear or side, compare the adjusted Attack and Defense totals. The defender attempts a Feat of Agility against that difference, penalized by worn armor (-10 light, -15 medium, -20 heavy). On success, final damage is halved (rounded down) and the defender evasively moves five feet. The talent also permits normal defense against additional side and rear attackers.",
+      "cost_bp": 0,
+      "category": "Essence",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "precognition"
+        }
+      ]
+    },
+    {
+      "id": "prescience",
+      "name": "Prescience",
+      "description": "Received upon reaching Eternity Proficiency II. After a successful ranged hit, compare the adjusted Attack total with a passive d20p Defense roll. The defender attempts a Feat of Agility against that difference, penalized by worn armor (-10 light, -15 medium, -20 heavy). On success, the missile is blocked and inflicts no wound.",
+      "cost_bp": 0,
+      "category": "Essence",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "prescience"
+        }
+      ]
+    },
+    {
+      "id": "eyesmite",
+      "name": "Eyesmite",
+      "description": "Received upon reaching Exertion Proficiency IV. A near-perfect defense may be exchanged for an instantaneous called shot to the attacker's eye. A buckler or small shield is dropped to free the required hand. On a successful called shot, the target suffers 2d4p damage plus modifiers, all damage reduction is ignored, and Threshold of Pain is applied for 10 seconds per point of damage. The Missing Eye flaw is not tracked by the simulator.",
+      "cost_bp": 0,
+      "category": "Essence",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "eyesmite"
+        }
+      ]
+    },
+    {
       "id": "tough_as_nails",
       "name": "Tough as Nails",
       "description": "Use a d12p for Threshold of Pain checks.",

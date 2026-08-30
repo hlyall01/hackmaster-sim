@@ -447,6 +447,9 @@ pub enum TalentEffect {
     },
     IgnoreAncillaryCritEffects,
     IncomingCritDamageRollTwiceTakeLower,
+    Precognition,
+    Prescience,
+    Eyesmite,
     NearPerfectDefenseMinRoll {
         roll: i32,
     },

@@ -1,9 +1,10 @@
 use super::modifiers::{ModifierStack, StatIdF32, StatIdI32, TemporaryEffect};
 use crate::core::rules::DamageExprCache;
+use crate::core::tactics::TacticalPolicy;
 use std::sync::Arc;
 
-const DEFAULT_GRID_HEIGHT: i32 = 7;
-const DEFAULT_GRID_PADDING: i32 = 4;
+const DEFAULT_GRID_HEIGHT: i32 = 11;
+const DEFAULT_GRID_PADDING: i32 = 5;
 const DEFAULT_TILE_SIZE_FT: f32 = 1.0;
 
 #[derive(Clone, Copy, Debug)]
@@ -26,6 +27,12 @@ impl SimConfig {
             grid_height: DEFAULT_GRID_HEIGHT,
             tile_size_ft: DEFAULT_TILE_SIZE_FT,
         }
+    }
+
+    pub fn set_start_distance(&mut self, start_distance: f32) {
+        self.start_distance = start_distance;
+        let start_tiles = (start_distance / self.tile_size_ft.max(0.01)).ceil() as i32;
+        self.grid_width = (start_tiles + DEFAULT_GRID_PADDING * 2 + 1).max(10);
     }
 }
 
@@ -250,6 +257,11 @@ pub struct DefenseProfile {
     pub defense_mod: i32,
     pub ranged_defense_mod: i32,
     pub dex_defense_bonus: i32,
+    pub feat_of_agility: i32,
+    pub armor_feat_of_agility_penalty: i32,
+    pub precognition: bool,
+    pub prescience: bool,
+    pub eyesmite: bool,
     pub armor_dr: i32,
     pub natural_dr: i32,
     pub knockback_step: i32,
@@ -314,6 +326,7 @@ pub struct CombatantState {
     pub total_shield_breaks_taken: u32,
     pub total_shield_hits_survived_before_break: u32,
     pub total_instakills_dealt: u32,
+    pub total_eyes_smote: u32,
     pub total_trauma_seconds_suffered: u32,
     pub total_knockback_inflicted_ft: f32,
     pub total_knockback_taken_ft: f32,
@@ -323,6 +336,8 @@ pub struct CombatantState {
     pub knockback_immobile_seconds: i32,
     pub knockback_applied_this_tick: bool,
     pub shield_intact: bool,
+    pub precognition_space_available: bool,
+    pub has_attacked: bool,
     pub armeroci_opening_strike_available: bool,
     pub regenstat_stacks: i32,
     pub returner_counter_available: bool,
@@ -331,8 +346,26 @@ pub struct CombatantState {
     pub three_mountains_hit_streak: i32,
     pub force_trauma_roll_20: bool,
     pub deceptive_defender_seen_attackers: Vec<usize>,
+    pub tactical_give_ground_defense_bonus: i32,
+    pub tactical_next_attack_penalty: i32,
+    pub activated_style_ids: Vec<String>,
     pub active_effects: Vec<TemporaryEffect>,
     pub cache: CombatantCache,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TacticalProfileKey {
+    pub style_ids: Vec<String>,
+    pub use_jab: bool,
+    pub fight_defensively_penalty: Option<i32>,
+}
+
+#[derive(Clone, Debug)]
+pub struct CombatantTacticalProfile {
+    pub key: TacticalProfileKey,
+    pub sheet: CombatantSheet,
+    pub weapon_group: String,
+    pub armor_type: String,
 }
 
 #[derive(Clone, Debug)]
@@ -340,6 +373,13 @@ pub struct Combatant {
     pub sheet: CombatantSheet,
     pub state: CombatantState,
     pub team_id: u8,
+    pub tactical_policy: TacticalPolicy,
+    pub tactical_profiles: Vec<CombatantTacticalProfile>,
+    pub active_style_ids: Vec<String>,
+    pub active_fight_defensively_penalty: Option<i32>,
+    pub last_tactical_directive: Option<String>,
+    pub weapon_group: String,
+    pub armor_type: String,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -360,6 +400,14 @@ pub struct CombatEvent {
 pub enum CombatEventKind {
     Attack(AttackEvent),
     KnockAside(KnockAsideEvent),
+    Tactical(TacticalEvent),
+}
+
+#[derive(Clone, Debug)]
+pub struct TacticalEvent {
+    pub rule_index: Option<usize>,
+    pub action: String,
+    pub message: String,
 }
 
 #[derive(Clone, Debug)]
@@ -507,6 +555,11 @@ impl Default for DefenseProfile {
             defense_mod: 0,
             ranged_defense_mod: 0,
             dex_defense_bonus: 0,
+            feat_of_agility: 0,
+            armor_feat_of_agility_penalty: 0,
+            precognition: false,
+            prescience: false,
+            eyesmite: false,
             armor_dr: 0,
             natural_dr: 0,
             knockback_step: 15,
@@ -586,6 +639,7 @@ impl CombatantState {
             total_shield_breaks_taken: 0,
             total_shield_hits_survived_before_break: 0,
             total_instakills_dealt: 0,
+            total_eyes_smote: 0,
             total_trauma_seconds_suffered: 0,
             total_knockback_inflicted_ft: 0.0,
             total_knockback_taken_ft: 0.0,
@@ -595,6 +649,8 @@ impl CombatantState {
             knockback_immobile_seconds: 0,
             knockback_applied_this_tick: false,
             shield_intact: sheet.defense.shield_name.is_some(),
+            precognition_space_available: false,
+            has_attacked: false,
             armeroci_opening_strike_available: armeroci_style,
             regenstat_stacks: 0,
             returner_counter_available: returner_style,
@@ -603,6 +659,9 @@ impl CombatantState {
             three_mountains_hit_streak: 0,
             force_trauma_roll_20: false,
             deceptive_defender_seen_attackers: Vec::new(),
+            tactical_give_ground_defense_bonus: 0,
+            tactical_next_attack_penalty: 0,
+            activated_style_ids: Vec::new(),
             active_effects: Vec::new(),
             cache: CombatantCache::default(),
         };
@@ -700,11 +759,162 @@ impl Combatant {
             sheet,
             state,
             team_id,
+            tactical_policy: TacticalPolicy::default(),
+            tactical_profiles: Vec::new(),
+            active_style_ids: Vec::new(),
+            active_fight_defensively_penalty: None,
+            last_tactical_directive: None,
+            weapon_group: String::new(),
+            armor_type: String::new(),
         }
     }
 
     pub(crate) fn reset_state(&mut self) {
         self.state = CombatantState::new(&self.sheet);
+        self.state.activated_style_ids = self.active_style_ids.clone();
+        self.last_tactical_directive = None;
+    }
+
+    pub fn configure_tactical_profiles(
+        &mut self,
+        policy: TacticalPolicy,
+        profiles: Vec<CombatantTacticalProfile>,
+        active_style_ids: Vec<String>,
+    ) {
+        self.tactical_policy = policy;
+        self.tactical_profiles = profiles;
+        self.active_style_ids = active_style_ids;
+        self.active_fight_defensively_penalty = None;
+        self.state.activated_style_ids = self.active_style_ids.clone();
+        let _ = self.activate_tactical_profile(false);
+    }
+
+    pub fn activate_tactical_profile(&mut self, use_jab: bool) -> bool {
+        let key = TacticalProfileKey {
+            style_ids: self.active_style_ids.clone(),
+            use_jab,
+            fight_defensively_penalty: self.active_fight_defensively_penalty,
+        };
+        let Some(profile) = self.tactical_profiles.iter().find(|profile| {
+            profile.key == key && (!use_jab || profile.sheet.offense.weapon.use_jab)
+        }) else {
+            return false;
+        };
+        self.sheet = profile.sheet.clone();
+        self.weapon_group = profile.weapon_group.clone();
+        self.armor_type = profile.armor_type.clone();
+        self.state.invalidate_weapon_cache(WeaponSlot::Primary);
+        self.state.invalidate_weapon_cache(WeaponSlot::Secondary);
+        true
+    }
+
+    pub fn tactical_jab_available(&self) -> bool {
+        self.tactical_profiles.iter().any(|profile| {
+            profile.key.style_ids == self.active_style_ids
+                && profile.key.use_jab
+                && profile.key.fight_defensively_penalty == self.active_fight_defensively_penalty
+                && profile.sheet.offense.weapon.use_jab
+        })
+    }
+
+    pub fn available_tactical_style_ids(&self) -> Vec<String> {
+        let mut styles = Vec::new();
+        for profile in &self.tactical_profiles {
+            for style_id in &profile.key.style_ids {
+                if !styles
+                    .iter()
+                    .any(|style: &String| style.eq_ignore_ascii_case(style_id))
+                {
+                    styles.push(style_id.clone());
+                }
+            }
+        }
+        styles
+    }
+
+    pub fn tactical_style_pair_allowed(&self) -> bool {
+        self.tactical_profiles.iter().any(|profile| {
+            profile.key.style_ids.len() == 2
+                && profile
+                    .key
+                    .style_ids
+                    .iter()
+                    .any(|style| style == crate::core::tactics::SHIELD_OF_BLADES_STYLE_ID)
+                && profile
+                    .key
+                    .style_ids
+                    .iter()
+                    .any(|style| style == crate::core::tactics::STORM_OF_BLADES_STYLE_ID)
+        })
+    }
+
+    pub fn switch_tactical_style(&mut self, style_ids: Vec<String>) -> bool {
+        let style_ids = crate::core::tactics::canonicalize_style_selection(style_ids);
+        if self.active_style_ids == style_ids {
+            return self.activate_tactical_profile(false);
+        }
+        let key = TacticalProfileKey {
+            style_ids: style_ids.clone(),
+            use_jab: false,
+            fight_defensively_penalty: self.active_fight_defensively_penalty,
+        };
+        let Some(profile) = self
+            .tactical_profiles
+            .iter()
+            .find(|profile| profile.key == key)
+        else {
+            return false;
+        };
+
+        let first_activation = style_ids.iter().any(|style_id| {
+            !self
+                .state
+                .activated_style_ids
+                .iter()
+                .any(|active| active.eq_ignore_ascii_case(style_id))
+        });
+        self.active_style_ids = style_ids.clone();
+        self.sheet = profile.sheet.clone();
+        self.weapon_group = profile.weapon_group.clone();
+        self.armor_type = profile.armor_type.clone();
+        self.state.regenstat_stacks = 0;
+        self.state.returner_counter_available = false;
+        self.state.returner_skip_opening_attack = false;
+        self.state.returner_double_counter_ready = false;
+        self.state.three_mountains_hit_streak = 0;
+        self.state.force_trauma_roll_20 = false;
+        self.state.armeroci_opening_strike_available = first_activation
+            && self
+                .sheet
+                .modifiers
+                .apply_i32(0, StatIdI32::FlagArmerociPoleStyle)
+                > 0;
+        if first_activation
+            && self
+                .sheet
+                .modifiers
+                .apply_i32(0, StatIdI32::FlagReturnerStyle)
+                > 0
+        {
+            self.state.returner_counter_available = true;
+            self.state.returner_skip_opening_attack = true;
+        }
+        for style_id in style_ids {
+            if !self
+                .state
+                .activated_style_ids
+                .iter()
+                .any(|active| active.eq_ignore_ascii_case(&style_id))
+            {
+                self.state.activated_style_ids.push(style_id);
+            }
+        }
+        if self.sheet.defense.shield_name.is_some() && self.state.total_shield_breaks_taken == 0 {
+            self.state.shield_intact = true;
+        }
+        self.state.invalidate_weapon_cache(WeaponSlot::Primary);
+        self.state.invalidate_weapon_cache(WeaponSlot::Secondary);
+        true
     }
 
     pub(crate) fn apply_i32(&self, stat: StatIdI32, base: i32) -> i32 {

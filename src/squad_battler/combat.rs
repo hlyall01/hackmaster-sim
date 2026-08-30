@@ -538,21 +538,38 @@ impl SquadCombat {
         if !self.units[idx].is_alive() || !self.units[target_idx].is_alive() {
             return None;
         }
-        let current_distance = self
+        let mut current_distance = self
             .grid
             .distance_ft(self.units[idx].pos, self.units[target_idx].pos);
         let mut attack_distance = self.attack_distance_between_units(idx, target_idx);
-        let desired_range = self.units[idx]
-            .max_range_ft
-            .unwrap_or_else(|| self.melee_reach_ft(&self.units[idx]))
-            .max(self.melee_reach_ft(&self.units[idx]));
+        let has_eyesmite = self.units[idx]
+            .combatant
+            .as_ref()
+            .is_some_and(|combatant| combatant.sheet.defense.eyesmite);
+        let desired_range = if has_eyesmite {
+            self.grid.tile_size_ft
+        } else {
+            self.units[idx]
+                .max_range_ft
+                .unwrap_or_else(|| self.melee_reach_ft(&self.units[idx]))
+                .max(self.melee_reach_ft(&self.units[idx]))
+        };
         let path_blocked = attack_distance.is_none()
             && self
                 .path_toward_range(idx, target_idx, desired_range)
                 .is_none();
         self.update_ai_intent(idx, Some(target_idx), path_blocked);
 
-        if self.units[idx].max_range_ft.is_some()
+        if has_eyesmite && current_distance > self.grid.tile_size_ft {
+            self.move_toward(idx, target_idx, desired_range);
+            current_distance = self
+                .grid
+                .distance_ft(self.units[idx].pos, self.units[target_idx].pos);
+            attack_distance = self.attack_distance_between_units(idx, target_idx);
+        }
+
+        if !has_eyesmite
+            && self.units[idx].max_range_ft.is_some()
             && current_distance <= self.melee_reach_ft(&self.units[idx])
         {
             if allow_attack {
@@ -713,6 +730,43 @@ impl SquadCombat {
             .into_iter()
             .max_by_key(|pos| pos.manhattan_distance(target))
             .filter(|pos| pos.manhattan_distance(target) > from.manhattan_distance(target))
+    }
+
+    fn precognition_evasion_destination(
+        &self,
+        defender_idx: usize,
+        attacker_idx: usize,
+    ) -> Option<GridPos> {
+        let from = self.units.get(defender_idx)?.pos;
+        let attacker = self.units.get(attacker_idx)?.pos;
+        let dx = from.x - attacker.x;
+        let dy = from.y - attacker.y;
+        let away = if dx.abs() >= dy.abs() && dx != 0 {
+            (dx.signum(), 0)
+        } else if dy != 0 {
+            (0, dy.signum())
+        } else {
+            return None;
+        };
+        let directions = [away, (-away.1, away.0), (away.1, -away.0)];
+        let steps = self.tiles_for_distance(5.0).max(1);
+
+        for (step_x, step_y) in directions {
+            let mut current = from;
+            let mut valid = true;
+            for _ in 0..steps {
+                let next = GridPos::new(current.x + step_x, current.y + step_y);
+                if !self.is_open_for(defender_idx, next) {
+                    valid = false;
+                    break;
+                }
+                current = next;
+            }
+            if valid {
+                return Some(current);
+            }
+        }
+        None
     }
 
     fn legal_neighbors(&self, mover_idx: usize) -> Vec<GridPos> {
@@ -882,11 +936,19 @@ impl SquadCombat {
         let speed = self.recovery_speed_for(attacker_idx);
 
         if self.units.iter().all(|unit| unit.combatant.is_some()) {
+            let defender_evasion =
+                self.precognition_evasion_destination(defender_idx, attacker_idx);
+            let attacker_evasion =
+                self.precognition_evasion_destination(attacker_idx, defender_idx);
             let mut combatants = self
                 .units
                 .iter()
                 .map(|unit| unit.combatant.clone().expect("checked combatant"))
                 .collect::<Vec<_>>();
+            combatants[defender_idx].state.precognition_space_available =
+                defender_evasion.is_some();
+            combatants[attacker_idx].state.precognition_space_available =
+                attacker_evasion.is_some();
             let result = resolve_basic_attack(
                 &mut combatants,
                 attacker_idx,
@@ -901,6 +963,11 @@ impl SquadCombat {
                 unit.hp = combatant.state.hp;
                 unit.combatant = Some(combatant);
             }
+            if result.precognition_triggered {
+                if let Some(destination) = defender_evasion {
+                    self.units[defender_idx].pos = destination;
+                }
+            }
             self.units[attacker_idx].initiative_ready_at = now + speed;
             self.emit_attack_event(
                 attacker_idx,
@@ -913,6 +980,11 @@ impl SquadCombat {
             self.apply_knockback(attacker_idx, defender_idx, result.event.knockback_ft);
             self.emit_death_if_needed(defender_idx, Some(attacker_idx));
             if let Some(counter) = result.counter_attack {
+                if result.counter_precognition_triggered {
+                    if let Some(destination) = attacker_evasion {
+                        self.units[attacker_idx].pos = destination;
+                    }
+                }
                 self.emit_attack_event(
                     defender_idx,
                     attacker_idx,
@@ -1559,6 +1631,38 @@ mod tests {
 
         assert_eq!(combat.units[0].pos, start);
         assert_eq!(combat.units[1].hp, 10);
+    }
+
+    #[test]
+    fn eyesmite_user_closes_to_five_feet_inside_weapon_reach() {
+        let mut smiter = combatant_unit("smiter", 0, 20.0);
+        smiter.reach_ft = TILE_SIZE_FT * 2.0;
+        let smiter_combatant = smiter.combatant.as_mut().expect("missing combatant");
+        smiter_combatant.sheet.defense.eyesmite = true;
+        let mut weapon = (*smiter_combatant.sheet.offense.weapon).clone();
+        weapon.reach_ft = TILE_SIZE_FT * 2.0;
+        smiter_combatant.sheet.offense.weapon = Arc::new(weapon);
+
+        let mut enemy = unit("enemy", 1);
+        enemy.reach_ft = TILE_SIZE_FT * 2.0;
+        let mut combat = SquadCombat::new(vec![smiter], vec![enemy]);
+        combat.units[0].pos = GridPos::new(2, 2);
+        combat.units[1].pos = GridPos::new(4, 2);
+        assert_eq!(
+            combat
+                .grid
+                .distance_ft(combat.units[0].pos, combat.units[1].pos),
+            TILE_SIZE_FT * 2.0
+        );
+
+        combat.resolve_unit_action(0, 1, false);
+
+        assert_eq!(
+            combat
+                .grid
+                .distance_ft(combat.units[0].pos, combat.units[1].pos),
+            TILE_SIZE_FT
+        );
     }
 
     #[test]

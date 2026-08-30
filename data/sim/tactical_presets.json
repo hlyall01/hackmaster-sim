@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "presets": [
+    {
+      "name": "Arthur - Armeroci Bridge",
+      "opening_style_ids": [
+        "armeroci_pole"
+      ],
+      "rules": [
+        {
+          "enabled": true,
+          "decision": "next_attack_opportunity",
+          "conditions": [
+            {
+              "kind": "my_has_attacked",
+              "value": true
+            },
+            {
+              "kind": "my_active_style",
+              "style_id": "armeroci_pole"
+            }
+          ],
+          "action": {
+            "kind": "use_weapon_style",
+            "style_ids": [
+              "rohavalan_bridge"
+            ]
+          }
+        },
+        {
+          "enabled": true,
+          "decision": "next_attack_opportunity",
+          "conditions": [
+            {
+              "kind": "my_active_style",
+              "style_id": "rohavalan_bridge"
+            },
+            {
+              "kind": "my_weapon_can_jab",
+              "value": true
+            }
+          ],
+          "action": {
+            "kind": "jab"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Always Give Ground",
+      "rules": [
+        {
+          "enabled": true,
+          "decision": "incoming_attack_reaction",
+          "conditions": [
+            {
+              "kind": "always"
+            }
+          ],
+          "action": {
+            "kind": "give_ground"
+          }
+        }
+      ]
+    },
+    {
+      "name": "12 Paths of the Sun",
+      "opening_style_ids": [
+        "twelve_paths"
+      ],
+      "rules": [
+        {
+          "enabled": true,
+          "decision": "next_attack_opportunity",
+          "conditions": [
+            {
+              "kind": "my_has_active_shield",
+              "value": false
+            },
+            {
+              "kind": "my_active_style",
+              "style_id": "twelve_paths"
+            }
+          ],
+          "action": {
+            "kind": "use_weapon_style",
+            "style_ids": [
+              "falling_sun"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
