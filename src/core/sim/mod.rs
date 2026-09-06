@@ -11,8 +11,10 @@ pub use engine::{
     bulk_simulate_with_seed,
 };
 pub use modifiers::{
-    ModifierOpF32, ModifierOpI32, ModifierStack, StatIdF32, StatIdI32, TemporaryEffect,
-    modifiers_for_magic_item,
+    CHRONOBLUR_DURATION_SECONDS, CHRONOBLUR_EFFECT_ID, CHRONOBLUR_MELEE_DEFENSE_BONUS,
+    CHRONOBLUR_RANGED_DISTANCE_FEET, ModifierOpF32, ModifierOpI32, ModifierStack,
+    STREAMLINE_DURATION_SECONDS, STREAMLINE_EFFECT_ID, STREAMLINE_RADIUS_FEET, StatIdF32,
+    StatIdI32, TemporaryEffect, modifiers_for_magic_item,
 };
 pub use movement::{max_range_for_bands, max_range_for_weapon_name, range_bands_for_weapon_name};
 pub use types::{
@@ -27,9 +29,8 @@ pub use types::{
 #[derive(Clone, Debug)]
 pub(crate) struct BasicAttackResult {
     pub event: AttackEvent,
-    pub counter_attack: Option<AttackEvent>,
+    pub counters: Vec<BasicCounterAttack>,
     pub precognition_triggered: bool,
-    pub counter_precognition_triggered: bool,
 }
 
 pub(crate) fn resolve_basic_attack(
@@ -75,36 +76,83 @@ pub(crate) fn resolve_basic_attack(
         defender_hp_after: outcome.defender_hp_after,
         critical: outcome.critical,
     };
-    let mut counter_precognition_triggered = false;
-    let counter_attack = outcome.counter_attack.map(|counter| {
-        counter_precognition_triggered = counter.precognition_triggered;
-        AttackEvent {
-            hit: counter.hit,
-            shield_block: counter.shield_block,
-            damage: counter.damage,
-            shield_damage: counter.shield_damage,
-            knockback_ft: counter.knockback_ft,
-            hold_at_bay: false,
-            is_charge: false,
-            weapon_slot: counter.weapon_slot,
-            use_jab: counter.use_jab,
-            is_ranged: counter.is_ranged,
-            trauma_applied: counter.trauma_applied,
-            trauma_seconds: counter.trauma_seconds,
-            roll: counter.roll,
-            damage_breakdown: counter.damage_breakdown,
-            shield_damage_breakdown: counter.shield_damage_breakdown,
-            defender_hp_after: counter.defender_hp_after,
-            critical: counter.critical,
-        }
-    });
+    let counters = outcome
+        .counter_attack
+        .into_iter()
+        .chain(outcome.additional_counters)
+        .map(|counter| BasicCounterAttack {
+            attacker_idx: counter.attacker_idx,
+            defender_idx: counter.defender_idx,
+            precognition_triggered: counter.precognition_triggered,
+            event: counter_event(counter),
+        })
+        .collect();
     BasicAttackResult {
         event,
-        counter_attack,
+        counters,
         precognition_triggered,
-        counter_precognition_triggered,
     }
 }
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod weapon_style_tests;
+
+#[derive(Clone, Debug)]
+pub(crate) struct BasicCounterAttack {
+    pub attacker_idx: usize,
+    pub defender_idx: usize,
+    pub precognition_triggered: bool,
+    pub event: AttackEvent,
+}
+
+pub(crate) fn resolve_basic_style_strikes(
+    combatants: &mut [Combatant],
+    attacker_idx: usize,
+    defender_idx: usize,
+    slot: WeaponSlot,
+    distance_ft: f32,
+    now: f32,
+    rng: &mut impl rand::Rng,
+) -> Vec<BasicCounterAttack> {
+    combat::resolve_style_strike_chain(
+        combatants,
+        attacker_idx,
+        defender_idx,
+        slot,
+        distance_ft,
+        now,
+        rng,
+    )
+    .into_iter()
+    .map(|counter| BasicCounterAttack {
+        attacker_idx: counter.attacker_idx,
+        defender_idx: counter.defender_idx,
+        precognition_triggered: counter.precognition_triggered,
+        event: counter_event(counter),
+    })
+    .collect()
+}
+
+pub(crate) fn counter_event(counter: combat::CounterAttackOutcome) -> AttackEvent {
+    AttackEvent {
+        hit: counter.hit,
+        shield_block: counter.shield_block,
+        damage: counter.damage,
+        shield_damage: counter.shield_damage,
+        knockback_ft: counter.knockback_ft,
+        hold_at_bay: false,
+        is_charge: false,
+        weapon_slot: counter.weapon_slot,
+        use_jab: counter.use_jab,
+        is_ranged: counter.is_ranged,
+        trauma_applied: counter.trauma_applied,
+        trauma_seconds: counter.trauma_seconds,
+        roll: counter.roll,
+        damage_breakdown: counter.damage_breakdown,
+        shield_damage_breakdown: counter.shield_damage_breakdown,
+        defender_hp_after: counter.defender_hp_after,
+        critical: counter.critical,
+    }
+}

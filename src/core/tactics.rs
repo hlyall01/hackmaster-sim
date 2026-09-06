@@ -224,6 +224,7 @@ pub enum TacticalAction {
     },
     StandGround,
     GiveGround,
+    ScamperBack,
 }
 
 impl TacticalAction {
@@ -234,7 +235,7 @@ impl TacticalAction {
             }
             Self::NormalAttack | Self::Jab => TacticalChannel::AttackMode,
             Self::NeutralStance | Self::FightDefensively { .. } => TacticalChannel::Stance,
-            Self::StandGround | Self::GiveGround => TacticalChannel::Reaction,
+            Self::StandGround | Self::GiveGround | Self::ScamperBack => TacticalChannel::Reaction,
         }
     }
 
@@ -260,6 +261,7 @@ impl TacticalAction {
             }
             Self::StandGround => "Stand ground".to_string(),
             Self::GiveGround => "Give Ground".to_string(),
+            Self::ScamperBack => "Scamper Back".to_string(),
         }
     }
 }
@@ -416,7 +418,9 @@ pub fn action_warning(action: &TacticalAction, context: &TacticalContext) -> Opt
     }
     Some(match action {
         TacticalAction::Jab => "Current weapon cannot Jab.".to_string(),
-        TacticalAction::GiveGround => "Give Ground is not currently legal.".to_string(),
+        TacticalAction::GiveGround | TacticalAction::ScamperBack => {
+            format!("{} is not currently legal.", action.label())
+        }
         TacticalAction::UseWeaponStyle { style_ids } => format!(
             "Style selection '{}' is not currently available.",
             style_ids.join(" + ")
@@ -517,7 +521,7 @@ fn condition_matches(condition: &TacticalCondition, context: &TacticalContext) -
 fn action_is_legal(action: &TacticalAction, context: &TacticalContext) -> bool {
     match action {
         TacticalAction::Jab => context.my_weapon_can_jab,
-        TacticalAction::GiveGround => context.give_ground_legal,
+        TacticalAction::GiveGround | TacticalAction::ScamperBack => context.give_ground_legal,
         TacticalAction::UseWeaponStyle { style_ids } => {
             valid_style_selection_shape(style_ids)
                 && style_ids.iter().all(|style_id| {

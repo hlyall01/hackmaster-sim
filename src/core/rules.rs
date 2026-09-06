@@ -67,6 +67,18 @@ impl DamageExprCache {
         }
     }
 
+    pub fn expected(&self, nonpenetrating: bool) -> f64 {
+        if nonpenetrating {
+            expected_expression(&self.cleaned_nonpenetrating, None, false)
+        } else {
+            expected_expression(
+                &self.cleaned,
+                self.d6_penetration_triggers.as_ref().map(Vec::len),
+                self.penetrate_on_max_minus_one,
+            )
+        }
+    }
+
     pub fn d6_penetration_triggers(&self) -> Option<&[i32]> {
         self.d6_penetration_triggers.as_deref()
     }
@@ -166,7 +178,7 @@ pub fn expected_damage_expr(expr: &str) -> f64 {
         return 0.0;
     }
     let cleaned = clean_damage_expr(expr).to_ascii_lowercase();
-    expected_expression(&cleaned)
+    expected_expression(&cleaned, None, false)
 }
 
 pub fn effective_armor_value(raw: f64, armor_pen: i32) -> f64 {
@@ -255,7 +267,11 @@ fn evaluate_expression(
     total
 }
 
-fn expected_expression(expr: &str) -> f64 {
+fn expected_expression(
+    expr: &str,
+    d6_penetration_trigger_count: Option<usize>,
+    penetrate_on_max_minus_one: bool,
+) -> f64 {
     if expr.is_empty() {
         return 0.0;
     }
@@ -294,7 +310,12 @@ fn expected_expression(expr: &str) -> f64 {
 
         let term = &expr[start..idx];
         if !term.is_empty() {
-            total += sign * expected_term(term);
+            total += sign
+                * expected_term(
+                    term,
+                    d6_penetration_trigger_count,
+                    penetrate_on_max_minus_one,
+                );
         }
     }
     total
@@ -355,11 +376,19 @@ fn evaluate_term(
     }
 }
 
-fn expected_term(term: &str) -> f64 {
+fn expected_term(
+    term: &str,
+    d6_penetration_trigger_count: Option<usize>,
+    penetrate_on_max_minus_one: bool,
+) -> f64 {
     let trimmed = strip_outer_parens(term);
 
     if has_top_level_operator(trimmed) {
-        return expected_expression(trimmed);
+        return expected_expression(
+            trimmed,
+            d6_penetration_trigger_count,
+            penetrate_on_max_minus_one,
+        );
     }
 
     if let Some(d_pos) = trimmed.find('d') {
@@ -382,8 +411,17 @@ fn expected_term(term: &str) -> f64 {
         let (sides_str, rest) = after_d.split_at(digits_end);
         let sides = sides_str.parse::<f64>().unwrap_or(0.0);
         let penetration = parse_penetration(rest, sides as i32);
+        let trigger_count = if penetration.is_none() {
+            0
+        } else if sides as i32 == 6 {
+            d6_penetration_trigger_count.unwrap_or(if penetrate_on_max_minus_one { 2 } else { 1 })
+        } else if penetrate_on_max_minus_one {
+            2
+        } else {
+            1
+        };
 
-        let single = expected_die_with_penetration(sides, penetration);
+        let single = expected_die_with_trigger_count(sides, trigger_count);
 
         count * single
     } else {
@@ -522,17 +560,15 @@ fn parse_penetration(rest: &str, sides: i32) -> Option<i32> {
     }
 }
 
-fn expected_die_with_penetration(sides: f64, penetration: Option<i32>) -> f64 {
+fn expected_die_with_trigger_count(sides: f64, trigger_count: usize) -> f64 {
     if sides <= 0.0 {
         return 0.0;
     }
     let standard = (sides + 1.0) / 2.0;
-    let Some(minimum) = penetration else {
+    if trigger_count == 0 {
         return standard;
-    };
-    let minimum = (minimum as f64).clamp(1.0, sides);
-    let penetrate_count = sides - minimum + 1.0;
-    let penetrate_chance = penetrate_count / sides;
+    }
+    let penetrate_chance = (trigger_count as f64).min(sides) / sides;
     let extra_base = (sides - 1.0) / 2.0;
     if penetrate_chance >= 1.0 {
         return standard;
@@ -672,5 +708,21 @@ mod tests {
         let mut rolls = vec![6, 4, 1].into_iter();
         let total = penetrating_roll_trigger_set_with(6, &[4, 5, 6], || rolls.next().unwrap_or(1));
         assert_eq!(total, 9);
+    }
+
+    #[test]
+    fn expected_damage_cache_respects_custom_penetration_rules() {
+        let standard = DamageExprCache::new("d4");
+        assert!((standard.expected(false) - 2.5).abs() < f64::EPSILON);
+
+        let penetrating = DamageExprCache::new("d6p");
+        assert!((penetrating.expected(false) - 4.0).abs() < f64::EPSILON);
+
+        let expanded = DamageExprCache::new_with_d6_penetration_triggers("d6p", &[4, 5, 6]);
+        assert!((expanded.expected(false) - 6.0).abs() < f64::EPSILON);
+
+        let max_minus_one = DamageExprCache::new_with_max_minus_one_penetration("d6p");
+        assert!((max_minus_one.expected(false) - 4.75).abs() < f64::EPSILON);
+        assert!((max_minus_one.expected(true) - 3.5).abs() < f64::EPSILON);
     }
 }

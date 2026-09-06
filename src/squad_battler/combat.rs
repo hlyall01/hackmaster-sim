@@ -1,7 +1,9 @@
 //! Tactical squad combat engine.
 
 use crate::core::rng::SimRng;
-use crate::core::sim::{Combatant, resolve_basic_attack};
+use crate::core::sim::{
+    Combatant, STREAMLINE_EFFECT_ID, STREAMLINE_RADIUS_FEET, resolve_basic_attack,
+};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -149,6 +151,7 @@ impl BattleUnit {
 
     pub fn from_combatant(id: impl Into<String>, team_id: u8, mut combatant: Combatant) -> Self {
         combatant.team_id = team_id;
+        combatant.melee_reach_floor_ft = TILE_SIZE_FT;
         let weapon = combatant.sheet.offense.weapon.clone();
         let max_range_ft = weapon.range_bands_feet.map(|bands| bands[3]);
         let move_tiles = (combatant.sheet.mobility.move_speed / TILE_SIZE_FT)
@@ -300,11 +303,6 @@ impl SquadCombat {
 
     fn clear_tactical_movement_flags(&mut self) {
         self.moved_unit_ids.clear();
-        for unit in &mut self.units {
-            if let Some(combatant) = unit.combatant.as_mut() {
-                combatant.state.moved_last_tick = false;
-            }
-        }
     }
 
     fn refresh_movement_budgets(&mut self) {
@@ -327,6 +325,13 @@ impl SquadCombat {
     }
 
     fn end_tactical_second(&mut self) {
+        for unit in &mut self.units {
+            if let Some(combatant) = unit.combatant.as_mut() {
+                combatant.state.moved_last_tick = self.moved_unit_ids.contains(&unit.id);
+                combatant.state.tick_effects();
+            }
+        }
+        self.refresh_streamline_coverage();
         self.tick_start_positions.clear();
         self.moved_unit_ids.clear();
         self.movement_budgets.clear();
@@ -923,10 +928,42 @@ impl SquadCombat {
         (distance_ft / self.grid.tile_size_ft.max(0.01)).ceil() as i32
     }
 
+    fn refresh_streamline_coverage(&mut self) {
+        let sources = self
+            .units
+            .iter()
+            .filter(|unit| {
+                unit.combatant.as_ref().is_some_and(|combatant| {
+                    combatant.state.has_active_effect(STREAMLINE_EFFECT_ID)
+                })
+            })
+            .map(|unit| unit.pos)
+            .collect::<Vec<_>>();
+        let tile_size_ft = self.grid.tile_size_ft.max(0.01);
+        let coverage = self
+            .units
+            .iter()
+            .map(|target| {
+                sources.iter().any(|source| {
+                    source.manhattan_distance(target.pos) as f32 * tile_size_ft
+                        <= STREAMLINE_RADIUS_FEET
+                })
+            })
+            .collect::<Vec<_>>();
+        for (idx, unit) in self.units.iter_mut().enumerate() {
+            if let Some(combatant) = unit.combatant.as_mut() {
+                combatant.melee_reach_floor_ft = tile_size_ft;
+                combatant.state.streamline_averages_incoming_damage =
+                    coverage.get(idx).copied().unwrap_or(false);
+            }
+        }
+    }
+
     fn resolve_attack_intent(&mut self, intent: AttackIntent) {
+        self.refresh_streamline_coverage();
         let attacker_idx = intent.attacker_idx;
         let defender_idx = intent.defender_idx;
-        let distance_ft = intent.distance_ft;
+        let mut distance_ft = intent.distance_ft;
         let now = self.elapsed_seconds as f32;
         if !self.units[defender_idx].is_alive() {
             return;
@@ -934,6 +971,27 @@ impl SquadCombat {
         let is_ranged = self.units[attacker_idx].max_range_ft.is_some()
             && distance_ft > self.melee_reach_ft(&self.units[attacker_idx]);
         let speed = self.recovery_speed_for(attacker_idx);
+
+        if !is_ranged && self.apply_pilgrim_retreat(attacker_idx, defender_idx) {
+            distance_ft = self
+                .grid
+                .distance_ft(self.units[attacker_idx].pos, self.units[defender_idx].pos);
+            let disabled = self.units[attacker_idx]
+                .combatant
+                .as_ref()
+                .is_some_and(|actor| actor.state.trauma_remaining_seconds > 0);
+            if !self.units[attacker_idx].is_alive()
+                || !self.units[defender_idx].is_alive()
+                || disabled
+                || distance_ft > self.melee_reach_ft(&self.units[attacker_idx])
+            {
+                self.units[attacker_idx].initiative_ready_at = now + speed;
+                if let Some(actor) = self.units[defender_idx].combatant.as_mut() {
+                    actor.state.tactical_give_ground_defense_bonus = 0;
+                }
+                return;
+            }
+        }
 
         if self.units.iter().all(|unit| unit.combatant.is_some()) {
             let defender_evasion =
@@ -959,6 +1017,9 @@ impl SquadCombat {
                 now,
                 &mut self.rng,
             );
+            combatants[defender_idx]
+                .state
+                .tactical_give_ground_defense_bonus = 0;
             for (unit, combatant) in self.units.iter_mut().zip(combatants) {
                 unit.hp = combatant.state.hp;
                 unit.combatant = Some(combatant);
@@ -979,22 +1040,29 @@ impl SquadCombat {
             );
             self.apply_knockback(attacker_idx, defender_idx, result.event.knockback_ft);
             self.emit_death_if_needed(defender_idx, Some(attacker_idx));
-            if let Some(counter) = result.counter_attack {
-                if result.counter_precognition_triggered {
-                    if let Some(destination) = attacker_evasion {
-                        self.units[attacker_idx].pos = destination;
+            for counter in result.counters {
+                let from = counter.attacker_idx;
+                let to = counter.defender_idx;
+                if counter.precognition_triggered {
+                    let destination = if to == attacker_idx {
+                        attacker_evasion
+                    } else {
+                        defender_evasion
+                    };
+                    if let Some(destination) = destination {
+                        self.units[to].pos = destination;
                     }
                 }
                 self.emit_attack_event(
-                    defender_idx,
-                    attacker_idx,
-                    counter.damage,
-                    counter.hit,
-                    counter.knockback_ft,
-                    counter.trauma_seconds,
+                    from,
+                    to,
+                    counter.event.damage,
+                    counter.event.hit,
+                    counter.event.knockback_ft,
+                    counter.event.trauma_seconds,
                 );
-                self.apply_knockback(defender_idx, attacker_idx, counter.knockback_ft);
-                self.emit_death_if_needed(attacker_idx, Some(defender_idx));
+                self.apply_knockback(from, to, counter.event.knockback_ft);
+                self.emit_death_if_needed(to, Some(from));
             }
         } else {
             let damage = 2;
@@ -1009,6 +1077,190 @@ impl SquadCombat {
         {
             self.try_move_away(attacker_idx, defender_idx);
         }
+    }
+
+    fn apply_pilgrim_retreat(&mut self, attacker_idx: usize, defender_idx: usize) -> bool {
+        use crate::core::sim::{StatIdF32, StatIdI32, WeaponSlot, resolve_basic_style_strikes};
+        use crate::core::tactics::{
+            TacticalAction, TacticalChannel, TacticalContext, TacticalDecisionPoint,
+            evaluate_channel,
+        };
+        let Some(mine) = self.units[defender_idx].combatant.as_ref() else {
+            return false;
+        };
+        let Some(enemy) = self.units[attacker_idx].combatant.as_ref() else {
+            return false;
+        };
+        if mine.apply_i32(StatIdI32::FlagPilgrimsPathStyle, 0) == 0
+            || mine.state.trauma_remaining_seconds > 0
+            || mine.sheet.maneuvers.passive
+        {
+            return false;
+        }
+        let mine_speed = mine.apply_f32(StatIdF32::MoveSpeed, mine.sheet.mobility.move_speed);
+        let enemy_speed = enemy.apply_f32(StatIdF32::MoveSpeed, enemy.sheet.mobility.move_speed);
+        let space = self
+            .best_step_away(defender_idx, self.units[attacker_idx].pos)
+            .is_some();
+        let legal =
+            space && mine_speed > 0.0 && enemy_speed <= mine_speed && !enemy.sheet.maneuvers.charge;
+        let distance = self
+            .grid
+            .distance_ft(self.units[attacker_idx].pos, self.units[defender_idx].pos);
+        let context = TacticalContext {
+            my_hp_percent: 100.0 * mine.state.hp as f32 / mine.sheet.vitals.max_hp.max(1) as f32,
+            enemy_hp_percent: 100.0 * enemy.state.hp as f32
+                / enemy.sheet.vitals.max_hp.max(1) as f32,
+            distance_ft: distance,
+            my_reach_ft: mine.sheet.offense.weapon.reach_ft,
+            enemy_reach_ft: enemy.sheet.offense.weapon.reach_ft,
+            retreat_space_available: space,
+            my_weapon_can_jab: mine.tactical_jab_available(),
+            my_has_active_shield: mine.sheet.defense.shield_name.is_some()
+                && mine.state.shield_intact,
+            enemy_has_active_shield: enemy.sheet.defense.shield_name.is_some()
+                && enemy.state.shield_intact,
+            enemy_weapon_group: enemy.weapon_group.clone(),
+            enemy_armor_type: enemy.armor_type.clone(),
+            enemy_charging: enemy.sheet.maneuvers.charge,
+            my_has_attacked: mine.state.has_attacked,
+            my_active_style_ids: mine.active_style_ids.clone(),
+            enemy_active_style_ids: enemy.active_style_ids.clone(),
+            available_style_ids: mine.available_tactical_style_ids(),
+            style_pair_allowed: mine.tactical_style_pair_allowed(),
+            enemy_dr: enemy.sheet.defense.armor_dr as f32,
+            my_attack_speed_seconds: mine.sheet.offense.weapon.speed,
+            enemy_attack_speed_seconds: enemy.sheet.offense.weapon.speed,
+            give_ground_legal: legal,
+            ..TacticalContext::default()
+        };
+        let action = if mine.tactical_policy.enabled {
+            evaluate_channel(
+                &mine.tactical_policy,
+                TacticalDecisionPoint::IncomingAttackReaction,
+                TacticalChannel::Reaction,
+                &context,
+            )
+            .action
+        } else if legal && mine.sheet.maneuvers.scamper_back {
+            TacticalAction::ScamperBack
+        } else if legal && mine.sheet.maneuvers.give_ground {
+            TacticalAction::GiveGround
+        } else {
+            TacticalAction::StandGround
+        };
+        let scamper = matches!(action, TacticalAction::ScamperBack);
+        if !legal
+            || !matches!(
+                action,
+                TacticalAction::GiveGround | TacticalAction::ScamperBack
+            )
+        {
+            return false;
+        }
+        let pursue = enemy.apply_i32(StatIdI32::FlagDeclinePursuit, 0) == 0 && enemy_speed > 0.0;
+        let steps = (mine_speed / self.grid.tile_size_ft).round().max(1.0) as usize
+            * if scamper { 2 } else { 1 };
+        let before = self.units[defender_idx].pos;
+        for _ in 0..steps {
+            let Some(next) = self.best_step_away(defender_idx, self.units[attacker_idx].pos) else {
+                break;
+            };
+            self.units[defender_idx].pos = next;
+        }
+        let after = self.units[defender_idx].pos;
+        let moved = before.manhattan_distance(after);
+        if moved == 0 {
+            return false;
+        }
+        let actor = self.units[defender_idx].combatant.as_mut().unwrap();
+        actor.state.moved_last_tick = true;
+        actor.state.tactical_give_ground_defense_bonus = 5;
+        actor.state.tactical_next_attack_penalty += if scamper { 4 } else { 1 };
+        self.emit_move_event(
+            defender_idx,
+            Some(attacker_idx),
+            before,
+            after,
+            action.label(),
+        );
+        let pursuer_before = self.units[attacker_idx].pos;
+        if pursue {
+            if let Some(path) = self.path_toward_range(attacker_idx, defender_idx, distance) {
+                for next in path.into_iter().take(moved as usize) {
+                    self.units[attacker_idx].pos = next;
+                }
+            }
+        }
+        let pursuer_after = self.units[attacker_idx].pos;
+        if pursuer_after == pursuer_before {
+            return true;
+        }
+        self.units[attacker_idx]
+            .combatant
+            .as_mut()
+            .unwrap()
+            .state
+            .moved_last_tick = true;
+        self.emit_move_event(
+            attacker_idx,
+            Some(defender_idx),
+            pursuer_before,
+            pursuer_after,
+            "Pursuit".to_string(),
+        );
+        let mut actors = self
+            .units
+            .iter()
+            .map(|unit| unit.combatant.clone().unwrap_or_default())
+            .collect::<Vec<_>>();
+        let attacker_evasion = self.precognition_evasion_destination(attacker_idx, defender_idx);
+        let defender_evasion = self.precognition_evasion_destination(defender_idx, attacker_idx);
+        actors[attacker_idx].state.precognition_space_available = attacker_evasion.is_some();
+        actors[defender_idx].state.precognition_space_available = defender_evasion.is_some();
+        let distance = self.grid.distance_ft(pursuer_after, after);
+        let strikes = resolve_basic_style_strikes(
+            &mut actors,
+            defender_idx,
+            attacker_idx,
+            WeaponSlot::Primary,
+            distance,
+            self.elapsed_seconds as f32,
+            &mut self.rng,
+        );
+        for (unit, actor) in self.units.iter_mut().zip(actors) {
+            if unit.combatant.is_some() {
+                unit.hp = actor.state.hp;
+                unit.combatant = Some(actor);
+            }
+        }
+        for strike in strikes {
+            if strike.precognition_triggered {
+                let evasion = if strike.defender_idx == attacker_idx {
+                    attacker_evasion
+                } else {
+                    defender_evasion
+                };
+                if let Some(pos) = evasion {
+                    self.units[strike.defender_idx].pos = pos;
+                }
+            }
+            self.emit_attack_event(
+                strike.attacker_idx,
+                strike.defender_idx,
+                strike.event.damage,
+                strike.event.hit,
+                strike.event.knockback_ft,
+                strike.event.trauma_seconds,
+            );
+            self.apply_knockback(
+                strike.attacker_idx,
+                strike.defender_idx,
+                strike.event.knockback_ft,
+            );
+            self.emit_death_if_needed(strike.defender_idx, Some(strike.attacker_idx));
+        }
+        true
     }
 
     fn recovery_speed_for(&self, unit_idx: usize) -> f32 {
@@ -1452,7 +1704,8 @@ fn apply_team_positions(
 mod tests {
     use super::*;
     use crate::core::sim::{
-        Combatant, CombatantSheet, MobilityProfile, OffenseProfile, Vitals, WeaponProfile,
+        Combatant, CombatantSheet, MobilityProfile, OffenseProfile, TemporaryEffect, Vitals,
+        WeaponProfile,
     };
     use std::sync::Arc;
 
@@ -1497,6 +1750,113 @@ mod tests {
         BattleUnit::from_combatant(id, team_id, Combatant::new_with_team(sheet, team_id))
     }
 
+    #[test]
+    fn pilgrim_squad_pursuit_uses_legal_movement_and_preserves_attack_timer() {
+        use crate::core::sim::{ModifierOpI32, StatIdI32};
+        for (scamper, decline, expect_strike) in [
+            (false, false, true),
+            (true, false, true),
+            (false, true, false),
+        ] {
+            let mut pilgrim = combatant_unit("pilgrim", 1, TILE_SIZE_FT);
+            let actor = pilgrim.combatant.as_mut().unwrap();
+            actor
+                .sheet
+                .modifiers
+                .add_i32(StatIdI32::FlagPilgrimsPathStyle, ModifierOpI32::Set(1));
+            actor.sheet.maneuvers.give_ground = !scamper;
+            actor.sheet.maneuvers.scamper_back = scamper;
+            let mut pursuer = combatant_unit("pursuer", 0, TILE_SIZE_FT);
+            let actor = pursuer.combatant.as_mut().unwrap();
+            actor.sheet.vitals.max_hp = 1000;
+            actor.sheet.vitals.threshold_of_pain = 1000;
+            actor.sheet.defense.knockback_step = 10000;
+            if decline {
+                actor
+                    .sheet
+                    .modifiers
+                    .add_i32(StatIdI32::FlagDeclinePursuit, ModifierOpI32::Set(1));
+            }
+            actor.reset_state();
+            pursuer.hp = actor.state.hp;
+            let mut combat = SquadCombat::new_with_seed(vec![pursuer], vec![pilgrim], 18);
+            combat.units[0].pos = GridPos::new(4, 4);
+            combat.units[1].pos = GridPos::new(5, 4);
+            combat.units[1].initiative_ready_at = 50.0;
+            assert!(combat.apply_pilgrim_retreat(0, 1));
+            assert_eq!(combat.units[1].initiative_ready_at, 50.0);
+            let strikes = combat
+                .events
+                .iter()
+                .filter(|event| event.actor_id == "pilgrim" && event.hit.is_some())
+                .count();
+            assert_eq!(strikes, usize::from(expect_strike));
+            assert_eq!(
+                combat.units[1].pos.manhattan_distance(GridPos::new(5, 4)),
+                if scamper { 2 } else { 1 }
+            );
+            assert_eq!(combat.units[0].pos != GridPos::new(4, 4), !decline);
+        }
+    }
+
+    #[test]
+    fn evonia_squad_offhand_strikes_reach_one_adjacent_cell_only() {
+        use crate::core::sim::{ModifierOpI32, OffhandProfile, StatIdI32};
+        for (distance_tiles, expect_strike) in [(1, true), (2, false)] {
+            let mut defender = combatant_unit("evonia", 1, 0.0);
+            let actor = defender.combatant.as_mut().unwrap();
+            actor
+                .sheet
+                .modifiers
+                .add_i32(StatIdI32::FlagLeftHandOfEvoniaStyle, ModifierOpI32::Set(1));
+            actor.sheet.defense.defense_mod = 100;
+            let mut secondary = WeaponProfile::default();
+            secondary.reach_ft = 2.0;
+            secondary.name = "Short sword".into();
+            actor.sheet.offense.offhand = Some(OffhandProfile {
+                attack_bonus: 0,
+                strength_damage: 0,
+                weapon: Arc::new(secondary),
+            });
+            let mut saw_miss = false;
+            for seed in 0..100 {
+                let attacker = combatant_unit("attacker", 0, 0.0);
+                let mut combat =
+                    SquadCombat::new_with_seed(vec![attacker], vec![defender.clone()], seed);
+                combat.units[0].pos = GridPos::new(4, 4);
+                combat.units[1].pos = GridPos::new(4 + distance_tiles, 4);
+                combat.resolve_attack_intent(AttackIntent {
+                    attacker_idx: 0,
+                    defender_idx: 1,
+                    distance_ft: TILE_SIZE_FT * distance_tiles as f32,
+                    move_after_attack: false,
+                });
+                let attacks = combat
+                    .events
+                    .iter()
+                    .filter(|event| event.hit.is_some())
+                    .collect::<Vec<_>>();
+                if attacks
+                    .first()
+                    .is_some_and(|event| event.hit == Some(false))
+                {
+                    let replies = attacks
+                        .iter()
+                        .filter(|event| event.actor_id == "evonia")
+                        .count();
+                    // Ignore seeds with a normal perfect/near-perfect counter: the isolated extra strike is decisive.
+                    if replies > 1 {
+                        continue;
+                    }
+                    assert_eq!(replies, usize::from(expect_strike));
+                    saw_miss = true;
+                    break;
+                }
+            }
+            assert!(saw_miss);
+        }
+    }
+
     fn hit_actor_ids(combat: &SquadCombat) -> Vec<&str> {
         combat
             .events
@@ -1534,6 +1894,66 @@ mod tests {
             grid.distance_ft(GridPos::new(1, 1), GridPos::new(4, 3)),
             25.0
         );
+    }
+
+    #[test]
+    fn streamline_coverage_and_duration_are_preserved_in_squad_combat() {
+        let caster = combatant_unit("caster", 0, 0.0);
+        let inside = combatant_unit("inside", 1, 0.0);
+        let outside = combatant_unit("outside", 1, 0.0);
+        let mut combat = SquadCombat::new(vec![caster], vec![inside, outside]);
+        combat.units[0].pos = GridPos::new(0, 0);
+        combat.units[1].pos = GridPos::new(6, 0);
+        combat.units[2].pos = GridPos::new(7, 0);
+        combat.units[0]
+            .combatant
+            .as_mut()
+            .expect("caster combatant")
+            .state
+            .add_effect(TemporaryEffect::new(STREAMLINE_EFFECT_ID, 2));
+
+        combat.refresh_streamline_coverage();
+        assert!(
+            combat.units[0]
+                .combatant
+                .as_ref()
+                .expect("caster combatant")
+                .state
+                .streamline_averages_incoming_damage
+        );
+        assert!(
+            combat.units[1]
+                .combatant
+                .as_ref()
+                .expect("inside combatant")
+                .state
+                .streamline_averages_incoming_damage
+        );
+        assert!(
+            !combat.units[2]
+                .combatant
+                .as_ref()
+                .expect("outside combatant")
+                .state
+                .streamline_averages_incoming_damage
+        );
+
+        combat.end_tactical_second();
+        assert!(
+            combat.units[0]
+                .combatant
+                .as_ref()
+                .expect("caster combatant")
+                .state
+                .has_active_effect(STREAMLINE_EFFECT_ID)
+        );
+        combat.end_tactical_second();
+        assert!(combat.units.iter().all(|unit| {
+            unit.combatant.as_ref().is_none_or(|combatant| {
+                !combatant.state.has_active_effect(STREAMLINE_EFFECT_ID)
+                    && !combatant.state.streamline_averages_incoming_damage
+            })
+        }));
     }
 
     #[test]
@@ -2028,6 +2448,27 @@ mod tests {
                 .state
                 .moved_last_tick,
             "squad movement must update the core moved flag used by ranged defense"
+        );
+
+        combat.begin_tactical_second();
+        assert!(
+            combat.units[0]
+                .combatant
+                .as_ref()
+                .expect("unit should carry core combatant")
+                .state
+                .moved_last_tick,
+            "movement from the previous second must remain visible during the next second"
+        );
+        combat.end_tactical_second();
+        assert!(
+            !combat.units[0]
+                .combatant
+                .as_ref()
+                .expect("unit should carry core combatant")
+                .state
+                .moved_last_tick,
+            "the movement flag must clear after a completely static second"
         );
     }
 

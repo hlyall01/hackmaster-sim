@@ -1357,6 +1357,8 @@ impl AutobattlerApp {
         creation.player.offhand_projectile_material_tier = preset.offhand_projectile_material_tier;
         creation.player.shield_material_tier = preset.shield_material_tier;
         creation.player.two_hand_grip = preset.two_hand_grip;
+        creation.player.one_path_piercing = preset.one_path_piercing;
+        creation.player.decline_pursuit = preset.decline_pursuit;
         creation.proficiencies = preset.proficiencies.clone();
         creation.player.proficiencies = preset.proficiencies.clone();
         creation.player.talents = preset.talents.clone();

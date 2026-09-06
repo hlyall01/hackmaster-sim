@@ -1,3 +1,12 @@
+pub const CHRONOBLUR_EFFECT_ID: &str = "spell_chronoblur";
+pub const CHRONOBLUR_DURATION_SECONDS: i32 = 60;
+pub const CHRONOBLUR_MELEE_DEFENSE_BONUS: i32 = 4;
+pub const CHRONOBLUR_RANGED_DISTANCE_FEET: f32 = 20.0;
+
+pub const STREAMLINE_EFFECT_ID: &str = "spell_streamline";
+pub const STREAMLINE_DURATION_SECONDS: i32 = 5 * 60;
+pub const STREAMLINE_RADIUS_FEET: f32 = 30.0;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum StatIdI32 {
     AttackBonus,
@@ -36,6 +45,15 @@ pub enum StatIdI32 {
     FlagSixPathsStyle,
     FlagThreeMountainsStyle,
     FlagUnbreakableWallStyle,
+    FlagLeftHandOfEvoniaStyle,
+    FlagOnePathPiercingStyle,
+    FlagOnePathCrushingStyle,
+    FlagNpcCombatant,
+    FlagPilgrimsPathStyle,
+    FlagDeclinePursuit,
+    FlagReaperOfTermonStyle,
+    FlagChronoblurSpell,
+    FlagStreamlineSpell,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

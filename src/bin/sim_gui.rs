@@ -2625,6 +2625,7 @@ fn tactical_action_editor(
         TacticalAction::FightDefensively { .. } => 6,
         TacticalAction::StandGround => 7,
         TacticalAction::GiveGround => 8,
+        TacticalAction::ScamperBack => 9,
     };
     let old_kind = kind;
     let labels = [
@@ -2637,6 +2638,7 @@ fn tactical_action_editor(
         "Fight defensively",
         "Stand ground",
         "Give Ground",
+        "Scamper Back",
     ];
     egui::ComboBox::from_id_source(format!("{id_prefix}_action"))
         .selected_text(labels[kind])
@@ -2657,7 +2659,8 @@ fn tactical_action_editor(
             5 => TacticalAction::NeutralStance,
             6 => TacticalAction::FightDefensively { penalty: 2 },
             7 => TacticalAction::StandGround,
-            _ => TacticalAction::GiveGround,
+            8 => TacticalAction::GiveGround,
+            _ => TacticalAction::ScamperBack,
         };
     }
     match action {
@@ -3326,7 +3329,14 @@ fn render_player_editor(
 
     render_player_editor_tabs(ui, id_prefix, active_tab);
 
-    match *active_tab {
+    egui::ScrollArea::vertical()
+        .id_source(format!(
+            "{id_prefix}_{}_editor_tab_body",
+            active_tab.label()
+        ))
+        .auto_shrink([false, false])
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+        .show(ui, |ui| match *active_tab {
         PlayerEditorTab::Core => {
             if !fighter_presets.is_empty() {
                 ui.horizontal(|ui| {
@@ -3629,7 +3639,7 @@ fn render_player_editor(
             if !can_dualwield {
                 player.defensive_dualwielding = false;
                 player.offensive_dualwielding = false;
-                player.offhand_weapon_id = None;
+                if !game_logic::evonia_offhand_allowed(player, weapon) { player.offhand_weapon_id = None; }
             }
             if !has_perfect_two_weapon_fighting {
                 if player.defensive_dualwielding {
@@ -3638,6 +3648,9 @@ fn render_player_editor(
                 if player.offensive_dualwielding {
                     player.defensive_dualwielding = false;
                 }
+            }
+            if player.talents.iter().any(|talent| talent.id == "one_path") {
+                ui.checkbox(&mut player.one_path_piercing, "One Path: piercing strikes").on_hover_text("Unchecked: crushing strikes with 5 DR penetration. Checked: piercing strikes, with criticals on precise called shots.");
             }
             let jab_label = weapon
                 .jab_speed_label
@@ -3807,9 +3820,9 @@ fn render_player_editor(
                 });
                 ui.horizontal(|ui| {
                     ui.label("Offhand weapon");
-                    let offhand_loadout_possible =
-                        weapon.handedness == WeaponHandedness::OneHanded && !player.two_hand_grip;
-                    let can_use_offhand = player.offensive_dualwielding && offhand_loadout_possible;
+                    let evonia_loadout = game_logic::evonia_offhand_allowed(player, weapon);
+                    let offhand_loadout_possible = evonia_loadout || (weapon.handedness == WeaponHandedness::OneHanded && !player.two_hand_grip);
+                    let can_use_offhand = evonia_loadout || ((player.offensive_dualwielding || player.defensive_dualwielding) && offhand_loadout_possible);
                     if !offhand_loadout_possible {
                         player.offhand_weapon_id = None;
                     }
@@ -3831,9 +3844,7 @@ fn render_player_editor(
                                     .entries()
                                     .iter()
                                     .enumerate()
-                                    .filter(|(_, weapon)| {
-                                        weapon.handedness == WeaponHandedness::OneHanded
-                                    })
+                                    .filter(|(_, secondary)| game_logic::offhand_option_allowed(player, weapon, secondary))
                                     .map(|(idx, weapon)| (Some(idx), weapon.name.clone(), true)),
                             ),
                         );
@@ -3913,7 +3924,7 @@ fn render_player_editor(
             if tactics_controlled {
                 ui.colored_label(
                     Color32::LIGHT_BLUE,
-                    "Jab, Fight Defensively, and Give Ground are controlled by Tactical Directives.",
+                    "Jab, Fight Defensively, Give Ground, and Scamper Back are controlled by Tactical Directives.",
                 );
             }
             ui.separator();
@@ -4001,12 +4012,21 @@ fn render_player_editor(
             ui.add_enabled_ui(false, |ui| {
                 ui.checkbox(&mut player.full_parry, "Full parry (NYI)");
             });
-            ui.add_enabled_ui(false, |ui| {
-                ui.checkbox(&mut player.give_ground, "Give ground (Tactics only)");
+            ui.add_enabled_ui(!tactics_controlled, |ui| {
+                if ui.checkbox(&mut player.give_ground, "Give ground")
+                    .on_hover_text("Retreat at walking speed: +5 Defense, -1 to your next Attack.")
+                    .changed() && player.give_ground
+                {
+                    player.scamper_back = false;
+                }
+                if ui.checkbox(&mut player.scamper_back, "Scamper back")
+                    .on_hover_text("Retreat at jogging speed: +5 Defense, -4 to your next Attack.")
+                    .changed() && player.scamper_back
+                {
+                    player.give_ground = false;
+                }
             });
-            ui.add_enabled_ui(false, |ui| {
-                ui.checkbox(&mut player.scamper_back, "Scamper back (NYI)");
-            });
+            ui.checkbox(&mut player.decline_pursuit, "Do not pursue retreating opponents");
             ui.add_enabled_ui(false, |ui| {
                 ui.checkbox(&mut player.fighting_withdrawal, "Fighting withdrawal (NYI)");
             });
@@ -4016,27 +4036,25 @@ fn render_player_editor(
             ui.checkbox(&mut player.mounted, "Mounted");
         }
         PlayerEditorTab::Tactics => {
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                render_tactics_editor(
-                    ui,
-                    id_prefix,
-                    player,
-                    weapon_catalog,
-                    armor_catalog,
-                    shield_catalog,
-                    talent_catalog,
-                    tactical_draft,
-                    tactical_presets,
-                    tactical_preset_index,
-                    tactical_preset_name,
-                    tactical_message,
-                    tactical_pending_load,
-                    tactical_confirm_overwrite,
-                    tactical_confirm_delete,
-                    tactics_locked,
-                    tactics_applied,
-                );
-            });
+            render_tactics_editor(
+                ui,
+                id_prefix,
+                player,
+                weapon_catalog,
+                armor_catalog,
+                shield_catalog,
+                talent_catalog,
+                tactical_draft,
+                tactical_presets,
+                tactical_preset_index,
+                tactical_preset_name,
+                tactical_message,
+                tactical_pending_load,
+                tactical_confirm_overwrite,
+                tactical_confirm_delete,
+                tactics_locked,
+                tactics_applied,
+            );
         }
         PlayerEditorTab::Stats => {
             let npc_active = player.npc_preset.is_some();
@@ -4253,13 +4271,9 @@ fn render_player_editor(
                 ui.label("None");
             } else {
                 current_talents.sort();
-                egui::ScrollArea::vertical()
-                    .max_height(120.0)
-                    .show(ui, |ui| {
-                        for label in current_talents {
-                            ui.label(label);
-                        }
-                    });
+                for label in current_talents {
+                    ui.label(label);
+                }
             }
             if !npc_active {
                 ui.separator();
@@ -4594,7 +4608,7 @@ fn render_player_editor(
                 run_dps_test,
             );
         }
-    }
+    });
 }
 
 fn render_player_tools_tab(
@@ -4971,6 +4985,8 @@ fn apply_fighter_preset(
     player.offhand_projectile_material_tier = preset.offhand_projectile_material_tier;
     player.shield_material_tier = preset.shield_material_tier;
     player.two_hand_grip = preset.two_hand_grip;
+    player.one_path_piercing = preset.one_path_piercing;
+    player.decline_pursuit = preset.decline_pursuit;
     let maneuvers = preset.maneuvers;
     player.use_jab = maneuvers.use_jab;
     player.hold_at_bay = maneuvers.hold_at_bay;
@@ -5079,6 +5095,8 @@ fn fighter_preset_from_player(
         offhand_projectile_material_tier: player.offhand_projectile_material_tier,
         shield_material_tier: player.shield_material_tier,
         two_hand_grip: player.two_hand_grip,
+        one_path_piercing: player.one_path_piercing,
+        decline_pursuit: player.decline_pursuit,
         maneuvers: game_logic::CombatManeuverConfig {
             use_jab: player.use_jab,
             hold_at_bay: player.hold_at_bay,
@@ -5332,6 +5350,9 @@ fn format_talent_requirement_failure(
         game_logic::TalentRequirementFailure::MissingThreeMountainsProficiency => {
             "Requires proficiency in at least one crushing melee weapon.".to_string()
         }
+        game_logic::TalentRequirementFailure::MissingNewWeaponStyleProficiency { style } => {
+            format!("Missing required weapon proficiency for {style}")
+        }
         game_logic::TalentRequirementFailure::MissingUnbreakableWallProficiency => {
             "Requires shield proficiency.".to_string()
         }
@@ -5503,79 +5524,72 @@ fn render_talent_selector(
         .map(|weapon| weapon_group_label(weapon.group))
         .unwrap_or(WEAPON_GROUP_LABELS[0]);
 
-    egui::ScrollArea::vertical()
-        .max_height(320.0)
-        .show(ui, |ui| {
-            if active_category.as_str() == TALENT_TAB_LEARNED {
-                if player.talents.is_empty() {
-                    ui.label("No learned talents.");
-                } else {
-                    let mut learned_talents: Vec<(String, usize)> = player
-                        .talents
-                        .iter()
-                        .enumerate()
-                        .map(|(index, selection)| {
-                            (talent_display_label(selection, talent_catalog), index)
-                        })
-                        .collect();
-                    learned_talents.sort_by(|left, right| left.0.cmp(&right.0));
-                    for (label, index) in learned_talents {
-                        ui.horizontal(|ui| {
-                            if ui.button("Remove").clicked() {
-                                remove_queue.push(index);
-                            }
-                            ui.label(label);
-                        });
+    if active_category.as_str() == TALENT_TAB_LEARNED {
+        if player.talents.is_empty() {
+            ui.label("No learned talents.");
+        } else {
+            let mut learned_talents: Vec<(String, usize)> = player
+                .talents
+                .iter()
+                .enumerate()
+                .map(|(index, selection)| (talent_display_label(selection, talent_catalog), index))
+                .collect();
+            learned_talents.sort_by(|left, right| left.0.cmp(&right.0));
+            for (label, index) in learned_talents {
+                ui.horizontal(|ui| {
+                    if ui.button("Remove").clicked() {
+                        remove_queue.push(index);
                     }
-                }
-            } else if active_category.as_str() == TALENT_TAB_ALL {
-                for (category, specs) in &categories {
-                    if specs.is_empty() {
-                        continue;
-                    }
-                    ui.separator();
-                    ui.label(category.as_str());
-                    for spec in specs {
-                        render_talent_entry(
-                            ui,
-                            id_prefix,
-                            player,
-                            default_group,
-                            weapon_catalog,
-                            talent_catalog,
-                            spec,
-                            &context,
-                            &mut add_queue,
-                            &mut remove_queue,
-                        );
-                    }
-                }
-            } else if let Some((name, specs)) =
-                categories.iter().find(|(name, _)| name == active_category)
-            {
-                if name == TALENT_TAB_RACIALS && specs.is_empty() {
-                    if active_race.is_some() {
-                        ui.label("No racial talents available for the selected race.");
-                    } else {
-                        ui.label("Select a race to view racial talents.");
-                    }
-                }
-                for spec in specs {
-                    render_talent_entry(
-                        ui,
-                        id_prefix,
-                        player,
-                        default_group,
-                        weapon_catalog,
-                        talent_catalog,
-                        spec,
-                        &context,
-                        &mut add_queue,
-                        &mut remove_queue,
-                    );
-                }
+                    ui.label(label);
+                });
             }
-        });
+        }
+    } else if active_category.as_str() == TALENT_TAB_ALL {
+        for (category, specs) in &categories {
+            if specs.is_empty() {
+                continue;
+            }
+            ui.separator();
+            ui.label(category.as_str());
+            for spec in specs {
+                render_talent_entry(
+                    ui,
+                    id_prefix,
+                    player,
+                    default_group,
+                    weapon_catalog,
+                    talent_catalog,
+                    spec,
+                    &context,
+                    &mut add_queue,
+                    &mut remove_queue,
+                );
+            }
+        }
+    } else if let Some((name, specs)) = categories.iter().find(|(name, _)| name == active_category)
+    {
+        if name == TALENT_TAB_RACIALS && specs.is_empty() {
+            if active_race.is_some() {
+                ui.label("No racial talents available for the selected race.");
+            } else {
+                ui.label("Select a race to view racial talents.");
+            }
+        }
+        for spec in specs {
+            render_talent_entry(
+                ui,
+                id_prefix,
+                player,
+                default_group,
+                weapon_catalog,
+                talent_catalog,
+                spec,
+                &context,
+                &mut add_queue,
+                &mut remove_queue,
+            );
+        }
+    }
 
     if !add_queue.is_empty() {
         player.talents.extend(add_queue);

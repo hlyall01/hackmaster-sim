@@ -3405,6 +3405,35 @@ fn format_talent_requirement_failure(
         game_logic::TalentRequirementFailure::MissingThreeMountainsProficiency => {
             "Requires proficiency in at least one crushing melee weapon.".to_string()
         }
+        game_logic::TalentRequirementFailure::MissingCrescentMoonProficiency => {
+            "Requires proficiency in at least one small sword and one size M large sword."
+                .to_string()
+        }
+        game_logic::TalentRequirementFailure::MissingDoomrazorProficiency => {
+            "Requires proficiency in at least one piercing melee weapon.".to_string()
+        }
+        game_logic::TalentRequirementFailure::MissingFallingSunProficiency => {
+            "Requires flamberge or two-handed sword proficiency.".to_string()
+        }
+        game_logic::TalentRequirementFailure::MissingQuietRiverProficiency => {
+            "Requires fist proficiency.".to_string()
+        }
+        game_logic::TalentRequirementFailure::MissingRhdwngFlowProficiency => {
+            "Requires proficiency in at least one throwing weapon.".to_string()
+        }
+        game_logic::TalentRequirementFailure::MissingRohavalanBridgeProficiency => {
+            "Requires staff proficiency or polearm proficiency.".to_string()
+        }
+        game_logic::TalentRequirementFailure::MissingScornOfTheDissendriProficiency => {
+            "Requires proficiency in at least one size S melee weapon.".to_string()
+        }
+        game_logic::TalentRequirementFailure::MissingSwordReachStyleProficiency => {
+            "Requires proficiency in at least one size S or M sword with at least 2 feet of reach."
+                .to_string()
+        }
+        game_logic::TalentRequirementFailure::MissingNewWeaponStyleProficiency { style } => {
+            format!("Missing required weapon proficiency for {style}")
+        }
         game_logic::TalentRequirementFailure::MissingUnbreakableWallProficiency => {
             "Requires shield proficiency.".to_string()
         }

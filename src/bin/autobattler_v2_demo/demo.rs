@@ -1225,6 +1225,8 @@ fn player_config_from_preset(
     player.offhand_projectile_material_tier = preset.offhand_projectile_material_tier;
     player.shield_material_tier = preset.shield_material_tier;
     player.two_hand_grip = preset.two_hand_grip;
+    player.one_path_piercing = preset.one_path_piercing;
+    player.decline_pursuit = preset.decline_pursuit;
     player.use_jab = preset.maneuvers.use_jab;
     player.hold_at_bay = preset.maneuvers.hold_at_bay;
     player.called_shot = preset.maneuvers.called_shot;

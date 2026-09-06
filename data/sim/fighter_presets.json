@@ -2,9 +2,9 @@
   "presets": [
     {
       "name": "Arthur Du Randt",
-      "level": 8,
+      "level": 9,
       "progression": {
-        "attack": "IV",
+        "attack": "V",
         "speed": "III",
         "initiative": "I",
         "health": "IV"
@@ -754,9 +754,9 @@
     },
     {
       "name": "Volfango Drakos",
-      "level": 8,
+      "level": 9,
       "progression": {
-        "attack": "III",
+        "attack": "IV",
         "speed": "III",
         "initiative": "III",
         "health": "IV"
@@ -772,9 +772,9 @@
       "base_hp": 10,
       "move_speed": 20.0,
       "strength_base": 11,
-      "strength_pct": 38,
+      "strength_pct": 1,
       "dex_base": 20,
-      "dex_pct": 85,
+      "dex_pct": 51,
       "intelligence": 15,
       "wisdom": 12,
       "constitution": 12,
@@ -782,12 +782,13 @@
       "charisma": 6,
       "weapon": "Short sword",
       "offhand_weapon": "Short sword",
-      "armor": "Raurosi Leather?",
+      "armor": "Gambeson",
       "shield": "None",
       "weapon_material_tier": 5,
       "offhand_weapon_material_tier": 2,
-      "armor_material_tier": 3,
+      "armor_material_tier": 2,
       "projectile_material_tier": 0,
+      "offhand_projectile_material_tier": 0,
       "shield_material_tier": 0,
       "two_hand_grip": false,
       "maneuvers": {
@@ -795,6 +796,7 @@
         "fight_defensively_penalty": 8
       },
       "defensive_dualwielding": true,
+      "offensive_dualwielding": false,
       "race_id": "ithican",
       "proficiencies": [
         "Short sword",
@@ -826,21 +828,6 @@
           "id": "combat_expertise",
           "rank": 1,
           "weapon": null
-        },
-        {
-          "id": "defense_bonus_weapon",
-          "rank": 1,
-          "weapon": "Short sword"
-        },
-        {
-          "id": "swift",
-          "rank": 1,
-          "weapon": "Short sword"
-        },
-        {
-          "id": "damage_bonus_weapon",
-          "rank": 1,
-          "weapon": "Short sword"
         },
         {
           "id": "light_armor_optimization",
@@ -901,9 +888,9 @@
     },
     {
       "name": "Volfango Drakos (Perfect Two-Weapon)",
-      "level": 8,
+      "level": 9,
       "progression": {
-        "attack": "III",
+        "attack": "IV",
         "speed": "III",
         "initiative": "III",
         "health": "IV"
@@ -919,9 +906,9 @@
       "base_hp": 10,
       "move_speed": 20.0,
       "strength_base": 11,
-      "strength_pct": 38,
+      "strength_pct": 1,
       "dex_base": 20,
-      "dex_pct": 85,
+      "dex_pct": 51,
       "intelligence": 15,
       "wisdom": 12,
       "constitution": 12,
@@ -929,12 +916,13 @@
       "charisma": 6,
       "weapon": "Short sword",
       "offhand_weapon": "Short sword",
-      "armor": "Raurosi Leather?",
+      "armor": "Gambeson",
       "shield": "None",
       "weapon_material_tier": 5,
       "offhand_weapon_material_tier": 2,
-      "armor_material_tier": 3,
+      "armor_material_tier": 2,
       "projectile_material_tier": 0,
+      "offhand_projectile_material_tier": 0,
       "shield_material_tier": 0,
       "two_hand_grip": false,
       "maneuvers": {
@@ -974,21 +962,6 @@
           "id": "combat_expertise",
           "rank": 1,
           "weapon": null
-        },
-        {
-          "id": "defense_bonus_weapon",
-          "rank": 1,
-          "weapon": "Short sword"
-        },
-        {
-          "id": "swift",
-          "rank": 1,
-          "weapon": "Short sword"
-        },
-        {
-          "id": "damage_bonus_weapon",
-          "rank": 1,
-          "weapon": "Short sword"
         },
         {
           "id": "light_armor_optimization",

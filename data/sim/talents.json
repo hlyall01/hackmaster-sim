@@ -54,6 +54,32 @@
       ]
     },
     {
+      "id": "spell_chronoblur",
+      "name": "Chronoblur",
+      "description": "For the first 60 seconds of combat, your momentary past self blurs over your current position. If you moved during the previous second, gain +4 Defense against melee attacks, and missile attacks treat you as 20 feet farther away. This trait models Chronoblur cast on its owner at the start of combat.",
+      "cost_bp": 0,
+      "category": "Spells",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "chronoblur"
+        }
+      ]
+    },
+    {
+      "id": "spell_streamline",
+      "name": "Streamline",
+      "description": "For the first 5 minutes of combat, project a 30-foot-radius field. Damage dice inflicted upon any target in the field are replaced by their mathematical average, rounded down, before modifiers and damage reduction. This trait models Streamline cast at the start of combat.",
+      "cost_bp": 0,
+      "category": "Spells",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "streamline"
+        }
+      ]
+    },
+    {
       "id": "eyesmite",
       "name": "Eyesmite",
       "description": "Received upon reaching Exertion Proficiency IV. A near-perfect defense may be exchanged for an instantaneous called shot to the attacker's eye. A buckler or small shield is dropped to free the required hand. On a successful called shot, the target suffers 2d4p damage plus modifiers, all damage reduction is ignored, and Threshold of Pain is applied for 10 seconds per point of damage. The Missing Eye flaw is not tracked by the simulator.",
@@ -684,6 +710,45 @@
           "amount": -1
         }
       ]
+    },
+    {
+      "id": "left_hand_of_evonia",
+      "name": "Left Hand of Evonia",
+      "description": "Requires proficiency with a size L large sword or polearm and a size S or M sword. Wield both together, retaining the primary's two-handed fighting style and adding the secondary's defense bonuses. Each incoming melee miss grants an immediate secondary sword attack if the enemy is within its reach, in addition to perfect or near-perfect counters.",
+      "cost_bp": null,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [{ "type": "left_hand_of_evonia_style" }]
+    },
+    {
+      "id": "one_path",
+      "name": "One Path",
+      "description": "Requires proficiency with a large sword capable of hacking and piercing, wielded two-handed. Reduce each damage die one step and reach by 1.5 feet. Hacking strikes become crushing and ignore 5 total DR against heavy armor or monsters with 5+ DR. Piercing called shots to an unarmored location inflict a critical strike, including extra damage dice. Choose crushing or piercing strikes in the loadout.",
+      "cost_bp": null,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [{ "type": "one_path_style" }]
+    },
+    {
+      "id": "pilgrims_path",
+      "name": "Pilgrim's Path",
+      "description": "Requires staff proficiency. Gain +4 Defense and increase weapon speed by 2. After Giving Ground or Scampering Back, immediately attack an attacker who pursues you, if within reach.",
+      "cost_bp": null,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        { "type": "pilgrims_path_style" },
+        { "type": "weapon_speed_flat_bonus", "amount": 2.0, "weapon_names": ["Staff"] }
+      ]
+    },
+    {
+      "id": "reaper_of_termon",
+      "name": "Reaper of Termon",
+      "description": "Requires scythe or sickle proficiency. After critical severity is determined, double the number of extra critical damage dice. With Improved Critical for the wielded weapon, natural 18s also threaten critical hits; with Critical Mastery, natural 17s do as well. These rolls must still hit.",
+      "cost_bp": null,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [{ "type": "reaper_of_termon_style" }]
     },
     {
       "id": "armeroci_pole",

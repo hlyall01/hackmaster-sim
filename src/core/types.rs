@@ -450,6 +450,8 @@ pub enum TalentEffect {
     Precognition,
     Prescience,
     Eyesmite,
+    Chronoblur,
+    Streamline,
     NearPerfectDefenseMinRoll {
         roll: i32,
     },
@@ -540,6 +542,10 @@ pub enum TalentEffect {
     StormOfBladesStyle,
     ThreeMountainsStyle,
     UnbreakableWallStyle,
+    LeftHandOfEvoniaStyle,
+    OnePathStyle,
+    PilgrimsPathStyle,
+    ReaperOfTermonStyle,
 }
 
 fn default_talent_rank() -> u8 {

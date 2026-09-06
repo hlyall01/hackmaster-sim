@@ -440,6 +440,8 @@ fn player_config_from_preset(
     player.offhand_projectile_material_tier = preset.offhand_projectile_material_tier;
     player.shield_material_tier = preset.shield_material_tier;
     player.two_hand_grip = preset.two_hand_grip;
+    player.one_path_piercing = preset.one_path_piercing;
+    player.decline_pursuit = preset.decline_pursuit;
     let maneuvers = preset.maneuvers;
     player.use_jab = maneuvers.use_jab;
     player.hold_at_bay = maneuvers.hold_at_bay;
@@ -3390,6 +3392,247 @@ fn temporary_effects_apply_and_expire() {
     assert_eq!(combatant.apply_i32(StatIdI32::AttackBonus, base), base + 5);
     combatant.state.tick_effects();
     assert_eq!(combatant.apply_i32(StatIdI32::AttackBonus, base), base);
+}
+
+#[test]
+fn streamline_averages_damage_and_rounds_down_before_modifiers() {
+    let mut attacker = combatant_basic(
+        "Attacker".to_string(),
+        "Test Blade".to_string(),
+        100,
+        0,
+        0,
+        false,
+        0,
+        "d4".to_string(),
+        3,
+        10.0,
+        5.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        100,
+    );
+    Arc::make_mut(&mut attacker.sheet.offense.weapon).crit_min_roll = 21;
+    let mut defender = combatant_basic(
+        "Defender".to_string(),
+        "Test Blade".to_string(),
+        -100,
+        -100,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        5.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        100,
+    );
+    defender.state.streamline_averages_incoming_damage = true;
+    let mut combatants = vec![attacker, defender];
+    let mut rng = SimRng::from_seed(91);
+
+    let outcome = resolve_attack(
+        &mut combatants,
+        0,
+        1,
+        0,
+        false,
+        5.0,
+        AttackMode::Normal,
+        WeaponSlot::Primary,
+        0.0,
+        None,
+        &mut rng,
+    );
+
+    let breakdown = outcome
+        .damage_breakdown
+        .expect("the attack should deal damage");
+    assert_eq!(
+        breakdown.rolled_damage, 2,
+        "d4 averages to 2.5, rounded down"
+    );
+    assert_eq!(
+        breakdown.raw_damage, 5,
+        "fixed damage is added after averaging"
+    );
+}
+
+#[test]
+fn chronoblur_applies_only_while_moving_and_before_its_duration_expires() {
+    let attacker = combatant_basic(
+        "Attacker".to_string(),
+        "Longbow".to_string(),
+        100,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        5.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        100,
+    );
+    let base_defender = combatant_basic(
+        "Defender".to_string(),
+        "Test Blade".to_string(),
+        -100,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        5.0,
+        5.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        100,
+    );
+
+    let resolve = |mut defender: Combatant, is_ranged: bool, distance: f32| {
+        let mut combatants = vec![attacker.clone(), defender.clone()];
+        let mut rng = SimRng::from_seed(177);
+        let outcome = resolve_attack(
+            &mut combatants,
+            0,
+            1,
+            0,
+            is_ranged,
+            distance,
+            AttackMode::Normal,
+            WeaponSlot::Primary,
+            0.0,
+            None,
+            &mut rng,
+        );
+        defender.state = combatants.remove(1).state;
+        (outcome, defender)
+    };
+
+    let (baseline_melee, _) = resolve(base_defender.clone(), false, 5.0);
+    let mut blurred = base_defender.clone();
+    blurred.state.moved_last_tick = true;
+    blurred.state.add_effect(TemporaryEffect::new(
+        CHRONOBLUR_EFFECT_ID,
+        CHRONOBLUR_DURATION_SECONDS,
+    ));
+    let (blurred_melee, _) = resolve(blurred.clone(), false, 5.0);
+    assert_eq!(
+        blurred_melee.roll.defense_base,
+        baseline_melee.roll.defense_base + CHRONOBLUR_MELEE_DEFENSE_BONUS
+    );
+
+    let (blurred_ranged, _) = resolve(blurred.clone(), true, 50.0);
+    assert_eq!(blurred_ranged.roll.range_mod, -4);
+
+    let mut static_blur = blurred.clone();
+    static_blur.state.moved_last_tick = false;
+    let (static_melee, _) = resolve(static_blur.clone(), false, 5.0);
+    let (static_ranged, _) = resolve(static_blur, true, 50.0);
+    assert_eq!(
+        static_melee.roll.defense_base,
+        baseline_melee.roll.defense_base
+    );
+    assert_eq!(static_ranged.roll.range_mod, 0);
+
+    for _ in 0..CHRONOBLUR_DURATION_SECONDS - 1 {
+        blurred.state.tick_effects();
+    }
+    assert!(blurred.state.has_active_effect(CHRONOBLUR_EFFECT_ID));
+    blurred.state.tick_effects();
+    assert!(!blurred.state.has_active_effect(CHRONOBLUR_EFFECT_ID));
+    let (expired_melee, _) = resolve(blurred, false, 5.0);
+    assert_eq!(
+        expired_melee.roll.defense_base,
+        baseline_melee.roll.defense_base
+    );
+}
+
+#[test]
+fn streamline_aura_uses_thirty_foot_radius_and_full_effect_duration() {
+    let mut caster = combatant_basic(
+        "Caster".to_string(),
+        "Test Blade".to_string(),
+        -100,
+        0,
+        0,
+        false,
+        0,
+        "1d1".to_string(),
+        0,
+        10.0,
+        5.0,
+        0.0,
+        false,
+        false,
+        None,
+        true,
+        false,
+        100,
+    );
+    caster.sheet.maneuvers.passive = true;
+    caster.team_id = 0;
+    let mut inside = caster.clone();
+    inside.state.active_effects.clear();
+    inside.team_id = 1;
+    let outside = inside.clone();
+
+    let mut sim = SimState::new(SimConfig::new(35.0, 5.0));
+    sim.reset_with_combatants(vec![caster, inside, outside]);
+    sim.combatants[0]
+        .state
+        .add_effect(TemporaryEffect::new(STREAMLINE_EFFECT_ID, 2));
+    sim.actors[0].position = GridPos::new(0, 0);
+    sim.actors[1].position = GridPos::new(30, 0);
+    sim.actors[2].position = GridPos::new(31, 0);
+
+    sim.tick();
+    assert!(sim.combatants[0].state.streamline_averages_incoming_damage);
+    assert!(sim.combatants[1].state.streamline_averages_incoming_damage);
+    assert!(!sim.combatants[2].state.streamline_averages_incoming_damage);
+    assert_eq!(
+        sim.combatants[0]
+            .state
+            .active_effects
+            .iter()
+            .find(|effect| effect.id == STREAMLINE_EFFECT_ID)
+            .map(|effect| effect.remaining_seconds),
+        Some(1)
+    );
+
+    sim.tick();
+    assert!(
+        !sim.combatants[0]
+            .state
+            .has_active_effect(STREAMLINE_EFFECT_ID)
+    );
+    assert!(
+        sim.combatants
+            .iter()
+            .all(|combatant| !combatant.state.streamline_averages_incoming_damage)
+    );
 }
 
 #[test]
@@ -7452,12 +7695,13 @@ fn named_fighter_preset_weapon_and_mastery_overrides_are_preserved() {
     for name in ["Volfango Drakos", "Volfango Drakos (Perfect Two-Weapon)"] {
         let preset = find_fighter_preset(&fighter_presets, name)
             .unwrap_or_else(|| panic!("missing {name} preset"));
-        assert_eq!(preset.level, 8);
+        assert_eq!(preset.level, 9);
+        assert_eq!(preset.progression.attack, "IV");
         assert_eq!(preset.progression.speed, "III");
         assert_eq!(preset.strength_base, 11);
-        assert_eq!(preset.strength_pct, 38);
+        assert_eq!(preset.strength_pct, 1);
         assert_eq!(preset.dex_base, 20);
-        assert_eq!(preset.dex_pct, 85);
+        assert_eq!(preset.dex_pct, 51);
         assert_eq!(preset.constitution, 12);
         assert_eq!(preset.charisma, 6);
         assert_eq!(preset.masteries.defense, 3);
@@ -7465,10 +7709,20 @@ fn named_fighter_preset_weapon_and_mastery_overrides_are_preserved() {
         assert_eq!(preset.weapon_material_tier, 5);
         assert_eq!(preset.offhand_weapon.as_deref(), Some("Short sword"));
         assert_eq!(preset.offhand_weapon_material_tier, 2);
-        assert_eq!(preset.armor, "Raurosi Leather?");
-        assert_eq!(preset.armor_material_tier, 3);
+        assert_eq!(preset.armor, "Gambeson");
+        assert_eq!(preset.armor_material_tier, 2);
+        assert_eq!(preset.offhand_projectile_material_tier, 0);
         assert!(preset.maneuvers.fight_defensively);
         assert_eq!(preset.maneuvers.fight_defensively_penalty, 8);
+        for removed_talent in ["defense_bonus_weapon", "swift", "damage_bonus_weapon"] {
+            assert!(
+                !preset
+                    .talents
+                    .iter()
+                    .any(|selection| selection.id == removed_talent),
+                "{name} still has removed talent {removed_talent}"
+            );
+        }
         for proficiency in ["Short sword", "Dueling sword", "Throwing Knife"] {
             assert!(
                 preset
@@ -7479,6 +7733,11 @@ fn named_fighter_preset_weapon_and_mastery_overrides_are_preserved() {
             );
         }
     }
+
+    let base = find_fighter_preset(&fighter_presets, "Volfango Drakos")
+        .expect("missing base Volfango preset");
+    assert!(base.defensive_dualwielding);
+    assert!(!base.offensive_dualwielding);
 }
 
 #[test]
@@ -7622,7 +7881,7 @@ fn fighter_presets_use_valid_default_weapon_style_selections() {
 }
 
 #[test]
-fn volfango_perfect_two_weapon_preset_is_level_eight_and_combines_dualwield_modes() {
+fn volfango_perfect_two_weapon_preset_is_level_nine_and_combines_dualwield_modes() {
     let (weapon_catalog, armor_catalog, shield_catalog) =
         data::load_catalogs().expect("failed to load catalogs");
     let race_catalog = data::load_races("data/races.json").expect("failed to load races");
@@ -7650,7 +7909,7 @@ fn volfango_perfect_two_weapon_preset_is_level_eight_and_combines_dualwield_mode
         &talent_catalog,
     );
 
-    assert_eq!(preset.level, 8);
+    assert_eq!(preset.level, 9);
     for talent_id in [
         "two_weapon_fighting",
         "improved_two_weapon_fighting",

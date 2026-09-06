@@ -104,6 +104,10 @@ pub fn load_weapon_catalog(path: &str) -> Result<WeaponCatalog, String> {
             reach_ft,
             range_bands_feet,
             armor_pen: entry.armor_penetration.unwrap_or(0),
+            can_hack_and_pierce: entry
+                .damage_type
+                .as_deref()
+                .is_some_and(|kind| kind.contains('H') && kind.contains('P')),
             hacking_or_piercing: entry
                 .damage_type
                 .as_deref()

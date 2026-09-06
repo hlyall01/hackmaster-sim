@@ -1,4 +1,7 @@
-use super::modifiers::{ModifierStack, StatIdF32, StatIdI32, TemporaryEffect};
+use super::modifiers::{
+    CHRONOBLUR_DURATION_SECONDS, CHRONOBLUR_EFFECT_ID, ModifierStack, STREAMLINE_DURATION_SECONDS,
+    STREAMLINE_EFFECT_ID, StatIdF32, StatIdI32, TemporaryEffect,
+};
 use crate::core::rules::DamageExprCache;
 use crate::core::tactics::TacticalPolicy;
 use std::sync::Arc;
@@ -348,6 +351,7 @@ pub struct CombatantState {
     pub deceptive_defender_seen_attackers: Vec<usize>,
     pub tactical_give_ground_defense_bonus: i32,
     pub tactical_next_attack_penalty: i32,
+    pub streamline_averages_incoming_damage: bool,
     pub activated_style_ids: Vec<String>,
     pub active_effects: Vec<TemporaryEffect>,
     pub cache: CombatantCache,
@@ -373,6 +377,8 @@ pub struct Combatant {
     pub sheet: CombatantSheet,
     pub state: CombatantState,
     pub team_id: u8,
+    /// Spatial resolution of the host engine: exact reach in duels, one cell in squads.
+    pub melee_reach_floor_ft: f32,
     pub tactical_policy: TacticalPolicy,
     pub tactical_profiles: Vec<CombatantTacticalProfile>,
     pub active_style_ids: Vec<String>,
@@ -614,6 +620,19 @@ impl CombatantState {
             .modifiers
             .apply_i32(0, StatIdI32::FlagArmerociPoleStyle)
             > 0;
+        let mut active_effects = Vec::new();
+        if sheet.modifiers.apply_i32(0, StatIdI32::FlagChronoblurSpell) > 0 {
+            active_effects.push(TemporaryEffect::new(
+                CHRONOBLUR_EFFECT_ID,
+                CHRONOBLUR_DURATION_SECONDS,
+            ));
+        }
+        if sheet.modifiers.apply_i32(0, StatIdI32::FlagStreamlineSpell) > 0 {
+            active_effects.push(TemporaryEffect::new(
+                STREAMLINE_EFFECT_ID,
+                STREAMLINE_DURATION_SECONDS,
+            ));
+        }
         let mut state = Self {
             hp: sheet.vitals.max_hp,
             next_attack_time_primary: None,
@@ -661,8 +680,9 @@ impl CombatantState {
             deceptive_defender_seen_attackers: Vec::new(),
             tactical_give_ground_defense_bonus: 0,
             tactical_next_attack_penalty: 0,
+            streamline_averages_incoming_damage: false,
             activated_style_ids: Vec::new(),
-            active_effects: Vec::new(),
+            active_effects,
             cache: CombatantCache::default(),
         };
         state.refresh_defense_plus_four_ready(sheet, 0.0);
@@ -676,6 +696,12 @@ impl CombatantState {
 
     pub fn add_effect(&mut self, effect: TemporaryEffect) {
         self.active_effects.push(effect);
+    }
+
+    pub fn has_active_effect(&self, id: &str) -> bool {
+        self.active_effects
+            .iter()
+            .any(|effect| effect.id == id && effect.remaining_seconds > 0)
     }
 
     pub fn tick_effects(&mut self) {
@@ -759,6 +785,7 @@ impl Combatant {
             sheet,
             state,
             team_id,
+            melee_reach_floor_ft: 0.5,
             tactical_policy: TacticalPolicy::default(),
             tactical_profiles: Vec::new(),
             active_style_ids: Vec::new(),

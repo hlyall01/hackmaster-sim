@@ -20,6 +20,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+mod weapon_styles;
+use weapon_styles::*;
+pub use weapon_styles::{evonia_offhand_allowed, offhand_option_allowed};
+
 pub type WeaponCatalog = Catalog<WeaponTag, WeaponPreset>;
 pub type ArmorCatalog = Catalog<ArmorTag, ArmorEntry>;
 pub type ShieldCatalog = Catalog<ShieldTag, ShieldEntry>;
@@ -44,6 +48,7 @@ pub struct WeaponPreset {
     pub range_bands_feet: Option<[f32; 4]>,
     pub armor_pen: i32,
     pub hacking_or_piercing: bool,
+    pub can_hack_and_pierce: bool,
     pub defense_bonus_always: bool,
     pub size: WeaponSize,
     pub handedness: WeaponHandedness,
@@ -97,6 +102,10 @@ const TALENT_ID_SIX_PATHS: &str = "six_paths";
 const TALENT_ID_STORM_OF_BLADES: &str = "storm_of_blades";
 const TALENT_ID_THREE_MOUNTAINS: &str = "three_mountains";
 const TALENT_ID_UNBREAKABLE_WALL: &str = "unbreakable_wall";
+const TALENT_ID_LEFT_HAND_OF_EVONIA: &str = "left_hand_of_evonia";
+const TALENT_ID_ONE_PATH: &str = "one_path";
+const TALENT_ID_PILGRIMS_PATH: &str = "pilgrims_path";
+const TALENT_ID_REAPER_OF_TERMON: &str = "reaper_of_termon";
 const TALENT_ID_DUELIST: &str = "duelist";
 const TALENT_ID_CONTENDER: &str = "contender";
 #[cfg(test)]
@@ -336,6 +345,10 @@ pub struct FighterPreset {
     pub offhand_projectile_material_tier: i32,
     pub shield_material_tier: i32,
     pub two_hand_grip: bool,
+    #[serde(default)]
+    pub one_path_piercing: bool,
+    #[serde(default)]
+    pub decline_pursuit: bool,
     #[serde(default, skip_serializing_if = "CombatManeuverConfig::is_default")]
     pub maneuvers: CombatManeuverConfig,
     #[serde(default)]
@@ -417,6 +430,8 @@ pub struct PlayerConfig {
     pub shield_mastery_defense: i32,
     pub shield_mastery_speed: i32,
     pub two_hand_grip: bool,
+    pub one_path_piercing: bool,
+    pub decline_pursuit: bool,
     pub use_jab: bool,
     pub hold_at_bay: bool,
     pub called_shot: bool,
@@ -487,6 +502,8 @@ impl PlayerConfig {
             shield_mastery_defense: 0,
             shield_mastery_speed: 0,
             two_hand_grip: false,
+            one_path_piercing: false,
+            decline_pursuit: false,
             use_jab: false,
             hold_at_bay: false,
             called_shot: false,
@@ -600,6 +617,8 @@ struct TalentModifiers {
     precognition: bool,
     prescience: bool,
     eyesmite: bool,
+    chronoblur: bool,
+    streamline: bool,
     fight_defensively_attack_penalty_divisor: i32,
     called_shot_delay_profile: Option<sim::CalledShotDelayProfile>,
     called_shot_target_defense_bonus_divisor: i32,
@@ -628,6 +647,10 @@ struct TalentModifiers {
     six_paths_style: bool,
     storm_of_blades_style: bool,
     three_mountains_style: bool,
+    left_hand_of_evonia_style: bool,
+    one_path_style: bool,
+    pilgrims_path_style: bool,
+    reaper_of_termon_style: bool,
     unbreakable_wall_style: bool,
     forced_weapon_loadout: Option<ForcedWeaponLoadout>,
 }
@@ -713,6 +736,8 @@ impl Default for TalentModifiers {
             precognition: false,
             prescience: false,
             eyesmite: false,
+            chronoblur: false,
+            streamline: false,
             fight_defensively_attack_penalty_divisor: 1,
             called_shot_delay_profile: None,
             called_shot_target_defense_bonus_divisor: 1,
@@ -741,6 +766,10 @@ impl Default for TalentModifiers {
             six_paths_style: false,
             storm_of_blades_style: false,
             three_mountains_style: false,
+            left_hand_of_evonia_style: false,
+            one_path_style: false,
+            pilgrims_path_style: false,
+            reaper_of_termon_style: false,
             unbreakable_wall_style: false,
             forced_weapon_loadout: None,
         }
@@ -1004,6 +1033,10 @@ const SUPPORTED_TACTICAL_TOGGLES: &[&str] = &[
     "power_attack",
     "charge",
     "fight_defensively",
+    "give_ground",
+    "scamper_back",
+    "decline_pursuit",
+    "one_path_piercing",
     "mounted",
     "defensive_dualwielding",
     "offensive_dualwielding",
@@ -1014,8 +1047,6 @@ const KNOWN_UNSUPPORTED_TACTICAL_TOGGLES: &[&str] = &[
     "ready_against_charge",
     "tactical_move",
     "full_parry",
-    "give_ground",
-    "scamper_back",
     "fighting_withdrawal",
     "flee",
 ];
@@ -1155,6 +1186,9 @@ pub enum TalentRequirementFailure {
     MissingSixPathsProficiency,
     MissingThreeMountainsProficiency,
     MissingUnbreakableWallProficiency,
+    MissingNewWeaponStyleProficiency {
+        style: String,
+    },
 }
 
 fn ability_values(stats: &AbilitySet, stat: AbilityKind) -> (u8, Option<u8>) {
@@ -1508,6 +1542,11 @@ pub fn evaluate_talent_requirements(
                 }
             }
         }
+    }
+    if new_style_proficiency(&spec.id, context) == Some(false) {
+        failures.push(TalentRequirementFailure::MissingNewWeaponStyleProficiency {
+            style: spec.name.clone(),
+        });
     }
     match spec.id.as_str() {
         TALENT_ID_TWELVE_PATHS => {
@@ -1924,6 +1963,22 @@ pub fn weapon_style_compatible_with_loadout(
     let sword_offhand = offhand.map(is_one_handed_sword).unwrap_or(false);
 
     match style_id.trim().to_ascii_lowercase().as_str() {
+        TALENT_ID_LEFT_HAND_OF_EVONIA => {
+            is_evonia_primary(weapon)
+                && offhand.is_some_and(is_evonia_secondary)
+                && selected_shield.is_none()
+        }
+        TALENT_ID_ONE_PATH => {
+            is_one_path_weapon(weapon)
+                && effective_two_hand_grip(weapon, player.two_hand_grip)
+                && selected_shield.is_none()
+        }
+        TALENT_ID_PILGRIMS_PATH => weapon.name.eq_ignore_ascii_case("staff"),
+        TALENT_ID_REAPER_OF_TERMON => {
+            is_reaper_weapon(weapon)
+                || ((offensive_dualwielding || defensive_dualwielding)
+                    && offhand.is_some_and(is_reaper_weapon))
+        }
         TALENT_ID_TWELVE_PATHS => {
             weapon.group == WeaponGroup::LargeSwords
                 && weapon.size == WeaponSize::Large
@@ -2871,6 +2926,12 @@ fn resolve_talent_modifiers(
                 TalentEffect::Eyesmite => {
                     modifiers.eyesmite = true;
                 }
+                TalentEffect::Chronoblur => {
+                    modifiers.chronoblur = true;
+                }
+                TalentEffect::Streamline => {
+                    modifiers.streamline = true;
+                }
                 TalentEffect::NearPerfectDefenseMinRoll { roll } => {
                     if *roll <= 18 {
                         modifiers.superior_defense = true;
@@ -3040,6 +3101,10 @@ fn resolve_talent_modifiers(
                 TalentEffect::ThreeMountainsStyle => {
                     modifiers.three_mountains_style = true;
                 }
+                TalentEffect::LeftHandOfEvoniaStyle => modifiers.left_hand_of_evonia_style = true,
+                TalentEffect::OnePathStyle => modifiers.one_path_style = true,
+                TalentEffect::PilgrimsPathStyle => modifiers.pilgrims_path_style = true,
+                TalentEffect::ReaperOfTermonStyle => modifiers.reaper_of_termon_style = true,
                 TalentEffect::UnbreakableWallStyle => {
                     modifiers.unbreakable_wall_style = true;
                 }
@@ -3731,6 +3796,13 @@ fn effective_two_hand_grip_with_modifiers(
     weapon: &WeaponPreset,
     modifiers: &TalentModifiers,
 ) -> bool {
+    if (modifiers.left_hand_of_evonia_style && is_evonia_primary(weapon))
+        || (modifiers.one_path_style
+            && is_one_path_weapon(weapon)
+            && weapon.handedness == WeaponHandedness::TwoHanded)
+    {
+        return true;
+    }
     if modifiers
         .forced_weapon_loadout
         .as_ref()
@@ -3849,6 +3921,7 @@ pub fn player_summary(
         0
     };
     let style_defense_bonus = ithican_half_int_bonus
+        + new_style_defense_bonus(&modifiers, player, weapon, weapon_catalog)
         - if returner_active {
             RETURNER_DEFENSE_PENALTY
         } else {
@@ -4003,6 +4076,7 @@ pub fn derived_stat_breakdowns(
         0
     };
     let style_defense_bonus = ithican_half_int_bonus
+        + new_style_defense_bonus(&modifiers, player, weapon, weapon_catalog)
         - if returner_active {
             RETURNER_DEFENSE_PENALTY
         } else {
@@ -4249,7 +4323,12 @@ pub fn derived_stat_breakdowns(
         effective_damage.clone(),
     );
     let mut mainhand_damage = effective_damage;
-    mainhand_damage.note(format!("Add weapon damage dice {}.", weapon.damage_expr));
+    let displayed_damage_dice = if one_path_active(&modifiers, player, weapon) {
+        reduce_damage_dice(&weapon.damage_expr)
+    } else {
+        weapon.damage_expr.clone()
+    };
+    mainhand_damage.note(format!("Add weapon damage dice {displayed_damage_dice}."));
     breakdowns.insert(DerivedStatId::MainhandDamageRoll, mainhand_damage);
 
     let armor_speed = character
@@ -4518,6 +4597,10 @@ pub fn derived_stat_breakdowns(
             style_defense_bonus,
             if ithican_prince_active {
                 "Weapon style: Ithican Prince"
+            } else if modifiers.pilgrims_path_style {
+                "Weapon style: Pilgrim's Path"
+            } else if modifiers.left_hand_of_evonia_style {
+                "Weapon style: Left Hand of Evonia"
             } else {
                 "Weapon style: Returner"
             },
@@ -4585,6 +4668,9 @@ pub fn derived_stat_breakdowns(
     breakdowns.insert(DerivedStatId::MeleeDefense, melee_defense);
 
     let mut ranged_defense = StatBreakdown::new(summary.defense.ranged_roll_label.clone());
+    if modifiers.pilgrims_path_style {
+        ranged_defense.add_i32(4, "Pilgrim's Path");
+    }
     if has_shield {
         if let Some(shield_bonus) = summary.defense.shield_bonus {
             ranged_defense.add_i32(shield_bonus, "Shield defense bonus");
@@ -4902,7 +4988,7 @@ fn defense_display_summary(
             None,
         )
     };
-    let ranged_roll_label = if let Some(shield_bonus) = shield_bonus {
+    let mut ranged_roll_label = if let Some(shield_bonus) = shield_bonus {
         if called_shot_defense_penalty > 0 {
             format!(
                 "Defense roll (ranged): d20p + {shield_bonus} - {called_shot_defense_penalty} (cover cap applies)"
@@ -4919,6 +5005,10 @@ fn defense_display_summary(
             "Defense roll (ranged): d12p if stationary, else d20p".to_string()
         }
     };
+
+    if modifiers.pilgrims_path_style {
+        ranged_roll_label.push_str(" + 4 (Pilgrim's Path)");
+    }
 
     DefenseDisplaySummary {
         shield_bonus,
@@ -5551,15 +5641,15 @@ fn build_combatant_profile(
     } else {
         damage_expr_cache_for_player_weapon(weapon_preset, &modifiers)
     };
-    let shield_damage_expr_cache = shield_damage_expr.as_deref().map(DamageExprCache::new);
-    let jab_special_expr_cache = jab_special_expr.as_deref().map(DamageExprCache::new);
+
     let is_unarmed_weapon = weapon_preset.group == WeaponGroup::Unarmed;
     let is_small_weapon = matches!(weapon_preset.size, WeaponSize::Small);
     let knockback_step =
         bump_knockback_step(player.knockback_step.max(1), modifiers.knockback_step_bumps);
+    let evonia = evonia_active(&modifiers, player, weapon_preset, weapon_catalog);
     let mut offhand_profile = None;
     let mut storm_of_blades = false;
-    if offensive_dualwielding {
+    if offensive_dualwielding || evonia {
         if let Some(offhand_id) = player.offhand_weapon_id {
             if let Some(offhand_preset) = weapon_catalog.get(offhand_id) {
                 if offhand_preset.handedness == WeaponHandedness::OneHanded {
@@ -5674,7 +5764,11 @@ fn build_combatant_profile(
                             use_close_hit_damage_expr: None,
                             use_close_hit_damage_expr_cache: None,
                             use_close_hit_margin_less_than: 0,
-                            crit_min_roll: offhand_crit_min_roll,
+                            crit_min_roll: reaper_critical_min(
+                                &modifiers,
+                                offhand_preset,
+                                offhand_crit_min_roll,
+                            ),
                             crit_min_roll_ranged: offhand_crit_min_roll_ranged,
                             crit_severity_bonus: offhand_crit_severity_bonus,
                             defender_knockback_step_adjustment: offhand_knockback_adjustment,
@@ -5804,8 +5898,91 @@ fn build_combatant_profile(
             sim::ModifierOpI32::Set(1),
         );
     }
+    if modifiers.chronoblur {
+        sheet_modifiers.add_i32(
+            sim::StatIdI32::FlagChronoblurSpell,
+            sim::ModifierOpI32::Set(1),
+        );
+    }
+    if modifiers.streamline {
+        sheet_modifiers.add_i32(
+            sim::StatIdI32::FlagStreamlineSpell,
+            sim::ModifierOpI32::Set(1),
+        );
+    }
     let defender_knockback_step_adjustment =
         kanian_impaler_knockback_adjustment(modifiers.kanian_impaler_style, weapon_preset);
+    let one_path = one_path_active(&modifiers, player, weapon_preset);
+    let weapon_damage = if one_path {
+        reduce_damage_dice(&weapon_damage)
+    } else {
+        weapon_damage
+    };
+    let damage_expr_cache = if one_path {
+        DamageExprCache::new(&weapon_damage)
+    } else {
+        damage_expr_cache
+    };
+    let shield_damage_expr = if one_path {
+        shield_damage_expr.map(|expr| reduce_damage_dice(&expr))
+    } else {
+        shield_damage_expr
+    };
+    let shield_damage_expr_cache = shield_damage_expr.as_deref().map(DamageExprCache::new);
+    let jab_special_expr = if one_path {
+        jab_special_expr.map(|expr| reduce_damage_dice(&expr))
+    } else {
+        jab_special_expr
+    };
+    let jab_special_expr_cache = jab_special_expr.as_deref().map(DamageExprCache::new);
+    if one_path {
+        weapon_reach = (weapon_reach - 1.5).max(0.5);
+    }
+    if evonia {
+        defense_mod += evonia_defense_bonus(&modifiers, player, weapon_preset, weapon_catalog);
+        sheet_modifiers.add_i32(
+            sim::StatIdI32::FlagLeftHandOfEvoniaStyle,
+            sim::ModifierOpI32::Set(1),
+        );
+    }
+    if player
+        .npc_preset
+        .and_then(|id| npc_presets.get(id))
+        .is_some()
+    {
+        sheet_modifiers.add_i32(sim::StatIdI32::FlagNpcCombatant, sim::ModifierOpI32::Set(1));
+    }
+    if one_path && !player.one_path_piercing {
+        sheet_modifiers.add_i32(
+            sim::StatIdI32::FlagOnePathCrushingStyle,
+            sim::ModifierOpI32::Set(1),
+        );
+    }
+    if one_path && player.one_path_piercing {
+        sheet_modifiers.add_i32(
+            sim::StatIdI32::FlagOnePathPiercingStyle,
+            sim::ModifierOpI32::Set(1),
+        );
+    }
+    if modifiers.pilgrims_path_style && weapon_preset.name.eq_ignore_ascii_case("staff") {
+        sheet_modifiers.add_i32(
+            sim::StatIdI32::FlagPilgrimsPathStyle,
+            sim::ModifierOpI32::Set(1),
+        );
+    }
+    if player.decline_pursuit {
+        sheet_modifiers.add_i32(
+            sim::StatIdI32::FlagDeclinePursuit,
+            sim::ModifierOpI32::Set(1),
+        );
+    }
+    if modifiers.reaper_of_termon_style {
+        sheet_modifiers.add_i32(
+            sim::StatIdI32::FlagReaperOfTermonStyle,
+            sim::ModifierOpI32::Set(1),
+        );
+    }
+    crit_min_roll = reaper_critical_min(&modifiers, weapon_preset, crit_min_roll);
     let sheet = CombatantSheet {
         name,
         offense: OffenseProfile {
@@ -5820,7 +5997,11 @@ fn build_combatant_profile(
                 damage_expr_cache,
                 shield_damage_expr,
                 shield_damage_expr_cache,
-                armor_penetration,
+                armor_penetration: if one_path && !player.one_path_piercing {
+                    5
+                } else {
+                    armor_penetration
+                },
                 speed: weapon_speed,
                 reach_ft: weapon_reach,
                 range_bands_feet,
@@ -5834,7 +6015,8 @@ fn build_combatant_profile(
                 uses_projectiles: primary_uses_projectiles,
                 is_small_weapon,
                 is_unarmed: is_unarmed_weapon,
-                hacking_or_piercing: weapon_preset.hacking_or_piercing,
+                hacking_or_piercing: weapon_preset.hacking_or_piercing
+                    && !(one_path && !player.one_path_piercing),
                 force_nonpenetrating_damage: doomrazor_active
                     || modifiers
                         .force_nonpenetrating_damage_by_weapon
@@ -6085,7 +6267,13 @@ pub fn stop_distance_for_players(
         } else {
             weapon.reach_ft
         };
-        ((base_reach + reach_bonus + armeroci_reach_bonus) * reach_multiplier).max(0.5)
+        ((base_reach + reach_bonus + armeroci_reach_bonus) * reach_multiplier
+            - if one_path_active(&modifiers, player, weapon) {
+                1.5
+            } else {
+                0.0
+            })
+        .max(0.5)
     };
     let reach_a = reach_for_player(&players[0]);
     let reach_b = reach_for_player(&players[1]);
@@ -10542,6 +10730,8 @@ mod tests {
             "precognition",
             "prescience",
             "eyesmite",
+            "spell_chronoblur",
+            "spell_streamline",
         ] {
             let spec = talents
                 .entries()
@@ -10551,6 +10741,45 @@ mod tests {
             assert!(
                 talent_is_implemented(spec),
                 "{talent_id} should be treated as implemented"
+            );
+        }
+    }
+
+    #[test]
+    fn spell_traits_start_with_their_full_durations() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npc_presets = sample_npc_presets();
+        let weapon_id = one_handed_weapon_id(&weapons);
+
+        for tactical_policy_enabled in [false, true] {
+            let mut player = base_player(weapon_id);
+            player.tactical_policy.enabled = tactical_policy_enabled;
+            add_talent(&mut player, "spell_chronoblur", None);
+            add_talent(&mut player, "spell_streamline", None);
+            let combatant =
+                build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
+
+            let chronoblur = combatant
+                .state
+                .active_effects
+                .iter()
+                .find(|effect| effect.id == sim::CHRONOBLUR_EFFECT_ID)
+                .expect("Chronoblur should be active at combat start");
+            assert_eq!(
+                chronoblur.remaining_seconds,
+                sim::CHRONOBLUR_DURATION_SECONDS
+            );
+
+            let streamline = combatant
+                .state
+                .active_effects
+                .iter()
+                .find(|effect| effect.id == sim::STREAMLINE_EFFECT_ID)
+                .expect("Streamline should be active at combat start");
+            assert_eq!(
+                streamline.remaining_seconds,
+                sim::STREAMLINE_DURATION_SECONDS
             );
         }
     }

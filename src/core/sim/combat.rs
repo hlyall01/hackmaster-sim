@@ -2,7 +2,11 @@ use rand::Rng;
 
 use crate::core::rules::{DamageExprCache, clean_damage_expr, penetrating_roll, roll_damage_expr};
 
-use super::modifiers::{ModifierOpI32, StatIdF32, StatIdI32, TemporaryEffect};
+use super::modifiers::{
+    CHRONOBLUR_EFFECT_ID, CHRONOBLUR_MELEE_DEFENSE_BONUS, CHRONOBLUR_RANGED_DISTANCE_FEET,
+    ModifierOpI32, StatIdF32, StatIdI32, TemporaryEffect,
+};
+use super::movement::range_modifier_for_weapon_with_scale;
 use super::types::{
     AttackRollBreakdown, Combatant, CombatantState, CriticalHit, DamageBreakdown, DamageDie,
     KnockAsideRollBreakdown, ShieldBreakageStep, ShieldDamageBreakdown, WeaponCache, WeaponSlot,
@@ -28,6 +32,160 @@ const DEFAULT_SHIELD_BLOCK_WINDOW: i32 = 10;
 const DECEPTIVE_DEFENDER_CALLED_SHOT_DEFENSE_BONUS: i32 = 4;
 const CALLED_SHOT_PRECISION_BONUS_SCALE_BASE: i32 = 8;
 const TWELVE_PATHS_DAMAGE_PENALTY: i32 = 3;
+
+fn reaper_extra_dice_multiplier(
+    attacker: &Combatant,
+    weapon: Option<&super::types::WeaponProfile>,
+) -> i32 {
+    if attacker.apply_i32(StatIdI32::FlagReaperOfTermonStyle, 0) > 0
+        && weapon.is_some_and(|weapon| {
+            matches!(
+                weapon.name.to_ascii_lowercase().as_str(),
+                "scythe" | "sickle"
+            )
+        })
+    {
+        2
+    } else {
+        1
+    }
+}
+
+fn style_armor_penetration(attacker: &Combatant, defender: &Combatant, base: i32) -> i32 {
+    if attacker.apply_i32(StatIdI32::FlagOnePathCrushingStyle, 0) > 0
+        && !defender.sheet.defense.armor_is_heavy
+        && !(defender.apply_i32(StatIdI32::FlagNpcCombatant, 0) > 0
+            && defender.apply_i32(StatIdI32::ArmorDr, defender.sheet.defense.armor_dr) >= 5)
+    {
+        return 0;
+    }
+    base
+}
+
+/// An immediate style strike does not reschedule either regular attack clock.
+pub(crate) fn resolve_style_strike(
+    combatants: &mut [Combatant],
+    attacker_idx: usize,
+    defender_idx: usize,
+    slot: WeaponSlot,
+    distance_ft: f32,
+    now: f32,
+    rng: &mut impl Rng,
+) -> Option<CounterAttackOutcome> {
+    let attacker = &combatants[attacker_idx];
+    if attacker.state.hp <= 0
+        || attacker.state.trauma_remaining_seconds > 0
+        || attacker.sheet.maneuvers.passive
+        || combatants[defender_idx].state.hp <= 0
+    {
+        return None;
+    }
+    let profile = attack_profile_for_slot(attacker, slot)?;
+    let reach = attacker
+        .apply_f32(StatIdF32::WeaponReach, profile.weapon.reach_ft)
+        .max(attacker.melee_reach_floor_ft.max(0.5));
+    if distance_ft > reach {
+        return None;
+    }
+    Some(resolve_counter_attack(
+        combatants,
+        attacker_idx,
+        defender_idx,
+        now,
+        slot,
+        true,
+        false,
+        true,
+        false,
+        false,
+        1,
+        rng,
+    ))
+}
+
+pub(crate) fn resolve_style_strike_chain(
+    combatants: &mut [Combatant],
+    attacker_idx: usize,
+    defender_idx: usize,
+    slot: WeaponSlot,
+    distance_ft: f32,
+    now: f32,
+    rng: &mut impl Rng,
+) -> Vec<CounterAttackOutcome> {
+    let Some(first) = resolve_style_strike(
+        combatants,
+        attacker_idx,
+        defender_idx,
+        slot,
+        distance_ft,
+        now,
+        rng,
+    ) else {
+        return Vec::new();
+    };
+    let mut extra = resolve_evonia_counters(
+        combatants,
+        attacker_idx,
+        defender_idx,
+        !first.hit,
+        None,
+        distance_ft + first.knockback_ft,
+        now,
+        rng,
+    );
+    let mut results = vec![first];
+    results.append(&mut extra);
+    results
+}
+
+fn resolve_evonia_counters(
+    combatants: &mut [Combatant],
+    attacker_idx: usize,
+    defender_idx: usize,
+    melee_miss: bool,
+    normal_counter: Option<&CounterAttackOutcome>,
+    mut distance_ft: f32,
+    now: f32,
+    rng: &mut impl Rng,
+) -> Vec<CounterAttackOutcome> {
+    if combatants[attacker_idx].apply_i32(StatIdI32::FlagLeftHandOfEvoniaStyle, 0) == 0
+        && combatants[defender_idx].apply_i32(StatIdI32::FlagLeftHandOfEvoniaStyle, 0) == 0
+    {
+        return Vec::new();
+    }
+    let mut pending = std::collections::VecDeque::new();
+    if let Some(counter) = normal_counter {
+        distance_ft += counter.knockback_ft;
+        if !counter.hit && !counter.is_ranged {
+            pending.push_back((counter.defender_idx, counter.attacker_idx));
+        }
+    }
+    if melee_miss {
+        pending.push_back((defender_idx, attacker_idx));
+    }
+    let mut outcomes = Vec::new();
+    while let Some((parrier, opponent)) = pending.pop_front() {
+        if combatants[parrier].apply_i32(StatIdI32::FlagLeftHandOfEvoniaStyle, 0) <= 0 {
+            continue;
+        }
+        if let Some(counter) = resolve_style_strike(
+            combatants,
+            parrier,
+            opponent,
+            WeaponSlot::Secondary,
+            distance_ft,
+            now,
+            rng,
+        ) {
+            distance_ft += counter.knockback_ft;
+            if !counter.hit {
+                pending.push_back((opponent, parrier));
+            }
+            outcomes.push(counter);
+        }
+    }
+    outcomes
+}
 
 struct AttackProfile {
     weapon: Arc<super::types::WeaponProfile>,
@@ -86,7 +244,13 @@ fn attack_profile_for_slot(attacker: &Combatant, slot: WeaponSlot) -> Option<Att
                     ),
                     use_jab: offhand.weapon.use_jab,
                     uses_projectiles: offhand.weapon.uses_projectiles,
-                    damage_penalty: attacker.sheet.maneuvers.dualwield_offhand_damage_penalty,
+                    damage_penalty: if attacker.apply_i32(StatIdI32::FlagLeftHandOfEvoniaStyle, 0)
+                        > 0
+                    {
+                        0
+                    } else {
+                        attacker.sheet.maneuvers.dualwield_offhand_damage_penalty
+                    },
                     defender_knockback_step_adjustment: offhand
                         .weapon
                         .defender_knockback_step_adjustment,
@@ -125,7 +289,13 @@ fn fight_defensively_defense_bonus(combatant: &Combatant) -> i32 {
     } else {
         0
     };
-    stance_bonus + combatant.state.tactical_give_ground_defense_bonus.max(0)
+    stance_bonus
+        + combatant.state.tactical_give_ground_defense_bonus.max(0)
+        + if combatant.apply_i32(StatIdI32::FlagPilgrimsPathStyle, 0) > 0 {
+            4
+        } else {
+            0
+        }
 }
 
 fn called_shot_active(combatant: &Combatant) -> bool {
@@ -153,6 +323,18 @@ fn called_shot_precision_target_bonus(attacker: &Combatant, defender: &Combatant
     let attacker_scale = called_shot_defense_bonus(attacker).max(1);
     let scaled = defender_base.saturating_mul(attacker_scale);
     (scaled / CALLED_SHOT_PRECISION_BONUS_SCALE_BASE).max(1)
+}
+
+fn chronoblur_active_for_moved_defender(state: &CombatantState) -> bool {
+    state.moved_last_tick && state.has_active_effect(CHRONOBLUR_EFFECT_ID)
+}
+
+fn chronoblur_melee_defense_bonus(state: &CombatantState) -> i32 {
+    if chronoblur_active_for_moved_defender(state) {
+        CHRONOBLUR_MELEE_DEFENSE_BONUS
+    } else {
+        0
+    }
 }
 
 fn update_regenstat_on_exchange(
@@ -202,6 +384,7 @@ pub(crate) struct AttackOutcome {
     pub(super) critical: Option<CriticalHit>,
     pub(super) precognition_triggered: bool,
     pub(super) counter_attack: Option<CounterAttackOutcome>,
+    pub(super) additional_counters: Vec<CounterAttackOutcome>,
 }
 
 pub(crate) struct CounterAttackOutcome {
@@ -512,8 +695,59 @@ fn extra_damage_dice_sequence_from_cache(
     sequence
 }
 
-fn roll_extra_damage(expr: &str, dice: i32, force_nonpenetrating: bool, rng: &mut impl Rng) -> i32 {
+fn average_damage_cache_rounded_down(cache: &DamageExprCache, nonpenetrating: bool) -> i32 {
+    cache.expected(nonpenetrating).floor() as i32
+}
+
+fn expected_damage_die(die: DamageDie) -> f64 {
+    let sides = die.sides.max(0) as f64;
+    if sides <= 0.0 {
+        return 0.0;
+    }
+    let standard = (sides + 1.0) / 2.0;
+    let trigger_count = if !die.penetrating {
+        0
+    } else if die.penetrate_on_max_minus_one {
+        2
+    } else if let Some(triggers) = die.penetration_triggers {
+        triggers
+            .iter()
+            .filter(|roll| (1..=die.sides).contains(roll))
+            .count()
+    } else {
+        1
+    };
+    if trigger_count == 0 {
+        return standard;
+    }
+    let penetration_chance = (trigger_count as f64).min(sides) / sides;
+    if penetration_chance >= 1.0 {
+        return standard;
+    }
+    let continuation_average = ((sides - 1.0) / 2.0) / (1.0 - penetration_chance);
+    standard + penetration_chance * continuation_average
+}
+
+fn average_extra_damage_rounded_down(sequence: &[DamageDie]) -> i32 {
+    sequence
+        .iter()
+        .copied()
+        .map(expected_damage_die)
+        .sum::<f64>()
+        .floor() as i32
+}
+
+fn roll_extra_damage(
+    expr: &str,
+    dice: i32,
+    force_nonpenetrating: bool,
+    average: bool,
+    rng: &mut impl Rng,
+) -> i32 {
     let sequence = extra_damage_dice_sequence(expr, dice, force_nonpenetrating);
+    if average {
+        return average_extra_damage_rounded_down(&sequence);
+    }
     let mut total = 0;
     for die in sequence {
         total += if die.penetrating && die.penetrate_on_max_minus_one {
@@ -538,12 +772,17 @@ fn shield_block_raw_damage(
     strength_damage: i32,
     damage_penalty: i32,
     damage_multiplier: i32,
+    average: bool,
     rng: &mut impl Rng,
 ) -> (i32, i32) {
     let Some(expr_cache) = shield_expr_cache else {
         return (0, 0);
     };
-    let rolled_damage = expr_cache.roll(rng, false);
+    let rolled_damage = if average {
+        average_damage_cache_rounded_down(expr_cache, false)
+    } else {
+        expr_cache.roll(rng, false)
+    };
     let mut raw = rolled_damage + strength_damage + damage_penalty;
     if raw < 0 {
         raw = 0;
@@ -587,10 +826,14 @@ fn roll_extra_damage_cached(
     use_jab: bool,
     dice: i32,
     force_nonpenetrating: bool,
+    average: bool,
     rng: &mut impl Rng,
 ) -> i32 {
     let pool = cached_damage_dice(cache, weapon, use_jab);
     let sequence = extra_damage_dice_sequence_from_cache(pool, dice, force_nonpenetrating);
+    if average {
+        return average_extra_damage_rounded_down(&sequence);
+    }
     let mut total = 0;
     for die in sequence {
         let value = if die.penetrating && die.penetrate_on_max_minus_one {
@@ -714,7 +957,8 @@ fn resolve_eyesmite(
     let shield_active = defender_state.shield_intact;
     let defense_mod = defender.apply_i32(StatIdI32::DefenseMod, defender.sheet.defense.defense_mod)
         + fight_defensively_defense_bonus(defender)
-        - called_shot_defense_penalty(defender);
+        - called_shot_defense_penalty(defender)
+        + chronoblur_melee_defense_bonus(&defender_state);
     let defense_ready = defense_plus_four_ready_at(&defender.sheet, &defender_state, now);
     let weapon_defense_bonus =
         if defender.sheet.offense.weapon.defense_bonus_always || defense_ready {
@@ -767,7 +1011,14 @@ fn resolve_eyesmite(
     let mut trauma_seconds = None;
     let mut damage_breakdown = None;
     if hit {
-        let rolled_damage = roll_damage_expr("2d4p", rng, false);
+        let rolled_damage = if combatants[defender_idx]
+            .state
+            .streamline_averages_incoming_damage
+        {
+            DamageExprCache::new("2d4p").expected(false).floor() as i32
+        } else {
+            roll_damage_expr("2d4p", rng, false)
+        };
         let raw_damage = (rolled_damage + strength_damage).max(0);
         damage = raw_damage;
         combatants[attacker_idx].state.total_eyes_smote = combatants[attacker_idx]
@@ -839,6 +1090,9 @@ fn resolve_counter_attack(
         .max(0);
     combatants[attacker_idx].state.tactical_next_attack_penalty = 0;
     let defender_state = combatants[defender_idx].state.clone();
+    let average_damage = combatants[defender_idx]
+        .state
+        .streamline_averages_incoming_damage;
     let defender = &combatants[defender_idx];
     let defender_infinite_hp = defender.sheet.vitals.infinite_hp;
     let damage_multiplier = damage_multiplier.max(1);
@@ -935,6 +1189,11 @@ fn resolve_counter_attack(
         )
     };
     let unarmed_expr = unarmed_expr.unwrap_or("d4p");
+    let armor_penetration = style_armor_penetration(
+        &combatants[attacker_idx],
+        &combatants[defender_idx],
+        armor_penetration,
+    );
     let attacker_fight_defensively_penalty =
         fight_defensively_attack_penalty(&combatants[attacker_idx]);
     let defender_fight_defensively_bonus = fight_defensively_defense_bonus(defender);
@@ -965,7 +1224,8 @@ fn resolve_counter_attack(
             defender.apply_i32(StatIdI32::DefenseMod, defender.sheet.defense.defense_mod)
                 + defender_regenstat_bonus
                 + defender_fight_defensively_bonus
-                - defender_called_shot_penalty,
+                - defender_called_shot_penalty
+                + chronoblur_melee_defense_bonus(&defender_state),
             defender.apply_i32(StatIdI32::ArmorDr, defender.sheet.defense.armor_dr),
             defender.apply_i32(StatIdI32::NaturalDr, defender.sheet.defense.natural_dr),
             defender.sheet.defense.armor_is_heavy,
@@ -1063,17 +1323,28 @@ fn resolve_counter_attack(
     let mut shield_damage_breakdown = None;
     let mut critical = None;
     let crit_trigger = force_critical || (allow_critical && attack_first >= crit_min_roll);
+    let reaper_multiplier =
+        reaper_extra_dice_multiplier(&combatants[attacker_idx], weapon_profile.as_deref());
 
     if hit {
         let mut rolled_damage = if use_weapon {
             let weapon = weapon_profile.as_ref().expect("weapon profile missing");
-            weapon
-                .damage_expr_cache
-                .roll(rng, weapon.force_nonpenetrating_damage)
+            if average_damage {
+                average_damage_cache_rounded_down(
+                    &weapon.damage_expr_cache,
+                    weapon.force_nonpenetrating_damage,
+                )
+            } else {
+                weapon
+                    .damage_expr_cache
+                    .roll(rng, weapon.force_nonpenetrating_damage)
+            }
+        } else if average_damage {
+            DamageExprCache::new(unarmed_expr).expected(false).floor() as i32
         } else {
             roll_damage_expr(unarmed_expr, rng, false)
         };
-        if crit_trigger && defender_defiant {
+        if !average_damage && crit_trigger && defender_defiant {
             let second = if use_weapon {
                 let weapon = weapon_profile.as_ref().expect("weapon profile missing");
                 weapon
@@ -1118,12 +1389,13 @@ fn resolve_counter_attack(
             let severity = (attack_roll - defense_roll + raw_base - effective_dr + crit_severity
                 - defender_crit_severity_reduction)
                 .max(1);
-            let effect = apply_ancillary_critical_immunity(
+            let mut effect = apply_ancillary_critical_immunity(
                 critical_effect_for(severity),
                 crit_trigger
                     && attacker_weapon_hacking_or_piercing
                     && defender_ignore_ancillary_crit_effects,
             );
+            effect.extra_dice *= reaper_multiplier;
             if effect.instant_kill {
                 critical = Some(CriticalHit {
                     severity: effect.severity,
@@ -1152,6 +1424,7 @@ fn resolve_counter_attack(
                             false,
                             extra_dice,
                             weapon_profile.force_nonpenetrating_damage,
+                            average_damage,
                             rng,
                         );
                         if defender_halves_crit_extra_damage {
@@ -1160,7 +1433,8 @@ fn resolve_counter_attack(
                             rolled
                         }
                     } else {
-                        let rolled = roll_extra_damage(unarmed_expr, extra_dice, false, rng);
+                        let rolled =
+                            roll_extra_damage(unarmed_expr, extra_dice, false, average_damage, rng);
                         if defender_halves_crit_extra_damage {
                             rolled / 2
                         } else {
@@ -1276,6 +1550,7 @@ fn resolve_counter_attack(
                     strength_damage,
                     damage_penalty,
                     damage_multiplier,
+                    average_damage,
                     rng,
                 )
             } else {
@@ -1401,6 +1676,9 @@ pub(crate) fn resolve_attack(
         .and_then(|snapshot| snapshot.get(attacker_idx))
         .cloned()
         .unwrap_or_else(|| combatants[attacker_idx].state.clone());
+    let average_damage = combatants[defender_idx]
+        .state
+        .streamline_averages_incoming_damage;
     let defender_infinite_hp = combatants[defender_idx].sheet.vitals.infinite_hp;
     let attack_profile = {
         let attacker = &combatants[attacker_idx];
@@ -1476,6 +1754,7 @@ pub(crate) fn resolve_attack(
             critical: None,
             precognition_triggered: false,
             counter_attack: None,
+            additional_counters: Vec::new(),
         };
     }
     combatants[attacker_idx].state.has_attacked = true;
@@ -1539,12 +1818,39 @@ pub(crate) fn resolve_attack(
     attack_bonus -= attacker_fight_defensively_penalty;
     attack_bonus -= tactical_attack_penalty;
     let strength_damage = attack_profile.strength_damage;
-    let armor_penetration = attack_profile.armor_penetration;
+    let armor_penetration = style_armor_penetration(
+        &combatants[attacker_idx],
+        &combatants[defender_idx],
+        attack_profile.armor_penetration,
+    );
     let use_jab = attack_profile.use_jab;
     let attacker_uses_projectiles = attack_profile.uses_projectiles;
     let damage_penalty = attack_profile.damage_penalty;
     let defender_knockback_step_adjustment = attack_profile.defender_knockback_step_adjustment;
     let weapon = attack_profile.weapon;
+    let reaper_multiplier = reaper_extra_dice_multiplier(&combatants[attacker_idx], Some(&weapon));
+    let chronoblur_active = chronoblur_active_for_moved_defender(&defender_state);
+    let chronoblur_melee_bonus = if is_ranged {
+        0
+    } else {
+        chronoblur_melee_defense_bonus(&defender_state)
+    };
+    let (range_mod, chronoblur_out_of_range) = if is_ranged && chronoblur_active {
+        let range_scale = combatants[attacker_idx].apply_f32(
+            StatIdF32::RangeDistanceMultiplier,
+            weapon.range_distance_multiplier,
+        );
+        match range_modifier_for_weapon_with_scale(
+            weapon.as_ref(),
+            distance_ft + CHRONOBLUR_RANGED_DISTANCE_FEET,
+            range_scale,
+        ) {
+            Some(modifier) => (modifier, false),
+            None => (range_mod.min(-8), true),
+        }
+    } else {
+        (range_mod, false)
+    };
     let strength_damage = if is_ranged && attacker_uses_projectiles {
         0
     } else {
@@ -1580,7 +1886,8 @@ pub(crate) fn resolve_attack(
             defender.apply_i32(StatIdI32::DefenseMod, defender.sheet.defense.defense_mod)
                 + defender_regenstat_bonus
                 - defender_called_shot_penalty
-                + defender_initial_attack_bonus,
+                + defender_initial_attack_bonus
+                + chronoblur_melee_bonus,
             defender.apply_i32(
                 StatIdI32::RangedDefenseMod,
                 defender.sheet.defense.ranged_defense_mod,
@@ -1743,6 +2050,10 @@ pub(crate) fn resolve_attack(
                 attacker_called_shot && attack_roll >= called_shot_precision_target;
         }
     }
+    if chronoblur_out_of_range {
+        attack_hits = false;
+        called_shot_precise_hit = false;
+    }
     if attack_hits && is_ranged && combatants[defender_idx].sheet.defense.prescience {
         let passive_defense_roll =
             penetrating_roll(20, rng) + defense_mod + defender_fight_defensively_bonus;
@@ -1752,6 +2063,9 @@ pub(crate) fn resolve_attack(
             called_shot_precise_hit = false;
         }
     }
+    let crit_trigger = crit_trigger
+        || (called_shot_precise_hit
+            && combatants[attacker_idx].apply_i32(StatIdI32::FlagOnePathPiercingStyle, 0) > 0);
     let precognition_triggered = attack_hits
         && !is_ranged
         && combatants[defender_idx].sheet.defense.precognition
@@ -1772,17 +2086,28 @@ pub(crate) fn resolve_attack(
         hit = true;
         let (mut rolled_damage, halve_jab_damage) = if use_jab {
             let cache = weapon.damage_expr_cache_for_attack();
-            let mut rolled = cache.roll(rng, true);
-            if crit_trigger && defender_defiant {
+            let mut rolled = if average_damage {
+                average_damage_cache_rounded_down(cache, true)
+            } else {
+                cache.roll(rng, true)
+            };
+            if !average_damage && crit_trigger && defender_defiant {
                 let second = cache.roll(rng, true);
                 rolled = rolled.min(second);
             }
             (rolled, weapon.halves_damage_for_attack())
         } else {
-            let mut rolled = weapon
-                .damage_expr_cache
-                .roll(rng, weapon.force_nonpenetrating_damage);
-            if crit_trigger && defender_defiant {
+            let mut rolled = if average_damage {
+                average_damage_cache_rounded_down(
+                    &weapon.damage_expr_cache,
+                    weapon.force_nonpenetrating_damage,
+                )
+            } else {
+                weapon
+                    .damage_expr_cache
+                    .roll(rng, weapon.force_nonpenetrating_damage)
+            };
+            if !average_damage && crit_trigger && defender_defiant {
                 let second = weapon
                     .damage_expr_cache
                     .roll(rng, weapon.force_nonpenetrating_damage);
@@ -1810,6 +2135,7 @@ pub(crate) fn resolve_attack(
                     use_jab,
                     1,
                     use_jab || weapon.force_nonpenetrating_damage,
+                    average_damage,
                     rng,
                 )
             };
@@ -1837,7 +2163,11 @@ pub(crate) fn resolve_attack(
                         && attack_roll - defense_roll < weapon.use_close_hit_margin_less_than
                 });
             if let Some(cache) = close_hit_damage_cache {
-                rolled_damage = cache.roll(rng, weapon.force_nonpenetrating_damage);
+                rolled_damage = if average_damage {
+                    average_damage_cache_rounded_down(cache, weapon.force_nonpenetrating_damage)
+                } else {
+                    cache.roll(rng, weapon.force_nonpenetrating_damage)
+                };
                 let mut close_raw = rolled_damage + strength_damage + damage_penalty;
                 if close_raw < 0 {
                     close_raw = 0;
@@ -1860,12 +2190,13 @@ pub(crate) fn resolve_attack(
                     attacker.apply_i32(StatIdI32::CritSeverityBonus, weapon.crit_severity_bonus)
                 } - defender_crit_severity_reduction)
                     .max(1);
-                let effect = apply_ancillary_critical_immunity(
+                let mut effect = apply_ancillary_critical_immunity(
                     critical_effect_for(severity),
                     crit_trigger
                         && weapon.hacking_or_piercing
                         && defender_ignore_ancillary_crit_effects,
                 );
+                effect.extra_dice *= reaper_multiplier;
                 if effect.instant_kill {
                     crit_effect = Some(effect);
                 } else {
@@ -1882,6 +2213,7 @@ pub(crate) fn resolve_attack(
                             use_jab,
                             extra_dice,
                             use_jab || weapon.force_nonpenetrating_damage,
+                            average_damage,
                             rng,
                         );
                         if defender_halves_crit_extra_damage {
@@ -2015,6 +2347,7 @@ pub(crate) fn resolve_attack(
                 strength_damage,
                 damage_penalty,
                 1,
+                average_damage,
                 rng,
             );
             shield_damage = raw;
@@ -2223,6 +2556,16 @@ pub(crate) fn resolve_attack(
     }
 
     let defender_hp_after = combatants[defender_idx].state.hp;
+    let additional_counters = resolve_evonia_counters(
+        combatants,
+        attacker_idx,
+        defender_idx,
+        !hit && !is_ranged,
+        counter_attack.as_ref(),
+        distance_ft,
+        now,
+        rng,
+    );
     let trauma_applied = trauma_seconds.is_some();
     AttackOutcome {
         attacker_idx,
@@ -2245,6 +2588,7 @@ pub(crate) fn resolve_attack(
         critical,
         precognition_triggered,
         counter_attack,
+        additional_counters,
     }
 }
 
@@ -2314,8 +2658,11 @@ pub(crate) fn resolve_knock_aside(
         } else {
             0
         };
-    let defense_base = defender.sheet.defense.defense_mod + defender_fight_defensively_bonus
-        - defender_called_shot_penalty;
+    let defense_base = defender
+        .apply_i32(StatIdI32::DefenseMod, defender.sheet.defense.defense_mod)
+        + defender_fight_defensively_bonus
+        - defender_called_shot_penalty
+        + chronoblur_melee_defense_bonus(defender_state);
     let defense_roll = defense_die + defense_base + weapon_defense_bonus;
     let success = attack_roll >= defense_roll;
     let roll = KnockAsideRollBreakdown {

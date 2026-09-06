@@ -979,6 +979,7 @@ mod tests {
             range_bands_feet: None,
             armor_pen,
             hacking_or_piercing: false,
+            can_hack_and_pierce: false,
             defense_bonus_always: false,
             size,
             handedness,
