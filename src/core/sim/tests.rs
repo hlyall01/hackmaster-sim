@@ -4,7 +4,7 @@ use super::combat::{
 };
 use super::movement::range_modifier_for_weapon_with_scale;
 use super::*;
-use crate::character::{Progression, ProgressionTier};
+use crate::character::{Progression, ProgressionTier, WeaponGroup};
 use crate::core::rng::SimRng;
 use crate::core::rules::{
     DamageExprCache, clean_damage_expr, evaluate_expression_with_detail, penetrating_roll_with,
@@ -105,6 +105,7 @@ fn combatant_basic(
             eyesmite: false,
             armor_dr,
             natural_dr: 0,
+            is_medium_sized: true,
             knockback_step: 15,
             armor_is_heavy,
             shield_name: None,
@@ -416,12 +417,7 @@ fn player_config_from_preset(
     );
     player.level = preset.level;
     player.progression = Progression::new(attack, speed, initiative, health);
-    player.mastery_attack = game_logic::clamp_mastery(preset.masteries.attack);
-    player.mastery_defense = game_logic::clamp_mastery(preset.masteries.defense);
-    player.mastery_damage = game_logic::clamp_mastery(preset.masteries.damage);
-    player.mastery_speed = game_logic::clamp_mastery(preset.masteries.speed);
-    player.shield_mastery_defense = game_logic::clamp_mastery(preset.masteries.shield_defense);
-    player.shield_mastery_speed = game_logic::clamp_mastery(preset.masteries.shield_speed);
+    player.weapon_masteries = game_logic::weapon_masteries_for_preset(preset, weapon_catalog);
     player.base_hp = preset.base_hp;
     player.move_speed = preset.move_speed;
     player.strength_base = preset.strength_base;
@@ -459,6 +455,7 @@ fn player_config_from_preset(
     player.fighting_withdrawal = maneuvers.fighting_withdrawal;
     player.flee = maneuvers.flee;
     player.mounted = maneuvers.mounted;
+    player.mounted_combat = maneuvers.mounted_combat;
     player.defensive_dualwielding = preset.defensive_dualwielding;
     player.offensive_dualwielding = preset.offensive_dualwielding;
     player.proficiencies = preset.proficiencies.clone();
@@ -609,12 +606,20 @@ fn volfango_hardcoded_player(
     player.projectile_material_tier = 0;
     player.offhand_projectile_material_tier = 0;
     player.shield_material_tier = 0;
-    player.mastery_attack = 2;
-    player.mastery_defense = 3;
-    player.mastery_damage = 2;
-    player.mastery_speed = 2;
-    player.shield_mastery_defense = 0;
-    player.shield_mastery_speed = 0;
+    player
+        .mastery_mut(weapon_catalog.get(player.weapon_id).unwrap().group)
+        .attack = 2;
+    player
+        .mastery_mut(weapon_catalog.get(player.weapon_id).unwrap().group)
+        .defense = 3;
+    player
+        .mastery_mut(weapon_catalog.get(player.weapon_id).unwrap().group)
+        .damage = 2;
+    player
+        .mastery_mut(weapon_catalog.get(player.weapon_id).unwrap().group)
+        .speed = 2;
+    player.mastery_mut(WeaponGroup::Shields).defense = 0;
+    player.mastery_mut(WeaponGroup::Shields).speed = 0;
     player.two_hand_grip = false;
     player.fight_defensively = true;
     player.fight_defensively_penalty = 8;
@@ -1783,6 +1788,7 @@ fn ranged_weapons_cannot_hold_at_bay() {
             eyesmite: false,
             armor_dr: 0,
             natural_dr: 0,
+            is_medium_sized: true,
             knockback_step: 15,
             armor_is_heavy: false,
             shield_name: None,
@@ -1826,6 +1832,7 @@ fn ranged_weapons_cannot_hold_at_bay() {
             eyesmite: false,
             armor_dr: 0,
             natural_dr: 0,
+            is_medium_sized: true,
             knockback_step: 15,
             armor_is_heavy: false,
             shield_name: None,
@@ -1981,6 +1988,7 @@ fn equal_reach_trauma_does_not_block_simultaneous_attacks() {
             eyesmite: false,
             armor_dr: 0,
             natural_dr: 0,
+            is_medium_sized: true,
             knockback_step: 15,
             armor_is_heavy: false,
             shield_name: None,
@@ -2922,6 +2930,7 @@ fn equal_reach_knockback_does_not_block_simultaneous_attacks() {
             eyesmite: false,
             armor_dr: 0,
             natural_dr: 0,
+            is_medium_sized: true,
             knockback_step: 15,
             armor_is_heavy: false,
             shield_name: None,
@@ -7064,6 +7073,7 @@ fn throwing_axe_switches_to_melee_at_close_range() {
             eyesmite: false,
             armor_dr: 0,
             natural_dr: 0,
+            is_medium_sized: true,
             knockback_step: 15,
             armor_is_heavy: false,
             shield_name: None,
@@ -7107,6 +7117,7 @@ fn throwing_axe_switches_to_melee_at_close_range() {
             eyesmite: false,
             armor_dr: 0,
             natural_dr: 0,
+            is_medium_sized: true,
             knockback_step: 15,
             armor_is_heavy: false,
             shield_name: None,
@@ -7261,6 +7272,7 @@ fn throwing_axe_cooldown_resets_on_melee_engagement() {
             eyesmite: false,
             armor_dr: 0,
             natural_dr: 0,
+            is_medium_sized: true,
             knockback_step: 15,
             armor_is_heavy: false,
             shield_name: None,
@@ -7304,6 +7316,7 @@ fn throwing_axe_cooldown_resets_on_melee_engagement() {
             eyesmite: false,
             armor_dr: 0,
             natural_dr: 0,
+            is_medium_sized: true,
             knockback_step: 15,
             armor_is_heavy: false,
             shield_name: None,
@@ -7625,7 +7638,11 @@ fn wren_preset_builds_with_power_attack_and_kanian_impaler() {
     assert_eq!(wren.strength_pct, 1);
     assert_eq!(wren.dex_pct, 1);
     assert_eq!(wren.constitution, 14);
-    assert_eq!(wren.mastery_defense, 2);
+    assert_eq!(
+        wren.mastery(weapon_catalog.get(wren.weapon_id).unwrap().group)
+            .defense,
+        2
+    );
     assert!(
         wren.talents
             .iter()
@@ -7668,13 +7685,16 @@ fn named_fighter_preset_weapon_and_mastery_overrides_are_preserved() {
 
     let arthur = find_fighter_preset(&fighter_presets, "Arthur Du Randt")
         .expect("missing Arthur Du Randt preset");
-    assert_eq!(arthur.level, 8);
+    assert_eq!(arthur.level, 9);
     assert_eq!(arthur.strength_pct, 94);
     assert_eq!(arthur.dex_pct, 80);
     assert_eq!(arthur.constitution, 14);
     assert_eq!(arthur.weapon, "Halberd");
     assert_eq!(arthur.weapon_material_tier, 5);
-    assert_eq!(arthur.masteries.damage, 4);
+    assert_eq!(
+        arthur.weapon_masteries.as_ref().unwrap()[&WeaponGroup::Polearms].damage,
+        4
+    );
     assert!(
         arthur
             .proficiencies
@@ -7704,7 +7724,10 @@ fn named_fighter_preset_weapon_and_mastery_overrides_are_preserved() {
         assert_eq!(preset.dex_pct, 51);
         assert_eq!(preset.constitution, 12);
         assert_eq!(preset.charisma, 6);
-        assert_eq!(preset.masteries.defense, 3);
+        assert_eq!(
+            preset.weapon_masteries.as_ref().unwrap()[&WeaponGroup::SmallSwords].defense,
+            3
+        );
         assert_eq!(preset.weapon, "Short sword");
         assert_eq!(preset.weapon_material_tier, 5);
         assert_eq!(preset.offhand_weapon.as_deref(), Some("Short sword"));
@@ -7979,4 +8002,64 @@ fn errit_preset_enables_eyesmite_with_feat_of_agility_data() {
     assert!(combatant.sheet.defense.eyesmite);
     assert_eq!(combatant.sheet.defense.feat_of_agility, 1);
     assert_eq!(combatant.sheet.defense.armor_feat_of_agility_penalty, 20);
+}
+
+#[test]
+fn remarkable_arthur_presets_are_last_and_build_for_default_sim() {
+    let (weapon_catalog, armor_catalog, shield_catalog) =
+        data::load_catalogs().expect("failed to load catalogs");
+    let race_catalog = data::load_races("data/races.json").expect("failed to load races");
+    let fighter_presets = data::load_fighter_presets("data/sim/fighter_presets.json")
+        .expect("failed to load fighter presets");
+    let talent_catalog = data::load_talents(data::TALENTS_PATH).expect("failed to load talents");
+    let npc_presets =
+        data::load_npc_presets("data/npc_presets.json").expect("failed to load NPC presets");
+    let expected_names = [
+        "Arthur Du Randt (Remarkable L10 - 0 BP)",
+        "Arthur Du Randt (Remarkable L10 - 35 BP)",
+        "Arthur Du Randt (Remarkable L10 - 41 BP)",
+        "Arthur Du Randt (Remarkable L10 - 45 BP)",
+        "Arthur Du Randt (Remarkable L10 - 46 BP)",
+        "Arthur Du Randt (Remarkable L10 - 62 BP)",
+    ];
+    let presets = fighter_presets.entries();
+    let actual_last_names = presets[presets.len() - expected_names.len()..]
+        .iter()
+        .map(|preset| preset.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(actual_last_names, expected_names);
+
+    for name in expected_names {
+        let preset = find_fighter_preset(&fighter_presets, name).expect("missing Arthur preset");
+        assert_eq!(preset.level, 10);
+        assert_eq!(preset.progression.attack, "V");
+        assert_eq!(preset.progression.health, "V");
+        assert_eq!(preset.weapon, "Halberd");
+        assert_eq!(preset.weapon_material_tier, 5);
+        assert_eq!(preset.armor, "Platemail");
+        assert_eq!(preset.armor_material_tier, 2);
+        assert!(
+            preset
+                .talents
+                .iter()
+                .any(|selection| selection.id == "remarkability")
+        );
+
+        let player = player_config_from_preset(
+            preset,
+            &weapon_catalog,
+            &armor_catalog,
+            &shield_catalog,
+            &race_catalog,
+        );
+        let combatant = game_logic::build_combatant(
+            &player,
+            &weapon_catalog,
+            &armor_catalog,
+            &shield_catalog,
+            &npc_presets,
+            &talent_catalog,
+        );
+        assert!(combatant.sheet.vitals.max_hp > 0);
+    }
 }

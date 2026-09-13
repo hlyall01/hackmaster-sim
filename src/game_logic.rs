@@ -1,6 +1,6 @@
 use crate::character::{
-    AbilityScore, AbilitySet, Armor, ArmorType, Character, DerivedStats, Equipment, Progression,
-    Shield, Weapon, WeaponGroup, WeaponMastery,
+    AbilityDerived, AbilityScore, AbilitySet, Armor, ArmorType, Character, DerivedStats, Equipment,
+    Progression, Shield, Weapon, WeaponGroup, WeaponMastery,
 };
 use crate::core::catalog::Catalog;
 pub use crate::core::ids::{
@@ -20,6 +20,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+pub use crate::sim::{MountedCombatConfig, MountType, RidingMastery, MountedTargetSize};
+mod mounted;
+pub use mounted::*;
+mod masteries;
+pub use masteries::*;
+#[cfg(test)]
+mod mastery_tests;
 mod weapon_styles;
 use weapon_styles::*;
 pub use weapon_styles::{evonia_offhand_allowed, offhand_option_allowed};
@@ -278,6 +285,8 @@ pub struct CombatManeuverConfig {
     pub flee: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub mounted: bool,
+    #[serde(default, skip_serializing_if = "MountedCombatConfig::is_default")]
+    pub mounted_combat: MountedCombatConfig,
 }
 
 impl Default for CombatManeuverConfig {
@@ -299,6 +308,7 @@ impl Default for CombatManeuverConfig {
             fighting_withdrawal: false,
             flee: false,
             mounted: false,
+            mounted_combat: MountedCombatConfig::default(),
         }
     }
 }
@@ -318,8 +328,11 @@ pub struct FighterPreset {
     pub name: String,
     pub level: u8,
     pub progression: FighterProgression,
-    #[serde(default)]
+    /// Read compatibility for presets saved before per-group mastery.
+    #[serde(default, skip_serializing_if = "FighterMasteries::is_empty")]
     pub masteries: FighterMasteries,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weapon_masteries: Option<WeaponMasteries>,
     pub base_hp: u32,
     pub move_speed: f32,
     pub strength_base: u8,
@@ -423,12 +436,7 @@ pub struct PlayerConfig {
     pub shield_material_tier: i32,
     pub npc_preset: Option<NpcPresetId>,
     pub fighter_preset: Option<FighterPresetId>,
-    pub mastery_attack: i32,
-    pub mastery_defense: i32,
-    pub mastery_damage: i32,
-    pub mastery_speed: i32,
-    pub shield_mastery_defense: i32,
-    pub shield_mastery_speed: i32,
+    pub weapon_masteries: WeaponMasteries,
     pub two_hand_grip: bool,
     pub one_path_piercing: bool,
     pub decline_pursuit: bool,
@@ -448,6 +456,7 @@ pub struct PlayerConfig {
     pub fighting_withdrawal: bool,
     pub flee: bool,
     pub mounted: bool,
+    pub mounted_combat: MountedCombatConfig,
     pub defensive_dualwielding: bool,
     pub offensive_dualwielding: bool,
     pub environment: EnvironmentConfig,
@@ -495,12 +504,7 @@ impl PlayerConfig {
             shield_material_tier: 0,
             npc_preset: None,
             fighter_preset: None,
-            mastery_attack: 0,
-            mastery_defense: 0,
-            mastery_damage: 0,
-            mastery_speed: 0,
-            shield_mastery_defense: 0,
-            shield_mastery_speed: 0,
+            weapon_masteries: WeaponMasteries::new(),
             two_hand_grip: false,
             one_path_piercing: false,
             decline_pursuit: false,
@@ -520,6 +524,7 @@ impl PlayerConfig {
             fighting_withdrawal: false,
             flee: false,
             mounted: false,
+            mounted_combat: MountedCombatConfig::default(),
             defensive_dualwielding: false,
             offensive_dualwielding: false,
             environment: EnvironmentConfig::default(),
@@ -619,6 +624,7 @@ struct TalentModifiers {
     eyesmite: bool,
     chronoblur: bool,
     streamline: bool,
+    remarkability: bool,
     fight_defensively_attack_penalty_divisor: i32,
     called_shot_delay_profile: Option<sim::CalledShotDelayProfile>,
     called_shot_target_defense_bonus_divisor: i32,
@@ -738,6 +744,7 @@ impl Default for TalentModifiers {
             eyesmite: false,
             chronoblur: false,
             streamline: false,
+            remarkability: false,
             fight_defensively_attack_penalty_divisor: 1,
             called_shot_delay_profile: None,
             called_shot_target_defense_bonus_divisor: 1,
@@ -2932,6 +2939,9 @@ fn resolve_talent_modifiers(
                 TalentEffect::Streamline => {
                     modifiers.streamline = true;
                 }
+                TalentEffect::Remarkability => {
+                    modifiers.remarkability = true;
+                }
                 TalentEffect::NearPerfectDefenseMinRoll { roll } => {
                     if *roll <= 18 {
                         modifiers.superior_defense = true;
@@ -3576,45 +3586,55 @@ pub fn default_offhand_weapon_id(
     Some(player.weapon_id)
 }
 
-pub fn effective_attack_mastery(player: &PlayerConfig) -> i32 {
-    clamp_mastery(player.mastery_attack)
+pub fn effective_attack_mastery(player: &PlayerConfig, weapon: &WeaponPreset) -> i32 {
+    player.mastery(weapon.group).attack
 }
 
 pub fn effective_defense_mastery(player: &PlayerConfig, weapon: &WeaponPreset) -> i32 {
-    if shield_equipped(player, weapon) {
-        clamp_mastery(player.shield_mastery_defense)
-    } else {
-        clamp_mastery(player.mastery_defense)
-    }
+    player
+        .mastery(if shield_equipped(player, weapon) {
+            WeaponGroup::Shields
+        } else {
+            weapon.group
+        })
+        .defense
 }
 
 fn defense_mastery_bonus(
     player: &PlayerConfig,
+    weapon: &WeaponPreset,
+    weapon_catalog: &WeaponCatalog,
     has_shield: bool,
     twelve_paths_active: bool,
     defensive_dualwielding: bool,
 ) -> i32 {
-    let mastery = if twelve_paths_active && has_shield {
-        clamp_mastery(player.mastery_defense) + clamp_mastery(player.shield_mastery_defense)
-    } else if has_shield {
-        clamp_mastery(player.shield_mastery_defense)
+    let primary = player.mastery(weapon.group).defense;
+    let shield = player.mastery(WeaponGroup::Shields).defense;
+    if has_shield {
+        return shield + if twelve_paths_active { primary } else { 0 };
+    }
+    if defensive_dualwielding {
+        let secondary_group = player
+            .offhand_weapon_id
+            .and_then(|id| weapon_catalog.get(id))
+            .map(|weapon| weapon.group)
+            .unwrap_or(weapon.group);
+        primary + player.mastery(secondary_group).defense
     } else {
-        clamp_mastery(player.mastery_defense)
-    };
-    mastery * if defensive_dualwielding { 2 } else { 1 }
+        primary
+    }
 }
 
-pub fn effective_damage_mastery(player: &PlayerConfig) -> i32 {
-    clamp_mastery(player.mastery_damage)
+pub fn effective_damage_mastery(player: &PlayerConfig, weapon: &WeaponPreset) -> i32 {
+    player.mastery(weapon.group).damage
 }
 
 pub fn effective_speed_mastery(player: &PlayerConfig, weapon: &WeaponPreset) -> i32 {
-    let weapon_speed = clamp_mastery(player.mastery_speed);
+    let speed = player.mastery(weapon.group).speed;
     if shield_equipped(player, weapon) {
-        let shield_speed = clamp_mastery(player.shield_mastery_speed);
-        weapon_speed.min(shield_speed)
+        speed.min(player.mastery(WeaponGroup::Shields).speed)
     } else {
-        weapon_speed
+        speed
     }
 }
 
@@ -3630,6 +3650,16 @@ pub struct DefenseDisplaySummary {
     pub melee_roll_label: String,
     pub ranged_roll_label: String,
     pub melee_with_shield_dv: Option<i32>,
+    pub conditional_notes: Vec<String>,
+}
+
+fn chronoblur_defense_notes() -> [String; 2] {
+    [
+        format!("Chronoblur: +{} melee Defense if you moved in the previous second (first {} seconds).",
+            sim::CHRONOBLUR_MELEE_DEFENSE_BONUS, sim::CHRONOBLUR_DURATION_SECONDS),
+        format!("Chronoblur: missile attacks treat you as {} feet farther away if you moved in the previous second (first {} seconds).",
+            sim::CHRONOBLUR_RANGED_DISTANCE_FEET, sim::CHRONOBLUR_DURATION_SECONDS),
+    ]
 }
 
 pub struct PlayerSummary {
@@ -4059,6 +4089,8 @@ pub fn derived_stat_breakdowns(
         modifiers.defense_bonus_for_weapon(weapon_id) * if defensive_dualwielding { 2 } else { 1 };
     let defense_mastery = defense_mastery_bonus(
         player,
+        weapon,
+        weapon_catalog,
         has_shield,
         twelve_paths_active,
         defensive_dualwielding,
@@ -4190,7 +4222,7 @@ pub fn derived_stat_breakdowns(
         is_ranged,
         projectile_weapon,
     );
-    let attack_mastery = effective_attack_mastery(player);
+    let attack_mastery = effective_attack_mastery(player, weapon);
     let weapon_attack_bonus = modifiers.attack_bonus_for_weapon(weapon_id);
     let power_attack_penalty = power_attack_attack_penalty(player, weapon, &character);
     let style_attack_bonus = if hobbler_active {
@@ -4200,6 +4232,9 @@ pub fn derived_stat_breakdowns(
     };
     let mut effective_attack = StatBreakdown::new(summary.roll.attack_bonus.to_string());
     effective_attack.add_i32(summary.derived.attack_bonus, "Derived attack bonus");
+    if player.mounted {
+        effective_attack.add_i32(mounted_attack_bonus(player, weapon), "Mounted combat / Riding mastery");
+    }
     if material_attack_bonus != 0 {
         effective_attack.add_i32(material_attack_bonus, "Weapon/projectile material");
     }
@@ -4243,7 +4278,7 @@ pub fn derived_stat_breakdowns(
     let strength_damage_base =
         strength_damage_for_weapon(weapon, character.ability_mods.strength.damage);
     let two_hand_bonus = two_hand_damage_bonus(weapon, effective_two_hand);
-    let damage_mastery = effective_damage_mastery(player);
+    let damage_mastery = effective_damage_mastery(player, weapon);
     let weapon_damage_bonus = modifiers.damage_bonus_for_weapon(weapon_id);
     let group_damage_bonus = modifiers.damage_bonus_for_group(weapon.group);
     let armor_damage_bonus = if is_ranged {
@@ -4329,6 +4364,7 @@ pub fn derived_stat_breakdowns(
         weapon.damage_expr.clone()
     };
     mainhand_damage.note(format!("Add weapon damage dice {displayed_damage_dice}."));
+    if player.mounted { mainhand_damage.note(mounted_damage_summary(player, weapon)); }
     breakdowns.insert(DerivedStatId::MainhandDamageRoll, mainhand_damage);
 
     let armor_speed = character
@@ -4610,6 +4646,15 @@ pub fn derived_stat_breakdowns(
 
     let mut melee_defense = StatBreakdown::new(summary.defense.melee_roll_label.clone());
     melee_defense.add_i32(summary.derived.base_dv, "Base DV");
+    let mounted_defense = mounted_defense_bonus(player);
+    let mounted_defense_source = if player.mounted_combat.trot_or_faster {
+        "Mounted: trot or faster"
+    } else {
+        "Mounted: walking or slower"
+    };
+    if mounted_defense != 0 {
+        melee_defense.add_i32(mounted_defense, mounted_defense_source);
+    }
     if defense_mastery != 0 {
         melee_defense.add_i32(
             defense_mastery,
@@ -4665,9 +4710,15 @@ pub fn derived_stat_breakdowns(
             "Deceptive Defender: +4 against every Called Shot, and that attack is delayed 4d4p (not included above).",
         );
     }
+    if modifiers.chronoblur {
+        melee_defense.note(chronoblur_defense_notes()[0].clone());
+    }
     breakdowns.insert(DerivedStatId::MeleeDefense, melee_defense);
 
     let mut ranged_defense = StatBreakdown::new(summary.defense.ranged_roll_label.clone());
+    if mounted_defense != 0 {
+        ranged_defense.add_i32(mounted_defense, mounted_defense_source);
+    }
     if modifiers.pilgrims_path_style {
         ranged_defense.add_i32(4, "Pilgrim's Path");
     }
@@ -4704,6 +4755,9 @@ pub fn derived_stat_breakdowns(
         ranged_defense.note(
             "Deceptive Defender: +4 against every Called Shot, and that attack is delayed 4d4p (not included above).",
         );
+    }
+    if modifiers.chronoblur {
+        ranged_defense.note(chronoblur_defense_notes()[1].clone());
     }
     breakdowns.insert(DerivedStatId::RangedDefense, ranged_defense);
 
@@ -4789,6 +4843,8 @@ pub fn derived_stat_breakdowns(
         player.offhand_weapon_id,
     ) {
         if let Some(offhand_weapon) = weapon_catalog.get(offhand_id) {
+            let attack_mastery = effective_attack_mastery(player, offhand_weapon);
+            let damage_mastery = effective_damage_mastery(player, offhand_weapon);
             let offhand_speed_mastery = effective_speed_mastery(player, offhand_weapon);
             let offhand_speed_talent = modifiers.weapon_speed_bonus_for_weapon(offhand_id);
             let mut offhand_speed = StatBreakdown::new(format!("{:.1}", offhand.weapon.speed));
@@ -4819,6 +4875,7 @@ pub fn derived_stat_breakdowns(
                 power_attack_attack_penalty(player, offhand_weapon, &character);
             let mut offhand_attack = StatBreakdown::new(offhand.attack_bonus.to_string());
             offhand_attack.add_i32(summary.derived.attack_bonus, "Derived attack bonus");
+            if player.mounted { offhand_attack.add_i32(mounted_attack_bonus(player, offhand_weapon), "Mounted combat / Riding mastery"); }
             if attack_mastery != 0 {
                 offhand_attack.add_i32(attack_mastery, "Attack mastery");
             }
@@ -4875,6 +4932,7 @@ pub fn derived_stat_breakdowns(
                 "Offhand damage modifier in combat: {:+}.",
                 combatant.sheet.maneuvers.dualwield_offhand_damage_penalty
             ));
+            if player.mounted { offhand_damage.note(mounted_damage_summary(player, offhand_weapon)); }
             breakdowns.insert(DerivedStatId::OffhandDamageRoll, offhand_damage);
 
             let offhand_shield_damage = offhand.weapon.shield_damage_expr.as_deref().unwrap_or("-");
@@ -4914,6 +4972,8 @@ fn defense_display_summary(
     let has_shield = character.equipment.shield.is_some();
     let defense_mastery = defense_mastery_bonus(
         player,
+        weapon,
+        weapon_catalog,
         has_shield,
         twelve_paths_active,
         defensive_dualwielding,
@@ -4950,6 +5010,7 @@ fn defense_display_summary(
     };
     let (melee_roll_label, melee_with_shield_dv) = if let Some(shield_bonus) = shield_bonus {
         let melee_base = derived.base_dv
+            + mounted_defense_bonus(player)
             + defense_mastery
             + shield_of_blades_defense_bonus
             + 4
@@ -4961,6 +5022,7 @@ fn defense_display_summary(
             ),
             Some(
                 derived.base_dv
+                    + mounted_defense_bonus(player)
                     + defense_mastery
                     + weapon_defense_bonus
                     + fight_defensively_defense_bonus
@@ -4976,6 +5038,7 @@ fn defense_display_summary(
             ""
         };
         let melee_base = derived.base_dv
+            + mounted_defense_bonus(player)
             + defense_mastery
             + shield_of_blades_defense_bonus
             + fight_defensively_defense_bonus
@@ -5009,6 +5072,10 @@ fn defense_display_summary(
     if modifiers.pilgrims_path_style {
         ranged_roll_label.push_str(" + 4 (Pilgrim's Path)");
     }
+    let mounted_defense = mounted_defense_bonus(player);
+    if mounted_defense != 0 {
+        ranged_roll_label.push_str(&format!(" + {mounted_defense} (mounted)"));
+    }
 
     DefenseDisplaySummary {
         shield_bonus,
@@ -5016,6 +5083,11 @@ fn defense_display_summary(
         melee_roll_label,
         ranged_roll_label,
         melee_with_shield_dv,
+        conditional_notes: if modifiers.chronoblur {
+            chronoblur_defense_notes().into()
+        } else {
+            Vec::new()
+        },
     }
 }
 
@@ -5042,14 +5114,15 @@ fn roll_summary(
         is_ranged_weapon,
         uses_projectiles,
     );
-    let attack_mastery = effective_attack_mastery(player);
-    let damage_mastery = effective_damage_mastery(player);
+    let attack_mastery = effective_attack_mastery(player, weapon);
+    let damage_mastery = effective_damage_mastery(player, weapon);
     let power_attack_penalty = power_attack_attack_penalty(player, weapon, character);
     let attack_bonus = derived.attack_bonus
         + material_attack_bonus
         + attack_mastery
         + modifiers.attack_bonus_for_weapon(weapon_id)
         + style_attack_bonus
+        + mounted_attack_bonus(player, weapon)
         - power_attack_penalty
         - fight_defensively_attack_penalty;
     let effective_two_hand = effective_two_hand_grip_with_modifiers(player, weapon, modifiers);
@@ -5080,6 +5153,42 @@ fn roll_summary(
     }
 }
 
+fn improve_nonzero_modifier(value: i32) -> i32 {
+    value + value.signum()
+}
+
+fn apply_remarkability_modifier_adjustments(mods: &mut AbilityDerived) {
+    mods.strength.damage = improve_nonzero_modifier(mods.strength.damage);
+    mods.strength.feat = improve_nonzero_modifier(mods.strength.feat);
+
+    mods.dexterity.initiative = improve_nonzero_modifier(mods.dexterity.initiative);
+    mods.dexterity.attack = improve_nonzero_modifier(mods.dexterity.attack);
+    mods.dexterity.defense = improve_nonzero_modifier(mods.dexterity.defense);
+    mods.dexterity.feat_of_agility = improve_nonzero_modifier(mods.dexterity.feat_of_agility);
+
+    mods.intelligence.attack = improve_nonzero_modifier(mods.intelligence.attack);
+    mods.intelligence.lp_bonus = improve_nonzero_modifier(mods.intelligence.lp_bonus);
+    mods.intelligence.weapon_exp_threshold_pct =
+        improve_nonzero_modifier(mods.intelligence.weapon_exp_threshold_pct);
+
+    mods.wisdom.initiative = improve_nonzero_modifier(mods.wisdom.initiative);
+    mods.wisdom.lp_bonus = improve_nonzero_modifier(mods.wisdom.lp_bonus);
+    mods.wisdom.defense = improve_nonzero_modifier(mods.wisdom.defense);
+    mods.wisdom.base_ff = improve_nonzero_modifier(mods.wisdom.base_ff);
+
+    mods.constitution.base_ff = improve_nonzero_modifier(mods.constitution.base_ff);
+
+    mods.looks.charisma = improve_nonzero_modifier(mods.looks.charisma);
+    mods.looks.honor = improve_nonzero_modifier(mods.looks.honor);
+    mods.looks.fame = improve_nonzero_modifier(mods.looks.fame);
+
+    mods.charisma.lp_bonus = improve_nonzero_modifier(mods.charisma.lp_bonus);
+    mods.charisma.honor = improve_nonzero_modifier(mods.charisma.honor);
+    mods.charisma.turning = improve_nonzero_modifier(mods.charisma.turning);
+    mods.charisma.morale = improve_nonzero_modifier(mods.charisma.morale);
+    mods.charisma.max_proteges = improve_nonzero_modifier(mods.charisma.max_proteges);
+}
+
 pub fn build_character(
     player: &PlayerConfig,
     weapon_catalog: &WeaponCatalog,
@@ -5107,12 +5216,6 @@ pub fn build_character(
         .and_then(|entry| entry.shield.clone());
 
     let abilities = ability_set_from_player(player);
-
-    let mastery = WeaponMastery {
-        group: weapon_preset.group,
-        points: Default::default(),
-        base_threshold: base_weapon_threshold(weapon_preset.group),
-    };
 
     let shield = if modifiers
         .forced_weapon_loadout
@@ -5142,13 +5245,23 @@ pub fn build_character(
         shield_material: None,
     };
 
-    Character::builder(&player.name)
+    let mut builder = Character::builder(&player.name)
         .level(player.level, player.progression)
         .base_hp(player.base_hp)
         .abilities(abilities)
-        .weapon_mastery(mastery)
-        .equipment(equipment)
-        .build()
+        .equipment(equipment);
+    for group in MASTERY_GROUPS {
+        builder = builder.weapon_mastery(WeaponMastery {
+            group,
+            points: player.mastery(group),
+            base_threshold: base_weapon_threshold(group),
+        });
+    }
+    let mut character = builder.build();
+    if modifiers.remarkability {
+        apply_remarkability_modifier_adjustments(&mut character.ability_mods);
+    }
+    character
 }
 
 pub fn build_combatants(
@@ -5437,9 +5550,12 @@ fn build_combatant_profile(
         0.0
     };
     let speed_mastery = if has_shield {
-        clamp_mastery(player.mastery_speed).min(clamp_mastery(player.shield_mastery_speed)) as f32
+        player
+            .mastery(weapon_preset.group)
+            .speed
+            .min(player.mastery(WeaponGroup::Shields).speed) as f32
     } else {
-        clamp_mastery(player.mastery_speed) as f32
+        player.mastery(weapon_preset.group).speed as f32
     };
     let jab_speed = (weapon_preset.jab_speed.unwrap_or(base_weapon_speed) + speed_mod
         - speed_mastery
@@ -5485,8 +5601,8 @@ fn build_combatant_profile(
         primary_is_ranged,
         primary_uses_projectiles,
     );
-    let attack_mastery = effective_attack_mastery(player);
-    let mut attack_bonus_base = derived.attack_bonus + attack_mastery;
+    let attack_mastery = effective_attack_mastery(player, weapon_preset);
+    let mut attack_bonus_base = derived.attack_bonus;
     let power_attack_penalty = power_attack_attack_penalty(player, weapon_preset, &character);
     attack_bonus_base -= power_attack_penalty;
     if offensive_dualwielding && !perfect_two_weapon_fighting_active {
@@ -5494,6 +5610,8 @@ fn build_combatant_profile(
     }
     let defense_mastery = defense_mastery_bonus(
         player,
+        weapon_preset,
+        weapon_catalog,
         has_shield,
         twelve_paths_active,
         defensive_dualwielding,
@@ -5502,9 +5620,11 @@ fn build_combatant_profile(
         modifiers.defense_bonus_for_weapon(weapon_id) * if defensive_dualwielding { 2 } else { 1 };
     let defense_bonus =
         modifiers.defense_bonus + misc_modifiers.defense_bonus + misc_modifiers.all_roll_bonus;
-    let damage_mastery = effective_damage_mastery(player);
-    let mut attack_bonus =
-        attack_bonus_base + material_attack_bonus + modifiers.attack_bonus_for_weapon(weapon_id);
+    let damage_mastery = effective_damage_mastery(player, weapon_preset);
+    let mut attack_bonus = attack_bonus_base
+        + attack_mastery
+        + material_attack_bonus
+        + modifiers.attack_bonus_for_weapon(weapon_id);
     if modifiers.hobbler_style && hobbler_style_active(&modifiers, weapon_preset) {
         attack_bonus -= HOBBLER_ATTACK_PENALTY;
         attack_bonus_base -= HOBBLER_ATTACK_PENALTY;
@@ -5523,7 +5643,8 @@ fn build_combatant_profile(
     let mut natural_dr = (modifiers.armor_dr_bonus + misc_modifiers.armor_dr_bonus).max(0);
     let mut armor_dr = (derived.armor_dr + natural_dr).max(0);
     let mut strength_damage_base = character.ability_mods.strength.damage;
-    let mut unarmed_damage_bonus = modifiers.damage_bonus_for_group(WeaponGroup::Unarmed);
+    let mut unarmed_damage_bonus = modifiers.damage_bonus_for_group(WeaponGroup::Unarmed)
+        + player.mastery(WeaponGroup::Unarmed).damage;
     let mut strength_damage = strength_damage_for_weapon(weapon_preset, strength_damage_base)
         + two_hand_damage_bonus
         + material_damage_bonus
@@ -5618,6 +5739,8 @@ fn build_combatant_profile(
         called_shot_target_defense_bonus_base = CALLED_SHOT_TARGET_DEFENSE_BONUS_MEDIUM;
     }
 
+    attack_bonus += mounted_attack_bonus(player, weapon_preset);
+
     let weapon_speed = if use_jab {
         jab_speed
     } else {
@@ -5668,14 +5791,15 @@ fn build_combatant_profile(
                     let offhand_power_attack_penalty =
                         power_attack_attack_penalty(player, offhand_preset, &character);
                     let offhand_attack_bonus = derived.attack_bonus
-                        + attack_mastery
+                        + effective_attack_mastery(player, offhand_preset)
                         + material_attack_bonus
                         + modifiers.attack_bonus_for_weapon(offhand_id)
+                        + mounted_attack_bonus(player, offhand_preset)
                         - offhand_power_attack_penalty;
                     let mut offhand_strength_damage =
                         strength_damage_for_weapon(offhand_preset, strength_damage_base)
                             + material_damage_bonus
-                            + damage_mastery
+                            + effective_damage_mastery(player, offhand_preset)
                             + modifiers.damage_bonus_for_weapon(offhand_id)
                             + modifiers.damage_bonus_for_group(offhand_preset.group)
                             + misc_modifiers.damage_bonus
@@ -5786,6 +5910,19 @@ fn build_combatant_profile(
         }
     }
     let mut sheet_modifiers = sim::ModifierStack::default();
+    if player
+        .npc_preset
+        .and_then(|id| npc_presets.get(id))
+        .is_none()
+    {
+        let unarmed_attack = player.mastery(WeaponGroup::Unarmed).attack;
+        if unarmed_attack != 0 {
+            sheet_modifiers.add_i32(
+                sim::StatIdI32::UnarmedAttackBonus,
+                sim::ModifierOpI32::Add(unarmed_attack),
+            );
+        }
+    }
     if modifiers.defiant {
         sheet_modifiers.add_i32(sim::StatIdI32::FlagDefiant, sim::ModifierOpI32::Set(1));
     }
@@ -6063,6 +6200,7 @@ fn build_combatant_profile(
             eyesmite: modifiers.eyesmite,
             armor_dr,
             natural_dr,
+            is_medium_sized: player.knockback_step == DEFAULT_KNOCKBACK_STEP,
             knockback_step,
             armor_is_heavy,
             shield_name,
@@ -6105,6 +6243,7 @@ fn build_combatant_profile(
             fighting_withdrawal: player.fighting_withdrawal,
             flee: player.flee,
             mounted: player.mounted,
+            mounted_combat: player.mounted_combat,
             defensive_dualwielding,
             offensive_dualwielding,
             offensive_dualwielding_defense_penalty,
@@ -6547,6 +6686,106 @@ mod tests {
         player.charisma = 15;
         player.dex_pct = 1;
         player
+    }
+
+    #[test]
+    fn remarkability_adjusts_ability_modifiers_but_not_saves() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let weapon_id = weapon_id_matching(&weapons, |weapon| weapon.name == "Halberd");
+        let mut player = base_player(weapon_id);
+        player.strength_base = 17;
+        player.strength_pct = 14;
+        player.dex_base = 14;
+        player.dex_pct = 97;
+        player.intelligence = 9;
+        player.wisdom = 11;
+        player.constitution = 13;
+        player.looks = 8;
+        player.charisma = 8;
+
+        let baseline = build_character(&player, &weapons, &armor, &shields, &talents);
+        add_talent(&mut player, "remarkability", None);
+        let remarkable = build_character(&player, &weapons, &armor, &shields, &talents);
+
+        let adjusted_modifiers = [
+            (
+                "strength damage",
+                baseline.ability_mods.strength.damage,
+                remarkable.ability_mods.strength.damage,
+            ),
+            (
+                "strength feat",
+                baseline.ability_mods.strength.feat,
+                remarkable.ability_mods.strength.feat,
+            ),
+            (
+                "dexterity initiative",
+                baseline.ability_mods.dexterity.initiative,
+                remarkable.ability_mods.dexterity.initiative,
+            ),
+            (
+                "dexterity attack",
+                baseline.ability_mods.dexterity.attack,
+                remarkable.ability_mods.dexterity.attack,
+            ),
+            (
+                "dexterity defense",
+                baseline.ability_mods.dexterity.defense,
+                remarkable.ability_mods.dexterity.defense,
+            ),
+            (
+                "dexterity feat of agility",
+                baseline.ability_mods.dexterity.feat_of_agility,
+                remarkable.ability_mods.dexterity.feat_of_agility,
+            ),
+            (
+                "intelligence attack",
+                baseline.ability_mods.intelligence.attack,
+                remarkable.ability_mods.intelligence.attack,
+            ),
+            (
+                "wisdom initiative",
+                baseline.ability_mods.wisdom.initiative,
+                remarkable.ability_mods.wisdom.initiative,
+            ),
+            (
+                "wisdom defense",
+                baseline.ability_mods.wisdom.defense,
+                remarkable.ability_mods.wisdom.defense,
+            ),
+            (
+                "wisdom fatigue factor",
+                baseline.ability_mods.wisdom.base_ff,
+                remarkable.ability_mods.wisdom.base_ff,
+            ),
+            (
+                "constitution fatigue factor",
+                baseline.ability_mods.constitution.base_ff,
+                remarkable.ability_mods.constitution.base_ff,
+            ),
+            (
+                "charisma morale",
+                baseline.ability_mods.charisma.morale,
+                remarkable.ability_mods.charisma.morale,
+            ),
+        ];
+        for (label, before, after) in adjusted_modifiers {
+            assert_eq!(after, improve_nonzero_modifier(before), "{label}");
+        }
+
+        assert_eq!(
+            remarkable.ability_mods.dexterity.dodge_save,
+            baseline.ability_mods.dexterity.dodge_save
+        );
+        assert_eq!(
+            remarkable.ability_mods.wisdom.mental_save,
+            baseline.ability_mods.wisdom.mental_save
+        );
+        assert_eq!(
+            remarkable.ability_mods.constitution.physical_save,
+            baseline.ability_mods.constitution.physical_save
+        );
     }
 
     #[test]
@@ -7828,10 +8067,14 @@ mod tests {
         let talents = Catalog::new(Vec::new());
         let mut player = PlayerConfig::new("Test", WeaponId::new(0));
         player.weapon_id = one_handed_weapon_id(&weapons);
-        player.mastery_attack = 3;
+        player
+            .mastery_mut(weapons.get(player.weapon_id).unwrap().group)
+            .attack = 3;
         let summary = player_summary(&player, &weapons, &armor, &shields, &talents);
         let mut baseline = player.clone();
-        baseline.mastery_attack = 0;
+        baseline
+            .mastery_mut(weapons.get(baseline.weapon_id).unwrap().group)
+            .attack = 0;
         let baseline_summary = player_summary(&baseline, &weapons, &armor, &shields, &talents);
         assert_eq!(
             summary.roll.attack_bonus - baseline_summary.roll.attack_bonus,
@@ -7845,10 +8088,14 @@ mod tests {
         let talents = Catalog::new(Vec::new());
         let mut player = PlayerConfig::new("Test", WeaponId::new(0));
         player.weapon_id = one_handed_weapon_id(&weapons);
-        player.mastery_damage = 4;
+        player
+            .mastery_mut(weapons.get(player.weapon_id).unwrap().group)
+            .damage = 4;
         let summary = player_summary(&player, &weapons, &armor, &shields, &talents);
         let mut baseline = player.clone();
-        baseline.mastery_damage = 0;
+        baseline
+            .mastery_mut(weapons.get(baseline.weapon_id).unwrap().group)
+            .damage = 0;
         let baseline_summary = player_summary(&baseline, &weapons, &armor, &shields, &talents);
         assert_eq!(
             summary.roll.strength_damage - baseline_summary.roll.strength_damage,
@@ -7862,12 +8109,16 @@ mod tests {
         let talents = Catalog::new(Vec::new());
         let mut player = PlayerConfig::new("Test", WeaponId::new(0));
         player.weapon_id = one_handed_weapon_id(&weapons);
-        player.mastery_defense = 2;
+        player
+            .mastery_mut(weapons.get(player.weapon_id).unwrap().group)
+            .defense = 2;
         let npc_presets = Catalog::new(Vec::new());
         let combatant =
             build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
         let mut baseline = player.clone();
-        baseline.mastery_defense = 0;
+        baseline
+            .mastery_mut(weapons.get(baseline.weapon_id).unwrap().group)
+            .defense = 0;
         let baseline_combatant = build_combatant(
             &baseline,
             &weapons,
@@ -7924,7 +8175,9 @@ mod tests {
             },
         ]);
         let mut player = PlayerConfig::new("Test", weapon_id);
-        player.mastery_defense = 3;
+        player
+            .mastery_mut(weapons.get(player.weapon_id).unwrap().group)
+            .defense = 3;
         player.defensive_dualwielding = true;
         player.talents = vec![
             TalentSelection {
@@ -7951,8 +8204,20 @@ mod tests {
             &talents,
         );
         let diff = dual.sheet.defense.defense_mod - normal.sheet.defense.defense_mod;
-        assert_eq!(diff, player.mastery_defense + 2);
-        assert_ne!(diff, player.mastery_defense + 3);
+        assert_eq!(
+            diff,
+            player
+                .mastery(weapons.get(player.weapon_id).unwrap().group)
+                .defense
+                + 2
+        );
+        assert_ne!(
+            diff,
+            player
+                .mastery(weapons.get(player.weapon_id).unwrap().group)
+                .defense
+                + 3
+        );
     }
 
     #[test]
@@ -8117,12 +8382,16 @@ mod tests {
         let talents = Catalog::new(Vec::new());
         let mut player = PlayerConfig::new("Test", WeaponId::new(0));
         player.weapon_id = one_handed_weapon_id(&weapons);
-        player.mastery_speed = 3;
+        player
+            .mastery_mut(weapons.get(player.weapon_id).unwrap().group)
+            .speed = 3;
         let npc_presets = Catalog::new(Vec::new());
         let combatant =
             build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
         let mut baseline = player.clone();
-        baseline.mastery_speed = 0;
+        baseline
+            .mastery_mut(weapons.get(baseline.weapon_id).unwrap().group)
+            .speed = 0;
         let baseline_combatant = build_combatant(
             &baseline,
             &weapons,
@@ -8176,8 +8445,10 @@ mod tests {
         let (weapons, _armor, _shields) = sample_catalogs();
         let mut player = PlayerConfig::new("Test", WeaponId::new(0));
         player.weapon_id = one_handed_weapon_id(&weapons);
-        player.mastery_defense = 5;
-        player.shield_mastery_defense = 1;
+        player
+            .mastery_mut(weapons.get(player.weapon_id).unwrap().group)
+            .defense = 5;
+        player.mastery_mut(WeaponGroup::Shields).defense = 1;
         player.shield_id = ShieldId::new(1);
         let weapon = weapons
             .get(player.weapon_id)
@@ -8191,8 +8462,10 @@ mod tests {
         let (weapons, _armor, _shields) = sample_catalogs();
         let mut player = PlayerConfig::new("Test", WeaponId::new(0));
         player.weapon_id = one_handed_weapon_id(&weapons);
-        player.mastery_speed = 5;
-        player.shield_mastery_speed = 2;
+        player
+            .mastery_mut(weapons.get(player.weapon_id).unwrap().group)
+            .speed = 5;
+        player.mastery_mut(WeaponGroup::Shields).speed = 2;
         player.shield_id = ShieldId::new(1);
         let weapon = weapons
             .get(player.weapon_id)
@@ -8206,8 +8479,10 @@ mod tests {
         let (weapons, _armor, _shields) = sample_catalogs();
         let mut player = PlayerConfig::new("Test", WeaponId::new(0));
         player.weapon_id = one_handed_weapon_id(&weapons);
-        player.mastery_speed = 4;
-        player.shield_mastery_speed = 1;
+        player
+            .mastery_mut(weapons.get(player.weapon_id).unwrap().group)
+            .speed = 4;
+        player.mastery_mut(WeaponGroup::Shields).speed = 1;
         player.shield_id = ShieldId::new(0);
         let weapon = weapons
             .get(player.weapon_id)
@@ -9162,8 +9437,10 @@ mod tests {
         let mut player = base_player(weapon_id);
         player.shield_id = shield_id;
         player.proficiencies = vec!["Flamberge".to_string(), "Shields".to_string()];
-        player.mastery_defense = 2;
-        player.shield_mastery_defense = 1;
+        player
+            .mastery_mut(weapons.get(player.weapon_id).unwrap().group)
+            .defense = 2;
+        player.mastery_mut(WeaponGroup::Shields).defense = 1;
         add_talent(&mut player, TALENT_ID_TWELVE_PATHS, None);
 
         let summary = player_summary(&player, &weapons, &armor, &shields, &talents);
@@ -9171,8 +9448,10 @@ mod tests {
             build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
 
         let mut baseline = player.clone();
-        baseline.mastery_defense = 0;
-        baseline.shield_mastery_defense = 0;
+        baseline
+            .mastery_mut(weapons.get(baseline.weapon_id).unwrap().group)
+            .defense = 0;
+        baseline.mastery_mut(WeaponGroup::Shields).defense = 0;
         let baseline_summary = player_summary(&baseline, &weapons, &armor, &shields, &talents);
         let baseline_combatant = build_combatant(
             &baseline,
@@ -9183,7 +9462,10 @@ mod tests {
             &talents,
         );
 
-        let expected_delta = player.mastery_defense + player.shield_mastery_defense;
+        let expected_delta = player
+            .mastery(weapons.get(player.weapon_id).unwrap().group)
+            .defense
+            + player.mastery(WeaponGroup::Shields).defense;
         assert_eq!(
             summary
                 .defense
@@ -9312,7 +9594,9 @@ mod tests {
             .and_then(|idx| weapons.id_from_index(idx))
             .expect("no dagger found");
         let mut player = base_player(weapon_id);
-        player.mastery_damage = 3;
+        player
+            .mastery_mut(weapons.get(player.weapon_id).unwrap().group)
+            .damage = 3;
         player.proficiencies = vec!["Dagger".to_string()];
         add_talent(&mut player, TALENT_ID_DOOMRAZOR, None);
         let combatant =
@@ -9331,7 +9615,9 @@ mod tests {
         let removed_damage = strength_damage_for_weapon(
             weapon,
             baseline_combatant.sheet.offense.strength_damage_base,
-        ) + player.mastery_damage;
+        ) + player
+            .mastery(weapons.get(player.weapon_id).unwrap().group)
+            .damage;
 
         assert_eq!(
             baseline_combatant.sheet.offense.strength_damage
@@ -9354,7 +9640,9 @@ mod tests {
             .and_then(|idx| weapons.id_from_index(idx))
             .expect("no fist found");
         let mut player = base_player(weapon_id);
-        player.mastery_defense = 3;
+        player
+            .mastery_mut(weapons.get(player.weapon_id).unwrap().group)
+            .defense = 3;
         player.proficiencies = vec!["Fist".to_string()];
         add_talent(&mut player, TALENT_ID_QUIET_RIVER, None);
         let combatant =
@@ -9374,7 +9662,9 @@ mod tests {
         assert!(combatant.sheet.offense.weapon.ignore_all_dr);
         assert_eq!(
             combatant.sheet.defense.defense_mod - baseline_combatant.sheet.defense.defense_mod,
-            player.mastery_defense
+            player
+                .mastery(weapons.get(player.weapon_id).unwrap().group)
+                .defense
         );
     }
 
@@ -9926,7 +10216,9 @@ mod tests {
         player.wisdom = 12;
         player.armor_id = raurosi_leather_id;
         player.armor_material_tier = 3;
-        player.mastery_defense = 3;
+        player
+            .mastery_mut(weapons.get(player.weapon_id).unwrap().group)
+            .defense = 3;
         player.offhand_weapon_id = Some(sword_id);
         player.defensive_dualwielding = true;
         player.fight_defensively = true;
@@ -10742,6 +11034,36 @@ mod tests {
                 talent_is_implemented(spec),
                 "{talent_id} should be treated as implemented"
             );
+        }
+    }
+
+    #[test]
+    fn chronoblur_is_visible_in_derived_without_becoming_a_permanent_defense_bonus() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npc_presets = sample_npc_presets();
+        let mut player = base_player(one_handed_weapon_id(&weapons));
+        player.mounted = true;
+        player.mounted_combat.trot_or_faster = true;
+        let baseline = player_summary(&player, &weapons, &armor, &shields, &talents);
+        assert!(baseline.defense.conditional_notes.is_empty());
+        add_talent(&mut player, "spell_chronoblur", None);
+        let summary = player_summary(&player, &weapons, &armor, &shields, &talents);
+        let combatant = build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
+        let breakdowns = derived_stat_breakdowns(&player, &weapons, &armor, &shields,
+            &talents, &summary, &combatant);
+        assert_eq!(summary.defense.melee_roll_label, baseline.defense.melee_roll_label);
+        assert_eq!(summary.defense.ranged_roll_label, baseline.defense.ranged_roll_label);
+        assert_eq!(summary.defense.melee_with_shield_dv, baseline.defense.melee_with_shield_dv);
+        let notes = &summary.defense.conditional_notes;
+        assert_eq!(notes.len(), 2);
+        assert!(notes[0].contains("+4 melee Defense"));
+        assert!(notes[1].contains("20 feet farther away"));
+        for (id, note) in [DerivedStatId::MeleeDefense, DerivedStatId::RangedDefense].into_iter().zip(notes) {
+            assert!(note.contains("previous second"));
+            assert!(note.contains("first 60 seconds"));
+            assert!(breakdowns.get(id).unwrap().notes.contains(note));
+            assert!(!breakdowns.get(id).unwrap().lines.iter().any(|line| line.source.contains("Chronoblur")));
         }
     }
 

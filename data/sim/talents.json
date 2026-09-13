@@ -3480,7 +3480,11 @@
         "midlander"
       ],
       "max_rank": 1,
-      "effects": []
+      "effects": [
+        {
+          "type": "remarkability"
+        }
+      ]
     },
     {
       "id": "educated",

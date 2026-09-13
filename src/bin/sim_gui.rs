@@ -3693,7 +3693,7 @@ fn render_player_editor(
             });
             if player.defensive_dualwielding {
                 ui.label(
-                    "Defensive dualwielding: double defense mastery & weapon defense talent bonus",
+                    "Defensive dualwielding: both weapons contribute Defense mastery",
                 );
             }
             if player.offensive_dualwielding {
@@ -4034,6 +4034,49 @@ fn render_player_editor(
                 ui.checkbox(&mut player.flee, "Flee (NYI)");
             });
             ui.checkbox(&mut player.mounted, "Mounted");
+            if player.mounted {
+                ui.label("Mounted combat conditions");
+                ui.small("Conditions stay fixed for this simulation. Requires Average or better Riding.");
+                ui.horizontal(|ui| {
+                    ui.label("Mount");
+                    let label = game_logic::MOUNT_TYPE_OPTIONS.iter()
+                        .find(|(value, _)| *value == player.mounted_combat.mount).unwrap().1;
+                    searchable_select(ui, format!("{id_prefix}_mount_type"), label,
+                        &mut player.mounted_combat.mount,
+                        game_logic::MOUNT_TYPE_OPTIONS.into_iter().map(|(v, label)| (v, label.to_string(), true)));
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Riding mastery");
+                    let label = game_logic::RIDING_MASTERY_OPTIONS.iter()
+                        .find(|(value, _)| *value == player.mounted_combat.riding).unwrap().1;
+                    searchable_select(ui, format!("{id_prefix}_riding"), label,
+                        &mut player.mounted_combat.riding,
+                        game_logic::RIDING_MASTERY_OPTIONS.into_iter().map(|(v, label)| (v, label.to_string(), true)));
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Target size");
+                    let label = game_logic::MOUNTED_TARGET_SIZE_OPTIONS.iter()
+                        .find(|(value, _)| *value == player.mounted_combat.target_size).unwrap().1;
+                    searchable_select(ui, format!("{id_prefix}_mounted_target_size"), label,
+                        &mut player.mounted_combat.target_size,
+                        game_logic::MOUNTED_TARGET_SIZE_OPTIONS.into_iter().map(|(v, label)| (v, label.to_string(), true)));
+                });
+                ui.small("Size override is useful for NPC presets without body-size data.");
+                ui.checkbox(&mut player.mounted_combat.trot_or_faster, "Moving at a trot or faster");
+                ui.label(format!("Mounted Defense: {:+}", game_logic::mounted_defense_bonus(player)));
+                ui.small("Lance attacks are detected automatically from the weapon used.");
+                ui.small("On a warhorse at trot or faster: double base lance dice, then add mounted and horse dice.");
+                if let Some(weapon) = weapon_catalog.get(player.weapon_id) {
+                    ui.label(format!("{}: mounted Attack {:+}", weapon.name,
+                        game_logic::mounted_attack_bonus(player, weapon)));
+                    ui.label(game_logic::mounted_damage_summary(player, weapon));
+                }
+                if let Some(weapon) = player.offhand_weapon_id.and_then(|id| weapon_catalog.get(id)) {
+                    ui.label(format!("Offhand {}: mounted Attack {:+}", weapon.name,
+                        game_logic::mounted_attack_bonus(player, weapon)));
+                    ui.label(game_logic::mounted_damage_summary(player, weapon));
+                }
+            }
         }
         PlayerEditorTab::Tactics => {
             render_tactics_editor(
@@ -4180,36 +4223,7 @@ fn render_player_editor(
                 ability_slider(ui, "CHA", &mut player.charisma);
 
                 ui.separator();
-                let weapon = weapon_catalog.get(player.weapon_id).unwrap_or_else(|| {
-                    weapon_catalog
-                        .entries()
-                        .first()
-                        .expect("weapon catalog empty")
-                });
-                let shield_active = game_logic::shield_equipped_with_catalog(
-                    player,
-                    weapon,
-                    shield_catalog,
-                    talent_catalog,
-                    weapon_catalog,
-                );
-                ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.label("Weapon masteries");
-                        mastery_slider(ui, "Attack", &mut player.mastery_attack);
-                        mastery_slider(ui, "Defense", &mut player.mastery_defense);
-                        mastery_slider(ui, "Damage", &mut player.mastery_damage);
-                        mastery_slider(ui, "Speed", &mut player.mastery_speed);
-                    });
-                    ui.separator();
-                    ui.add_enabled_ui(shield_active, |ui| {
-                        ui.vertical(|ui| {
-                            ui.label("Shield masteries");
-                            mastery_slider(ui, "Defense", &mut player.shield_mastery_defense);
-                            mastery_slider(ui, "Speed", &mut player.shield_mastery_speed);
-                        });
-                    });
-                });
+                render_weapon_masteries(ui, id_prefix, player);
             });
         }
         PlayerEditorTab::Talents => {
@@ -4312,7 +4326,7 @@ fn render_player_editor(
                 npc_presets,
                 talent_catalog,
             );
-            let breakdowns = game_logic::derived_stat_breakdowns(
+            let mut breakdowns = game_logic::derived_stat_breakdowns(
                 player,
                 weapon_catalog,
                 armor_catalog,
@@ -4441,6 +4455,9 @@ fn render_player_editor(
                 talent_catalog,
             );
             let target_armor_dr = opponent_combatant.sheet.defense.armor_dr.max(0);
+            game_logic::apply_target_damage_breakdowns(
+                &mut breakdowns, &combatant, &opponent_combatant, roll.is_ranged_weapon,
+            );
             let target_natural_dr = opponent_combatant.sheet.defense.natural_dr.max(0);
             let called_shot_target_bonus_vs_opponent =
                 game_logic::called_shot_target_defense_bonus_against_target(
@@ -4475,15 +4492,15 @@ fn render_player_editor(
                     breakdowns.get(game_logic::DerivedStatId::MeleeDefense),
                 );
             }
+            for note in &defense.conditional_notes {
+                ui.label(note);
+            }
             ui.separator();
             ui.label("Mainhand");
-            let weapon_shield_damage = combatant
-                .sheet
-                .offense
-                .weapon
-                .shield_damage_expr
-                .as_deref()
-                .unwrap_or("-");
+            let weapon_shield_damage = sim::weapon_damage_expression(
+                &combatant, &opponent_combatant, &combatant.sheet.offense.weapon,
+                roll.is_ranged_weapon, true,
+            );
             if player.called_shot {
                 derived_stat_line(
                     ui,
@@ -4506,7 +4523,9 @@ fn render_player_editor(
                 breakdowns.get(game_logic::DerivedStatId::MainhandShieldDamage),
             );
             let mainhand_weapon = &combatant.sheet.offense.weapon;
-            let effective_damage_expr = mainhand_weapon.damage_expr_for_attack();
+            let effective_damage_expr = sim::weapon_damage_expression(
+                &combatant, &opponent_combatant, mainhand_weapon, roll.is_ranged_weapon, false,
+            );
             let damage_roll = if mainhand_weapon.halves_damage_for_attack() {
                 format!("({effective_damage_expr} + {strength_damage}) / 2")
             } else {
@@ -4559,8 +4578,12 @@ fn render_player_editor(
                     format!("Weapon speed: {}", offhand.weapon.speed),
                     breakdowns.get(game_logic::DerivedStatId::OffhandWeaponSpeed),
                 );
-                let offhand_shield_damage =
-                    offhand.weapon.shield_damage_expr.as_deref().unwrap_or("-");
+                let offhand_shield_damage = sim::weapon_damage_expression(
+                    &combatant, &opponent_combatant, &offhand.weapon, false, true,
+                );
+                let offhand_damage_expr = sim::weapon_damage_expression(
+                    &combatant, &opponent_combatant, &offhand.weapon, false, false,
+                );
                 derived_stat_line(
                     ui,
                     format!("Weapon shield damage: {}", offhand_shield_damage),
@@ -4575,7 +4598,7 @@ fn render_player_editor(
                     ui,
                     format!(
                         "Damage roll: {} + {} {:+} vs target DR {} (AP {})",
-                        offhand.weapon.damage_expr,
+                        offhand_damage_expr,
                         offhand.strength_damage,
                         combatant.sheet.maneuvers.dualwield_offhand_damage_penalty,
                         target_armor_dr,
@@ -4961,12 +4984,7 @@ fn apply_fighter_preset(
     player.name = preset.name.clone();
     player.level = preset.level;
     player.progression = Progression::new(attack, speed, initiative, health);
-    player.mastery_attack = game_logic::clamp_mastery(preset.masteries.attack);
-    player.mastery_defense = game_logic::clamp_mastery(preset.masteries.defense);
-    player.mastery_damage = game_logic::clamp_mastery(preset.masteries.damage);
-    player.mastery_speed = game_logic::clamp_mastery(preset.masteries.speed);
-    player.shield_mastery_defense = game_logic::clamp_mastery(preset.masteries.shield_defense);
-    player.shield_mastery_speed = game_logic::clamp_mastery(preset.masteries.shield_speed);
+    player.weapon_masteries = game_logic::weapon_masteries_for_preset(preset, weapon_catalog);
     player.base_hp = preset.base_hp;
     player.move_speed = preset.move_speed;
     player.strength_base = preset.strength_base;
@@ -5004,6 +5022,7 @@ fn apply_fighter_preset(
     player.fighting_withdrawal = maneuvers.fighting_withdrawal;
     player.flee = maneuvers.flee;
     player.mounted = maneuvers.mounted;
+    player.mounted_combat = maneuvers.mounted_combat;
     player.defensive_dualwielding = preset.defensive_dualwielding;
     player.offensive_dualwielding = preset.offensive_dualwielding;
     player.environment = game_logic::EnvironmentConfig::default();
@@ -5065,14 +5084,16 @@ fn fighter_preset_from_player(
             initiative: tier_label(player.progression.initiative).to_string(),
             health: tier_label(player.progression.health).to_string(),
         },
-        masteries: FighterMasteries {
-            attack: game_logic::clamp_mastery(player.mastery_attack),
-            defense: game_logic::clamp_mastery(player.mastery_defense),
-            damage: game_logic::clamp_mastery(player.mastery_damage),
-            speed: game_logic::clamp_mastery(player.mastery_speed),
-            shield_defense: game_logic::clamp_mastery(player.shield_mastery_defense),
-            shield_speed: game_logic::clamp_mastery(player.shield_mastery_speed),
-        },
+        masteries: FighterMasteries::default(),
+        weapon_masteries: Some(
+            player
+                .weapon_masteries
+                .iter()
+                .map(|(&group, &points)| {
+                    (group, game_logic::normalized_group_mastery(group, points))
+                })
+                .collect(),
+        ),
         base_hp: player.base_hp,
         move_speed: player.move_speed,
         strength_base: player.strength_base,
@@ -5116,6 +5137,7 @@ fn fighter_preset_from_player(
             fighting_withdrawal: player.fighting_withdrawal,
             flee: player.flee,
             mounted: player.mounted,
+            mounted_combat: player.mounted_combat,
         },
         defensive_dualwielding: player.defensive_dualwielding,
         offensive_dualwielding: player.offensive_dualwielding,
@@ -5243,11 +5265,43 @@ fn ability_slider(ui: &mut egui::Ui, label: &str, value: &mut u8) {
     });
 }
 
-fn mastery_slider(ui: &mut egui::Ui, label: &str, value: &mut i32) {
-    ui.horizontal(|ui| {
-        ui.label(label);
-        ui.add(egui::Slider::new(value, 0..=6).step_by(1.0));
-    });
+fn render_weapon_masteries(ui: &mut egui::Ui, id_prefix: &str, player: &mut PlayerConfig) {
+    ui.label("Weapon masteries");
+    egui::Grid::new(format!("{id_prefix}_weapon_masteries"))
+        .striped(true)
+        .spacing(egui::vec2(8.0, 4.0))
+        .show(ui, |ui| {
+            for label in ["Group", "ATK", "DMG", "SPD", "DEF"] {
+                ui.strong(label);
+            }
+            ui.end_row();
+            for group in game_logic::MASTERY_GROUPS {
+                ui.label(game_logic::mastery_group_label(group));
+                let points = player.mastery_mut(group);
+                for aspect in [&mut points.attack, &mut points.damage] {
+                    if game_logic::mastery_has_attack_and_damage(group) {
+                        ui.add(egui::DragValue::new(aspect).clamp_range(0..=6).prefix("+"));
+                    } else {
+                        ui.label("—");
+                    }
+                }
+                ui.add(
+                    egui::DragValue::new(&mut points.speed)
+                        .clamp_range(0..=6)
+                        .prefix("−"),
+                );
+                if game_logic::mastery_has_defense(group) {
+                    ui.add(
+                        egui::DragValue::new(&mut points.defense)
+                            .clamp_range(0..=6)
+                            .prefix("+"),
+                    );
+                } else {
+                    ui.label("—");
+                }
+                ui.end_row();
+            }
+        });
 }
 
 fn format_talent_requirement_failure(
@@ -6102,5 +6156,35 @@ mod tests {
             calculate_essence_wounds(1000, 100, i64::MIN).current_essence,
             0
         );
+    }
+
+    #[test]
+    fn fighter_editor_round_trip_preserves_each_group_even_when_unequipped() {
+        let app = SimGuiApp::new();
+        let mut player = app.players[0].clone();
+        player.mastery_mut(WeaponGroup::Axes).attack = 3;
+        player.mastery_mut(WeaponGroup::Spears).damage = 2;
+        player.mastery_mut(WeaponGroup::SmallSwords).defense = 1;
+        player.mastery_mut(WeaponGroup::Shields).speed = 4;
+        let saved = fighter_preset_from_player(
+            &player,
+            &app.weapon_catalog,
+            &app.armor_catalog,
+            &app.shield_catalog,
+            "Mastery round trip",
+        );
+        let json = serde_json::to_value(&saved).unwrap();
+        assert!(json.get("masteries").is_none());
+        let restored: FighterPreset = serde_json::from_value(json).unwrap();
+        let mut loaded = PlayerConfig::new("Empty", app.weapon_catalog.first_id().unwrap());
+        apply_fighter_preset(
+            &mut loaded,
+            &restored,
+            &app.weapon_catalog,
+            &app.armor_catalog,
+            &app.shield_catalog,
+            &app.race_catalog,
+        );
+        assert_eq!(loaded.weapon_masteries, player.weapon_masteries);
     }
 }

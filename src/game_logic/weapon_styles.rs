@@ -62,7 +62,7 @@ pub(super) fn evonia_defense_bonus(
     }
     let id = player.offhand_weapon_id.expect("validated Evonia offhand");
     let offhand = catalog.get(id).expect("validated Evonia offhand");
-    clamp_mastery(player.mastery_defense)
+    player.mastery(offhand.group).defense
         + modifiers.defense_bonus_for_weapon(id)
         + if offhand.defense_bonus_always { 4 } else { 0 }
 }

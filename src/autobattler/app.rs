@@ -1331,14 +1331,8 @@ impl AutobattlerApp {
             tier_from_label(&preset.progression.initiative),
             tier_from_label(&preset.progression.health),
         );
-        creation.player.mastery_attack = game_logic::clamp_mastery(preset.masteries.attack);
-        creation.player.mastery_defense = game_logic::clamp_mastery(preset.masteries.defense);
-        creation.player.mastery_damage = game_logic::clamp_mastery(preset.masteries.damage);
-        creation.player.mastery_speed = game_logic::clamp_mastery(preset.masteries.speed);
-        creation.player.shield_mastery_defense =
-            game_logic::clamp_mastery(preset.masteries.shield_defense);
-        creation.player.shield_mastery_speed =
-            game_logic::clamp_mastery(preset.masteries.shield_speed);
+        creation.player.weapon_masteries =
+            game_logic::weapon_masteries_for_preset(preset, &self.weapon_catalog);
         creation.player.base_hp = preset.base_hp.max(1);
         creation.player.move_speed = preset.move_speed;
         creation.player.strength_base = preset.strength_base;
@@ -1382,6 +1376,7 @@ impl AutobattlerApp {
         creation.player.fighting_withdrawal = preset.maneuvers.fighting_withdrawal;
         creation.player.flee = preset.maneuvers.flee;
         creation.player.mounted = preset.maneuvers.mounted;
+        creation.player.mounted_combat = preset.maneuvers.mounted_combat;
         creation.player.defensive_dualwielding = preset.defensive_dualwielding;
         creation.player.offensive_dualwielding = preset.offensive_dualwielding;
         creation.player.environment = game_logic::EnvironmentConfig::default();

@@ -284,14 +284,18 @@ fn evonia_keeps_two_handed_defense_and_adds_offhand_mastery_without_offensive_ti
         "left_hand_of_evonia",
         "Greatsword",
         Some("Short sword"),
-        |p| p.mastery_defense = 3,
+        |p| {
+            p.mastery_mut(crate::character::WeaponGroup::SmallSwords)
+                .defense = 3
+        },
     );
     let neutral = fixture(
         "left_hand_of_evonia",
         "Greatsword",
         Some("Short sword"),
         |p| {
-            p.mastery_defense = 3;
+            p.mastery_mut(crate::character::WeaponGroup::SmallSwords)
+                .defense = 3;
             p.default_weapon_style_ids = Some(vec![]);
         },
     );
@@ -554,4 +558,65 @@ fn new_style_options_survive_preset_round_trips_and_default_for_legacy_presets()
     json.as_object_mut().unwrap().remove("decline_pursuit");
     let legacy: logic::FighterPreset = serde_json::from_value(json).unwrap();
     assert!(!legacy.one_path_piercing && !legacy.decline_pursuit);
+}
+
+#[test]
+fn unarmed_near_perfect_counters_use_unarmed_mastery_instead_of_the_held_sword() {
+    use crate::character::WeaponGroup;
+    let mut defender = fixture("", "Longsword", None, |p| {
+        p.mastery_mut(WeaponGroup::LargeSwords).attack = 6;
+        p.mastery_mut(WeaponGroup::LargeSwords).damage = 6;
+        p.mastery_mut(WeaponGroup::Unarmed).attack = 2;
+        p.mastery_mut(WeaponGroup::Unarmed).damage = 3;
+    });
+    let mut neutral = fixture("", "Longsword", None, |_| {});
+    defender.sheet.defense.defense_mod = 100;
+    neutral.sheet.defense.defense_mod = 100;
+    for eyesmite in [false, true] {
+        defender.sheet.defense.eyesmite = eyesmite;
+        neutral.sheet.defense.eyesmite = eyesmite;
+        let mut verified = false;
+        for seed in 0..1000 {
+            let run = |actor| {
+                let mut actors = vec![target(), actor];
+                resolve_attack(
+                    &mut actors,
+                    0,
+                    1,
+                    0,
+                    false,
+                    1.0,
+                    AttackMode::Normal,
+                    WeaponSlot::Primary,
+                    0.0,
+                    None,
+                    &mut StdRng::seed_from_u64(seed),
+                )
+            };
+            let original = run(neutral.clone());
+            if original.roll.defense_die != 19 {
+                continue;
+            }
+            let Some(base_counter) = original.counter_attack else {
+                continue;
+            };
+            let trained_counter = run(defender.clone()).counter_attack.unwrap();
+            assert_eq!(
+                trained_counter.roll.attack_bonus - base_counter.roll.attack_bonus,
+                2
+            );
+            if let (Some(trained), Some(base)) = (
+                trained_counter.damage_breakdown,
+                base_counter.damage_breakdown,
+            ) {
+                assert_eq!(trained.strength_damage - base.strength_damage, 3);
+                verified = true;
+                break;
+            }
+        }
+        assert!(
+            verified,
+            "No shared successful near-perfect counter was exercised (Eyesmite: {eyesmite})"
+        );
+    }
 }

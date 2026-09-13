@@ -1,9 +1,12 @@
 //! Simulation engine and state transitions.
 
 mod combat;
+pub use combat::weapon_damage_expression;
 mod engine;
 mod modifiers;
 mod movement;
+mod mounted;
+pub use mounted::{MountedCombatConfig, MountType, RidingMastery, MountedTargetSize};
 mod types;
 
 pub use engine::{

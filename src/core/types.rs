@@ -452,6 +452,7 @@ pub enum TalentEffect {
     Eyesmite,
     Chronoblur,
     Streamline,
+    Remarkability,
     NearPerfectDefenseMinRoll {
         roll: i32,
     },

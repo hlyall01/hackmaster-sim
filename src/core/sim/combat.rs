@@ -7,6 +7,7 @@ use super::modifiers::{
     ModifierOpI32, StatIdF32, StatIdI32, TemporaryEffect,
 };
 use super::movement::range_modifier_for_weapon_with_scale;
+use super::mounted::MountedDamagePlan;
 use super::types::{
     AttackRollBreakdown, Combatant, CombatantState, CriticalHit, DamageBreakdown, DamageDie,
     KnockAsideRollBreakdown, ShieldBreakageStep, ShieldDamageBreakdown, WeaponCache, WeaponSlot,
@@ -15,6 +16,10 @@ use super::types::{
 use std::sync::Arc;
 
 const CURSE_OF_AXE_D6_TRIGGERS: &[i32] = &[4, 5, 6];
+
+#[cfg(test)]
+#[path = "mounted_damage_tests.rs"]
+mod mounted_damage_tests;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AttackMode {
@@ -277,6 +282,10 @@ fn fight_defensively_attack_penalty(combatant: &Combatant) -> i32 {
     } else {
         0
     }
+}
+
+fn mounted_defense_bonus(combatant: &Combatant) -> i32 {
+    combatant.sheet.maneuvers.mounted_combat.defense_bonus(combatant.sheet.maneuvers.mounted)
 }
 
 fn fight_defensively_defense_bonus(combatant: &Combatant) -> i32 {
@@ -767,22 +776,162 @@ fn roll_extra_damage(
     total
 }
 
+fn mounted_damage_plan(
+    attacker: &Combatant,
+    defender: &Combatant,
+    weapon: &super::WeaponProfile,
+    is_ranged: bool,
+) -> MountedDamagePlan {
+    if !attacker.sheet.maneuvers.mounted || is_ranged || !weapon.has_weapon || weapon.is_unarmed {
+        return MountedDamagePlan::default();
+    }
+    attacker.sheet.maneuvers.mounted_combat.damage_plan(
+        &weapon.name, defender.sheet.defense.is_medium_sized,
+    )
+}
+
+fn mounted_extra_dice(pool: &[DamageDie], plan: MountedDamagePlan) -> Vec<DamageDie> {
+    let mut extra = if plan.double_base_dice { pool.to_vec() } else { Vec::new() };
+    if let Some(smallest) = pool.first() {
+        extra.extend(std::iter::repeat_n(*smallest, plan.extra_smallest));
+    }
+    extra
+}
+
+fn format_damage_dice(dice: &[DamageDie]) -> String {
+    let mut groups: Vec<(i32, bool, usize)> = Vec::new();
+    for die in dice {
+        if let Some(group) = groups.iter_mut().find(|g| g.0 == die.sides && g.1 == die.penetrating) {
+            group.2 += 1;
+        } else {
+            groups.push((die.sides, die.penetrating, 1));
+        }
+    }
+    groups.into_iter().map(|(sides, penetrating, count)| {
+        format!("{count}d{sides}{}", if penetrating { "p" } else { "" })
+    }).collect::<Vec<_>>().join(" + ")
+}
+
+/// Weapon dice for the current matchup, before Strength and other flat modifiers.
+/// Uses the same mounted plan and bonus dice pool as attack resolution.
+pub fn weapon_damage_expression(
+    attacker: &Combatant,
+    defender: &Combatant,
+    weapon: &super::WeaponProfile,
+    is_ranged: bool,
+    shield: bool,
+) -> String {
+    let (expr, cache) = if shield {
+        match (&weapon.shield_damage_expr, &weapon.shield_damage_expr_cache) {
+            (Some(expr), Some(cache)) => (expr.as_str(), cache),
+            _ => return "-".into(),
+        }
+    } else {
+        (weapon.damage_expr_for_attack(), weapon.damage_expr_cache_for_attack())
+    };
+    let nonpenetrating = !shield && (weapon.use_jab || weapon.force_nonpenetrating_damage);
+    let plan = mounted_damage_plan(attacker, defender, weapon, is_ranged);
+    let pool = parse_damage_dice(expr, nonpenetrating, cache.d6_penetration_triggers(),
+        cache.penetrate_on_max_minus_one());
+    let extra = mounted_extra_dice(&pool, plan);
+    let base = if nonpenetrating { expr.replace(['p', 'P'], "") } else { expr.into() };
+    if extra.is_empty() {
+        return base;
+    }
+
+    // Combine ordinary additive dice into e.g. 7d8p, preserving flat terms once.
+    // Keep special expressions (such as "lower of") intact and append their bonus dice.
+    let compact = base.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+    let mut constants = Vec::new();
+    let simple = compact.split_inclusive(|c| c == '+' || c == '-');
+    let mut sign = '+';
+    let mut additive = true;
+    for part in simple {
+        let term = part.trim_end_matches(['+', '-']);
+        if let Ok(value) = term.parse::<i32>() {
+            constants.push((sign, value));
+        } else if let Some((count, sides)) = term.split_once('d') {
+            let sides = sides.strip_suffix('p').unwrap_or(sides);
+            additive &= sign == '+' && (count.is_empty() || count.parse::<usize>().is_ok())
+                && sides.parse::<i32>().is_ok();
+        } else {
+            additive = false;
+        }
+        if let Some(last @ ('+' | '-')) = part.chars().last() { sign = last; }
+    }
+    if !additive {
+        return format!("({base}) + {}", format_damage_dice(&extra));
+    }
+    let mut dice = pool;
+    dice.extend(extra);
+    let mut expression = format_damage_dice(&dice);
+    for (sign, value) in constants {
+        expression.push_str(&format!(" {sign} {value}"));
+    }
+    expression
+}
+
+// Add dice, never multiply the weapon's flat term or Strength/mastery/material bonuses.
+// Critical extra dice continue to use the original weapon pool.
+fn roll_mounted_weapon_damage(
+    weapon: &super::WeaponProfile,
+    plan: MountedDamagePlan,
+    use_jab: bool,
+    shield: bool,
+    average: bool,
+    rng: &mut impl Rng,
+) -> i32 {
+    let (expr, cache) = if shield {
+        match (&weapon.shield_damage_expr, &weapon.shield_damage_expr_cache) {
+            (Some(expr), Some(cache)) => (expr.as_str(), cache),
+            _ => return 0,
+        }
+    } else if use_jab {
+        (weapon.damage_expr_for_attack(), weapon.damage_expr_cache_for_attack())
+    } else {
+        (weapon.damage_expr.as_str(), &weapon.damage_expr_cache)
+    };
+    let nonpenetrating = !shield && (use_jab || weapon.force_nonpenetrating_damage);
+    if !plan.double_base_dice && plan.extra_smallest == 0 {
+        return if average { average_damage_cache_rounded_down(cache, nonpenetrating) }
+            else { cache.roll(rng, nonpenetrating) };
+    }
+    let pool = parse_damage_dice(expr, nonpenetrating, cache.d6_penetration_triggers(),
+        cache.penetrate_on_max_minus_one());
+    let extra = mounted_extra_dice(&pool, plan);
+    if average {
+        return (cache.expected(nonpenetrating)
+            + extra.iter().copied().map(expected_damage_die).sum::<f64>()).floor() as i32;
+    }
+    let mut result = cache.roll(rng, nonpenetrating);
+    for die in extra {
+        result += if die.penetrating && die.penetrate_on_max_minus_one {
+            crate::core::rules::penetrating_roll_trigger_set(
+                die.sides, &[(die.sides - 1).max(1), die.sides], rng)
+        } else if let Some(triggers) = die.penetration_triggers {
+            crate::core::rules::penetrating_roll_trigger_set(die.sides, triggers, rng)
+        } else if die.penetrating {
+            penetrating_roll(die.sides, rng)
+        } else {
+            roll_die(die.sides, rng)
+        };
+    }
+    result
+}
+
 fn shield_block_raw_damage(
-    shield_expr_cache: Option<&DamageExprCache>,
+    weapon: &super::WeaponProfile,
+    mounted_plan: MountedDamagePlan,
     strength_damage: i32,
     damage_penalty: i32,
     damage_multiplier: i32,
     average: bool,
     rng: &mut impl Rng,
 ) -> (i32, i32) {
-    let Some(expr_cache) = shield_expr_cache else {
+    let Some(_) = weapon.shield_damage_expr_cache.as_ref() else {
         return (0, 0);
     };
-    let rolled_damage = if average {
-        average_damage_cache_rounded_down(expr_cache, false)
-    } else {
-        expr_cache.roll(rng, false)
-    };
+    let rolled_damage = roll_mounted_weapon_damage(weapon, mounted_plan, false, true, average, rng);
     let mut raw = rolled_damage + strength_damage + damage_penalty;
     if raw < 0 {
         raw = 0;
@@ -941,7 +1090,7 @@ fn resolve_eyesmite(
     let attack_bonus = combatants[attacker_idx].apply_i32(
         StatIdI32::AttackBonusBase,
         combatants[attacker_idx].sheet.offense.attack_bonus_base,
-    );
+    ) + combatants[attacker_idx].apply_i32(StatIdI32::UnarmedAttackBonus, 0);
     let strength_damage = combatants[attacker_idx].apply_i32(
         StatIdI32::StrengthDamageBase,
         combatants[attacker_idx].sheet.offense.strength_damage_base,
@@ -956,6 +1105,7 @@ fn resolve_eyesmite(
     let defender_total_dr = defender.sheet.defense.armor_dr + defender.sheet.defense.natural_dr;
     let shield_active = defender_state.shield_intact;
     let defense_mod = defender.apply_i32(StatIdI32::DefenseMod, defender.sheet.defense.defense_mod)
+        + mounted_defense_bonus(defender)
         + fight_defensively_defense_bonus(defender)
         - called_shot_defense_penalty(defender)
         + chronoblur_melee_defense_bonus(&defender_state);
@@ -1164,7 +1314,7 @@ fn resolve_counter_attack(
                 attacker.apply_i32(
                     StatIdI32::AttackBonusBase,
                     attacker.sheet.offense.attack_bonus_base,
-                ),
+                ) + attacker.apply_i32(StatIdI32::UnarmedAttackBonus, 0),
                 attacker.apply_i32(
                     StatIdI32::StrengthDamageBase,
                     attacker.sheet.offense.strength_damage_base,
@@ -1189,6 +1339,9 @@ fn resolve_counter_attack(
         )
     };
     let unarmed_expr = unarmed_expr.unwrap_or("d4p");
+    let mounted_plan = weapon_profile.as_ref().map(|weapon| mounted_damage_plan(
+        &combatants[attacker_idx], &combatants[defender_idx], weapon, false,
+    )).unwrap_or_default();
     let armor_penetration = style_armor_penetration(
         &combatants[attacker_idx],
         &combatants[defender_idx],
@@ -1222,6 +1375,7 @@ fn resolve_counter_attack(
     ) = {
         (
             defender.apply_i32(StatIdI32::DefenseMod, defender.sheet.defense.defense_mod)
+                + mounted_defense_bonus(defender)
                 + defender_regenstat_bonus
                 + defender_fight_defensively_bonus
                 - defender_called_shot_penalty
@@ -1327,33 +1481,18 @@ fn resolve_counter_attack(
         reaper_extra_dice_multiplier(&combatants[attacker_idx], weapon_profile.as_deref());
 
     if hit {
-        let mut rolled_damage = if use_weapon {
-            let weapon = weapon_profile.as_ref().expect("weapon profile missing");
-            if average_damage {
-                average_damage_cache_rounded_down(
-                    &weapon.damage_expr_cache,
-                    weapon.force_nonpenetrating_damage,
-                )
-            } else {
-                weapon
-                    .damage_expr_cache
-                    .roll(rng, weapon.force_nonpenetrating_damage)
-            }
-        } else if average_damage {
-            DamageExprCache::new(unarmed_expr).expected(false).floor() as i32
-        } else {
-            roll_damage_expr(unarmed_expr, rng, false)
-        };
-        if !average_damage && crit_trigger && defender_defiant {
-            let second = if use_weapon {
-                let weapon = weapon_profile.as_ref().expect("weapon profile missing");
-                weapon
-                    .damage_expr_cache
-                    .roll(rng, weapon.force_nonpenetrating_damage)
+        let roll = |rng: &mut _| {
+            if let Some(weapon) = weapon_profile.as_ref() {
+                roll_mounted_weapon_damage(weapon, mounted_plan, false, false, average_damage, rng)
+            } else if average_damage {
+                DamageExprCache::new(unarmed_expr).expected(false).floor() as i32
             } else {
                 roll_damage_expr(unarmed_expr, rng, false)
-            };
-            rolled_damage = rolled_damage.min(second);
+            }
+        };
+        let mut rolled_damage = roll(rng);
+        if !average_damage && crit_trigger && defender_defiant {
+            rolled_damage = rolled_damage.min(roll(rng));
         }
         let mut raw = rolled_damage + strength_damage + damage_penalty;
         if use_weapon
@@ -1546,7 +1685,8 @@ fn resolve_counter_attack(
             let (rolled_damage, raw) = if use_weapon {
                 let weapon = weapon_profile.as_ref().expect("weapon profile missing");
                 shield_block_raw_damage(
-                    weapon.shield_damage_expr_cache.as_ref(),
+                    weapon,
+                    mounted_plan,
                     strength_damage,
                     damage_penalty,
                     damage_multiplier,
@@ -1811,7 +1951,7 @@ pub(crate) fn resolve_attack(
         0
     };
     let mut attack_bonus = attack_profile.attack_bonus;
-    if attack_mode == AttackMode::Charge {
+    if attack_mode == AttackMode::Charge && !combatants[attacker_idx].sheet.maneuvers.mounted {
         attack_bonus += CHARGE_ATTACK_BONUS;
     }
     attack_bonus += attacker_regenstat_bonus;
@@ -1828,6 +1968,8 @@ pub(crate) fn resolve_attack(
     let damage_penalty = attack_profile.damage_penalty;
     let defender_knockback_step_adjustment = attack_profile.defender_knockback_step_adjustment;
     let weapon = attack_profile.weapon;
+    let mounted_plan = mounted_damage_plan(&combatants[attacker_idx],
+        &combatants[defender_idx], &weapon, is_ranged);
     let reaper_multiplier = reaper_extra_dice_multiplier(&combatants[attacker_idx], Some(&weapon));
     let chronoblur_active = chronoblur_active_for_moved_defender(&defender_state);
     let chronoblur_melee_bonus = if is_ranged {
@@ -1981,6 +2123,8 @@ pub(crate) fn resolve_attack(
             shield_defense_bonus,
         )
     };
+    // Mount movement protects the rider with either ranged defense option and in melee.
+    let defense_mod_used = defense_mod_used + mounted_defense_bonus(&combatants[defender_idx]);
     if is_ranged && use_shield_for_ranged {
         if let Some(cap) = shield_cover_value {
             attack_roll = attack_roll.min(cap);
@@ -2084,37 +2228,13 @@ pub(crate) fn resolve_attack(
 
     if attack_hits {
         hit = true;
-        let (mut rolled_damage, halve_jab_damage) = if use_jab {
-            let cache = weapon.damage_expr_cache_for_attack();
-            let mut rolled = if average_damage {
-                average_damage_cache_rounded_down(cache, true)
-            } else {
-                cache.roll(rng, true)
-            };
-            if !average_damage && crit_trigger && defender_defiant {
-                let second = cache.roll(rng, true);
-                rolled = rolled.min(second);
-            }
-            (rolled, weapon.halves_damage_for_attack())
-        } else {
-            let mut rolled = if average_damage {
-                average_damage_cache_rounded_down(
-                    &weapon.damage_expr_cache,
-                    weapon.force_nonpenetrating_damage,
-                )
-            } else {
-                weapon
-                    .damage_expr_cache
-                    .roll(rng, weapon.force_nonpenetrating_damage)
-            };
-            if !average_damage && crit_trigger && defender_defiant {
-                let second = weapon
-                    .damage_expr_cache
-                    .roll(rng, weapon.force_nonpenetrating_damage);
-                rolled = rolled.min(second);
-            }
-            (rolled, false)
-        };
+        let mut rolled_damage = roll_mounted_weapon_damage(
+            &weapon, mounted_plan, use_jab, false, average_damage, rng);
+        if !average_damage && crit_trigger && defender_defiant {
+            rolled_damage = rolled_damage.min(roll_mounted_weapon_damage(
+                &weapon, mounted_plan, use_jab, false, average_damage, rng));
+        }
+        let halve_jab_damage = use_jab && weapon.halves_damage_for_attack();
         let mut raw = rolled_damage + strength_damage;
         if halve_jab_damage {
             raw /= 2;
@@ -2343,7 +2463,8 @@ pub(crate) fn resolve_attack(
         if miss_margin < shield_block_window {
             shield_block = true;
             let (rolled_damage, raw) = shield_block_raw_damage(
-                weapon.shield_damage_expr_cache.as_ref(),
+                &weapon,
+                mounted_plan,
                 strength_damage,
                 damage_penalty,
                 1,

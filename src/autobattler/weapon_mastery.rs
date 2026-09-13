@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::character::{MasteryAspect, WeaponGroup, mastery_threshold};
 use crate::core::rng::SimRng;
@@ -121,27 +121,28 @@ pub fn seed_profile_masteries_from_config(
     weapon_catalog: &WeaponCatalog,
     shield_catalog: &ShieldCatalog,
 ) {
-    if let Some(weapon) = weapon_catalog.get(config.weapon_id) {
-        let idx = ensure_progress_index(profile, weapon.group);
-        let entry = &mut profile.weapon_masteries[idx];
-        entry.attack = entry.attack.max(config.mastery_attack.max(0));
-        entry.defense = entry.defense.max(config.mastery_defense.max(0));
-        entry.damage = entry.damage.max(config.mastery_damage.max(0));
-        entry.speed = entry.speed.max(config.mastery_speed.max(0));
-        let tiers = completed_tiers(entry, false);
-        entry.free_proficiency_tiers_claimed = entry.free_proficiency_tiers_claimed.max(tiers);
+    let mut groups: BTreeSet<_> = config.weapon_masteries.keys().copied().collect();
+    for id in std::iter::once(config.weapon_id).chain(config.offhand_weapon_id) {
+        if let Some(weapon) = weapon_catalog.get(id) {
+            groups.insert(weapon.group);
+        }
     }
-
-    let shield_equipped = shield_catalog
+    if shield_catalog
         .get(config.shield_id)
         .and_then(|entry| entry.shield.as_ref())
-        .is_some();
-    if shield_equipped {
-        let idx = ensure_progress_index(profile, WeaponGroup::Shields);
+        .is_some()
+    {
+        groups.insert(WeaponGroup::Shields);
+    }
+    for group in groups {
+        let points = config.mastery(group);
+        let idx = ensure_progress_index(profile, group);
         let entry = &mut profile.weapon_masteries[idx];
-        entry.defense = entry.defense.max(config.shield_mastery_defense.max(0));
-        entry.speed = entry.speed.max(config.shield_mastery_speed.max(0));
-        let tiers = completed_tiers(entry, true);
+        entry.attack = entry.attack.max(points.attack);
+        entry.defense = entry.defense.max(points.defense);
+        entry.damage = entry.damage.max(points.damage);
+        entry.speed = entry.speed.max(points.speed);
+        let tiers = completed_tiers(entry, group == WeaponGroup::Shields);
         entry.free_proficiency_tiers_claimed = entry.free_proficiency_tiers_claimed.max(tiers);
     }
 }
@@ -149,35 +150,26 @@ pub fn seed_profile_masteries_from_config(
 pub fn apply_profile_masteries_to_config(
     profile: &PlayerProfile,
     config: &mut PlayerConfig,
-    weapon_catalog: &WeaponCatalog,
-    shield_catalog: &ShieldCatalog,
+    _weapon_catalog: &WeaponCatalog,
+    _shield_catalog: &ShieldCatalog,
 ) {
-    config.mastery_attack = 0;
-    config.mastery_defense = 0;
-    config.mastery_damage = 0;
-    config.mastery_speed = 0;
-    config.shield_mastery_defense = 0;
-    config.shield_mastery_speed = 0;
-
-    if let Some(weapon) = weapon_catalog.get(config.weapon_id) {
-        if let Some(progress) = progress_for_group(profile, weapon.group) {
-            config.mastery_attack = progress.attack.max(0);
-            config.mastery_defense = progress.defense.max(0);
-            config.mastery_damage = progress.damage.max(0);
-            config.mastery_speed = progress.speed.max(0);
-        }
-    }
-
-    let shield_equipped = shield_catalog
-        .get(config.shield_id)
-        .and_then(|entry| entry.shield.as_ref())
-        .is_some();
-    if shield_equipped {
-        if let Some(progress) = progress_for_group(profile, WeaponGroup::Shields) {
-            config.shield_mastery_defense = progress.defense.max(0);
-            config.shield_mastery_speed = progress.speed.max(0);
-        }
-    }
+    config.weapon_masteries = profile
+        .weapon_masteries
+        .iter()
+        .filter_map(|entry| {
+            let group = weapon_group_from_label(&entry.group)?;
+            let points = crate::character::MasteryState {
+                attack: entry.attack,
+                defense: entry.defense,
+                damage: entry.damage,
+                speed: entry.speed,
+            };
+            Some((
+                group,
+                crate::game_logic::normalized_group_mastery(group, points),
+            ))
+        })
+        .collect();
 }
 
 pub fn spend_mastery_point(
@@ -809,9 +801,67 @@ mod tests {
         let mut cfg = PlayerConfig::new("Test", primary);
         cfg.shield_id = ShieldId::new(0);
         apply_profile_masteries_to_config(&profile, &mut cfg, &weapons, &shields);
-        assert_eq!(cfg.mastery_attack, 2);
-        assert_eq!(cfg.mastery_defense, 3);
-        assert_eq!(cfg.mastery_damage, 4);
-        assert_eq!(cfg.mastery_speed, 1);
+        assert_eq!(
+            cfg.mastery(weapons.get(cfg.weapon_id).unwrap().group)
+                .attack,
+            2
+        );
+        assert_eq!(
+            cfg.mastery(weapons.get(cfg.weapon_id).unwrap().group)
+                .defense,
+            3
+        );
+        assert_eq!(
+            cfg.mastery(weapons.get(cfg.weapon_id).unwrap().group)
+                .damage,
+            4
+        );
+        assert_eq!(
+            cfg.mastery(weapons.get(cfg.weapon_id).unwrap().group).speed,
+            1
+        );
+    }
+    #[test]
+    fn profile_masteries_preserve_unequipped_groups_for_later_weapon_changes() {
+        let (weapons, shields) = sample_catalogs();
+        let mut profile = PlayerProfile::default();
+        let primary = weapons.first_id().unwrap();
+        for (group, bonus) in [
+            (WeaponGroup::Polearms, 4),
+            (WeaponGroup::Spears, 2),
+            (WeaponGroup::Shields, 1),
+        ] {
+            let idx = ensure_progress_index(&mut profile, group);
+            profile.weapon_masteries[idx].defense = bonus;
+            profile.weapon_masteries[idx].speed = bonus;
+        }
+        let mut config = PlayerConfig::new("Test", primary);
+        apply_profile_masteries_to_config(&profile, &mut config, &weapons, &shields);
+        assert_eq!(config.mastery(WeaponGroup::Polearms).defense, 4);
+        assert_eq!(config.mastery(WeaponGroup::Spears).defense, 2);
+        assert_eq!(config.mastery(WeaponGroup::Shields).speed, 1);
+    }
+
+    #[test]
+    fn seeding_all_configured_masteries_preserves_existing_experience_and_points() {
+        let (weapons, shields) = sample_catalogs();
+        let mut profile = PlayerProfile::default();
+        let idx = ensure_progress_index(&mut profile, WeaponGroup::Polearms);
+        profile.weapon_masteries[idx].experience = 117;
+        profile.weapon_masteries[idx].unspent_points = 2;
+        let mut config = PlayerConfig::new("Test", weapons.first_id().unwrap());
+        config.mastery_mut(WeaponGroup::Polearms).attack = 5;
+        config.mastery_mut(WeaponGroup::Spears).attack = 2;
+        seed_profile_masteries_from_config(&mut profile, &config, &weapons, &shields);
+        let polearm = progress_for_group(&profile, WeaponGroup::Polearms).unwrap();
+        assert_eq!(polearm.attack, 5);
+        assert_eq!(polearm.experience, 117);
+        assert_eq!(polearm.unspent_points, 2);
+        assert_eq!(
+            progress_for_group(&profile, WeaponGroup::Spears)
+                .unwrap()
+                .attack,
+            2
+        );
     }
 }

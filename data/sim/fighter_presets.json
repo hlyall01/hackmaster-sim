@@ -9,13 +9,91 @@
         "initiative": "I",
         "health": "IV"
       },
-      "masteries": {
-        "attack": 5,
-        "defense": 4,
-        "damage": 4,
-        "speed": 4,
-        "shield_defense": 0,
-        "shield_speed": 0
+      "weapon_masteries": {
+        "unarmed": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "axes": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "basic": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "blunt": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "ensnaring": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "lashes": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "large_swords": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "small_swords": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "polearms": {
+          "attack": 5,
+          "damage": 4,
+          "speed": 4,
+          "defense": 4
+        },
+        "spears": {
+          "attack": 2,
+          "damage": 2,
+          "speed": 2,
+          "defense": 2
+        },
+        "double": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "bows": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "crossbows": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "shields": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        }
       },
       "base_hp": 10,
       "move_speed": 20.0,
@@ -138,13 +216,19 @@
         "initiative": "III",
         "health": "II"
       },
-      "masteries": {
-        "attack": 3,
-        "defense": 3,
-        "damage": 2,
-        "speed": 3,
-        "shield_defense": 1,
-        "shield_speed": 1
+      "weapon_masteries": {
+        "axes": {
+          "attack": 3,
+          "damage": 2,
+          "speed": 3,
+          "defense": 3
+        },
+        "shields": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 1,
+          "defense": 1
+        }
       },
       "base_hp": 10,
       "move_speed": 20.0,
@@ -245,13 +329,19 @@
         "initiative": "III",
         "health": "II"
       },
-      "masteries": {
-        "attack": 3,
-        "defense": 4,
-        "damage": 3,
-        "speed": 3,
-        "shield_defense": 0,
-        "shield_speed": 1
+      "weapon_masteries": {
+        "axes": {
+          "attack": 3,
+          "damage": 3,
+          "speed": 3,
+          "defense": 4
+        },
+        "shields": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 1,
+          "defense": 0
+        }
       },
       "base_hp": 10,
       "move_speed": 20.0,
@@ -375,13 +465,19 @@
         "initiative": "II",
         "health": "III"
       },
-      "masteries": {
-        "attack": 1,
-        "defense": 1,
-        "damage": 0,
-        "speed": 1,
-        "shield_defense": 0,
-        "shield_speed": 0
+      "weapon_masteries": {
+        "unarmed": {
+          "attack": 1,
+          "damage": 0,
+          "speed": 1,
+          "defense": 1
+        },
+        "shields": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        }
       },
       "base_hp": 10,
       "move_speed": 20.0,
@@ -442,13 +538,19 @@
         "initiative": "II",
         "health": "IV"
       },
-      "masteries": {
-        "attack": 2,
-        "defense": 2,
-        "damage": 2,
-        "speed": 2,
-        "shield_defense": 2,
-        "shield_speed": 1
+      "weapon_masteries": {
+        "large_swords": {
+          "attack": 2,
+          "damage": 2,
+          "speed": 2,
+          "defense": 2
+        },
+        "shields": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 1,
+          "defense": 2
+        }
       },
       "base_hp": 10,
       "move_speed": 20.0,
@@ -571,13 +673,19 @@
         "initiative": "III",
         "health": "III"
       },
-      "masteries": {
-        "attack": 0,
-        "defense": 1,
-        "damage": 0,
-        "speed": 0,
-        "shield_defense": 0,
-        "shield_speed": 0
+      "weapon_masteries": {
+        "spears": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 1
+        },
+        "shields": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        }
       },
       "base_hp": 10,
       "move_speed": 20.0,
@@ -636,13 +744,19 @@
         "initiative": "III",
         "health": "IV"
       },
-      "masteries": {
-        "attack": 2,
-        "defense": 2,
-        "damage": 2,
-        "speed": 2,
-        "shield_defense": 2,
-        "shield_speed": 1
+      "weapon_masteries": {
+        "spears": {
+          "attack": 2,
+          "damage": 2,
+          "speed": 2,
+          "defense": 2
+        },
+        "shields": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 1,
+          "defense": 2
+        }
       },
       "base_hp": 10,
       "move_speed": 20.0,
@@ -761,13 +875,19 @@
         "initiative": "III",
         "health": "IV"
       },
-      "masteries": {
-        "attack": 2,
-        "defense": 3,
-        "damage": 2,
-        "speed": 2,
-        "shield_defense": 0,
-        "shield_speed": 0
+      "weapon_masteries": {
+        "small_swords": {
+          "attack": 2,
+          "damage": 2,
+          "speed": 2,
+          "defense": 3
+        },
+        "shields": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        }
       },
       "base_hp": 10,
       "move_speed": 20.0,
@@ -895,13 +1015,19 @@
         "initiative": "III",
         "health": "IV"
       },
-      "masteries": {
-        "attack": 2,
-        "defense": 3,
-        "damage": 2,
-        "speed": 2,
-        "shield_defense": 0,
-        "shield_speed": 0
+      "weapon_masteries": {
+        "small_swords": {
+          "attack": 2,
+          "damage": 2,
+          "speed": 2,
+          "defense": 3
+        },
+        "shields": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        }
       },
       "base_hp": 10,
       "move_speed": 20.0,
@@ -1054,13 +1180,19 @@
         "initiative": "IV",
         "health": "III"
       },
-      "masteries": {
-        "attack": 1,
-        "defense": 0,
-        "damage": 1,
-        "speed": 2,
-        "shield_defense": 0,
-        "shield_speed": 0
+      "weapon_masteries": {
+        "bows": {
+          "attack": 1,
+          "damage": 1,
+          "speed": 2,
+          "defense": 0
+        },
+        "shields": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        }
       },
       "base_hp": 10,
       "move_speed": 20.0,
@@ -1160,6 +1292,1318 @@
           "weapon": null
         }
       ]
+    },
+    {
+      "name": "Arthur Du Randt (Remarkable L10 - 0 BP)",
+      "level": 10,
+      "progression": {
+        "attack": "V",
+        "speed": "III",
+        "initiative": "I",
+        "health": "V"
+      },
+      "weapon_masteries": {
+        "unarmed": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "axes": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "basic": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "blunt": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "ensnaring": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "lashes": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "large_swords": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "small_swords": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "polearms": {
+          "attack": 5,
+          "damage": 4,
+          "speed": 4,
+          "defense": 4
+        },
+        "spears": {
+          "attack": 2,
+          "damage": 2,
+          "speed": 2,
+          "defense": 2
+        },
+        "double": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "bows": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "crossbows": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "shields": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        }
+      },
+      "base_hp": 10,
+      "move_speed": 20,
+      "strength_base": 17,
+      "strength_pct": 14,
+      "dex_base": 14,
+      "dex_pct": 97,
+      "intelligence": 9,
+      "wisdom": 11,
+      "constitution": 13,
+      "looks": 8,
+      "charisma": 8,
+      "weapon": "Halberd",
+      "armor": "Platemail",
+      "shield": "None",
+      "weapon_material_tier": 5,
+      "armor_material_tier": 2,
+      "projectile_material_tier": 0,
+      "shield_material_tier": 0,
+      "two_hand_grip": true,
+      "maneuvers": {
+        "charge": false
+      },
+      "defensive_dualwielding": false,
+      "race_id": "midlander",
+      "proficiencies": [
+        "Fist",
+        "Glaive",
+        "Halberd",
+        "Poleaxe",
+        "Lance",
+        "Polehammer",
+        "Light armor",
+        "Medium armor",
+        "Heavy armor",
+        "Laborer",
+        "Trilingual",
+        "Hiking"
+      ],
+      "talents": [
+        {
+          "id": "armor_focus",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "armor_specialization",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "armor_master",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "heavy_armor_optimization",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "weapon_focus",
+          "rank": 1,
+          "weapon": "Polearms"
+        },
+        {
+          "id": "weapon_specialization",
+          "rank": 1,
+          "weapon": "Polearms"
+        },
+        {
+          "id": "swift",
+          "rank": 1,
+          "weapon": "Halberd"
+        },
+        {
+          "id": "cleave",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "great_cleave",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "solid",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "tough_hide",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "tough_as_nails",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "armeroci_pole",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "rohavalan_bridge",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "remarkability",
+          "rank": 1,
+          "weapon": null
+        }
+      ],
+      "default_weapon_style_ids": []
+    },
+    {
+      "name": "Arthur Du Randt (Remarkable L10 - 35 BP)",
+      "level": 10,
+      "progression": {
+        "attack": "V",
+        "speed": "III",
+        "initiative": "I",
+        "health": "V"
+      },
+      "weapon_masteries": {
+        "unarmed": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "axes": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "basic": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "blunt": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "ensnaring": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "lashes": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "large_swords": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "small_swords": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "polearms": {
+          "attack": 5,
+          "damage": 4,
+          "speed": 4,
+          "defense": 4
+        },
+        "spears": {
+          "attack": 2,
+          "damage": 2,
+          "speed": 2,
+          "defense": 2
+        },
+        "double": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "bows": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "crossbows": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "shields": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        }
+      },
+      "base_hp": 10,
+      "move_speed": 20,
+      "strength_base": 17,
+      "strength_pct": 14,
+      "dex_base": 14,
+      "dex_pct": 97,
+      "intelligence": 10,
+      "wisdom": 12,
+      "constitution": 13,
+      "looks": 8,
+      "charisma": 8,
+      "weapon": "Halberd",
+      "armor": "Platemail",
+      "shield": "None",
+      "weapon_material_tier": 5,
+      "armor_material_tier": 2,
+      "projectile_material_tier": 0,
+      "shield_material_tier": 0,
+      "two_hand_grip": true,
+      "maneuvers": {
+        "charge": false
+      },
+      "defensive_dualwielding": false,
+      "race_id": "midlander",
+      "proficiencies": [
+        "Fist",
+        "Glaive",
+        "Halberd",
+        "Poleaxe",
+        "Lance",
+        "Polehammer",
+        "Light armor",
+        "Medium armor",
+        "Heavy armor",
+        "Laborer",
+        "Trilingual",
+        "Hiking"
+      ],
+      "talents": [
+        {
+          "id": "armor_focus",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "armor_specialization",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "armor_master",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "heavy_armor_optimization",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "weapon_focus",
+          "rank": 1,
+          "weapon": "Polearms"
+        },
+        {
+          "id": "weapon_specialization",
+          "rank": 1,
+          "weapon": "Polearms"
+        },
+        {
+          "id": "swift",
+          "rank": 1,
+          "weapon": "Halberd"
+        },
+        {
+          "id": "cleave",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "great_cleave",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "solid",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "tough_hide",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "tough_as_nails",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "armeroci_pole",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "rohavalan_bridge",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "remarkability",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "damage_bonus_weapon",
+          "rank": 1,
+          "weapon": "Halberd"
+        },
+        {
+          "id": "defense_bonus_weapon",
+          "rank": 1,
+          "weapon": "Halberd"
+        }
+      ],
+      "default_weapon_style_ids": []
+    },
+    {
+      "name": "Arthur Du Randt (Remarkable L10 - 41 BP)",
+      "level": 10,
+      "progression": {
+        "attack": "V",
+        "speed": "III",
+        "initiative": "I",
+        "health": "V"
+      },
+      "weapon_masteries": {
+        "unarmed": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "axes": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "basic": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "blunt": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "ensnaring": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "lashes": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "large_swords": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "small_swords": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "polearms": {
+          "attack": 5,
+          "damage": 4,
+          "speed": 4,
+          "defense": 4
+        },
+        "spears": {
+          "attack": 2,
+          "damage": 2,
+          "speed": 2,
+          "defense": 2
+        },
+        "double": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "bows": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "crossbows": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "shields": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        }
+      },
+      "base_hp": 10,
+      "move_speed": 20,
+      "strength_base": 17,
+      "strength_pct": 14,
+      "dex_base": 14,
+      "dex_pct": 97,
+      "intelligence": 10,
+      "wisdom": 12,
+      "constitution": 14,
+      "looks": 8,
+      "charisma": 8,
+      "weapon": "Halberd",
+      "armor": "Platemail",
+      "shield": "None",
+      "weapon_material_tier": 5,
+      "armor_material_tier": 2,
+      "projectile_material_tier": 0,
+      "shield_material_tier": 0,
+      "two_hand_grip": true,
+      "maneuvers": {
+        "charge": false
+      },
+      "defensive_dualwielding": false,
+      "race_id": "midlander",
+      "proficiencies": [
+        "Fist",
+        "Glaive",
+        "Halberd",
+        "Poleaxe",
+        "Lance",
+        "Polehammer",
+        "Light armor",
+        "Medium armor",
+        "Heavy armor",
+        "Laborer",
+        "Trilingual",
+        "Hiking"
+      ],
+      "talents": [
+        {
+          "id": "armor_focus",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "armor_specialization",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "armor_master",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "heavy_armor_optimization",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "weapon_focus",
+          "rank": 1,
+          "weapon": "Polearms"
+        },
+        {
+          "id": "weapon_specialization",
+          "rank": 1,
+          "weapon": "Polearms"
+        },
+        {
+          "id": "swift",
+          "rank": 1,
+          "weapon": "Halberd"
+        },
+        {
+          "id": "cleave",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "great_cleave",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "solid",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "tough_hide",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "tough_as_nails",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "armeroci_pole",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "rohavalan_bridge",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "remarkability",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "damage_bonus_weapon",
+          "rank": 1,
+          "weapon": "Halberd"
+        }
+      ],
+      "default_weapon_style_ids": []
+    },
+    {
+      "name": "Arthur Du Randt (Remarkable L10 - 45 BP)",
+      "level": 10,
+      "progression": {
+        "attack": "V",
+        "speed": "III",
+        "initiative": "I",
+        "health": "V"
+      },
+      "weapon_masteries": {
+        "unarmed": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "axes": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "basic": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "blunt": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "ensnaring": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "lashes": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "large_swords": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "small_swords": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "polearms": {
+          "attack": 5,
+          "damage": 4,
+          "speed": 4,
+          "defense": 4
+        },
+        "spears": {
+          "attack": 2,
+          "damage": 2,
+          "speed": 2,
+          "defense": 2
+        },
+        "double": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "bows": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "crossbows": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "shields": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        }
+      },
+      "base_hp": 10,
+      "move_speed": 20,
+      "strength_base": 17,
+      "strength_pct": 14,
+      "dex_base": 14,
+      "dex_pct": 97,
+      "intelligence": 10,
+      "wisdom": 12,
+      "constitution": 13,
+      "looks": 8,
+      "charisma": 8,
+      "weapon": "Halberd",
+      "armor": "Platemail",
+      "shield": "None",
+      "weapon_material_tier": 5,
+      "armor_material_tier": 2,
+      "projectile_material_tier": 0,
+      "shield_material_tier": 0,
+      "two_hand_grip": true,
+      "maneuvers": {
+        "charge": false
+      },
+      "defensive_dualwielding": false,
+      "race_id": "midlander",
+      "proficiencies": [
+        "Fist",
+        "Glaive",
+        "Halberd",
+        "Poleaxe",
+        "Lance",
+        "Polehammer",
+        "Light armor",
+        "Medium armor",
+        "Heavy armor",
+        "Laborer",
+        "Trilingual",
+        "Hiking"
+      ],
+      "talents": [
+        {
+          "id": "armor_focus",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "armor_specialization",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "armor_master",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "heavy_armor_optimization",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "weapon_focus",
+          "rank": 1,
+          "weapon": "Polearms"
+        },
+        {
+          "id": "weapon_specialization",
+          "rank": 1,
+          "weapon": "Polearms"
+        },
+        {
+          "id": "swift",
+          "rank": 1,
+          "weapon": "Halberd"
+        },
+        {
+          "id": "cleave",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "great_cleave",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "solid",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "tough_hide",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "tough_as_nails",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "armeroci_pole",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "rohavalan_bridge",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "remarkability",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "attack_bonus_weapon",
+          "rank": 1,
+          "weapon": "Halberd"
+        },
+        {
+          "id": "damage_bonus_weapon",
+          "rank": 1,
+          "weapon": "Halberd"
+        },
+        {
+          "id": "defense_bonus_weapon",
+          "rank": 1,
+          "weapon": "Halberd"
+        }
+      ],
+      "default_weapon_style_ids": []
+    },
+    {
+      "name": "Arthur Du Randt (Remarkable L10 - 46 BP)",
+      "level": 10,
+      "progression": {
+        "attack": "V",
+        "speed": "III",
+        "initiative": "I",
+        "health": "V"
+      },
+      "weapon_masteries": {
+        "unarmed": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "axes": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "basic": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "blunt": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "ensnaring": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "lashes": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "large_swords": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "small_swords": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "polearms": {
+          "attack": 5,
+          "damage": 4,
+          "speed": 4,
+          "defense": 4
+        },
+        "spears": {
+          "attack": 2,
+          "damage": 2,
+          "speed": 2,
+          "defense": 2
+        },
+        "double": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "bows": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "crossbows": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "shields": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        }
+      },
+      "base_hp": 10,
+      "move_speed": 20,
+      "strength_base": 17,
+      "strength_pct": 14,
+      "dex_base": 16,
+      "dex_pct": 2,
+      "intelligence": 10,
+      "wisdom": 12,
+      "constitution": 13,
+      "looks": 8,
+      "charisma": 8,
+      "weapon": "Halberd",
+      "armor": "Platemail",
+      "shield": "None",
+      "weapon_material_tier": 5,
+      "armor_material_tier": 2,
+      "projectile_material_tier": 0,
+      "shield_material_tier": 0,
+      "two_hand_grip": true,
+      "maneuvers": {
+        "charge": false
+      },
+      "defensive_dualwielding": false,
+      "race_id": "midlander",
+      "proficiencies": [
+        "Fist",
+        "Glaive",
+        "Halberd",
+        "Poleaxe",
+        "Lance",
+        "Polehammer",
+        "Light armor",
+        "Medium armor",
+        "Heavy armor",
+        "Laborer",
+        "Trilingual",
+        "Hiking"
+      ],
+      "talents": [
+        {
+          "id": "armor_focus",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "armor_specialization",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "armor_master",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "heavy_armor_optimization",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "weapon_focus",
+          "rank": 1,
+          "weapon": "Polearms"
+        },
+        {
+          "id": "weapon_specialization",
+          "rank": 1,
+          "weapon": "Polearms"
+        },
+        {
+          "id": "swift",
+          "rank": 1,
+          "weapon": "Halberd"
+        },
+        {
+          "id": "cleave",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "great_cleave",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "solid",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "tough_hide",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "tough_as_nails",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "armeroci_pole",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "rohavalan_bridge",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "remarkability",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "damage_bonus_weapon",
+          "rank": 1,
+          "weapon": "Halberd"
+        }
+      ],
+      "default_weapon_style_ids": []
+    },
+    {
+      "name": "Arthur Du Randt (Remarkable L10 - 62 BP)",
+      "level": 10,
+      "progression": {
+        "attack": "V",
+        "speed": "III",
+        "initiative": "I",
+        "health": "V"
+      },
+      "weapon_masteries": {
+        "unarmed": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "axes": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "basic": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "blunt": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "ensnaring": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "lashes": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "large_swords": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "small_swords": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "polearms": {
+          "attack": 5,
+          "damage": 4,
+          "speed": 4,
+          "defense": 4
+        },
+        "spears": {
+          "attack": 2,
+          "damage": 2,
+          "speed": 2,
+          "defense": 2
+        },
+        "double": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "bows": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "crossbows": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "shields": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        }
+      },
+      "base_hp": 10,
+      "move_speed": 20,
+      "strength_base": 17,
+      "strength_pct": 14,
+      "dex_base": 16,
+      "dex_pct": 2,
+      "intelligence": 10,
+      "wisdom": 12,
+      "constitution": 14,
+      "looks": 8,
+      "charisma": 8,
+      "weapon": "Halberd",
+      "armor": "Platemail",
+      "shield": "None",
+      "weapon_material_tier": 5,
+      "armor_material_tier": 2,
+      "projectile_material_tier": 0,
+      "shield_material_tier": 0,
+      "two_hand_grip": true,
+      "maneuvers": {
+        "charge": false
+      },
+      "defensive_dualwielding": false,
+      "race_id": "midlander",
+      "proficiencies": [
+        "Fist",
+        "Glaive",
+        "Halberd",
+        "Poleaxe",
+        "Lance",
+        "Polehammer",
+        "Light armor",
+        "Medium armor",
+        "Heavy armor",
+        "Laborer",
+        "Trilingual",
+        "Hiking"
+      ],
+      "talents": [
+        {
+          "id": "armor_focus",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "armor_specialization",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "armor_master",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "heavy_armor_optimization",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "weapon_focus",
+          "rank": 1,
+          "weapon": "Polearms"
+        },
+        {
+          "id": "weapon_specialization",
+          "rank": 1,
+          "weapon": "Polearms"
+        },
+        {
+          "id": "swift",
+          "rank": 1,
+          "weapon": "Halberd"
+        },
+        {
+          "id": "cleave",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "great_cleave",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "solid",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "tough_hide",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "tough_as_nails",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "armeroci_pole",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "rohavalan_bridge",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "remarkability",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "damage_bonus_weapon",
+          "rank": 1,
+          "weapon": "Halberd"
+        }
+      ],
+      "default_weapon_style_ids": []
     }
   ]
 }

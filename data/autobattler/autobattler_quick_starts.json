@@ -22,13 +22,19 @@
         "initiative": "I",
         "health": "III"
       },
-      "masteries": {
-        "attack": 0,
-        "defense": 0,
-        "damage": 0,
-        "speed": 0,
-        "shield_defense": 0,
-        "shield_speed": 0
+      "weapon_masteries": {
+        "polearms": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "shields": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        }
       },
       "base_hp": 10,
       "move_speed": 20.0,
@@ -87,13 +93,19 @@
         "initiative": "III",
         "health": "II"
       },
-      "masteries": {
-        "attack": 0,
-        "defense": 0,
-        "damage": 0,
-        "speed": 0,
-        "shield_defense": 0,
-        "shield_speed": 0
+      "weapon_masteries": {
+        "axes": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "shields": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        }
       },
       "base_hp": 10,
       "move_speed": 20.0,
@@ -125,13 +137,19 @@
         "initiative": "III",
         "health": "III"
       },
-      "masteries": {
-        "attack": 0,
-        "defense": 0,
-        "damage": 0,
-        "speed": 0,
-        "shield_defense": 0,
-        "shield_speed": 0
+      "weapon_masteries": {
+        "small_swords": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "shields": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        }
       },
       "base_hp": 10,
       "move_speed": 20.0,
@@ -163,13 +181,19 @@
         "initiative": "III",
         "health": "III"
       },
-      "masteries": {
-        "attack": 0,
-        "defense": 0,
-        "damage": 0,
-        "speed": 0,
-        "shield_defense": 0,
-        "shield_speed": 0
+      "weapon_masteries": {
+        "spears": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        },
+        "shields": {
+          "attack": 0,
+          "damage": 0,
+          "speed": 0,
+          "defense": 0
+        }
       },
       "base_hp": 10,
       "move_speed": 20.0,

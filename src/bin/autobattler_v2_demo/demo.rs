@@ -1201,12 +1201,7 @@ fn player_config_from_preset(
         tier_from_label(&preset.progression.initiative).unwrap_or(ProgressionTier::I),
         tier_from_label(&preset.progression.health).unwrap_or(ProgressionTier::I),
     );
-    player.mastery_attack = game_logic::clamp_mastery(preset.masteries.attack);
-    player.mastery_defense = game_logic::clamp_mastery(preset.masteries.defense);
-    player.mastery_damage = game_logic::clamp_mastery(preset.masteries.damage);
-    player.mastery_speed = game_logic::clamp_mastery(preset.masteries.speed);
-    player.shield_mastery_defense = game_logic::clamp_mastery(preset.masteries.shield_defense);
-    player.shield_mastery_speed = game_logic::clamp_mastery(preset.masteries.shield_speed);
+    player.weapon_masteries = game_logic::weapon_masteries_for_preset(preset, weapon_catalog);
     player.base_hp = preset.base_hp;
     player.move_speed = preset.move_speed;
     player.strength_base = preset.strength_base;
@@ -1243,6 +1238,7 @@ fn player_config_from_preset(
     player.fighting_withdrawal = preset.maneuvers.fighting_withdrawal;
     player.flee = preset.maneuvers.flee;
     player.mounted = preset.maneuvers.mounted;
+    player.mounted_combat = preset.maneuvers.mounted_combat;
     player.defensive_dualwielding = preset.defensive_dualwielding;
     player.offensive_dualwielding = preset.offensive_dualwielding;
     player.proficiencies = preset.proficiencies.clone();

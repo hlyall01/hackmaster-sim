@@ -288,7 +288,8 @@ pub struct Shield {
     pub weight_lbs: f32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum WeaponGroup {
     Unarmed,
     Axes,
@@ -314,7 +315,8 @@ pub enum MasteryAspect {
     Speed,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default)]
 pub struct MasteryState {
     pub attack: i32,
     pub defense: i32,

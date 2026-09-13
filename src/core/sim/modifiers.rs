@@ -14,6 +14,7 @@ pub enum StatIdI32 {
     StrengthDamage,
     StrengthDamageBase,
     UnarmedDamageBonus,
+    UnarmedAttackBonus,
     ArmorPenetration,
     DefenseMod,
     RangedDefenseMod,
