@@ -1,9 +1,9 @@
-use hackmaster_sim::{character, data, game_logic, sim};
-use hackmaster_sim::core::rules::DamageExprCache;
 use character::{
     AbilityScore, AbilitySet, ArmorRegion, Character, Equipment, MaterialKind, Progression,
     ProgressionTier, Weapon, WeaponGroup, WeaponMastery,
 };
+use hackmaster_sim::core::rules::DamageExprCache;
+use hackmaster_sim::{character, data, game_logic, sim};
 use sim::{
     Combatant, CombatantSheet, DefenseProfile, MobilityProfile, OffenseProfile, SimConfig,
     SimState, Vitals, WeaponProfile,
@@ -38,8 +38,8 @@ fn main() {
         base_threshold: 100.0,
     };
 
-    let armor_catalog = data::load_armor_catalog("data/armor.json")
-        .expect("Failed to load armor catalog");
+    let armor_catalog =
+        data::load_armor_catalog("data/armor.json").expect("Failed to load armor catalog");
     let armor = armor_catalog.entries().iter().find_map(|entry| {
         entry
             .armor
@@ -47,8 +47,7 @@ fn main() {
             .filter(|armor| armor.name == "Chainmail" && armor.region == ArmorRegion::Northern)
             .cloned()
     });
-    let materials = data::load_materials("data/materials.json")
-        .expect("Failed to load materials");
+    let materials = data::load_materials("data/materials.json").expect("Failed to load materials");
 
     let equipment = Equipment {
         weapon: Some(weapon.clone()),
@@ -79,6 +78,7 @@ fn main() {
         .build();
 
     let derived = character.derived();
+    let dex_defense_bonus = character.ability_mods.dexterity.defense;
 
     println!("Character: {}", character.name);
     println!("Level: {} ({:?})", character.level, character.progression);
@@ -90,6 +90,7 @@ fn main() {
         "Hit points: {} (x{:.1})",
         derived.hit_points, derived.health_mult
     );
+    println!("Drain resistance: {}", derived.drain_resistance);
     println!("Base DV: {}", derived.base_dv);
     println!("Armor DR: {}", derived.armor_dr);
     println!(
@@ -98,8 +99,8 @@ fn main() {
     );
     println!("Load category: {}", derived.load_category);
 
-    let weapon_catalog = data::load_weapon_catalog("data/weapons.json")
-        .expect("Failed to load weapon catalog");
+    let weapon_catalog =
+        data::load_weapon_catalog("data/weapons.json").expect("Failed to load weapon catalog");
     let weapon_preset = weapon_catalog
         .entries()
         .iter()
@@ -151,6 +152,9 @@ fn main() {
     let uses_projectiles = weapon_preset
         .map(|preset| game_logic::weapon_uses_projectiles(preset))
         .unwrap_or(false);
+    let hacking_or_piercing = weapon_preset
+        .map(|preset| preset.hacking_or_piercing)
+        .unwrap_or(false);
     let armor_is_heavy = character
         .equipment
         .armor
@@ -186,6 +190,14 @@ fn main() {
                 uses_projectiles,
                 is_small_weapon: false,
                 is_unarmed: weapon.group == WeaponGroup::Unarmed,
+                hacking_or_piercing,
+                force_nonpenetrating_damage: false,
+                halve_damage: false,
+                ignore_all_dr: false,
+                internal_hemorrhage_damage: 0,
+                use_close_hit_damage_expr: None,
+                use_close_hit_damage_expr_cache: None,
+                use_close_hit_margin_less_than: 0,
                 crit_min_roll: 20,
                 crit_min_roll_ranged: None,
                 crit_severity_bonus: 0,
@@ -196,8 +208,15 @@ fn main() {
         defense: DefenseProfile {
             defense_mod: derived.base_dv,
             ranged_defense_mod: 0,
+            dex_defense_bonus,
+            feat_of_agility: character.ability_mods.dexterity.feat_of_agility,
+            armor_feat_of_agility_penalty: if armor_is_heavy { 20 } else { 0 },
+            precognition: false,
+            prescience: false,
+            eyesmite: false,
             armor_dr: derived.armor_dr,
             natural_dr: 0,
+            is_medium_sized: true,
             knockback_step: game_logic::DEFAULT_KNOCKBACK_STEP,
             armor_is_heavy,
             shield_name: None,
@@ -209,7 +228,9 @@ fn main() {
         mobility: MobilityProfile { move_speed: 5.0 },
         vitals: Vitals {
             max_hp: derived.hit_points as i32,
+            infinite_hp: false,
             constitution: character.abilities.constitution,
+            drain_resistance: derived.drain_resistance,
             threshold_of_pain: game_logic::threshold_of_pain(
                 derived.hit_points as i32,
                 character.level,
@@ -219,23 +240,44 @@ fn main() {
         },
         maneuvers: sim::ManeuverProfile {
             hold_at_bay: false,
+            called_shot: false,
+            called_shot_defense_bonus: 8,
+            called_shot_defense_penalty: 4,
+            called_shot_delay_profile: sim::CalledShotDelayProfile::Standard,
+            called_shot_deceptive_defender: false,
+            called_shot_target_defense_bonus_base: 8,
+            power_attack: false,
             aggressive_attack: false,
             charge: false,
             ready_against_charge: false,
             tactical_move: false,
             fight_defensively: false,
+            fight_defensively_attack_penalty: 0,
+            fight_defensively_defense_bonus: 0,
             full_parry: false,
             give_ground: false,
             scamper_back: false,
             fighting_withdrawal: false,
             flee: false,
+            mounted: false,
+            mounted_combat: sim::MountedCombatConfig::default(),
             defensive_dualwielding: false,
             offensive_dualwielding: false,
+            offensive_dualwielding_defense_penalty: false,
+            dualwield_offhand_damage_penalty: -2,
+            dualwield_primary_recovery_penalty: 2.0,
+            dualwield_secondary_recovery_penalty: 2.0,
+            storm_of_blades: false,
+            passive: false,
         },
         modifiers: sim::ModifierStack::default(),
     };
     let combatant = Combatant::new(sheet);
-    sim.reset_with_combatants([combatant.clone(), combatant]);
+    let mut combatant_a = combatant.clone();
+    let mut combatant_b = combatant;
+    combatant_a.team_id = 0;
+    combatant_b.team_id = 1;
+    sim.reset_with_combatants(vec![combatant_a, combatant_b]);
     println!("--- Simulation (1s ticks) ---");
     let mut printed_events = 0usize;
     while !sim.done {
@@ -247,10 +289,7 @@ fn main() {
         );
         if printed_events < sim.combat_events.len() {
             for event in &sim.combat_events[printed_events..] {
-                println!(
-                    "{}",
-                    sim::format_combat_event_line(event, &sim.combatants)
-                );
+                println!("{}", sim::format_combat_event_line(event, &sim.combatants));
             }
             printed_events = sim.combat_events.len();
         }

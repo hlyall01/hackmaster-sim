@@ -39,12 +39,12 @@ Notation for parsing:
 
 ## Basic Weapons
 
-| Weapon | STR required | Skill level | Damage | Shield Damage | Speed | Size | Reach or Range | Type | Weight |
-|---|---:|---|---|---|---:|---|---|---|---|
-| Club | 5 | minimal | d6[p]+d4[p] | d6[p] | 10 | M | 2.5 feet | C | 2 lbs |
-| Dart | 3 | medium | d4[p] | - | 5 | S | 0.5/40 feet | P | 0.1 lb |
-| Sling | 4 | medium | d4[p]+d6[p] | 1 | 10 | S | 160 feet | C/P | 0.5 lb |
-| StaffT | 7 | low | 2d4[p]+3 | d4[p] | 13 | L | 8 feet | C | 4 lbs |
+| Weapon | STR required | Skill level | Damage | Shield Damage | Speed | Size | Reach or Range | Defense | Type | Weight |
+|---|---:|---|---|---|---:|---|---|---|---|---|
+| Club | 5 | minimal | d6[p]+d4[p] | d6[p] | 10 | M | 2.5 feet | - | C | 2 lbs |
+| Dart | 3 | medium | d4[p] | - | 5 | S | 0.5/40 feet | - | P | 0.1 lb |
+| Sling | 4 | medium | d4[p]+d6[p] | 1 | 10 | S | 160 feet | - | C/P | 0.5 lb |
+| StaffT | 7 | low | 2d4[p]+3 | d4[p] | 13 | L | 8 feet | d20[p] | C | 4 lbs |
 
 ---
 
@@ -94,7 +94,7 @@ Notation for parsing:
 | Dual scytheD | 12 | high | 2d6[p] and 2d6[p] | d6[p] and d6[p] | 16 | L | 4 feet | H/P and H/P | 12 lbs |
 | Hooked hammerD | 12 | high | d8[p]+d10[p]^1 and 3d4[p]^2 | d10[p] and 2d4[p] | 14 | L | 3 feet | C and P | 9 lbs |
 | Monk's SpadeD | 8 | high | 2d4[p] and 2d4[p] | d4[p] and d4[p] | 9 | L | 3 feet | H and H | 5 lbs |
-| Spear-axeD | 10 | high | 2d6[p] and 4d3[p]^2 | d6[p]+3 and 3d3[p]^2 | 13 (9) | L | 6.5 feet | P and H | 9.5 lbs |
+| Spear-axeD | 10 | high | 2d6[p] and 4d3[p]^2 | d6[p]+3 and 3d3[p] | 13 (9) | L | 6.5 feet | P and H | 9.5 lbs |
 | Two-bladed swordD | 10 | high | 2d8[p] and 2d8[p] | d8[p] and d8[p] | 11 (9) | L | 4 feet | H/P and H/P | 8 lbs |
 
 ---
@@ -168,7 +168,7 @@ Notation for parsing:
 | PoleaxeT | 10 | medium | 3d6[p]+3^2 | 2d6[p]+3 | - | - | 13 (11) | - | L | 6 feet | d20[p] | H/P | - | 6 lbs |
 | PolehammerT | 11 | medium | d10[p]+d12[p]+3^2 | d12[p]+3 | yes | - | 15 (13) | - | L | 7 feet | d20[p] | C/P | - | 9 lbs |
 | Raven's BeakT | 9 | medium | 2d6[p]+3^2 | lower of 2d6[p] | yes | yes | 14 (10) | 2d6[p]+3 | L | 6 feet | d20[p]-4 | C/P | - | 8 lbs |
-| SwordstaffT | 8 | medium | 2d8[p]+3 | 1d8[p]+3 | - | - | 11 (8) | - | L | 8 feet | d20[p]-4 | H/P | - | 5 lbs |
+| SwordstaffT | 8 | medium | 2d8[p]+3 | 1d8[p]+3 | - | - | 11 (8) | - | L | 8 feet | d20[p] | H/P | - | 5 lbs |
 | VoulgeT | 9 | low | 4d4[p]+3 | 2d4[p]+3 | - | - | 15 (11) | 3d4+3 | L | 8 feet | d20[p]-4 | H | 2nd | 6 lbs |
 
 ---
@@ -177,17 +177,17 @@ Notation for parsing:
 
 | Weapon | STR required | Skill level | Damage | Shield Damage | Dismount | Set for Charge | Speed (jab) | Jab Special | Size | Reach or Range | Defense | Type | Phalanx | Weight |
 |---|---:|---|---|---|---|---|---:|---|---|---|---|---|---|---|
-| Hasta | 9 | low | 2d6[p] | lower of 2d6[p] | - | yes | 12 (8) | 2d6 | M | 7 feet | d20[p]-4 | P | 2nd | 4 lbs |
+| Hasta | 9 | low | 2d6[p] | lower of 2d6[p] | - | yes | 11 (8) | 2d6 | L | 8 feet | d20[p]-4 | P | 2nd | 4 lbs |
 | Javelin | 6 | low | d12[p] | 1 | - | - | 7 | - | M | 5/100 feet | d20[p]-4 | P | - | 2 lbs |
 | LanceH | 11 | medium | 2d8[p]^2 | d8[p] | - | - | 12 | - | L | 10 feet | d20[p]-4 | P | - | 6 lbs |
-| PartisanT | 9 | low | 2d8[p]+3 | lower of 2d8[p] | - | yes | 14 (9) | 2d8+3 | L | 7 feet | d20[p]-4 | P | - | 5 lbs |
-| PikeT | 10 | low | 2d6[p]+3 | lower of 2d6[p] | - | yes | 18 (14) | 2d6+3 | L | 18 feet | d20[p]-4 | P | 3rd | 10 lbs |
+| PartisanT | 9 | low | 2d8[p]+3 | lower of 2d8[p] | - | yes | 12 (8) | 2d8+3 | L | 7 feet | d20[p]-4 | P | - | 5 lbs |
+| PikeT | 10 | low | 2d6[p]+3 | lower of 2d6[p] | - | yes | 18 (14) | 2d6+3 | L | 18 feet | d20[p]-4 | P | 4th | 10 lbs |
 | Pilum | 8 | low | 2d6[p] | 2 | - | - | 8 | - | M | 5/80 feet | d20[p]-4 | P | - | 3 lbs |
 | RanseurT | 9 | medium | 2d6[p]+3^3 | lower of 2d6[p] | yes | yes | 13 (8) | 2d6+3 | L | 8 feet | d20[p]-4 | P | 2nd | 5 lbs |
-| Short Spear | 5 | low | d4[p]+d6[p] | lower of d4[p]+d6[p] | - | yes | 12 (8) | d4+d6 | M | 5 feet | d20[p]-4 | P | - | 3 lbs |
+| Short Spear | 5 | low | d4[p]+d6[p] | lower of d4[p]+d6[p] | - | yes | 10 (7) | d4+d6 | M | 5 feet | d20[p]-4 | P | - | 3 lbs |
 | Spear | 9 | low | 2d6[p] | lower of 2d6[p] | - | yes | 12 (8) | 2d6 | L | 13 feet | d20[p]-4 | P | 3rd | 4 lbs |
 | SpetumT | 9 | low | 2d8[p]+3 | lower of 2d8[p] | - | yes | 13 (9) | 2d8+3 | L | 8 feet | d20[p] | P | 2nd | 5 lbs |
-| TridentT | 9 | medium | d6[p]+d8[p]+3 | lower of d6[p]+d8[p] | - | - | 12 (8) | d6+d8+3 | L | 6 feet | d20[p]-4 | P | - | 6 lbs |
+| TridentT | 9 | medium | d4[p]+d6[p]+d8[p]+3 | d8[p] | - | - | 12 (8) | d4+d6+d8+3 | L | 6 feet | d20[p]-4 | P | - | 6 lbs |
 
 ---
 

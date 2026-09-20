@@ -1,24 +1,161 @@
 //! Simulation engine and state transitions.
 
 mod combat;
+pub use combat::weapon_damage_expression;
 mod engine;
 mod modifiers;
 mod movement;
+mod mounted;
+pub use mounted::{MountedCombatConfig, MountType, RidingMastery, MountedTargetSize};
 mod types;
 
-pub use engine::{bulk_simulate, BulkSimResult, SimState};
-pub use movement::{max_range_for_bands, max_range_for_weapon_name, range_bands_for_weapon_name};
+pub use engine::{
+    BulkSimResult, DetailedSimStats, DetailedTeamStats, SimState, bulk_simulate,
+    bulk_simulate_with_seed,
+};
 pub use modifiers::{
-    modifiers_for_magic_item, ModifierOpF32, ModifierOpI32, ModifierStack, StatIdF32, StatIdI32,
-    TemporaryEffect,
+    CHRONOBLUR_DURATION_SECONDS, CHRONOBLUR_EFFECT_ID, CHRONOBLUR_MELEE_DEFENSE_BONUS,
+    CHRONOBLUR_RANGED_DISTANCE_FEET, ModifierOpF32, ModifierOpI32, ModifierStack,
+    STREAMLINE_DURATION_SECONDS, STREAMLINE_EFFECT_ID, STREAMLINE_RADIUS_FEET, StatIdF32,
+    StatIdI32, TemporaryEffect, modifiers_for_magic_item,
 };
+pub use movement::{max_range_for_bands, max_range_for_weapon_name, range_bands_for_weapon_name};
 pub use types::{
-    AttackEvent, AttackRollBreakdown, CombatEvent, CombatEventKind, Combatant, CombatantSheet,
-    CombatantState, CombatantCache, CriticalHit, DamageBreakdown, DamageDie, DefenseProfile,
-    KnockAsideEvent, KnockAsideRollBreakdown, ManeuverProfile, MobilityProfile, OffenseProfile,
-    OffhandProfile, ShieldBreakageStep, ShieldDamageBreakdown, SimActor, SimConfig, Vitals,
-    WeaponCache, WeaponProfile, WeaponSlot,
+    AttackEvent, AttackRollBreakdown, CalledShotDelayProfile, CombatEvent, CombatEventKind,
+    Combatant, CombatantCache, CombatantSheet, CombatantState, CombatantTacticalProfile,
+    CriticalHit, DamageBreakdown, DamageDie, DefenseProfile, GridPos, KnockAsideEvent,
+    KnockAsideRollBreakdown, ManeuverProfile, MobilityProfile, OffenseProfile, OffhandProfile,
+    ShieldBreakageStep, ShieldDamageBreakdown, SimActor, SimConfig, TacticalEvent,
+    TacticalProfileKey, Vitals, WeaponCache, WeaponProfile, WeaponSlot,
 };
+
+#[derive(Clone, Debug)]
+pub(crate) struct BasicAttackResult {
+    pub event: AttackEvent,
+    pub counters: Vec<BasicCounterAttack>,
+    pub precognition_triggered: bool,
+}
+
+pub(crate) fn resolve_basic_attack(
+    combatants: &mut [Combatant],
+    attacker_idx: usize,
+    defender_idx: usize,
+    range_mod: i32,
+    is_ranged: bool,
+    distance_ft: f32,
+    now: f32,
+    rng: &mut impl rand::Rng,
+) -> BasicAttackResult {
+    let outcome = combat::resolve_attack(
+        combatants,
+        attacker_idx,
+        defender_idx,
+        range_mod,
+        is_ranged,
+        distance_ft,
+        combat::AttackMode::Normal,
+        WeaponSlot::Primary,
+        now,
+        None,
+        rng,
+    );
+    let precognition_triggered = outcome.precognition_triggered;
+    let event = AttackEvent {
+        hit: outcome.hit,
+        shield_block: outcome.shield_block,
+        damage: outcome.damage,
+        shield_damage: outcome.shield_damage,
+        knockback_ft: outcome.knockback_ft,
+        hold_at_bay: outcome.hold_at_bay,
+        is_charge: false,
+        weapon_slot: outcome.weapon_slot,
+        use_jab: outcome.use_jab,
+        is_ranged: outcome.is_ranged,
+        trauma_applied: outcome.trauma_applied,
+        trauma_seconds: outcome.trauma_seconds,
+        roll: outcome.roll,
+        damage_breakdown: outcome.damage_breakdown,
+        shield_damage_breakdown: outcome.shield_damage_breakdown,
+        defender_hp_after: outcome.defender_hp_after,
+        critical: outcome.critical,
+    };
+    let counters = outcome
+        .counter_attack
+        .into_iter()
+        .chain(outcome.additional_counters)
+        .map(|counter| BasicCounterAttack {
+            attacker_idx: counter.attacker_idx,
+            defender_idx: counter.defender_idx,
+            precognition_triggered: counter.precognition_triggered,
+            event: counter_event(counter),
+        })
+        .collect();
+    BasicAttackResult {
+        event,
+        counters,
+        precognition_triggered,
+    }
+}
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod weapon_style_tests;
+
+#[derive(Clone, Debug)]
+pub(crate) struct BasicCounterAttack {
+    pub attacker_idx: usize,
+    pub defender_idx: usize,
+    pub precognition_triggered: bool,
+    pub event: AttackEvent,
+}
+
+pub(crate) fn resolve_basic_style_strikes(
+    combatants: &mut [Combatant],
+    attacker_idx: usize,
+    defender_idx: usize,
+    slot: WeaponSlot,
+    distance_ft: f32,
+    now: f32,
+    rng: &mut impl rand::Rng,
+) -> Vec<BasicCounterAttack> {
+    combat::resolve_style_strike_chain(
+        combatants,
+        attacker_idx,
+        defender_idx,
+        slot,
+        distance_ft,
+        now,
+        rng,
+    )
+    .into_iter()
+    .map(|counter| BasicCounterAttack {
+        attacker_idx: counter.attacker_idx,
+        defender_idx: counter.defender_idx,
+        precognition_triggered: counter.precognition_triggered,
+        event: counter_event(counter),
+    })
+    .collect()
+}
+
+pub(crate) fn counter_event(counter: combat::CounterAttackOutcome) -> AttackEvent {
+    AttackEvent {
+        hit: counter.hit,
+        shield_block: counter.shield_block,
+        damage: counter.damage,
+        shield_damage: counter.shield_damage,
+        knockback_ft: counter.knockback_ft,
+        hold_at_bay: false,
+        is_charge: false,
+        weapon_slot: counter.weapon_slot,
+        use_jab: counter.use_jab,
+        is_ranged: counter.is_ranged,
+        trauma_applied: counter.trauma_applied,
+        trauma_seconds: counter.trauma_seconds,
+        roll: counter.roll,
+        damage_breakdown: counter.damage_breakdown,
+        shield_damage_breakdown: counter.shield_damage_breakdown,
+        defender_hp_after: counter.defender_hp_after,
+        critical: counter.critical,
+    }
+}

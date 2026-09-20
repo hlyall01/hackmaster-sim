@@ -7,8 +7,10 @@ use crate::game_logic::{
 use serde::Deserialize;
 use std::fs;
 
-const EMBEDDED_WEAPONS_JSON: &str =
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/weapons.json"));
+const EMBEDDED_WEAPONS_JSON: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/data/sim/weapons.json"
+));
 
 #[derive(Deserialize)]
 struct WeaponsFile {
@@ -19,6 +21,8 @@ struct WeaponsFile {
 #[derive(Deserialize)]
 struct WeaponJson {
     name: String,
+    #[serde(default)]
+    price_gp: Option<u32>,
     group: String,
     speed: String,
     jab_speed: Option<String>,
@@ -28,6 +32,8 @@ struct WeaponJson {
     ammunition: Option<String>,
     range_bands_feet: Option<Vec<f32>>,
     armor_penetration: Option<i32>,
+    #[serde(rename = "type")]
+    damage_type: Option<String>,
     defense_bonus_always: Option<bool>,
     #[serde(rename = "reach_or_range")]
     reach_or_range: Option<String>,
@@ -38,6 +44,8 @@ struct WeaponJson {
 #[derive(Deserialize)]
 struct ShieldJson {
     name: String,
+    #[serde(default)]
+    price_gp: Option<u32>,
     defense: String,
     damage_reduction: String,
     #[allow(dead_code)]
@@ -83,6 +91,7 @@ pub fn load_weapon_catalog(path: &str) -> Result<WeaponCatalog, String> {
             .and_then(parse_range_bands_feet);
         catalog.push(WeaponPreset {
             name: entry.name,
+            price_gp: entry.price_gp.unwrap_or(0),
             group,
             speed: speed_value,
             speed_label,
@@ -95,6 +104,15 @@ pub fn load_weapon_catalog(path: &str) -> Result<WeaponCatalog, String> {
             reach_ft,
             range_bands_feet,
             armor_pen: entry.armor_penetration.unwrap_or(0),
+            can_hack_and_pierce: entry
+                .damage_type
+                .as_deref()
+                .is_some_and(|kind| kind.contains('H') && kind.contains('P')),
+            hacking_or_piercing: entry
+                .damage_type
+                .as_deref()
+                .map(is_hacking_or_piercing_type)
+                .unwrap_or(false),
             defense_bonus_always: entry.defense_bonus_always.unwrap_or(false),
             size,
             handedness,
@@ -125,6 +143,7 @@ pub fn load_shield_catalog(path: &str) -> Result<ShieldCatalog, String> {
             .map_err(|err| format!("shield {}: {err}", entry.name))?;
         let shield = ShieldPreset {
             name: entry.name.clone(),
+            price_gp: entry.price_gp.unwrap_or(0),
             defense_bonus,
             dr,
             cover_value,
@@ -143,7 +162,10 @@ fn split_speed_label(speed: &str, jab_speed: Option<&str>) -> (String, Option<St
     let trimmed = speed.trim();
     if let Some(jab_speed) = jab_speed {
         let jab_speed = jab_speed.trim();
-        let speed = trimmed.split_once(',').map(|pair| pair.0).unwrap_or(trimmed);
+        let speed = trimmed
+            .split_once(',')
+            .map(|pair| pair.0)
+            .unwrap_or(trimmed);
         (speed.trim().to_string(), Some(jab_speed.to_string()))
     } else {
         let mut jab = None;
@@ -195,6 +217,11 @@ fn weapon_handedness_from_str(handedness: &str) -> Option<WeaponHandedness> {
         "2h" => Some(WeaponHandedness::TwoHanded),
         _ => None,
     }
+}
+
+fn is_hacking_or_piercing_type(damage_type: &str) -> bool {
+    let normalized = damage_type.to_ascii_uppercase();
+    normalized.contains('H') || normalized.contains('P')
 }
 
 fn parse_leading_number(value: &str) -> f32 {

@@ -1,6 +1,6 @@
 pub use crate::core::sim::*;
 
-pub fn format_combat_event(event: &CombatEvent, combatants: &[Combatant; 2]) -> String {
+pub fn format_combat_event(event: &CombatEvent, combatants: &[Combatant]) -> String {
     let attacker_name = combatants
         .get(event.attacker_idx)
         .map(|combatant| combatant.sheet.name.as_str())
@@ -14,7 +14,16 @@ pub fn format_combat_event(event: &CombatEvent, combatants: &[Combatant; 2]) -> 
         CombatEventKind::Attack(attack) => {
             let weapon_name = combatants
                 .get(event.attacker_idx)
-                .map(|combatant| combatant.sheet.offense.weapon.name.as_str())
+                .map(|combatant| match attack.weapon_slot {
+                    WeaponSlot::Primary => combatant.sheet.offense.weapon.name.as_str(),
+                    WeaponSlot::Secondary => combatant
+                        .sheet
+                        .offense
+                        .offhand
+                        .as_ref()
+                        .map(|offhand| offhand.weapon.name.as_str())
+                        .unwrap_or(combatant.sheet.offense.weapon.name.as_str()),
+                })
                 .unwrap_or("Weapon");
             let base = if attack.hit {
                 if attack.hold_at_bay {
@@ -29,22 +38,32 @@ pub fn format_combat_event(event: &CombatEvent, combatants: &[Combatant; 2]) -> 
                         )
                     }
                 } else {
+                    let verb = if attack.is_charge { "charges" } else { "hits" };
                     format!(
-                        "{attacker_name} hits {defender_name} with {weapon_name} for {} dmg",
+                        "{attacker_name} {verb} {defender_name} with {weapon_name} for {} dmg",
                         attack.damage
                     )
                 }
             } else if attack.shield_block {
-                format!(
-                    "{defender_name} blocks {attacker_name} with shield for {} shield dmg",
-                    attack.shield_damage
-                )
+                if attack.is_charge {
+                    format!(
+                        "{defender_name} blocks {attacker_name}'s charge with shield for {} shield dmg",
+                        attack.shield_damage
+                    )
+                } else {
+                    format!(
+                        "{defender_name} blocks {attacker_name} with shield for {} shield dmg",
+                        attack.shield_damage
+                    )
+                }
             } else if attack.hold_at_bay {
-                format!(
-                    "{attacker_name} fails to hold {defender_name} at bay with {weapon_name}"
-                )
+                format!("{attacker_name} fails to hold {defender_name} at bay with {weapon_name}")
             } else {
-                format!("{attacker_name} misses {defender_name} with {weapon_name}")
+                if attack.is_charge {
+                    format!("{attacker_name} charges {defender_name} with {weapon_name} but misses")
+                } else {
+                    format!("{attacker_name} misses {defender_name} with {weapon_name}")
+                }
             };
 
             let mut details = Vec::new();
@@ -58,6 +77,9 @@ pub fn format_combat_event(event: &CombatEvent, combatants: &[Combatant; 2]) -> 
             details.push(format!("hp {}", attack.defender_hp_after.max(0)));
             if attack.is_ranged {
                 details.push("ranged".to_string());
+            }
+            if attack.is_charge {
+                details.push("charge".to_string());
             }
             if attack.use_jab {
                 details.push("jab".to_string());
@@ -104,10 +126,11 @@ pub fn format_combat_event(event: &CombatEvent, combatants: &[Combatant; 2]) -> 
             let details = format_knock_aside_roll(&knock.roll);
             format!("{base} [{details}]")
         }
+        CombatEventKind::Tactical(tactical) => tactical.message.clone(),
     }
 }
 
-pub fn format_combat_event_line(event: &CombatEvent, combatants: &[Combatant; 2]) -> String {
+pub fn format_combat_event_line(event: &CombatEvent, combatants: &[Combatant]) -> String {
     format!(
         "t={}s | {}",
         event.time,

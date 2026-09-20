@@ -1,5 +1,27 @@
 # Hackmaster Sim
 
+## Squad battler demo
+
+Run the separate squad battler browser demo on port 8788:
+
+```bash
+cargo run --bin squad_battler_demo -- --port 8788
+```
+
+Then open `http://127.0.0.1:8788`.
+
+QA commands:
+
+```bash
+cargo check --bin squad_battler_demo
+cargo check --bin sim_gui
+test ! -f src/bin/autobattler_v2_demo.rs || cargo check --bin autobattler_v2_demo
+python3 scripts/squad_battler_api_smoke.py --base-url http://127.0.0.1:8788 --seed 8788
+```
+
+See [docs/squad_battler_qa.md](docs/squad_battler_qa.md) for the smoke script,
+deterministic replay check, API shape checks, and integration checklist.
+
 ## WSL build + Windows signing
 
 ### One-time: create a dev signing cert

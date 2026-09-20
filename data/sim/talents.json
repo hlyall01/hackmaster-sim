@@ -1,0 +1,4203 @@
+{
+  "talents": [
+    {
+      "id": "hit_point_bonus",
+      "name": "Hit Point Bonus",
+      "description": "Gain +2 hit points per rank.",
+      "cost_bp": 10,
+      "category": "Miscellaneous",
+      "max_rank": 10,
+      "effects": [
+        {
+          "type": "hit_point_bonus",
+          "amount": 2
+        }
+      ]
+    },
+    {
+      "id": "essence_health_bonus",
+      "name": "Confluence",
+      "description": "Essence talent. Gain level-scaled hit points and record drain resistance: levels 1-4 +1 HP/0 drain resistance; 5-7 +3 HP/+2 drain resistance; 8-10 +4 HP/+4 drain resistance; 11-13 +6 HP/+6 drain resistance; 14-16 +7 HP/+8 drain resistance; 17-20 +9 HP/+10 drain resistance. Drain resistance is recorded but not applied to combat.",
+      "cost_bp": 0,
+      "category": "Essence",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "essence_advancement"
+        }
+      ]
+    },
+    {
+      "id": "precognition",
+      "name": "Precognition",
+      "description": "Received upon reaching Eternity Proficiency IV. After a successful melee hit, if five feet of open space exists to the defender's rear or side, compare the adjusted Attack and Defense totals. The defender attempts a Feat of Agility against that difference, penalized by worn armor (-10 light, -15 medium, -20 heavy). On success, final damage is halved (rounded down) and the defender evasively moves five feet. The talent also permits normal defense against additional side and rear attackers.",
+      "cost_bp": 0,
+      "category": "Essence",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "precognition"
+        }
+      ]
+    },
+    {
+      "id": "prescience",
+      "name": "Prescience",
+      "description": "Received upon reaching Eternity Proficiency II. After a successful ranged hit, compare the adjusted Attack total with a passive d20p Defense roll. The defender attempts a Feat of Agility against that difference, penalized by worn armor (-10 light, -15 medium, -20 heavy). On success, the missile is blocked and inflicts no wound.",
+      "cost_bp": 0,
+      "category": "Essence",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "prescience"
+        }
+      ]
+    },
+    {
+      "id": "spell_chronoblur",
+      "name": "Chronoblur",
+      "description": "For the first 60 seconds of combat, your momentary past self blurs over your current position. If you moved during the previous second, gain +4 Defense against melee attacks, and missile attacks treat you as 20 feet farther away. This trait models Chronoblur cast on its owner at the start of combat.",
+      "cost_bp": 0,
+      "category": "Spells",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "chronoblur"
+        }
+      ]
+    },
+    {
+      "id": "spell_streamline",
+      "name": "Streamline",
+      "description": "For the first 5 minutes of combat, project a 30-foot-radius field. Damage dice inflicted upon any target in the field are replaced by their mathematical average, rounded down, before modifiers and damage reduction. This trait models Streamline cast at the start of combat.",
+      "cost_bp": 0,
+      "category": "Spells",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "streamline"
+        }
+      ]
+    },
+    {
+      "id": "eyesmite",
+      "name": "Eyesmite",
+      "description": "Received upon reaching Exertion Proficiency IV. A near-perfect defense may be exchanged for an instantaneous called shot to the attacker's eye. A buckler or small shield is dropped to free the required hand. On a successful called shot, the target suffers 2d4p damage plus modifiers, all damage reduction is ignored, and Threshold of Pain is applied for 10 seconds per point of damage. The Missing Eye flaw is not tracked by the simulator.",
+      "cost_bp": 0,
+      "category": "Essence",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "eyesmite"
+        }
+      ]
+    },
+    {
+      "id": "tough_as_nails",
+      "name": "Tough as Nails",
+      "description": "Use a d12p for Threshold of Pain checks.",
+      "cost_bp": 20,
+      "category": "Miscellaneous",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "trauma_die_override",
+          "sides": 12,
+          "penetrating": true
+        }
+      ]
+    },
+    {
+      "id": "tough_hide",
+      "name": "Tough Hide",
+      "description": "Gain +1 damage reduction to any wound.",
+      "cost_bp": 40,
+      "category": "Miscellaneous",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "armor_dr_bonus",
+          "amount": 1
+        }
+      ]
+    },
+    {
+      "id": "attack_bonus_weapon",
+      "name": "Attack Bonus (weapon)",
+      "description": "Gain +1 attack bonus with a chosen melee weapon. May be taken multiple times but only once per weapon.",
+      "cost_bp": 10,
+      "category": "Martial",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "attack_bonus_weapon",
+          "amount": 1
+        }
+      ]
+    },
+    {
+      "id": "damage_bonus_weapon",
+      "name": "Damage Bonus (weapon)",
+      "description": "Gain +1 damage bonus with a chosen melee weapon. May be taken multiple times but only once per weapon.",
+      "cost_bp": 10,
+      "category": "Martial",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "damage_bonus_weapon",
+          "amount": 1
+        }
+      ]
+    },
+    {
+      "id": "defense_bonus_weapon",
+      "name": "Parry Bonus (weapon)",
+      "description": "Gain +1 defense bonus with a chosen melee weapon. May be taken multiple times but only once per weapon.",
+      "cost_bp": 10,
+      "category": "Martial",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "defense_bonus_weapon",
+          "amount": 1
+        }
+      ]
+    },
+    {
+      "id": "dodge",
+      "name": "Dodge",
+      "description": "Gain +1 to your Defense roll. Additionally, possessing this talent permits the defender to add the Defense modifier provided by Dexterity (assuming the defender can see the approaching missile). Note that if a defender with the Dodge talent and a shield opts to use the shield to deflect missiles, the Dodge benefits do not apply.",
+      "cost_bp": 25,
+      "category": "Martial",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "dodge",
+          "defense_bonus": 1,
+          "allow_dex_ranged": true
+        }
+      ]
+    },
+    {
+      "id": "advanced_sighting",
+      "name": "Advanced Sighting",
+      "description": "Mitigate distance penalties on Accuracy with ranged weapons. Treat targets as if only two-thirds their effective (size-modified) distance. Example: a man 60 feet away is treated as 40 feet.",
+      "cost_bp": 30,
+      "category": "Martial",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "range_distance_multiplier",
+          "multiplier": 0.666
+        }
+      ]
+    },
+    {
+      "id": "armor_focus",
+      "name": "Armor Focus",
+      "description": "Negates the penalty to initiative from wearing armor.",
+      "cost_bp": 15,
+      "category": "Martial",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "armor_initiative_penalty_negation"
+        }
+      ]
+    },
+    {
+      "id": "armor_specialization",
+      "name": "Armor Specialization",
+      "description": "Negates the penalty to speed from wearing armor.",
+      "cost_bp": 20,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "requires_talent",
+          "id": "armor_focus"
+        }
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "armor_speed_penalty_negation"
+        }
+      ]
+    },
+    {
+      "id": "armor_master",
+      "name": "Armor Master",
+      "description": "Increases the damage reduction worn armor grants you by 1.",
+      "cost_bp": 25,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "requires_talent",
+          "id": "armor_specialization"
+        }
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "armor_dr_bonus_armored",
+          "amount": 1
+        }
+      ]
+    },
+    {
+      "id": "blind_fighting",
+      "name": "Blind-Fighting",
+      "description": "Fight in poor or no light. In total darkness, suffer only a -4 penalty to attack (instead of -8). In extremely dim illumination, incur only a -2 penalty. No Defense penalties due to darkness or inability to see within melee distance. Effective only against threats within melee distance. No protection from missile fire or threats outside melee range. You may walk safely in darkness. Reduces attack penalty versus invisible creatures to -4, but does not allow precise targeting.",
+      "cost_bp": 30,
+      "category": "Martial",
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "blind_shooting",
+      "name": "Blind-Shooting",
+      "description": "Fire at opponents you cannot see. Dimly lit targets suffer -2 accuracy; completely blind shots are -6. The target may employ a shield for cover if held at the ready. The GM compares the attack roll versus true distance and applies cover if applicable.",
+      "cost_bp": 40,
+      "category": "Martial",
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "cleave",
+      "name": "Cleave",
+      "description": "If you drop a creature, you get an immediate extra melee attack against another creature within reach. The extra attack is with the same weapon and bonus. Usable once per second.",
+      "cost_bp": 30,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "strength",
+          "min_base": 12
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "combat_expertise",
+      "name": "Combat Expertise",
+      "description": "Improves the Fight Defensively special combat move, halving the attack penalty from -2/4/6/8 to -1/2/3/4.",
+      "cost_bp": 25,
+      "category": "Martial",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "fight_defensively_attack_penalty_divisor",
+          "divisor": 2
+        }
+      ]
+    },
+    {
+      "id": "combat_reflexes",
+      "name": "Combat Reflexes",
+      "description": "Attack an opponent who performs the Flee special combat move, even if you are not due to act and are engaged by other foes.",
+      "cost_bp": 15,
+      "category": "Martial",
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "crack_shot",
+      "name": "Crack Shot (weapon)",
+      "description": "Gain +1 attack with a chosen ranged weapon. May be taken multiple times but only once per weapon.",
+      "cost_bp": 10,
+      "category": "Martial",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "attack_bonus_weapon",
+          "amount": 1
+        }
+      ]
+    },
+    {
+      "id": "deceptive_defender",
+      "name": "Deceptive Defender",
+      "description": "Gain +1 Defense bonus versus an opponent's initial attack; subsequent attacks by the same opponent do not gain this bonus. If an opponent declares a Called Shot, increase their delay to 4d4p seconds and gain an additional +4 Defense versus that called shot.",
+      "cost_bp": 17,
+      "category": "Martial",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "called_shot_deceptive_defender"
+        }
+      ]
+    },
+    {
+      "id": "double_weapon_focus",
+      "name": "Double Weapon Focus",
+      "description": "Reduce the unmodified base speed of double weapons by 1.",
+      "cost_bp": 10,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 14
+        }
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "weapon_speed_bonus",
+          "amount": -1,
+          "weapon_group": "double"
+        }
+      ]
+    },
+    {
+      "id": "double_weapon_specialization",
+      "name": "Double Weapon Specialization",
+      "description": "Treat double weapons as normal weapons for style matching: battle axes for double axes, scimitars for double scimitars, scythes for dual scythes, military picks for hooked hammers, staves for monk's spades, spears and battle axes for spear-axes, and longswords for two-bladed swords.",
+      "cost_bp": 10,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 16
+        },
+        {
+          "type": "min_level",
+          "level": 3
+        },
+        {
+          "type": "requires_talent",
+          "id": "double_weapon_focus"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "double_weapon_master",
+      "name": "Double Weapon Master",
+      "description": "Treat double weapons as size M instead of size L for handedness and minimum speed. Allows aggressive two-weapon fighting while using a shield.",
+      "cost_bp": 35,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "strength",
+          "min_base": 16
+        },
+        {
+          "type": "min_level",
+          "level": 6
+        },
+        {
+          "type": "requires_talent",
+          "id": "double_weapon_specialization"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "greased_lightning",
+      "name": "Greased Lightning (weapon)",
+      "description": "Gain -1 Speed bonus for a chosen ranged weapon (subject to the weapon's minimum speed). May be taken multiple times but only once per weapon.",
+      "cost_bp": 10,
+      "category": "Martial",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "weapon_speed_bonus",
+          "amount": -1,
+          "ranged_only": true
+        }
+      ]
+    },
+    {
+      "id": "great_cleave",
+      "name": "Great Cleave",
+      "description": "Removes the once per second restriction from Cleave, allowing multiple cleaves if you continue to drop enemies within one second.",
+      "cost_bp": 10,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "requires_talent",
+          "id": "cleave"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "heavy_armor_optimization",
+      "name": "Heavy Armor Optimization",
+      "description": "While wearing heavy armor, add one quarter of your armor's damage reduction (rounded down) to melee damage. If critically hit by a hacking or piercing weapon, ignore all ancillary critical hit effects.",
+      "cost_bp": 25,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "strength",
+          "min_base": 15
+        }
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "heavy_armor_damage_bonus_from_dr",
+          "divisor": 4
+        },
+        {
+          "type": "ignore_ancillary_crit_effects"
+        }
+      ]
+    },
+    {
+      "id": "improved_critical",
+      "name": "Improved Critical (weapon group)",
+      "description": "You can inflict critical hits on a natural 19 in addition to a natural 20, but do not automatically hit on a 19. Your modified total attack must still exceed the modified total defense.",
+      "cost_bp": 25,
+      "category": "Martial",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "crit_min_roll_weapon_group",
+          "min_roll": 19
+        }
+      ]
+    },
+    {
+      "id": "improved_reach",
+      "name": "Improved Reach (weapon group)",
+      "description": "Increase effective reach by 1 foot for a chosen weapon group (select a weapon from that group). If this makes your reach longer than your opponent's, you strike first; ties still go to the inherently longer weapon. May be taken again for a different weapon group.",
+      "cost_bp": 15,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 12
+        }
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "weapon_reach_bonus",
+          "amount": 1
+        }
+      ]
+    },
+    {
+      "id": "light_armor_optimization",
+      "name": "Light Armor Optimization",
+      "description": "While wearing light armor, add half of your armor's damage reduction (rounded down) to your defense. Halve extra damage taken from critical hits.",
+      "cost_bp": 25,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 15
+        }
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "light_armor_defense_bonus_from_dr",
+          "divisor": 2
+        },
+        {
+          "type": "incoming_crit_extra_damage_halved"
+        }
+      ]
+    },
+    {
+      "id": "medium_armor_optimization",
+      "name": "Medium Armor Optimization",
+      "description": "While wearing medium armor, increase armor damage reduction by 1 and reduce its defense penalty by 1. Reduce severity of received critical hits by 10.",
+      "cost_bp": 25,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "strength",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 13
+        }
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "medium_armor_dr_bonus",
+          "amount": 1
+        },
+        {
+          "type": "medium_armor_defense_penalty_reduction",
+          "amount": 1
+        },
+        {
+          "type": "incoming_crit_severity_reduction",
+          "amount": 10
+        }
+      ]
+    },
+    {
+      "id": "mobility",
+      "name": "Mobility",
+      "description": "Give Ground and Scamper Back may still be used against opponents whose superior speed would normally prevent these maneuvers.",
+      "cost_bp": 20,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "requires_talent",
+          "id": "dodge"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "one_upsmanship",
+      "name": "One-Upsmanship",
+      "description": "In melee, when attacker and defender tie, you may gain +1 Attack to land a blow if you have at least Average Honor and your foe is in a lower honor category. Must deliver a catchy, snarky, or distinctive catch phrase.",
+      "cost_bp": 10,
+      "category": "Martial",
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "power_attack",
+      "name": "Power Attack",
+      "description": "When attacking with a melee weapon, you may ignore beneficial attack modifiers from Intelligence and Dexterity to double your Strength damage modifier. Cannot be used with weapons smaller than your size.",
+      "cost_bp": 30,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "strength",
+          "min_base": 13
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "precision_aiming",
+      "name": "Precision Aiming",
+      "description": "For called shots, reduce delay time to 1-2 seconds and halve the passive defense bonus normally given to targets. No benefit when aiming center of mass.",
+      "cost_bp": 18,
+      "category": "Martial",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "called_shot_delay_profile",
+          "profile": "precision_aiming"
+        },
+        {
+          "type": "called_shot_target_defense_bonus_divisor",
+          "divisor": 2
+        }
+      ]
+    },
+    {
+      "id": "precision_combatant",
+      "name": "Precision Combatant",
+      "description": "Called shots incur a d4p second delay during which you take only a -2 defense penalty. Opponents receive only half the normal defense bonus for a called shot.",
+      "cost_bp": 12,
+      "category": "Martial",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "called_shot_delay_profile",
+          "profile": "precision_combatant"
+        },
+        {
+          "type": "called_shot_self_defense_penalty",
+          "amount": 2
+        },
+        {
+          "type": "called_shot_target_defense_bonus_divisor",
+          "divisor": 2
+        }
+      ]
+    },
+    {
+      "id": "shield_focus",
+      "name": "Shield Focus",
+      "description": "Gain a +1 defense bonus while using shields.",
+      "cost_bp": 15,
+      "category": "Martial",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "shield_defense_bonus",
+          "amount": 1
+        }
+      ]
+    },
+    {
+      "id": "shield_specialization",
+      "name": "Shield Specialization",
+      "description": "Reduce the cover value of your shield by 5, removing the need to actively crouch behind it for full projectile protection.",
+      "cost_bp": 15,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "min_level",
+          "level": 3
+        },
+        {
+          "type": "requires_talent",
+          "id": "shield_focus"
+        }
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "shield_cover_value_adjustment",
+          "amount": -5
+        }
+      ]
+    },
+    {
+      "id": "shield_master",
+      "name": "Shield Master",
+      "description": "Improve the Arc of Defense of shields: bucklers to two frontal attackers, small shields to all frontal and flank attackers, and medium/large/tower shields to all frontal, flank, and rear attackers.",
+      "cost_bp": 15,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "min_level",
+          "level": 6
+        },
+        {
+          "type": "requires_talent",
+          "id": "shield_specialization"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "spring_attack",
+      "name": "Spring Attack",
+      "description": "Tactical Move no longer penalizes attack, only defense.",
+      "cost_bp": 20,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "requires_talent",
+          "id": "mobility"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "swift",
+      "name": "Swift (weapon or shield)",
+      "description": "Gain -1 Speed with a chosen melee weapon or shield. May be taken multiple times but only once per implement.",
+      "cost_bp": 10,
+      "category": "Martial",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "weapon_speed_bonus",
+          "amount": -1
+        }
+      ]
+    },
+    {
+      "id": "left_hand_of_evonia",
+      "name": "Left Hand of Evonia",
+      "description": "Requires proficiency with a size L large sword or polearm and a size S or M sword. Wield both together, retaining the primary's two-handed fighting style and adding the secondary's defense bonuses. Each incoming melee miss grants an immediate secondary sword attack if the enemy is within its reach, in addition to perfect or near-perfect counters.",
+      "cost_bp": null,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [{ "type": "left_hand_of_evonia_style" }]
+    },
+    {
+      "id": "one_path",
+      "name": "One Path",
+      "description": "Requires proficiency with a large sword capable of hacking and piercing, wielded two-handed. Reduce each damage die one step and reach by 1.5 feet. Hacking strikes become crushing and ignore 5 total DR against heavy armor or monsters with 5+ DR. Piercing called shots to an unarmored location inflict a critical strike, including extra damage dice. Choose crushing or piercing strikes in the loadout.",
+      "cost_bp": null,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [{ "type": "one_path_style" }]
+    },
+    {
+      "id": "pilgrims_path",
+      "name": "Pilgrim's Path",
+      "description": "Requires staff proficiency. Gain +4 Defense and increase weapon speed by 2. After Giving Ground or Scampering Back, immediately attack an attacker who pursues you, if within reach.",
+      "cost_bp": null,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        { "type": "pilgrims_path_style" },
+        { "type": "weapon_speed_flat_bonus", "amount": 2.0, "weapon_names": ["Staff"] }
+      ]
+    },
+    {
+      "id": "reaper_of_termon",
+      "name": "Reaper of Termon",
+      "description": "Requires scythe or sickle proficiency. After critical severity is determined, double the number of extra critical damage dice. With Improved Critical for the wielded weapon, natural 18s also threaten critical hits; with Critical Mastery, natural 17s do as well. These rolls must still hit.",
+      "cost_bp": null,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [{ "type": "reaper_of_termon_style" }]
+    },
+    {
+      "id": "armeroci_pole",
+      "name": "Armeroci Pole",
+      "description": "The Armeroci do not simply wield weapons, they draw circles of death around themselves, and dare others to cross the line. Your reach is increased by 1 foot and you deal an extra die of damage on your initial engagement strikes at the cost of increasing your weapon speed by 2. In addition, you always receive an initial engagement strike against foes engaging you, as long as your reach is equivalent or greater than theirs, even if you are already engaged.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "weapon_reach_flat_bonus",
+          "amount": 1.0,
+          "min_reach_ft": 5.0,
+          "weapon_groups": [
+            "Large swords",
+            "Polearms"
+          ]
+        },
+        {
+          "type": "weapon_speed_flat_bonus",
+          "amount": 2.0,
+          "min_reach_ft": 5.0,
+          "weapon_groups": [
+            "Large swords",
+            "Polearms"
+          ]
+        },
+        {
+          "type": "opening_engagement_extra_damage_dice",
+          "dice": 1,
+          "min_reach_ft": 5.0,
+          "weapon_groups": [
+            "Large swords",
+            "Polearms"
+          ]
+        },
+        {
+          "type": "always_initial_engagement_if_reach_at_least_opponent",
+          "min_reach_ft": 5.0,
+          "weapon_groups": [
+            "Large swords",
+            "Polearms"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "crescent_moon",
+      "name": "Crescent Moon",
+      "description": "Strike to unbalance and disarm, turn every attack into an opening for a counter. When two-weapon fighting defensively with a primary large sword and secondary small sword, your perfect and near-perfect defenses allow you to immediately called shot your opponent's weapon, granting them a +6 to defense, instead of dealing damage. If you hit, your opponent's weapon is flung 2d6p feet in a random direction; results of 4 feet or less mean the weapon falls to the ground beneath them. You also treat natural 18s as near-perfect defenses, or 17s with the Superior Defense talent.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "crescent_moon_style"
+        }
+      ]
+    },
+    {
+      "id": "doomrazor",
+      "name": "Doomrazor",
+      "description": "It is an art, leaving wounds that seem shallow at first, until the victim realizes too late that the bleeding is happening where no bandage can reach. Do not add your strength or mastery bonus to damage, and no longer penetrate. In exchange, each wound you inflict is accompanied by internal hemorrhaging.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "weapon_damage_options",
+          "no_strength_bonus": true,
+          "no_mastery_bonus": true,
+          "force_nonpenetrating": true,
+          "internal_hemorrhage_damage": 1,
+          "melee_only": true,
+          "hacking_or_piercing": true
+        }
+      ]
+    },
+    {
+      "id": "falling_sun",
+      "name": "Falling Sun",
+      "description": "It is said that this technique was taught to man by a being forged of light who, shortly after, ascended into the night sky. At the cost of increasing your weapon speed by 2, your attack, defense and damage rolls now penetrate on both the maximum die roll and said roll -1.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "weapon_speed_flat_bonus",
+          "amount": 2.0,
+          "weapon_names": [
+            "Flamberge",
+            "Two-handed sword"
+          ]
+        },
+        {
+          "type": "expanded_penetration",
+          "attack_defense_max_minus_one": true,
+          "damage_max_minus_one": true,
+          "weapon_names": [
+            "Flamberge",
+            "Two-handed sword"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "fymblwnger",
+      "name": "Fymblwnger",
+      "description": "Said to originate from giants, warriors using this style are taught to swing as though hurling mountains. Your opponents are no longer afforded a bonus to defense when they Give Ground or Scamper Back.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "ignore_defender_movement_defense_bonus",
+          "weapon_names": [
+            "Battle axe",
+            "Executioner's axe",
+            "Greataxe"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "hammerer",
+      "name": "Hammerer",
+      "description": "Bodies crumpling with each blow, reminding them that resistance has a cost. Your knock-backs always reset your opponent's weapon count.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "knockback_resets_weapon_count",
+          "weapon_names": [
+            "Greathammer",
+            "Hammer",
+            "Maul",
+            "Warhammer"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "hobbler",
+      "name": "Hobbler",
+      "description": "If you can't move, you cannot fight. You suffer a -4 penalty to attack, but roll a d2000 for each strike you land. You deal the effects of a critical strike in that location according to the severity of the blow, although without the extra damage dice.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "weapon_attack_bonus",
+          "amount": -4,
+          "weapon_groups": [
+            "Polearms",
+            "Spears"
+          ]
+        },
+        {
+          "type": "hit_critical_effects_no_extra_dice",
+          "weapon_groups": [
+            "Polearms",
+            "Spears"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ithican_prince",
+      "name": "Ithican Prince",
+      "description": "The merchant princes of Ithica prize cleverness above strength. Every step a feint, every strike a lesson. Your intelligence grants half its attack bonus to both damage and defense while using a buckler and small sword.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "int_attack_bonus_to_damage_and_defense",
+          "fraction": 0.5,
+          "weapon_groups": [
+            "Small swords"
+          ],
+          "shield_names": [
+            "Buckler"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "quiet_river",
+      "name": "Quiet River",
+      "description": "A quiet river carves mountains. You deal half damage, but ignore all DR. While not wearing armor or using a shield, your base defense with your bare hands is d20p and you receive double the defense bonus from unarmed weapons mastery. You are not considered armed, however armed opponents do not receive free counterattacks against you.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "weapon_damage_options",
+          "halve_damage": true,
+          "ignore_all_dr": true,
+          "weapon_names": [
+            "Fist"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "regenstat",
+      "name": "Regenstat",
+      "description": "The Vetlander sword-duelists train to read the slightest hint of intent. When engaged with a single opponent while using your sword two-handed or one-handed without an offhand, gain +1 to attack and defense each time you successfully attack or defend, maximum +8, resetting upon missing or being hit.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "regenstat_style"
+        }
+      ]
+    },
+    {
+      "id": "returner",
+      "name": "Returner",
+      "description": "Conceived by a warrior-king tired of bloodshed, many wars were settled in single combat with this gambit. Subject yourself to a -4 penalty to your defense and in exchange you may take advantage of your opponent's exposed defenses to attack them as they attack you. You may only do this return attack against one enemy attack between your own attack rolls, but you still suffer the defense penalty against subsequent attacks. In addition, you may forgo your initial attack when engaging and instead deal double damage on your retaliatory attack.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "returner_style"
+        }
+      ]
+    },
+    {
+      "id": "rhdwng_flow",
+      "name": "Rhdwng Flow",
+      "description": "Rhdwngers say that force does not begin in the body, but in the earth itself. You may add your full strength bonus to thrown weapons, if applicable, no matter the speed at which you move.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "thrown_full_strength_damage",
+          "thrown_only": true
+        }
+      ]
+    },
+    {
+      "id": "rohavalan_bridge",
+      "name": "Rohavalan Bridge",
+      "description": "A ceaseless cascade, one blow flowing into another. Halve your modified weapon speed, minimum weapon speed and reach. However, you must use a 2d4p in place of your weapon's normal damage die if your attack exceeds your opponent's defense by less than 10.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "weapon_speed_multiplier",
+          "multiplier": 0.5,
+          "min_multiplier": 0.5,
+          "weapon_groups": [
+            "Polearms"
+          ],
+          "weapon_names": [
+            "Staff"
+          ]
+        },
+        {
+          "type": "weapon_reach_multiplier",
+          "multiplier": 0.5,
+          "weapon_groups": [
+            "Polearms"
+          ],
+          "weapon_names": [
+            "Staff"
+          ]
+        },
+        {
+          "type": "close_hit_damage_expr",
+          "expr": "2d4p",
+          "margin_less_than": 10,
+          "weapon_groups": [
+            "Polearms"
+          ],
+          "weapon_names": [
+            "Staff"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "scorn_of_the_dissendri",
+      "name": "Scorn of the Dissendri",
+      "description": "Two hands, one will. When two-weapon fighting, offensively or defensively, strike with both weapons on the initial engagement hits, perfect defenses and near-perfect defenses.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "scorn_of_the_dissendri_style"
+        }
+      ]
+    },
+    {
+      "id": "shield_of_blades",
+      "name": "Shield of Blades",
+      "description": "Be not a man, but a wall wrought of whirling iron. When wielding two one-handed swords defensively, you may use a full d20p plus any defense bonus from both the primary and secondary weapons for all defense rolls against frontal and flank attackers. This bonus may additionally be used against ranged attackers, provided you can see the approaching missile. If you possess the Perfect Two-Weapon Fighting talent, you may use this style and Storm of Blades simultaneously.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "shield_of_blades_style"
+        }
+      ]
+    },
+    {
+      "id": "six_paths",
+      "name": "Six Paths",
+      "description": "There's an odd calmness to this style. Parry, cut, bash, over and over. When wielding a large sword and either a medium or small shield, your shield is only hit within 5 of the defense roll instead of 10. Furthermore, each successful strike you land permits you a free shield bash attack on the following second.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "six_paths_style"
+        }
+      ]
+    },
+    {
+      "id": "storm_of_blades",
+      "name": "Storm of Blades",
+      "description": "A relentless cascade of steel, sure to turn any foe into mist. When wielding two one-handed swords offensively, the initial attack of your secondary weapon is always made exactly two seconds after your initial primary attack. Additionally, your subsequent attacks, both primary and secondary, are delayed one second less. If you possess the Perfect Two-Weapon Fighting talent, you may use this style and Shield of Blades simultaneously.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "storm_of_blades_style"
+        }
+      ]
+    },
+    {
+      "id": "three_mountains",
+      "name": "Three Mountains",
+      "description": "West of Caernoth lies a monastery hidden within this technique's namesake, what it has to do with it, I do not know. If you strike the same creature three times in a row without missing, it must make a Physical Saving Throw against your most recent adjusted attack roll or automatically take 20 on its next Trauma save.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "consecutive_hits_force_trauma_twenty",
+          "hits": 3,
+          "weapon_groups": [
+            "Blunt"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "unbreakable_wall",
+      "name": "Unbreakable Wall",
+      "description": "The blow meets the shield, and dies there. Large or tower shields you wield gain +2 DR. You know how to lean your body into your shield, reducing the damage dealt to your shield by its DR for the purposes of breakage.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "shield_dr_bonus_filtered",
+          "amount": 2,
+          "shield_names": [
+            "Large wooden shield",
+            "Large metallic shield",
+            "Tower shield"
+          ]
+        },
+        {
+          "type": "shield_breakage_uses_shield_dr",
+          "shield_names": [
+            "Large wooden shield",
+            "Large metallic shield",
+            "Tower shield"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "twelve_paths",
+      "name": "Twelve Paths",
+      "description": "Ask a dozen Twelve Paths students how to defend yourself, and you'll get a dozen different answers. It's all very philosophical until you have to fight one. At the cost of a -3 penalty to damage, you are able to wield both a size L large sword and either a small shield or buckler in conjunction, combining your defense modifiers from both your weapon and shield against all attackers in your arc of defense. In addition, your next attack comes two seconds sooner each time an opponent strikes your shield, immediately attacking if this reduces your weapon count to the current second.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "large_sword_shield_style"
+        }
+      ]
+    },
+    {
+      "id": "two_weapon_fighting",
+      "name": "Two-Weapon Fighting",
+      "description": "When using two one-handed weapons offensively, you no longer suffer a -2 penalty to damage with the secondary weapon.",
+      "cost_bp": 20,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 12
+        }
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "dual_wield_offhand_damage_penalty",
+          "amount": 0
+        }
+      ]
+    },
+    {
+      "id": "improved_two_weapon_fighting",
+      "name": "Improved Two-Weapon Fighting",
+      "description": "Subsequent attacks with the primary weapon are made on its weapon speed plus one.",
+      "cost_bp": 15,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 13
+        },
+        {
+          "type": "min_level",
+          "level": 3
+        },
+        {
+          "type": "requires_talent",
+          "id": "two_weapon_fighting"
+        }
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "dual_wield_primary_recovery_penalty",
+          "amount": 1.0
+        }
+      ]
+    },
+    {
+      "id": "greater_two_weapon_fighting",
+      "name": "Greater Two-Weapon Fighting",
+      "description": "Subsequent attacks with the secondary weapon are made after a delay of its weapon speed plus one.",
+      "cost_bp": 15,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 14
+        },
+        {
+          "type": "min_level",
+          "level": 6
+        },
+        {
+          "type": "requires_talent",
+          "id": "improved_two_weapon_fighting"
+        }
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "dual_wield_offhand_damage_penalty",
+          "amount": 0
+        },
+        {
+          "type": "dual_wield_primary_recovery_penalty",
+          "amount": 1.0
+        },
+        {
+          "type": "dual_wield_secondary_recovery_penalty",
+          "amount": 1.0
+        }
+      ]
+    },
+    {
+      "id": "perfect_two_weapon_fighting",
+      "name": "Perfect Two-Weapon Fighting",
+      "description": "Combine the best of both two one-handed weapon fighting styles: attack frequency of attacking with both weapons and the superior defense of defending with both weapons.",
+      "cost_bp": 35,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 15
+        },
+        {
+          "type": "min_level",
+          "level": 9
+        },
+        {
+          "type": "requires_talent",
+          "id": "greater_two_weapon_fighting"
+        }
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "dual_wield_offhand_damage_penalty",
+          "amount": 0
+        },
+        {
+          "type": "dual_wield_primary_recovery_penalty",
+          "amount": 1.0
+        },
+        {
+          "type": "dual_wield_secondary_recovery_penalty",
+          "amount": 1.0
+        },
+        {
+          "type": "perfect_two_weapon_fighting"
+        }
+      ]
+    },
+    {
+      "id": "weapon_focus",
+      "name": "Weapon Focus (weapon group)",
+      "description": "Reduce your base weapon experience threshold by 20% for the chosen weapon group.",
+      "cost_bp": 10,
+      "category": "Martial",
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "whirlwind_attack",
+      "name": "Whirlwind Attack",
+      "description": "Gain access to the Whirlwind Attack special combat move: strike all nearby creatures within reach with a single attack roll, increasing weapon speed by 5 seconds after all other modifiers. If defenders use Give Ground or Scamper Back, they take half damage. Cannot be combined with other special combat moves until your next attack opportunity.",
+      "cost_bp": 25,
+      "category": "Martial",
+      "requirements": [
+        {
+          "type": "min_level",
+          "level": 6
+        },
+        {
+          "type": "requires_talent",
+          "id": "combat_expertise"
+        },
+        {
+          "type": "requires_talent",
+          "id": "spring_attack"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "age_gracefully",
+      "name": "Age Gracefully",
+      "description": "Retain a youthful appearance as you age; hair may gray but severe wrinkling and sagging are resisted. Details on adverse aging effects are at the GM's discretion.",
+      "cost_lp": 13,
+      "category": "Miscellaneous",
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "fast_healer",
+      "name": "Fast Healer",
+      "description": "Each wound point heals half a day faster, except the final point which heals in 6 hours.",
+      "cost_bp": 10,
+      "category": "Miscellaneous",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "fast_healer"
+        }
+      ]
+    },
+    {
+      "id": "forgettable_face",
+      "name": "Forgettable Face",
+      "description": "NPCs have a 10% chance to recall details unless you had a meaningful conversation; then base chance is 85%. Modify by +5% per previous encounter and -1% per week since last encounter.",
+      "cost_lp": 20,
+      "category": "Miscellaneous",
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "heightened_immunity",
+      "name": "Heightened Immunity",
+      "description": "Gain a +2 bonus to communicability and severity checks against disease.",
+      "cost_bp": 10,
+      "category": "Miscellaneous",
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "improved_awareness",
+      "name": "Improved Awareness",
+      "description": "Roll a superior initiative die, improving the die type by one step (d12, d10, d8, d6, d4, d3).",
+      "cost_bp": 20,
+      "category": "Martial",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "initiative_die_bonus",
+          "steps": 1
+        }
+      ]
+    },
+    {
+      "id": "inoculation",
+      "name": "Inoculation (disease)",
+      "description": "Requires surviving the specified disease. Gain +7 to communicability and severity checks against that disease.",
+      "cost_bp": 3,
+      "category": "Miscellaneous",
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "less_sleep",
+      "name": "Less Sleep",
+      "description": "Require only three hours of sleep for normal mental functioning.",
+      "cost_bp": 12,
+      "category": "Miscellaneous",
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "long_distance_running",
+      "name": "Long Distance Running",
+      "description": "Requires Hiking/Roadmarching proficiency. In open plains, cover 40 miles/day; each day requires a Constitution check to maintain pace. Failure drops you to 20 miles/day until a successful check. Critical failure causes injury requiring 1d4p days rest (walking at 10 miles/day worsens it). In impeded terrain, cover 15 miles/day; no benefit in restricted terrain.",
+      "cost_lp": 10,
+      "category": "Miscellaneous",
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "no_accent",
+      "name": "No Accent",
+      "description": "Speak any language you know without revealing your native accent.",
+      "cost_lp": 10,
+      "category": "Miscellaneous",
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "pain_tolerant",
+      "name": "Pain Tolerant",
+      "description": "Gain a +10% bonus when calculating your Threshold of Pain.",
+      "cost_bp": 20,
+      "category": "Miscellaneous",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "threshold_of_pain_multiplier",
+          "multiplier": 1.1
+        }
+      ]
+    },
+    {
+      "id": "poison_resistant",
+      "name": "Poison Resistant",
+      "description": "Gain a +1 bonus to the contested poison resistance check (d20 + Constitution). May be taken multiple times; each additional purchase costs 4 BP more than the previous.",
+      "cost_bp": 4,
+      "category": "Miscellaneous",
+      "max_rank": 10,
+      "effects": []
+    },
+    {
+      "id": "polyglot",
+      "name": "Polyglot",
+      "description": "Gain double Mastery Die rolls for each Language purchase and a +2 bonus to each Mastery Die.",
+      "cost_lp": 10,
+      "category": "Miscellaneous",
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "resolute",
+      "name": "Resolute",
+      "description": "When a blow drops you to 0 or fewer hit points (but not death), you may attempt a Constitution check to regain d8 hit points for 30 + 5d12p seconds; without healing, you collapse afterward.",
+      "cost_bp": 20,
+      "category": "Miscellaneous",
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "stout",
+      "name": "Stout",
+      "description": "Count as one size category larger for determining the force required to knock you back.",
+      "cost_bp": 20,
+      "category": "Miscellaneous",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "knockback_step_bonus",
+          "amount": 1
+        }
+      ]
+    },
+    {
+      "id": "kanian_impaler",
+      "name": "Kanian Impaler",
+      "description": "Requires proficiency in at least one type of size L spear. When attacking with a size L spear, consider opponents one size category smaller for knock-backs. When you deal a double or greater knock-back, you may choose the direction to launch your opponent as you withdraw your spear.",
+      "cost_bp": 20,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "bridled_rage",
+      "name": "Bridled Rage",
+      "description": "Requires 5th level and either HackLust or HackFrenzy. When HackLust or HackFrenzy triggers, you may choose to pass or fail the Wisdom check to resist entering rage. At 10th level, you may choose to pass or fail the Wisdom check to end rage. At 13th level, you will not attack allies if no foes remain, instead sprinting to seek new foes. Barbarian requirements and Magic Phobia apply (see references/barbarian.md).",
+      "cost_bp": 30,
+      "category": "Barbarian",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "strength",
+          "min_base": 14
+        },
+        {
+          "type": "min_stat",
+          "stat": "constitution",
+          "min_base": 14
+        },
+        {
+          "type": "min_level",
+          "level": 5
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "controlled_rampage",
+      "name": "Controlled Rampage",
+      "description": "Requires 8th level and either HackLust or HackFrenzy. While raging, you no longer need to hack at a downed opponent's corpse and may move on immediately. At 17th level, opponents can no longer near-perfect defense twice as often when you are HackFrenzied. Barbarian requirements and Magic Phobia apply (see references/barbarian.md).",
+      "cost_bp": 20,
+      "category": "Barbarian",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "strength",
+          "min_base": 14
+        },
+        {
+          "type": "min_stat",
+          "stat": "constitution",
+          "min_base": 14
+        },
+        {
+          "type": "min_level",
+          "level": 8
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "hardened",
+      "name": "Hardened",
+      "description": "Threshold of Pain becomes 30% of max hit points plus 2% per level. Reduce base Fatigue Factor by 2. Barbarian requirements and Magic Phobia apply (see references/barbarian.md).",
+      "cost_bp": 10,
+      "category": "Barbarian",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "threshold_of_pain_level_bonus",
+          "per_level_pct": 0.01
+        }
+      ],
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "strength",
+          "min_base": 14
+        },
+        {
+          "type": "min_stat",
+          "stat": "constitution",
+          "min_base": 14
+        }
+      ]
+    },
+    {
+      "id": "hearty",
+      "name": "Hearty",
+      "description": "Gain +5 hit points. Gain a +1 saving throw bonus versus poison and magic for every 3 full points of Constitution. Barbarian requirements and Magic Phobia apply (see references/barbarian.md).",
+      "cost_bp": 15,
+      "category": "Barbarian",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "hit_point_bonus",
+          "amount": 5
+        }
+      ],
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "strength",
+          "min_base": 14
+        },
+        {
+          "type": "min_stat",
+          "stat": "constitution",
+          "min_base": 14
+        }
+      ]
+    },
+    {
+      "id": "natural_strength",
+      "name": "Natural Strength",
+      "description": "When battling natural animals while wearing light or no armor, reduce the animal's damage reduction by 1 per level. Gain +2 damage in unarmed combat regardless of foe. Strength counts as two points higher when calculating jumping distance. Barbarian requirements and Magic Phobia apply (see references/barbarian.md).",
+      "cost_bp": 15,
+      "category": "Barbarian",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "damage_bonus_weapon_group",
+          "amount": 2,
+          "weapon_group": "unarmed"
+        }
+      ],
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "strength",
+          "min_base": 14
+        },
+        {
+          "type": "min_stat",
+          "stat": "constitution",
+          "min_base": 14
+        }
+      ]
+    },
+    {
+      "id": "supreme_cleave",
+      "name": "Supreme Cleave",
+      "description": "Requires 12th level and Cleave. You may use the Tactical Move maneuver without foregoing any extra cleave attacks. Barbarian requirements and Magic Phobia apply (see references/barbarian.md).",
+      "cost_bp": 10,
+      "category": "Barbarian",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "strength",
+          "min_base": 14
+        },
+        {
+          "type": "min_stat",
+          "stat": "constitution",
+          "min_base": 14
+        },
+        {
+          "type": "min_level",
+          "level": 12
+        },
+        {
+          "type": "requires_talent",
+          "id": "cleave"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "supreme_power_attack",
+      "name": "Supreme Power Attack",
+      "description": "Requires 15th level and Power Attack. You may triple your Strength damage modifier while power attacking instead of doubling it. Barbarian requirements and Magic Phobia apply (see references/barbarian.md).",
+      "cost_bp": 30,
+      "category": "Barbarian",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "strength",
+          "min_base": 14
+        },
+        {
+          "type": "min_stat",
+          "stat": "constitution",
+          "min_base": 14
+        },
+        {
+          "type": "min_level",
+          "level": 15
+        },
+        {
+          "type": "requires_talent",
+          "id": "power_attack"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "bardic_knowledge",
+      "name": "Bardic Knowledge",
+      "description": "Bards sometimes know useless bits of trivia and background history (4% chance per level, subject to the GM's secret percentile roll). Bard requirements apply (see references/bard.md).",
+      "cost_lp": 12,
+      "category": "Bard",
+      "max_rank": 1,
+      "effects": [],
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "looks",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "charisma",
+          "min_base": 13
+        }
+      ]
+    },
+    {
+      "id": "bardic_music",
+      "name": "Bardic Music",
+      "description": "Use music or poetics to inspire yourself and allies who can hear you. Each use lasts up to five minutes and ends if you cast spells, speak, or stop vocalizing. Playing an instrument amplifies the effect and requires both hands free; the instrument can be stopped without ending the performance as long as you continue vocalizing, but the bonus is lost. Retrieving or stowing an instrument takes d4p+1 seconds. Each talent requiring Bardic Music grants two additional uses per day. Bard requirements apply (see references/bard.md).",
+      "cost_bp": 10,
+      "category": "Bard",
+      "max_rank": 1,
+      "effects": [],
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "looks",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "charisma",
+          "min_base": 13
+        }
+      ]
+    },
+    {
+      "id": "dual_performance",
+      "name": "Dual Performance",
+      "description": "Requires 18th level, Bardic Music, and any two other talents requiring Bardic Music. Perform two different Bardic Music effects at once; this counts as two uses. Bard requirements apply (see references/bard.md).",
+      "cost_bp": 30,
+      "category": "Bard",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "looks",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "charisma",
+          "min_base": 13
+        },
+        {
+          "type": "min_level",
+          "level": 18
+        },
+        {
+          "type": "requires_talent",
+          "id": "bardic_music"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "inspire_courage",
+      "name": "Inspire Courage",
+      "description": "Requires 2nd level and Bardic Music. Grant yourself and allies +1 to morale modifier, attack rolls, and damage rolls. Using an instrument improves this by another +1. At 10th level, improves to +2 (+3 with an instrument). Bard requirements apply (see references/bard.md).",
+      "cost_bp": 20,
+      "category": "Bard",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "looks",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "charisma",
+          "min_base": 13
+        },
+        {
+          "type": "min_level",
+          "level": 2
+        },
+        {
+          "type": "requires_talent",
+          "id": "bardic_music"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "inspire_competence",
+      "name": "Inspire Competence",
+      "description": "Requires 4th level and Bardic Music. Grant one ally +10% to a specific skill while they can hear the music; some skills cannot be bolstered. Using an instrument improves this by another +10%. At 12th level, improves to +20% (+30% with an instrument). Bard requirements apply (see references/bard.md).",
+      "cost_bp": 20,
+      "category": "Bard",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "looks",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "charisma",
+          "min_base": 13
+        },
+        {
+          "type": "min_level",
+          "level": 4
+        },
+        {
+          "type": "requires_talent",
+          "id": "bardic_music"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "inspire_greatness",
+      "name": "Inspire Greatness",
+      "description": "Requires 6th level and Bardic Music. Grant yourself and a number of allies equal to one third your level (rounded down) +1 damage reduction. Using an instrument improves this by another +1. At 14th level, improves to +2 (+3 with an instrument). Bard requirements apply (see references/bard.md).",
+      "cost_bp": 20,
+      "category": "Bard",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "looks",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "charisma",
+          "min_base": 13
+        },
+        {
+          "type": "min_level",
+          "level": 6
+        },
+        {
+          "type": "requires_talent",
+          "id": "bardic_music"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "inspire_heroics",
+      "name": "Inspire Heroics",
+      "description": "Requires 8th level and Bardic Music. Grant yourself and allies +1 to physical, dodge, and mental saving throw modifiers, and defense bonus. Using an instrument improves this by another +1. At 16th level, improves to +2 (+3 with an instrument). Bard requirements apply (see references/bard.md).",
+      "cost_bp": 20,
+      "category": "Bard",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "looks",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "charisma",
+          "min_base": 13
+        },
+        {
+          "type": "min_level",
+          "level": 8
+        },
+        {
+          "type": "requires_talent",
+          "id": "bardic_music"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "horn_of_the_commander",
+      "name": "Horn of the Commander",
+      "description": "Requires 8th level. The horn cannot be used while engaged in melee and requires a free hand. Each horn ability takes d3p seconds to blow and requires 6 seconds to recover breath afterward; horn/voice cannot be used while recovering or without a horn. Rally: halve remaining trauma duration (rounded up) for allies within earshot. Call to Battle (10th): surprised allies within earshot reduce Starting Initiative to current Count Up. Sound of Glory (12th): allies within earshot gain -5 on trauma checks for 60 seconds. Thunderous Blast (14th): 3d4p damage in a 60 ft. cone; commander rolls d20p + level vs targets' Physical Saving Throws to negate damage. Commander requirements apply (see references/commander.md).",
+      "cost_bp": 45,
+      "category": "Commander",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "intelligence",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "constitution",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "charisma",
+          "min_base": 13
+        },
+        {
+          "type": "min_level",
+          "level": 8
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "voice_of_the_commander",
+      "name": "Voice of the Commander",
+      "description": "Voice can affect only targets who can hear and understand you. Each ability takes d3p seconds to shout and requires 6 seconds to recover breath; horn/voice cannot be used while recovering. Encourage: ally's next attack within 6 seconds rolls twice, take better. Provoke (6th): d20p + level vs target's Mental Saving Throw to force it to attack you for 6 seconds; if resisted, target is immune until next day. Commanding Shout (11th): ally between attacks speeds next attack by up to 4 seconds. Warcry (16th): enemies within earshot must make a morale check; success grants immunity until next day. Commander requirements apply (see references/commander.md).",
+      "cost_bp": 55,
+      "category": "Commander",
+      "max_rank": 1,
+      "effects": [],
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "intelligence",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "constitution",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "charisma",
+          "min_base": 13
+        }
+      ]
+    },
+    {
+      "id": "critical_mastery",
+      "name": "Critical Mastery (weapon group)",
+      "description": "Requires 15th level and Improved Critical. Critical strikes occur on a natural 18, 19, or 20 with the chosen weapon group. Fighter requirements apply (see references/fighter.md).",
+      "cost_bp": 30,
+      "category": "Fighter",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "strength",
+          "min_base": 14
+        },
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 14
+        },
+        {
+          "type": "min_level",
+          "level": 15
+        },
+        {
+          "type": "requires_talent",
+          "id": "improved_critical"
+        }
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "crit_min_roll_weapon_group",
+          "min_roll": 18
+        }
+      ]
+    },
+    {
+      "id": "fighter_hardened",
+      "name": "Hardened",
+      "description": "Threshold of Pain becomes 30% of max hit points plus 2% per level. Reduce base Fatigue Factor by 2. Fighter requirements apply (see references/fighter.md).",
+      "cost_bp": 10,
+      "category": "Fighter",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "threshold_of_pain_level_bonus",
+          "per_level_pct": 0.01
+        }
+      ],
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "strength",
+          "min_base": 14
+        },
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 14
+        }
+      ]
+    },
+    {
+      "id": "unbreakable",
+      "name": "Unbreakable",
+      "description": "Requires 11th level and Tough Hide. Improve the Tough Hide damage reduction bonus by +1. Fighter requirements apply (see references/fighter.md).",
+      "cost_bp": 30,
+      "category": "Fighter",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "strength",
+          "min_base": 14
+        },
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 14
+        },
+        {
+          "type": "min_level",
+          "level": 11
+        },
+        {
+          "type": "requires_talent",
+          "id": "tough_hide"
+        }
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "armor_dr_bonus",
+          "amount": 1
+        }
+      ]
+    },
+    {
+      "id": "weapon_specialization",
+      "name": "Weapon Specialization (weapon group)",
+      "description": "Requires Weapon Focus with the specified weapon group. Gain +2d6p on weapon experience dice rolls with the chosen group. Fighter requirements apply (see references/fighter.md).",
+      "cost_bp": 20,
+      "category": "Fighter",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "strength",
+          "min_base": 14
+        },
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 14
+        },
+        {
+          "type": "requires_talent",
+          "id": "weapon_focus"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "weapon_supremacy",
+      "name": "Weapon Supremacy (weapon group)",
+      "description": "Requires Weapon Specialization with the specified weapon group. Increase the maximum mastery tier from +5 to +6 with the chosen group. Fighter requirements apply (see references/fighter.md).",
+      "cost_bp": 50,
+      "category": "Fighter",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "strength",
+          "min_base": 14
+        },
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 14
+        },
+        {
+          "type": "requires_talent",
+          "id": "weapon_specialization"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "whirlwind_mastery",
+      "name": "Whirlwind Mastery",
+      "description": "Requires 9th level and Whirlwind Attack. Use Whirlwind Attack with no speed penalty. At 15th level, defenders take full damage even if they Give Ground or Scamper Back. Fighter requirements apply (see references/fighter.md).",
+      "cost_bp": 25,
+      "category": "Fighter",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "strength",
+          "min_base": 14
+        },
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 14
+        },
+        {
+          "type": "min_level",
+          "level": 9
+        },
+        {
+          "type": "requires_talent",
+          "id": "whirlwind_attack"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "wounding_criticals",
+      "name": "Wounding Criticals (weapon group)",
+      "description": "Requires 11th level and Improved Critical. Increase Wound Severity by 3 on critical hits with the chosen weapon group. May be purchased twice to increase Wound Severity by 6 total. Fighter requirements apply (see references/fighter.md).",
+      "cost_bp": 20,
+      "category": "Fighter",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "strength",
+          "min_base": 14
+        },
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 14
+        },
+        {
+          "type": "min_level",
+          "level": 11
+        },
+        {
+          "type": "requires_talent",
+          "id": "improved_critical"
+        }
+      ],
+      "max_rank": 2,
+      "effects": [
+        {
+          "type": "crit_severity_bonus_weapon_group",
+          "amount": 3
+        }
+      ]
+    },
+    {
+      "id": "chivalry",
+      "name": "Chivalry",
+      "description": "Heroic deeds are the meat and drink of knights. Knights in Great Honor or higher gain Chivalry Points equal to half their level each day, usable to modify combat-related rolls at epic moments. Knight requirements and restrictions apply (see references/knight.md).",
+      "cost_bp": 15,
+      "category": "Knight",
+      "max_rank": 1,
+      "effects": [],
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "strength",
+          "min_base": 12
+        },
+        {
+          "type": "min_stat",
+          "stat": "wisdom",
+          "min_base": 10
+        },
+        {
+          "type": "min_stat",
+          "stat": "constitution",
+          "min_base": 12
+        },
+        {
+          "type": "min_stat",
+          "stat": "charisma",
+          "min_base": 12
+        }
+      ]
+    },
+    {
+      "id": "devastating_charge",
+      "name": "Devastating Charge",
+      "description": "When striking while galloping, double damage dice with all weapons except lances. Lances gain one additional damage die before doubling. Knight requirements and restrictions apply (see references/knight.md).",
+      "cost_bp": 30,
+      "category": "Knight",
+      "max_rank": 1,
+      "effects": [],
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "strength",
+          "min_base": 12
+        },
+        {
+          "type": "min_stat",
+          "stat": "wisdom",
+          "min_base": 10
+        },
+        {
+          "type": "min_stat",
+          "stat": "constitution",
+          "min_base": 12
+        },
+        {
+          "type": "min_stat",
+          "stat": "charisma",
+          "min_base": 12
+        }
+      ]
+    },
+    {
+      "id": "knight_hardened",
+      "name": "Hardened",
+      "description": "Threshold of Pain becomes 30% of max hit points plus 2% per level. Reduce base Fatigue Factor by 2. Knight requirements and restrictions apply (see references/knight.md).",
+      "cost_bp": 10,
+      "category": "Knight",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "threshold_of_pain_level_bonus",
+          "per_level_pct": 0.01
+        }
+      ],
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "strength",
+          "min_base": 12
+        },
+        {
+          "type": "min_stat",
+          "stat": "wisdom",
+          "min_base": 10
+        },
+        {
+          "type": "min_stat",
+          "stat": "constitution",
+          "min_base": 12
+        },
+        {
+          "type": "min_stat",
+          "stat": "charisma",
+          "min_base": 12
+        }
+      ]
+    },
+    {
+      "id": "inspire_others",
+      "name": "Inspire Others",
+      "description": "Allies within 10 feet of an active knight gain +4 to saving throws versus fear, fatigue, and morale. Knight requirements and restrictions apply (see references/knight.md).",
+      "cost_bp": 15,
+      "category": "Knight",
+      "max_rank": 1,
+      "effects": [],
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "strength",
+          "min_base": 12
+        },
+        {
+          "type": "min_stat",
+          "stat": "wisdom",
+          "min_base": 10
+        },
+        {
+          "type": "min_stat",
+          "stat": "constitution",
+          "min_base": 12
+        },
+        {
+          "type": "min_stat",
+          "stat": "charisma",
+          "min_base": 12
+        }
+      ]
+    },
+    {
+      "id": "intimidate_adversary",
+      "name": "Intimidate Adversary",
+      "description": "Requires Inspire Others. Sentient opponents within 10 feet suffer -2 on attack rolls, saving throws, fatigue checks, and morale checks. Knight requirements and restrictions apply (see references/knight.md).",
+      "cost_bp": 45,
+      "category": "Knight",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "strength",
+          "min_base": 12
+        },
+        {
+          "type": "min_stat",
+          "stat": "wisdom",
+          "min_base": 10
+        },
+        {
+          "type": "min_stat",
+          "stat": "constitution",
+          "min_base": 12
+        },
+        {
+          "type": "min_stat",
+          "stat": "charisma",
+          "min_base": 12
+        },
+        {
+          "type": "requires_talent",
+          "id": "inspire_others"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "mounted_champion",
+      "name": "Mounted Champion",
+      "description": "Add half your total defense modifier (rounded down, excluding mounted bonus) to your mount's defense. Knight requirements and restrictions apply (see references/knight.md).",
+      "cost_bp": 25,
+      "category": "Knight",
+      "max_rank": 1,
+      "effects": [],
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "strength",
+          "min_base": 12
+        },
+        {
+          "type": "min_stat",
+          "stat": "wisdom",
+          "min_base": 10
+        },
+        {
+          "type": "min_stat",
+          "stat": "constitution",
+          "min_base": 12
+        },
+        {
+          "type": "min_stat",
+          "stat": "charisma",
+          "min_base": 12
+        }
+      ]
+    },
+    {
+      "id": "mounted_juggernaut",
+      "name": "Mounted Juggernaut",
+      "description": "Use two-handed weapons and fighting styles while mounted. Gain an extra damage die (two for mounted weapons) against any size creature instead of only size M. Knight requirements and restrictions apply (see references/knight.md).",
+      "cost_bp": 15,
+      "category": "Knight",
+      "max_rank": 1,
+      "effects": [],
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "strength",
+          "min_base": 12
+        },
+        {
+          "type": "min_stat",
+          "stat": "wisdom",
+          "min_base": 10
+        },
+        {
+          "type": "min_stat",
+          "stat": "constitution",
+          "min_base": 12
+        },
+        {
+          "type": "min_stat",
+          "stat": "charisma",
+          "min_base": 12
+        }
+      ]
+    },
+    {
+      "id": "mounted_mobility",
+      "name": "Mounted Mobility",
+      "description": "Double degrees you can turn while mounted, with and without ride checks. Slide-stop maneuvers allow a 180-degree turn and immediate gallop instead of canter. Knight requirements and restrictions apply (see references/knight.md).",
+      "cost_bp": 20,
+      "category": "Knight",
+      "max_rank": 1,
+      "effects": [],
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "strength",
+          "min_base": 12
+        },
+        {
+          "type": "min_stat",
+          "stat": "wisdom",
+          "min_base": 10
+        },
+        {
+          "type": "min_stat",
+          "stat": "constitution",
+          "min_base": 12
+        },
+        {
+          "type": "min_stat",
+          "stat": "charisma",
+          "min_base": 12
+        }
+      ]
+    },
+    {
+      "id": "mounted_protector",
+      "name": "Mounted Protector",
+      "description": "When your mount is attacked, you may remove your mounted Defense bonus for 10 seconds and grant +6 Defense to your mount for the same duration. Knight requirements and restrictions apply (see references/knight.md).",
+      "cost_bp": 10,
+      "category": "Knight",
+      "max_rank": 1,
+      "effects": [],
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "strength",
+          "min_base": 12
+        },
+        {
+          "type": "min_stat",
+          "stat": "wisdom",
+          "min_base": 10
+        },
+        {
+          "type": "min_stat",
+          "stat": "constitution",
+          "min_base": 12
+        },
+        {
+          "type": "min_stat",
+          "stat": "charisma",
+          "min_base": 12
+        }
+      ]
+    },
+    {
+      "id": "ambush",
+      "name": "Ambush",
+      "description": "Launch a special ranged or throwing attack against an unaware opponent, inflicting penetrating damage on the max die roll and the roll minus 1. At 17th level, also apply penetrating damage on the roll minus 2. Ranger requirements apply (see references/ranger.md).",
+      "cost_bp": 15,
+      "category": "Ranger",
+      "max_rank": 1,
+      "effects": [],
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "wisdom",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "constitution",
+          "min_base": 13
+        }
+      ]
+    },
+    {
+      "id": "beastmaster",
+      "name": "Beastmaster",
+      "description": "Gain one free roll of Animal Empathy and Animal Training with the appropriate mastery die at each level; retroactive upon purchase. Ranger requirements apply (see references/ranger.md).",
+      "cost_lp": 20,
+      "category": "Ranger",
+      "max_rank": 1,
+      "effects": [],
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "wisdom",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "constitution",
+          "min_base": 13
+        }
+      ]
+    },
+    {
+      "id": "camouflage",
+      "name": "Camouflage",
+      "description": "Gain a +50 bonus to hiding and sneaking checks in natural surroundings. Ranger requirements apply (see references/ranger.md).",
+      "cost_bp": 25,
+      "category": "Ranger",
+      "max_rank": 1,
+      "effects": [],
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "wisdom",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "constitution",
+          "min_base": 13
+        }
+      ]
+    },
+    {
+      "id": "ranger_hardened",
+      "name": "Hardened",
+      "description": "Threshold of Pain becomes 30% of max hit points plus 2% per level. Reduce base Fatigue Factor by 2. Ranger requirements apply (see references/ranger.md).",
+      "cost_bp": 10,
+      "category": "Ranger",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "threshold_of_pain_level_bonus",
+          "per_level_pct": 0.01
+        }
+      ],
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "wisdom",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "constitution",
+          "min_base": 13
+        }
+      ]
+    },
+    {
+      "id": "pathfinder",
+      "name": "Pathfinder",
+      "description": "Gain a third attempt to find a trail; at levels 12 and 18 gain a fourth and fifth attempt. Ranger requirements apply (see references/ranger.md).",
+      "cost_bp": 8,
+      "category": "Ranger",
+      "max_rank": 1,
+      "effects": [],
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "wisdom",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "constitution",
+          "min_base": 13
+        }
+      ]
+    },
+    {
+      "id": "ranged_critical_mastery",
+      "name": "Ranged Critical Mastery (weapon group)",
+      "description": "Requires 15th level and Improved Critical with a ranged weapon. Critical strikes occur on a natural 18, 19, or 20 with ranged weapons in the chosen group. Ranger requirements apply (see references/ranger.md).",
+      "cost_bp": 30,
+      "category": "Ranger",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "wisdom",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "constitution",
+          "min_base": 13
+        },
+        {
+          "type": "min_level",
+          "level": 15
+        },
+        {
+          "type": "requires_talent",
+          "id": "improved_critical"
+        }
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "crit_min_roll_weapon_group",
+          "min_roll": 18,
+          "ranged_only": true
+        }
+      ]
+    },
+    {
+      "id": "ranged_weapon_specialization",
+      "name": "Ranged Weapon Specialization (weapon group)",
+      "description": "Requires Weapon Focus with a weapon group that contains a ranged weapon. Gain +2d6p on weapon experience dice rolls with ranged weapons in the chosen group. Ranger requirements apply (see references/ranger.md).",
+      "cost_bp": 20,
+      "category": "Ranger",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "wisdom",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "constitution",
+          "min_base": 13
+        },
+        {
+          "type": "requires_talent",
+          "id": "weapon_focus"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "ranged_weapon_supremacy",
+      "name": "Ranged Weapon Supremacy (weapon group)",
+      "description": "Requires Ranged Weapon Specialization with the specified weapon group. Increase maximum mastery tier from +5 to +6 with ranged weapons in the chosen group. Ranger requirements apply (see references/ranger.md).",
+      "cost_bp": 50,
+      "category": "Ranger",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "wisdom",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "constitution",
+          "min_base": 13
+        },
+        {
+          "type": "requires_talent",
+          "id": "ranged_weapon_specialization"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "slayer_of_beasts",
+      "name": "Slayer of Beasts",
+      "description": "On a successful hit, gain +1 damage per three full levels against non-fantastical animals. Ranger requirements apply (see references/ranger.md).",
+      "cost_bp": 15,
+      "category": "Ranger",
+      "max_rank": 1,
+      "effects": [],
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "wisdom",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "constitution",
+          "min_base": 13
+        }
+      ]
+    },
+    {
+      "id": "slayer_of_foes",
+      "name": "Slayer of Foes",
+      "description": "On a successful hit, gain +1 damage per three full levels against monstrous humanoids. Ranger requirements apply (see references/ranger.md).",
+      "cost_bp": 20,
+      "category": "Ranger",
+      "max_rank": 1,
+      "effects": [],
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "wisdom",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "constitution",
+          "min_base": 13
+        }
+      ]
+    },
+    {
+      "id": "slayer_of_monsters",
+      "name": "Slayer of Monsters",
+      "description": "Requires Slayer of Beasts and Slayer of Foes. On a successful hit, gain +1 damage per three full levels against fantastical animals and monsters. Ranger requirements apply (see references/ranger.md).",
+      "cost_bp": 25,
+      "category": "Ranger",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "wisdom",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "constitution",
+          "min_base": 13
+        },
+        {
+          "type": "requires_talent",
+          "id": "slayer_of_beasts"
+        },
+        {
+          "type": "requires_talent",
+          "id": "slayer_of_foes"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "swift_tracker",
+      "name": "Swift Tracker",
+      "description": "Pick up a trail in 20 minutes; at 15th level, only 10 minutes. Ranger requirements apply (see references/ranger.md).",
+      "cost_bp": 8,
+      "category": "Ranger",
+      "max_rank": 1,
+      "effects": [],
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "wisdom",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 13
+        },
+        {
+          "type": "min_stat",
+          "stat": "constitution",
+          "min_base": 13
+        }
+      ]
+    },
+    {
+      "id": "assassination",
+      "name": "Assassination",
+      "description": "Requires 6th level. Reduce a nearhuman biped opponent's Threshold of Pain by 1 per two levels (rounded up). Damage results far exceeding the ToP threshold impose silence, unconsciousness, or bleeding out based on the margin. Usable with ranged weapons only within 20 feet. Rogue requirements apply (see references/rogue.md).",
+      "cost_bp": 35,
+      "category": "Rogue",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 14
+        },
+        {
+          "type": "min_stat",
+          "stat": "intelligence",
+          "min_base": 12
+        },
+        {
+          "type": "min_level",
+          "level": 6
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "backstab",
+      "name": "Backstab",
+      "description": "When striking an unaware opponent in melee with a size S small sword, inflict penetrating damage on the max die roll and the roll minus 1. At 9th level add 1d4p extra damage; at 17th level add 2d4p. Supplemental dice penetrate on 3 or 4. Rogue requirements apply (see references/rogue.md).",
+      "cost_bp": 15,
+      "category": "Rogue",
+      "max_rank": 1,
+      "effects": [],
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 14
+        },
+        {
+          "type": "min_stat",
+          "stat": "intelligence",
+          "min_base": 12
+        }
+      ]
+    },
+    {
+      "id": "coup_de_grace",
+      "name": "Coup de Grace",
+      "description": "Dispatch incapacitated opponents in 3 seconds. Rogue requirements apply (see references/rogue.md).",
+      "cost_bp": 12,
+      "category": "Rogue",
+      "max_rank": 1,
+      "effects": [],
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 14
+        },
+        {
+          "type": "min_stat",
+          "stat": "intelligence",
+          "min_base": 12
+        }
+      ]
+    },
+    {
+      "id": "deadly_poison",
+      "name": "Deadly Poison",
+      "description": "Requires Advanced Botany and Advanced Craft (Poison). Poisons you create gain +1 Virulence Factor; at 13th level this improves to +2. Rogue requirements apply (see references/rogue.md).",
+      "cost_bp": 15,
+      "category": "Rogue",
+      "max_rank": 1,
+      "effects": [],
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 14
+        },
+        {
+          "type": "min_stat",
+          "stat": "intelligence",
+          "min_base": 12
+        }
+      ]
+    },
+    {
+      "id": "devious",
+      "name": "Devious",
+      "description": "Requires evil alignment. No honor hits for poisoning sentient creatures. Rogue requirements apply (see references/rogue.md).",
+      "cost_bp": 5,
+      "category": "Rogue",
+      "max_rank": 1,
+      "effects": [],
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 14
+        },
+        {
+          "type": "min_stat",
+          "stat": "intelligence",
+          "min_base": 12
+        }
+      ]
+    },
+    {
+      "id": "fleeing_opponent",
+      "name": "Fleeing Opponent",
+      "description": "Requires Backstab. Strike a fleeing opponent as if performing a backstab with any weapon; supplemental backstab damage dice do not apply. Rogue requirements apply (see references/rogue.md).",
+      "cost_bp": 15,
+      "category": "Rogue",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 14
+        },
+        {
+          "type": "min_stat",
+          "stat": "intelligence",
+          "min_base": 12
+        },
+        {
+          "type": "requires_talent",
+          "id": "backstab"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "rogue_knowledge",
+      "name": "Knowledge",
+      "description": "Rogues sometimes know useless bits of trivia and background history (3% chance per level, subject to the GM's secret percentile roll). Rogue requirements apply (see references/rogue.md).",
+      "cost_lp": 12,
+      "category": "Rogue",
+      "max_rank": 1,
+      "effects": [],
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 14
+        },
+        {
+          "type": "min_stat",
+          "stat": "intelligence",
+          "min_base": 12
+        }
+      ]
+    },
+    {
+      "id": "hide_in_shadows",
+      "name": "Hide in Shadows",
+      "description": "Gain a +50 bonus to hiding and sneaking checks in dim light or darker. Rogue requirements apply (see references/rogue.md).",
+      "cost_bp": 25,
+      "category": "Rogue",
+      "max_rank": 1,
+      "effects": [],
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 14
+        },
+        {
+          "type": "min_stat",
+          "stat": "intelligence",
+          "min_base": 12
+        }
+      ]
+    },
+    {
+      "id": "rapid_intoxication",
+      "name": "Rapid Intoxication",
+      "description": "Requires 6th level, Advanced Botany, and Advanced Craft (Poison). Poisons you create take effect after 60 seconds; at 9th level this is 30 seconds, and at 12th level it is 10 seconds. Rogue requirements apply (see references/rogue.md).",
+      "cost_bp": 30,
+      "category": "Rogue",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 14
+        },
+        {
+          "type": "min_stat",
+          "stat": "intelligence",
+          "min_base": 12
+        },
+        {
+          "type": "min_level",
+          "level": 6
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "rearward_strike",
+      "name": "Rearward Strike",
+      "description": "When striking from behind with a melee weapon 3 feet or shorter, subtract 1 DR per two full levels. Rogue requirements apply (see references/rogue.md).",
+      "cost_bp": 20,
+      "category": "Rogue",
+      "max_rank": 1,
+      "effects": [],
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 14
+        },
+        {
+          "type": "min_stat",
+          "stat": "intelligence",
+          "min_base": 12
+        }
+      ]
+    },
+    {
+      "id": "sudden_degeneration",
+      "name": "Sudden Degeneration",
+      "description": "Requires 10th level, Expert Botany, and Expert Craft (Poison). Poisons you create have progression time reduced from 10 seconds to 5. Rogue requirements apply (see references/rogue.md).",
+      "cost_bp": 30,
+      "category": "Rogue",
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 14
+        },
+        {
+          "type": "min_stat",
+          "stat": "intelligence",
+          "min_base": 12
+        },
+        {
+          "type": "min_level",
+          "level": 10
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "superior_defense",
+      "name": "Superior Defense",
+      "description": "Near-perfect defense on a natural 18 or 19 that exceeds the opponent's attack roll. Successful counter-blow rolls 2d4p damage instead of 2(d4p-2). Rogue requirements apply (see references/rogue.md).",
+      "cost_bp": 15,
+      "category": "Rogue",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "near_perfect_defense_min_roll",
+          "roll": 18
+        }
+      ],
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 14
+        },
+        {
+          "type": "min_stat",
+          "stat": "intelligence",
+          "min_base": 12
+        }
+      ]
+    },
+    {
+      "id": "adaptation",
+      "name": "Adaptation",
+      "description": "Reserve up to 3 free BP per character level (starting with your current free BP). You may learn and unlearn proficiencies and talents at the beginning of each new day with this pool, as long as you adhere to prerequisites. Track the proficiencies and talents purchased with this pool.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_categories": [
+        "Human"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "destined",
+      "name": "Destined",
+      "description": "Once per day, any effect that would kill you instead reduces you to 1 hit point away from death and leaves you stable. Effects that kill you without reducing hit points still function normally.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_categories": [
+        "Human"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "determined",
+      "name": "Determined",
+      "description": "Once per encounter, after a failed attack or saving throw, roll 1d4p and add it as a bonus to potentially alter the result.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_categories": [
+        "Human"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "improvisation",
+      "name": "Improvisation",
+      "description": "You are considered unskilled with even non-universal skills, and you use twice your weakest ability score to determine what you roll against for unskilled skill checks.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_categories": [
+        "Human"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "versatility",
+      "name": "Versatility",
+      "description": "You receive no penalty for using weapons you do not have proficiency with. You must still be proficient to benefit from mastery.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_categories": [
+        "Human"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "inheritor",
+      "name": "Inheritor",
+      "description": "You receive a +1 bonus to each of your saving throws.",
+      "cost_rp": 10,
+      "category": "Racials",
+      "race_categories": [
+        "Human"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "natural_attunement",
+      "name": "Natural Attunement",
+      "description": "Gain a -1 bonus to speed while in natural surroundings. Armeroci only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "armeroci"
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "speed_mod_bonus",
+          "amount": -1
+        }
+      ]
+    },
+    {
+      "id": "natural_protection",
+      "name": "Natural Protection",
+      "description": "Gain a +1 bonus to DR while in natural surroundings. Armeroci only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "armeroci"
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "armor_dr_bonus",
+          "amount": 1
+        }
+      ]
+    },
+    {
+      "id": "natural_awareness",
+      "name": "Natural Awareness",
+      "description": "Gain a -2 bonus to initiative while in natural surroundings. Armeroci only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "armeroci"
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "initiative_mod_bonus",
+          "amount": -2
+        }
+      ]
+    },
+    {
+      "id": "warrior_woad",
+      "name": "Warrior Woad",
+      "description": "Requires Average Artistry (painting). Apply warpaint over 10 minutes. After taking at least 1 point of piercing or hacking damage, add d6 to Strength and gain +6 Defense for 5d12p seconds. On expiration, succeed at Physical and Mental saving throws vs d20p+11 or fall unconscious for about an hour. Armeroci only.",
+      "cost_rp": 10,
+      "category": "Racials",
+      "race_ids": [
+        "armeroci"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "huntsman",
+      "name": "Huntsman",
+      "description": "Requires Average Hunting. If not engaged in melee, take 5 seconds to designate a visible creature as your quarry. Gain +1 to hit your quarry, and tracking them is 15% easier until you next rest or designate another target. Fymblwngen only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "fymblwngen"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "huntsmaster",
+      "name": "Huntsmaster",
+      "description": "Requires Advanced Hunting. Double quarry benefits and maintain two quarries simultaneously; choose one to drop when designating a new creature. Fymblwngen only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "fymblwngen"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "ysgrewng",
+      "name": "Ysgrewng",
+      "description": "Requires Expert Fymblwngish. Let loose a battle roar at combat onset to force a morale check for intelligent humanoids within 25 feet (except other Fymblwngen). Failure reduces morale by one increment; cowardly opponents flee on failure. Fymblwngen only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "fymblwngen"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "defiant",
+      "name": "Defiant",
+      "description": "When an enemy scores a critical hit against you, they roll damage twice and take the weaker result before determining critical severity and additional effects. Fymblwngen only.",
+      "cost_rp": 10,
+      "category": "Racials",
+      "race_ids": [
+        "fymblwngen"
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "incoming_crit_damage_roll_twice_take_lower"
+        }
+      ]
+    },
+    {
+      "id": "contender",
+      "name": "Contender",
+      "description": "Gain Deceptive Defender and Precision Combatant at no BP cost; refund their BP costs if you already had them. Ithican only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "ithican"
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "called_shot_deceptive_defender"
+        },
+        {
+          "type": "called_shot_delay_profile",
+          "profile": "precision_combatant"
+        },
+        {
+          "type": "called_shot_self_defense_penalty",
+          "amount": 2
+        },
+        {
+          "type": "called_shot_target_defense_bonus_divisor",
+          "divisor": 2
+        }
+      ]
+    },
+    {
+      "id": "duelist",
+      "name": "Duelist",
+      "description": "Requires Contender. You no longer suffer defense penalties while attempting a called shot. Gain Combat Expertise at no BP cost; refund its BP cost if already owned. Ithican only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "ithican"
+      ],
+      "requirements": [
+        {
+          "type": "requires_talent",
+          "id": "contender"
+        }
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "called_shot_deceptive_defender"
+        },
+        {
+          "type": "called_shot_delay_profile",
+          "profile": "precision_combatant"
+        },
+        {
+          "type": "called_shot_self_defense_penalty",
+          "amount": 0
+        },
+        {
+          "type": "called_shot_target_defense_bonus_divisor",
+          "divisor": 2
+        },
+        {
+          "type": "fight_defensively_attack_penalty_divisor",
+          "divisor": 2
+        }
+      ]
+    },
+    {
+      "id": "haggler",
+      "name": "Haggler",
+      "description": "Requires 13+ Charisma. Gain a free purchase of Salesmanship at each level (retroactive). Ithican only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "ithican"
+      ],
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "charisma",
+          "min_base": 13
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "deliberate",
+      "name": "Deliberate",
+      "description": "You no longer fumble attack rolls on natural 1s; they are misses instead. Ithican only.",
+      "cost_rp": 10,
+      "category": "Racials",
+      "race_ids": [
+        "ithican"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "ever_ready",
+      "name": "Ever Ready",
+      "description": "Readying a weapon or shield takes you at most 1 second. Kanian only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "kanian"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "saddleborn",
+      "name": "Saddleborn",
+      "description": "Requires Advanced Riding. You are no longer thrown from your mount due to failed Riding checks when performing tactical mounted maneuvers. Kanian only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "kanian"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "beastwall",
+      "name": "Beastwall",
+      "description": "Gain +1 to defense rolls against non-human opponents. Kanian only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "kanian"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "isolation",
+      "name": "Isolation",
+      "description": "Deal an additional 2 points of melee damage when your engaged opponent has no allies within 10 feet. Kanian only.",
+      "cost_rp": 10,
+      "category": "Racials",
+      "race_ids": [
+        "kanian"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "groin_stomp",
+      "name": "Groin Stomp",
+      "description": "Can only be used on prone, knocked down, or sleeping opponents. A successful attack stuns for 2d8p seconds and deals d4 damage per stomp. While the opponent is on the ground, you can repeat every 10 seconds until unconsciousness. Victim loses a point of Honor. Katlakehan only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "katlakehan"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "project_confidence",
+      "name": "Project Confidence",
+      "description": "Giving Ground no longer halves Aggressive Attack damage, only Scampering Back does. Gain an additional +1 to hit while Aggressive Attacking (total +6). Katlakehan only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "katlakehan"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "raconteur",
+      "name": "Raconteur",
+      "description": "Requires 13+ Charisma. Gain a free purchase of Distraction and Fast Talking at each level (retroactive). Katlakehan only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "katlakehan"
+      ],
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "charisma",
+          "min_base": 13
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "edge_counter",
+      "name": "Edge Counter",
+      "description": "When you land a riposte via Perfect Defense, you automatically critically hit. Katlakehan only.",
+      "cost_rp": 10,
+      "category": "Racials",
+      "race_ids": [
+        "katlakehan"
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "perfect_defense_counter_force_critical"
+        }
+      ]
+    },
+    {
+      "id": "common",
+      "name": "Common",
+      "description": "Requires Looks between 8 and 12. Gain Forgettable Face at no BP cost; refund its BP cost if already owned. Midlander only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "midlander"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "solid",
+      "name": "Solid",
+      "description": "Increase hit points by 8. Midlander only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "midlander"
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "hit_point_bonus",
+          "amount": 8
+        }
+      ]
+    },
+    {
+      "id": "worker",
+      "name": "Worker",
+      "description": "Gain two free purchases of either Agriculture, Animal Herding, Animal Husbandry, Blacksmithing, Carpentry, Cooking, Craft, Forestry, Leatherworking, or Pottery at each level (retroactive). Midlander only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "midlander"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "remarkability",
+      "name": "Remarkability",
+      "description": "Must have at least one ability score (aside from Looks) under 10. Treat each modifier (except saving throws) as 1 better if you have a bonus, or 1 worse if you have a penalty. Reduce all ability scores by 1, aside from Looks. Midlander only.",
+      "cost_rp": 10,
+      "category": "Racials",
+      "race_ids": [
+        "midlander"
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "remarkability"
+        }
+      ]
+    },
+    {
+      "id": "educated",
+      "name": "Educated",
+      "description": "Gain a free purchase of any two different skills where Intelligence is the sole relevant attribute at each level (retroactive). Pather only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "pather"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "pedestrian",
+      "name": "Pedestrian",
+      "description": "Increase the weight you can carry before being lightly or moderately encumbered by 50% (rounded down). Pather only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "pather"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "pilgrim",
+      "name": "Pilgrim",
+      "description": "Recovery time after failing a trauma check is 2 seconds times the difference between the 1/2 Con check and the 1/2 Con score. Rolling a 20 on trauma checks leaves you unconscious for d6p minutes. Pather only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "pather"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "armored_to_the_teeth",
+      "name": "Armored to the Teeth",
+      "description": "Requires heavy armor proficiency. Gain +1 to your damage modifier while wearing heavy armor. Pather only.",
+      "cost_rp": 10,
+      "category": "Racials",
+      "race_ids": [
+        "pather"
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "heavy_armor_damage_bonus",
+          "amount": 1
+        }
+      ]
+    },
+    {
+      "id": "ironworker",
+      "name": "Ironworker",
+      "description": "Requires Average Blacksmithing. Gain a free purchase of either Armorsmithing or Weaponsmithing at each level (retroactive). Vetlander only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "vetlander"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "presence",
+      "name": "Presence",
+      "description": "Charisma is considered 3 points higher when determining your morale modifier. Vetlander only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "vetlander"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "wetlands_immunity",
+      "name": "Wetlands Immunity",
+      "description": "Requires 12+ Constitution. Gain a +5 bonus to all communicability and severity checks against disease. Vetlander only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "vetlander"
+      ],
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "constitution",
+          "min_base": 12
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "marshstep",
+      "name": "Marshstep",
+      "description": "You can move at jogging pace instead of walking pace when using Tactical Move, Give Ground, and Fighting Withdrawal. Engaged opponents may pursue if their speed permits it. Vetlander only.",
+      "cost_rp": 10,
+      "category": "Racials",
+      "race_ids": [
+        "vetlander"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "gentle_tumble",
+      "name": "Gentle Tumble",
+      "description": "You can fall twice as far. You also no longer suffer damage from falls of up to 10 feet. Limmtrig only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "limmtrig"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "jack",
+      "name": "Jack",
+      "description": "Gain an additional 1 LP per level (retroactive). Limmtrig only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "limmtrig"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "sapdrinker",
+      "name": "Sapdrinker",
+      "description": "Each day you consume a pint of sap, heal an additional 1 point on each wound. Limmtrig only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "limmtrig"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "sapblood",
+      "name": "Sapblood",
+      "description": "Requires Sapdrinker. Broken bones heal and limbs can regrow in about a week while maintaining the sap diet. Heal an additional 1 point on each wound each day you consume a pint of sap. Limmtrig only.",
+      "cost_rp": 10,
+      "category": "Racials",
+      "race_ids": [
+        "limmtrig"
+      ],
+      "requirements": [
+        {
+          "type": "requires_talent",
+          "id": "sapdrinker"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "stumbling_gait",
+      "name": "Stumbling Gait",
+      "description": "Tactical Move no longer penalizes defense, only attack. Limmtrig only.",
+      "cost_rp": 10,
+      "category": "Racials",
+      "race_ids": [
+        "limmtrig"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "wooden_familiarity",
+      "name": "Wooden Familiarity",
+      "description": "Gain a -1 bonus to speed with wooden weapons or hafts. Wooden shields have the Damage Reduction of metal shields in your hands. Limmtrig only.",
+      "cost_rp": 10,
+      "category": "Racials",
+      "race_ids": [
+        "limmtrig"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "stargazer",
+      "name": "Stargazer",
+      "description": "Requires Average Astrology. You may consult the stars to guide your actions into the next day when you can observe a clear night sky. After doing so, roll 1d6. On a 1, you receive a 5% penalty to Intelligence-related skills. On a 2, nothing happens. On a 3, 4, or 5, you receive a 5% bonus to Intelligence-related skills. On a 6, the bonus is 10%. This modifier lasts until the next night. Qaraz only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "qaraz"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "astrologue",
+      "name": "Astrologue",
+      "description": "Requires Stargazer and Advanced Astrology. A 5% bonus is granted to each of Stargazer's d6 results (removing the penalty from a result of 1, and improving all other results). In addition, once per week, you can spend an hour to attempt to read the heavens for advice about a particular event or goal that will occur within 1 week. A secret Astrology check is rolled; on a success you uncover a clue or advice that could help, but on a failure the clue or advice will be misleading. Qaraz only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "qaraz"
+      ],
+      "requirements": [
+        {
+          "type": "requires_talent",
+          "id": "stargazer"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "medicant",
+      "name": "Medicant",
+      "description": "Requires Average First Aid. You can perform critical care at twice the speed, and it restores 1d3p points of damage from the wound instead of 1. Each individual wound may still only be treated once. In addition, while you are performing caregiver duties, you reduce the number of rest days required by an additional one per category. Qaraz only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "qaraz"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "blinding_strike",
+      "name": "Blinding Strike",
+      "description": "Requires 13+ Dexterity. Upon engaging in melee, you may choose to perform a contested attack roll against your opponent. The loser treats their attack roll as if it were a defense roll, and the winner lands a strike as normal. Neither of you receive another attack on the following second, regardless of weapon reach. This maneuver may not be performed if you cannot reach your opponent with your remaining movement when you engage (e.g. against spears or polearms). Qaraz only.",
+      "cost_rp": 10,
+      "category": "Racials",
+      "race_ids": [
+        "qaraz"
+      ],
+      "requirements": [
+        {
+          "type": "min_stat",
+          "stat": "dexterity",
+          "min_base": 13
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "poisonous_bite",
+      "name": "Poisonous Bite",
+      "description": "Your fangs are now poisonous, but you may still perform dry bites if you wish. The virulence factor of your poison is 9, and it can cause weakness, dizziness, headaches, breathing difficulty, nausea and death (effect 3). Qaraz only.",
+      "cost_rp": 10,
+      "category": "Racials",
+      "race_ids": [
+        "qaraz"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "revelator",
+      "name": "Revelator",
+      "description": "As long as you have evidence on your person that proves at least one of your conspiracy theories to be irrefutably true, you will no longer suffer migraines. If you help stop the perpetrators of your theory, you no longer need to carry around proof, can remove the Migraines flaw permanently, and gain a permanent +1 to your Charisma. Qaraz only.",
+      "cost_rp": 10,
+      "category": "Racials",
+      "race_ids": [
+        "qaraz"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "winged",
+      "name": "Winged",
+      "description": "Must be chosen within character creation and is mutually exclusive with Wingless. You may use your large bat-like wings to glide. You may glide 1 foot down for every 2 feet of forward movement in one second, or dive 1 foot for every 1 foot traveled forward. You may also turn while aerial and diving in the same manner as horses, with the same facing restrictions and turning diameters (no ride check necessary). Glide: Flutter (walk) 2 1/2 across, 1 1/4 down; Drift (jog) 5 across, 2 1/2 down; Fly (run) 7 1/2 across, 3 3/4 down; Soar (sprint) 10 across, 5 down. Dive: Flutter 2 1/2 across, 2 1/2 down; Drift 5 across, 5 down; Fly 7 1/2 across, 7 1/2 down; Soar 10 across, 10 down. Cirodes only.",
+      "cost_rp": 0,
+      "category": "Racials",
+      "race_ids": [
+        "cirodes"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "strengthened_wings",
+      "name": "Strengthened Wings",
+      "description": "Requires Winged. In addition to using your wings to glide and dive, you may now fly forward and climb. You can also fly in place, but you cannot gain or lose altitude while hovering; forward momentum is required. To begin flying, you must have a running start. Climb: Flutter 7 1/2 across, 3 3/4 up; Drift 10 across, 5 up; Fly 12 1/2 across, 6 1/4 up; Soar 15 across, 7 1/2 up. Straight: Flutter 15 across; Drift 20 across; Fly 25 across; Soar 30 across. Glide: Flutter 7 1/2 across, 3 3/4 down; Drift 10 across, 5 down; Fly 12 1/2 across, 6 1/4 down; Soar 15 across, 7 1/2 down. Dive: Flutter 7 1/2 across, 7 1/2 down; Drift 10 across, 10 down; Fly 12 1/2 across, 12 1/2 down; Soar 15 across, 15 down. Cirodes only.",
+      "cost_rp": 10,
+      "category": "Racials",
+      "race_ids": [
+        "cirodes"
+      ],
+      "requirements": [
+        {
+          "type": "requires_talent",
+          "id": "winged"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "aerial_mobility",
+      "name": "Aerial Mobility",
+      "description": "Requires Strengthened Wings. You double the degrees you can turn while flying. In addition, you may climb straight up while hovering at half speed. Lastly, you can now dive down at full speed without needing forward momentum, although you will still take fall damage if you dive straight into the ground. Cirodes only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "cirodes"
+      ],
+      "requirements": [
+        {
+          "type": "requires_talent",
+          "id": "strengthened_wings"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "wingless",
+      "name": "Wingless",
+      "description": "Must be chosen within character creation and is mutually exclusive with Winged. Unfettered by wings, your Dexterity is improved by 2. Cirodes only.",
+      "cost_rp": 0,
+      "category": "Racials",
+      "race_ids": [
+        "cirodes"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "terrifying",
+      "name": "Terrifying",
+      "description": "You gain a +3 on mastery die rolls for Intimidate, in addition to a free Intimidate purchase at each level (retroactive). Cirodes only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "cirodes"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "echolocation",
+      "name": "Echolocation",
+      "description": "You may detect objects in your environment by sensing echoes from those objects by actively creating sounds. You can accurately determine the location and size of objects within 30 feet by interpreting the sound waves reflected off of them. This will not allow you to accurately locate things around corners or behind walls. Cirodes only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "cirodes"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "nightstalker",
+      "name": "Nightstalker",
+      "description": "Requires Echolocation. You gain a +50 bonus to hiding and sneaking while within complete darkness. Cirodes only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "cirodes"
+      ],
+      "requirements": [
+        {
+          "type": "requires_talent",
+          "id": "echolocation"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "light_adaptation",
+      "name": "Light Adaptation",
+      "description": "Your eyes have adapted to sunlight and other bright lights. You no longer receive a penalty to attack in bright light. Cirodes only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "cirodes"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "wild_athleticism",
+      "name": "Wild Athleticism",
+      "description": "Your natural muscularity improves your speed by one step. Cirodes only.",
+      "cost_rp": 10,
+      "category": "Racials",
+      "race_ids": [
+        "cirodes"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "leaper",
+      "name": "Leaper",
+      "description": "Your jump and leap distances are tripled. Cirodes only.",
+      "cost_rp": 10,
+      "category": "Racials",
+      "race_ids": [
+        "cirodes"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "bloodline",
+      "name": "Bloodline",
+      "description": "Must be chosen within character creation. Gain a benefit based on your line: Virovoi: 1 free Survival skill purchase. Seskovoi: 1 free Persuasion skill purchase. Krastovoi: 1 free Intimidation skill purchase. Askotoi: 1 free Sneaking skill purchase. Linelost: 1 free First Aid skill purchase. Vorova only.",
+      "cost_rp": 0,
+      "category": "Racials",
+      "race_ids": [
+        "vorova_female",
+        "vorova_male"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "lithe",
+      "name": "Lithe",
+      "description": "Requires female. Gain +1 to your dodge saving throw. Vorova only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "vorova_female"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "sturdy",
+      "name": "Sturdy",
+      "description": "Requires male. You are considered size large for knock backs. Vorova only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "vorova_male"
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "knockback_step_bonus",
+          "amount": 1
+        }
+      ]
+    },
+    {
+      "id": "heat_adaptation",
+      "name": "Heat Adaptation",
+      "description": "Mutually exclusive with Frostheart. Reduce heat penalties by 1/5% (no penalty at 30C, only -1/5% at 40C+). Save vs fire and heat at -2 instead of -4, and no longer suffer additional fire/heat damage. Vorova only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "vorova_female",
+        "vorova_male"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "hibernate",
+      "name": "Hibernate",
+      "description": "On a failed trauma check, you may enter catalepsy for one hour. You retain hearing and smell but not sight or touch, can feign death, and toxins are held in check. You can enter or end hibernation at will; changing states takes 1 minute. Vorova only.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "vorova_female",
+        "vorova_male"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "endure",
+      "name": "Endure",
+      "description": "Requires Hibernate. You automatically enter catalepsy when knocked unconscious and are nearly impossible to distinguish from the dead by mundane means. You do not succumb to wounds unless suffering internal hemorrhaging or severe bleeding. Vorova only.",
+      "cost_rp": 10,
+      "category": "Racials",
+      "race_ids": [
+        "vorova_female",
+        "vorova_male"
+      ],
+      "requirements": [
+        {
+          "type": "requires_talent",
+          "id": "hibernate"
+        }
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "frostheart",
+      "name": "Frostheart",
+      "description": "Mutually exclusive with Heat Adaptation. Your cold-related benefits are tripled, but so are your heat-related penalties. Vorova only.",
+      "cost_rp": 10,
+      "category": "Racials",
+      "race_ids": [
+        "vorova_female",
+        "vorova_male"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "power_within",
+      "name": "Power Within",
+      "description": "Gain a benefit based on your line: Virovoi: +1 defense. Seskovoi: +2 mental saving throw. Krastovoi: +2 physical saving throw. Askotoi: +1 damage modifier. Linelost: resist pain (double your ToP target number). Vorova only.",
+      "cost_rp": 10,
+      "category": "Racials",
+      "race_ids": [
+        "vorova_female",
+        "vorova_male"
+      ],
+      "max_rank": 1,
+      "effects": []
+    },
+    {
+      "id": "event_iron_heart",
+      "name": "Iron Heart",
+      "description": "A hard-won veteran instinct from campaign events. Gain +2 max HP.",
+      "cost_bp": 0,
+      "category": "Event Boons",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "hit_point_bonus",
+          "amount": 2
+        }
+      ]
+    },
+    {
+      "id": "event_ashen_stride",
+      "name": "Ashen Stride",
+      "description": "You learn to drive through smoke and chaos. Gain +1 weapon speed bonus with a chosen weapon.",
+      "cost_bp": 0,
+      "category": "Event Boons",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "weapon_speed_bonus",
+          "amount": 1
+        }
+      ]
+    },
+    {
+      "id": "event_quickened_sight",
+      "name": "Quickened Sight",
+      "description": "Reflexive threat reading from hard encounters. Gain +1 initiative modifier.",
+      "cost_bp": 0,
+      "category": "Event Boons",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "initiative_mod_bonus",
+          "amount": 1
+        }
+      ]
+    },
+    {
+      "id": "event_stoneguard",
+      "name": "Stoneguard",
+      "description": "Your stance hardens after surviving a brutal ordeal. Gain +1 DR.",
+      "cost_bp": 0,
+      "category": "Event Boons",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "armor_dr_bonus",
+          "amount": 1
+        }
+      ]
+    },
+    {
+      "id": "event_river_footing",
+      "name": "River Footing",
+      "description": "Learned balance under pressure grants +1 defense with a chosen weapon.",
+      "cost_bp": 0,
+      "category": "Event Boons",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "defense_bonus_weapon",
+          "amount": 1
+        }
+      ]
+    },
+    {
+      "id": "event_blooded_edge",
+      "name": "Blooded Edge",
+      "description": "A sharper killing line from decisive encounters. Gain +1 damage with a chosen weapon.",
+      "cost_bp": 0,
+      "category": "Event Boons",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "damage_bonus_weapon",
+          "amount": 1
+        }
+      ]
+    },
+    {
+      "id": "event_storm_arm",
+      "name": "Storm Arm",
+      "description": "Your attacks become cleaner and faster under duress. Gain +1 weapon attack bonus.",
+      "cost_bp": 0,
+      "category": "Event Boons",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "attack_bonus_weapon",
+          "amount": 1
+        }
+      ]
+    },
+    {
+      "id": "event_far_mark",
+      "name": "Far Mark",
+      "description": "Calibrated aim from repeated long-distance engagements.",
+      "cost_bp": 0,
+      "category": "Event Boons",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "range_distance_multiplier",
+          "multiplier": 0.8
+        }
+      ]
+    },
+    {
+      "id": "event_steady_guard",
+      "name": "Steady Guard",
+      "description": "Disciplined shield use grants +1 shield defense.",
+      "cost_bp": 0,
+      "category": "Event Boons",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "shield_defense_bonus",
+          "amount": 1
+        }
+      ]
+    },
+    {
+      "id": "event_fast_healing",
+      "name": "Fast Healing (Event)",
+      "description": "Your recovery improves after a significant campaign milestone.",
+      "cost_bp": 0,
+      "category": "Event Boons",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "fast_healer"
+        }
+      ]
+    },
+    {
+      "id": "event_braced_reach",
+      "name": "Braced Reach",
+      "description": "You learn to command distance. Gain +1 reach with melee weapons.",
+      "cost_bp": 0,
+      "category": "Event Boons",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "weapon_reach_bonus",
+          "amount": 1
+        }
+      ]
+    },
+    {
+      "id": "event_hardened_plate",
+      "name": "Hardened Plate",
+      "description": "You adapt your armor work in the field. Gain +1 DR while armored.",
+      "cost_bp": 0,
+      "category": "Event Boons",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "armor_dr_bonus_armored",
+          "amount": 1
+        }
+      ]
+    },
+    {
+      "id": "curse_of_axe",
+      "name": "Curse of Axe",
+      "description": "You are compelled to wield a +2 greataxe. Its 3d6p damage dice penetrate on 4, 5, or 6.",
+      "cost_bp": 0,
+      "category": "Curses",
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "forced_weapon_loadout",
+          "weapon_name": "Greataxe",
+          "min_weapon_material_tier": 2,
+          "clear_projectile_material": true,
+          "disable_offhand": true,
+          "force_two_hand_grip": true,
+          "force_no_shield": true,
+          "d6_penetration_triggers": [
+            4,
+            5,
+            6
+          ]
+        }
+      ]
+    }
+  ]
+}

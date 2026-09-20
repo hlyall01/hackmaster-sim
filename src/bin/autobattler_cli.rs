@@ -1,12 +1,13 @@
-use hackmaster_sim::character::{AbilityScore, AbilitySet, Progression, ProgressionTier};
+use hackmaster_sim::character::{
+    AbilityScore, AbilitySet, AbilitySetFull, Progression, ProgressionTier,
+};
 use hackmaster_sim::core::gameplay::{
-    run_next_fight, AutobattlerConfig, CombatantBuilder, EnemySpawnEntry, EnemySpawner, RunState,
-    Wound,
+    AutobattlerConfig, CombatantBuilder, EnemySpawnEntry, EnemySpawner, RunState, Wound,
+    encounter_tier_for_depth, run_next_fight,
 };
 use hackmaster_sim::core::ids::NpcPresetId;
-use hackmaster_sim::core::rng::SimRng;
 use hackmaster_sim::core::sim::{CombatEvent, CombatEventKind, SimConfig};
-use hackmaster_sim::core::types::{EnemyProfile, Inventory, PlayerProfile, RaceSpec};
+use hackmaster_sim::core::types::{EnemyProfile, Inventory, PlayerProfile, PointPools, RaceSpec};
 use hackmaster_sim::data;
 use hackmaster_sim::game_logic::{
     self, ArmorCatalog, ArmorId, FighterPreset, FighterPresetCatalog, NpcPresetCatalog,
@@ -14,10 +15,9 @@ use hackmaster_sim::game_logic::{
 };
 use std::{env, process};
 
-const AUTOBATTLER_CONFIG_PATH: &str = "data/autobattler_config.json";
-const FIGHTER_PRESETS_PATH: &str = "data/fighter_presets.json";
-const NPC_PRESETS_PATH: &str = "data/npc_presets.json";
-const TALENTS_PATH: &str = "data/talents.json";
+const AUTOBATTLER_CONFIG_PATH: &str = "data/autobattler/autobattler_config.json";
+const FIGHTER_PRESETS_PATH: &str = "data/sim/fighter_presets.json";
+const NPC_PRESETS_PATH: &str = "data/sim/npc_presets.json";
 
 struct AutobattlerBuilder<'a> {
     player_base: PlayerConfig,
@@ -34,6 +34,7 @@ impl CombatantBuilder for AutobattlerBuilder<'_> {
         let mut player = self.player_base.clone();
         player.name = state.player.name.clone();
         player.level = state.player.level;
+        player.progression = state.player.progression;
         player.strength_base = state.player.base_stats.strength.base;
         player.strength_pct = state.player.base_stats.strength.percentile;
         player.dex_base = state.player.base_stats.dexterity.base;
@@ -43,6 +44,9 @@ impl CombatantBuilder for AutobattlerBuilder<'_> {
         player.constitution = state.player.base_stats.constitution;
         player.looks = state.player.base_stats.looks;
         player.charisma = state.player.base_stats.charisma;
+        player.race_id = state.player.race_id.clone();
+        player.race_applied = player.race_id.is_some();
+        player.talents = state.player.talents.clone();
         let mut combatant = game_logic::build_combatant(
             &player,
             self.weapon_catalog,
@@ -85,14 +89,13 @@ fn main() {
         .unwrap_or_else(|err| panic!("Failed to load autobattler config: {err}"));
     cli_overrides.apply(&mut config);
 
-    let (weapon_catalog, armor_catalog, shield_catalog) = data::load_catalogs()
-        .unwrap_or_else(|err| panic!("Failed to load JSON catalogs: {err}"));
-    let npc_presets =
-        data::load_npc_presets(NPC_PRESETS_PATH).expect("Failed to load NPC presets");
+    let (weapon_catalog, armor_catalog, shield_catalog) =
+        data::load_catalogs().unwrap_or_else(|err| panic!("Failed to load JSON catalogs: {err}"));
+    let npc_presets = data::load_npc_presets(NPC_PRESETS_PATH).expect("Failed to load NPC presets");
     let fighter_presets =
         data::load_fighter_presets(FIGHTER_PRESETS_PATH).expect("Failed to load fighter presets");
     let race_catalog = data::load_races("data/races.json").expect("Failed to load races");
-    let talent_catalog = data::load_talents(TALENTS_PATH).expect("Failed to load talents");
+    let talent_catalog = data::load_talents(data::TALENTS_PATH).expect("Failed to load talents");
 
     let arthur_preset = find_fighter_preset(&fighter_presets, &config.player_preset_name)
         .or_else(|| fighter_presets.entries().first())
@@ -105,12 +108,11 @@ fn main() {
         &race_catalog,
     );
     let player_profile = player_profile_from_config(&player_config);
-    let mut run_state = RunState::new(player_profile, Inventory::default());
+    let mut run_state = RunState::new(player_profile, Inventory::default(), config.seed);
 
     let spawner = hobgoblin_spawner(&npc_presets);
     let loot_table = config.to_loot_table();
     let sim_config = SimConfig::new(config.start_distance, config.stop_distance);
-    let mut rng = SimRng::from_seed(config.seed);
 
     let enemy_weapon_id = find_weapon_id_by_name(&weapon_catalog, &config.enemy_weapon)
         .or_else(|| weapon_catalog.first_id())
@@ -127,6 +129,7 @@ fn main() {
 
     println!("Autobattler run start: {}", run_state.player.name);
     for fight_index in 1..=config.fights_to_run {
+        let tier = encounter_tier_for_depth(run_state.run_depth);
         let outcome = run_next_fight(
             run_state,
             &spawner,
@@ -136,8 +139,8 @@ fn main() {
             config.max_fight_seconds,
             config.rest_days_between_encounters,
             true,
+            tier,
             &builder,
-            &mut rng,
         );
         let enemy_name = outcome
             .enemy
@@ -170,7 +173,7 @@ fn main() {
             reward_gold,
             outcome.state.inventory.gold
         );
-        println!("  Wound tracker (6h progress/need): {wound_tracker}");
+        println!("  Wound tracker (steps progress/need): {wound_tracker}");
         println!("  Hits (hp damage): dealt=[{hits_dealt}] taken=[{hits_taken}]");
 
         run_state = outcome.state;
@@ -320,8 +323,8 @@ fn format_wound_tracker(wounds: &[Wound]) -> String {
         .map(|wound| {
             let damage = wound.damage;
             let required = damage.saturating_mul(2);
-            let progress = wound.healing_progress_quarter_days.min(required);
-            format!("{damage}({progress}/{required} 6h)")
+            let progress = wound.healing_progress_steps.min(required);
+            format!("{damage}({progress}/{required} steps)")
         })
         .collect::<Vec<_>>()
         .join(", ")
@@ -381,12 +384,7 @@ fn player_config_from_preset(
     );
     player.level = preset.level;
     player.progression = Progression::new(attack, speed, initiative, health);
-    player.mastery_attack = game_logic::clamp_mastery(preset.masteries.attack);
-    player.mastery_defense = game_logic::clamp_mastery(preset.masteries.defense);
-    player.mastery_damage = game_logic::clamp_mastery(preset.masteries.damage);
-    player.mastery_speed = game_logic::clamp_mastery(preset.masteries.speed);
-    player.shield_mastery_defense = game_logic::clamp_mastery(preset.masteries.shield_defense);
-    player.shield_mastery_speed = game_logic::clamp_mastery(preset.masteries.shield_speed);
+    player.weapon_masteries = game_logic::weapon_masteries_for_preset(preset, weapon_catalog);
     player.base_hp = preset.base_hp;
     player.move_speed = preset.move_speed;
     player.strength_base = preset.strength_base;
@@ -405,21 +403,29 @@ fn player_config_from_preset(
     player.offhand_projectile_material_tier = preset.offhand_projectile_material_tier;
     player.shield_material_tier = preset.shield_material_tier;
     player.two_hand_grip = preset.two_hand_grip;
+    player.one_path_piercing = preset.one_path_piercing;
+    player.decline_pursuit = preset.decline_pursuit;
     let maneuvers = preset.maneuvers;
     player.use_jab = maneuvers.use_jab;
     player.hold_at_bay = maneuvers.hold_at_bay;
+    player.called_shot = maneuvers.called_shot;
+    player.power_attack = maneuvers.power_attack;
     player.aggressive_attack = maneuvers.aggressive_attack;
     player.charge = maneuvers.charge;
     player.ready_against_charge = maneuvers.ready_against_charge;
     player.tactical_move = maneuvers.tactical_move;
     player.fight_defensively = maneuvers.fight_defensively;
+    player.fight_defensively_penalty = maneuvers.fight_defensively_penalty;
     player.full_parry = maneuvers.full_parry;
     player.give_ground = maneuvers.give_ground;
     player.scamper_back = maneuvers.scamper_back;
     player.fighting_withdrawal = maneuvers.fighting_withdrawal;
     player.flee = maneuvers.flee;
+    player.mounted = maneuvers.mounted;
+    player.mounted_combat = maneuvers.mounted_combat;
     player.defensive_dualwielding = preset.defensive_dualwielding;
     player.offensive_dualwielding = preset.offensive_dualwielding;
+    player.proficiencies = preset.proficiencies.clone();
     player.talents = preset.talents.clone();
     player.race_id = preset.race_id.clone();
     player.race_applied = false;
@@ -445,19 +451,34 @@ fn player_config_from_preset(
 }
 
 fn player_profile_from_config(config: &PlayerConfig) -> PlayerProfile {
+    let ability_scores_full = AbilitySetFull {
+        strength: AbilityScore::new(config.strength_base, config.strength_pct),
+        intelligence: AbilityScore::new(config.intelligence, 1),
+        wisdom: AbilityScore::new(config.wisdom, 1),
+        dexterity: AbilityScore::new(config.dex_base, config.dex_pct),
+        constitution: AbilityScore::new(config.constitution, 1),
+        looks: AbilityScore::new(config.looks, 1),
+        charisma: AbilityScore::new(config.charisma, 1),
+    };
     PlayerProfile {
         name: config.name.clone(),
         level: config.level,
         xp: 0,
-        base_stats: AbilitySet {
-            strength: AbilityScore::new(config.strength_base, config.strength_pct),
-            intelligence: config.intelligence,
-            wisdom: config.wisdom,
-            dexterity: AbilityScore::new(config.dex_base, config.dex_pct),
-            constitution: config.constitution,
-            looks: config.looks,
-            charisma: config.charisma,
-        },
+        base_stats: AbilitySet::from(ability_scores_full),
+        ability_scores_full,
+        progression: config.progression,
+        points: PointPools::default(),
+        banked_points: PointPools::default(),
+        honor: 0,
+        alignment: None,
+        race_id: config.race_id.clone(),
+        background: None,
+        quirks: Vec::new(),
+        flaws: Vec::new(),
+        skills: Vec::new(),
+        skill_levels: Vec::new(),
+        proficiencies: config.proficiencies.clone(),
+        weapon_masteries: Vec::new(),
         talents: config.talents.clone(),
     }
 }

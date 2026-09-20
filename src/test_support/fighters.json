@@ -1,0 +1,680 @@
+[
+  {
+    "name": "Halberd fixture",
+    "level": 9,
+    "progression": {
+      "attack": "V",
+      "speed": "III",
+      "initiative": "I",
+      "health": "IV"
+    },
+    "weapon_masteries": {
+      "polearms": {
+        "attack": 5,
+        "damage": 4,
+        "speed": 5,
+        "defense": 4
+      },
+      "spears": {
+        "attack": 3,
+        "damage": 2,
+        "speed": 2,
+        "defense": 2
+      }
+    },
+    "base_hp": 10,
+    "move_speed": 20.0,
+    "strength_base": 18,
+    "strength_pct": 16,
+    "dex_base": 15,
+    "dex_pct": 98,
+    "intelligence": 10,
+    "wisdom": 12,
+    "constitution": 14,
+    "looks": 8,
+    "charisma": 9,
+    "weapon": "Halberd",
+    "armor": "Platemail",
+    "shield": "None",
+    "weapon_material_tier": 5,
+    "armor_material_tier": 2,
+    "projectile_material_tier": 0,
+    "shield_material_tier": 0,
+    "two_hand_grip": true,
+    "maneuvers": {
+      "charge": false
+    },
+    "defensive_dualwielding": false,
+    "race_id": "midlander",
+    "proficiencies": [
+      "Fist",
+      "Glaive",
+      "Halberd",
+      "Poleaxe",
+      "Lance",
+      "Polehammer",
+      "Light armor",
+      "Medium armor",
+      "Heavy armor",
+      "Laborer",
+      "Trilingual",
+      "Hiking"
+    ],
+    "talents": [
+      {
+        "id": "armor_focus",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "armor_specialization",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "armor_master",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "heavy_armor_optimization",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "weapon_focus",
+        "rank": 1,
+        "weapon": "Polearms"
+      },
+      {
+        "id": "weapon_specialization",
+        "rank": 1,
+        "weapon": "Polearms"
+      },
+      {
+        "id": "swift",
+        "rank": 1,
+        "weapon": "Halberd"
+      },
+      {
+        "id": "cleave",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "great_cleave",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "solid",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "tough_hide",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "tough_as_nails",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "polyglot",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "armeroci_pole",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "rohavalan_bridge",
+        "rank": 1,
+        "weapon": null
+      }
+    ],
+    "default_weapon_style_ids": []
+  },
+  {
+    "name": "Axe fixture",
+    "level": 8,
+    "progression": {
+      "attack": "II",
+      "speed": "V",
+      "initiative": "III",
+      "health": "II"
+    },
+    "weapon_masteries": {
+      "axes": {
+        "attack": 3,
+        "damage": 2,
+        "speed": 3,
+        "defense": 3
+      },
+      "shields": {
+        "attack": 0,
+        "damage": 0,
+        "speed": 1,
+        "defense": 1
+      }
+    },
+    "base_hp": 10,
+    "move_speed": 20.0,
+    "strength_base": 12,
+    "strength_pct": 32,
+    "dex_base": 17,
+    "dex_pct": 51,
+    "intelligence": 11,
+    "wisdom": 16,
+    "constitution": 14,
+    "looks": 7,
+    "charisma": 8,
+    "weapon": "Throwing axe",
+    "armor": "Gambeson",
+    "shield": "Large wooden shield",
+    "weapon_material_tier": 2,
+    "armor_material_tier": 2,
+    "projectile_material_tier": 0,
+    "shield_material_tier": 3,
+    "two_hand_grip": false,
+    "maneuvers": {
+      "charge": true
+    },
+    "defensive_dualwielding": false,
+    "race_id": "vorova_female",
+    "proficiencies": [
+      "Throwing axe",
+      "Shortbow",
+      "Battle axe",
+      "Greataxe",
+      "Blunt weapons",
+      "Large swords",
+      "Light armor",
+      "Shields",
+      "Hiking",
+      "Roadmarching",
+      "Skinning/Tanning"
+    ],
+    "talents": [
+      {
+        "id": "pain_tolerant",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "weapon_focus",
+        "rank": 1,
+        "weapon": "Axes"
+      },
+      {
+        "id": "advanced_sighting",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "ranged_weapon_specialization",
+        "rank": 1,
+        "weapon": "Axes"
+      },
+      {
+        "id": "light_armor_optimization",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "fymblwnger",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "hibernate",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "essence_health_bonus",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "bloodline",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "heat_adaptation",
+        "rank": 1,
+        "weapon": null
+      }
+    ]
+  },
+  {
+    "name": "Impaler fixture",
+    "level": 8,
+    "progression": {
+      "attack": "III",
+      "speed": "III",
+      "initiative": "III",
+      "health": "IV"
+    },
+    "weapon_masteries": {
+      "spears": {
+        "attack": 2,
+        "damage": 2,
+        "speed": 2,
+        "defense": 2
+      },
+      "shields": {
+        "attack": 0,
+        "damage": 0,
+        "speed": 1,
+        "defense": 2
+      }
+    },
+    "base_hp": 10,
+    "move_speed": 20.0,
+    "strength_base": 16,
+    "strength_pct": 31,
+    "dex_base": 10,
+    "dex_pct": 20,
+    "intelligence": 14,
+    "wisdom": 10,
+    "constitution": 14,
+    "looks": 16,
+    "charisma": 13,
+    "weapon": "Hasta",
+    "armor": "Halfplate",
+    "shield": "Large metallic shield",
+    "weapon_material_tier": 2,
+    "armor_material_tier": 2,
+    "projectile_material_tier": 0,
+    "shield_material_tier": 2,
+    "two_hand_grip": false,
+    "maneuvers": {
+      "power_attack": true
+    },
+    "defensive_dualwielding": false,
+    "race_id": "kanian",
+    "proficiencies": [
+      "Hasta",
+      "Lance",
+      "Pike",
+      "Light armor",
+      "Medium armor",
+      "Heavy armor",
+      "Shields",
+      "Hiking",
+      "Roadmarching"
+    ],
+    "talents": [
+      {
+        "id": "armor_focus",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "armor_specialization",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "armor_master",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "heavy_armor_optimization",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "power_attack",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "shield_focus",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "weapon_focus",
+        "rank": 1,
+        "weapon": "Spears"
+      },
+      {
+        "id": "weapon_focus",
+        "rank": 1,
+        "weapon": "Shields"
+      },
+      {
+        "id": "tough_as_nails",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "kanian_impaler",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "improved_awareness",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "destined",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "improvisation",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "voice_of_the_commander",
+        "rank": 1,
+        "weapon": null
+      }
+    ]
+  },
+  {
+    "name": "Dual wield fixture",
+    "level": 9,
+    "progression": {
+      "attack": "IV",
+      "speed": "III",
+      "initiative": "III",
+      "health": "IV"
+    },
+    "weapon_masteries": {
+      "small_swords": {
+        "attack": 2,
+        "damage": 2,
+        "speed": 2,
+        "defense": 3
+      }
+    },
+    "base_hp": 10,
+    "move_speed": 20.0,
+    "strength_base": 11,
+    "strength_pct": 1,
+    "dex_base": 20,
+    "dex_pct": 51,
+    "intelligence": 15,
+    "wisdom": 12,
+    "constitution": 12,
+    "looks": 8,
+    "charisma": 6,
+    "weapon": "Short sword",
+    "offhand_weapon": "Short sword",
+    "armor": "Gambeson",
+    "shield": "None",
+    "weapon_material_tier": 5,
+    "offhand_weapon_material_tier": 2,
+    "armor_material_tier": 2,
+    "projectile_material_tier": 0,
+    "offhand_projectile_material_tier": 0,
+    "shield_material_tier": 0,
+    "two_hand_grip": false,
+    "maneuvers": {
+      "fight_defensively": true,
+      "fight_defensively_penalty": 8
+    },
+    "defensive_dualwielding": true,
+    "offensive_dualwielding": true,
+    "race_id": "ithican",
+    "proficiencies": [
+      "Short sword",
+      "Dueling sword",
+      "Throwing Knife",
+      "Light armor",
+      "Seaman's Cant",
+      "Trilingual",
+      "Hiking",
+      "Roadmarching"
+    ],
+    "talents": [
+      {
+        "id": "dodge",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "deceptive_defender",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "precision_combatant",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "combat_expertise",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "light_armor_optimization",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "two_weapon_fighting",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "improved_two_weapon_fighting",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "greater_two_weapon_fighting",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "perfect_two_weapon_fighting",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "shield_of_blades",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "storm_of_blades",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "improved_awareness",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "backstab",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "devious",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "hide_in_shadows",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "rearward_strike",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "contender",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "duelist",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "precognition",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "prescience",
+        "rank": 1,
+        "weapon": null
+      }
+    ]
+  },
+  {
+    "name": "Eyesmite fixture",
+    "level": 8,
+    "progression": {
+      "attack": "IV",
+      "speed": "II",
+      "initiative": "II",
+      "health": "IV"
+    },
+    "weapon_masteries": {
+      "large_swords": {
+        "attack": 2,
+        "damage": 2,
+        "speed": 2,
+        "defense": 2
+      },
+      "shields": {
+        "attack": 0,
+        "damage": 0,
+        "speed": 1,
+        "defense": 2
+      }
+    },
+    "base_hp": 10,
+    "move_speed": 20.0,
+    "strength_base": 14,
+    "strength_pct": 57,
+    "dex_base": 12,
+    "dex_pct": 28,
+    "intelligence": 8,
+    "wisdom": 10,
+    "constitution": 16,
+    "looks": 13,
+    "charisma": 14,
+    "weapon": "Flamberge",
+    "armor": "Platemail",
+    "shield": "Buckler",
+    "weapon_material_tier": 2,
+    "armor_material_tier": 1,
+    "projectile_material_tier": 0,
+    "shield_material_tier": 5,
+    "two_hand_grip": false,
+    "maneuvers": {},
+    "defensive_dualwielding": false,
+    "race_id": "pather",
+    "proficiencies": [
+      "Flamberge",
+      "Lance",
+      "Two-handed sword",
+      "Shields",
+      "Light armor",
+      "Medium armor",
+      "Heavy armor",
+      "Laborer",
+      "Hiking",
+      "Roadmarching"
+    ],
+    "talents": [
+      {
+        "id": "armor_focus",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "armor_specialization",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "armor_master",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "shield_focus",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "shield_specialization",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "weapon_focus",
+        "rank": 1,
+        "weapon": "Large swords"
+      },
+      {
+        "id": "twelve_paths",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "falling_sun",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "mounted_juggernaut",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "knight_hardened",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "inspire_others",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "intimidate_adversary",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "pedestrian",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "destined",
+        "rank": 1,
+        "weapon": null
+      },
+      {
+        "id": "eyesmite",
+        "rank": 1,
+        "weapon": null
+      }
+    ]
+  }
+]

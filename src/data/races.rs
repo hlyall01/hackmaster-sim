@@ -3,7 +3,7 @@ use crate::data::resolve_data_path;
 use std::fs;
 
 const EMBEDDED_RACES_JSON: &str =
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/races.json"));
+    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/sim/races.json"));
 
 #[derive(serde::Deserialize)]
 struct RacesFile {

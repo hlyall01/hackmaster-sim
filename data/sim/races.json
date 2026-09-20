@@ -251,6 +251,72 @@
       ]
     },
     {
+      "id": "cirodes",
+      "name": "Cirodes",
+      "category": "Demi-human",
+      "base_hp": 10,
+      "size": "medium",
+      "ability_adjustments": {
+        "strength": 3,
+        "dexterity": -1,
+        "intelligence": -3,
+        "wisdom": 4,
+        "constitution": 0,
+        "looks": -3,
+        "charisma": -1
+      },
+      "pros": [
+        "Claws and claw proficiency",
+        "Fangs and fang proficiency",
+        "Low light vision",
+        "Blind-Fighting talent",
+        "3 free Listening skill purchases",
+        "2 free Direction Sense skill purchases"
+      ],
+      "cons": [
+        "Communicates via body language, clicks and shrieks (must learn language independently)",
+        "Cannot fit into human-sized apparel; must have it specially made or refitted",
+        "-2 attack in bright light",
+        "-3 on mastery die for Observation",
+        "-2 on mastery die for skills where Intelligence is the sole relevant attribute",
+        "-1 on mastery die for skills where Intelligence is one of multiple relevant attributes"
+      ]
+    },
+    {
+      "id": "qaraz",
+      "name": "Qaraz",
+      "category": "Demi-human",
+      "base_hp": 10,
+      "size": "medium",
+      "ability_adjustments": {
+        "strength": 0,
+        "dexterity": 0,
+        "intelligence": 2,
+        "wisdom": 1,
+        "constitution": 1,
+        "looks": 1,
+        "charisma": -3
+      },
+      "pros": [
+        "Fangs",
+        "Low light vision",
+        "Bilingual proficiency",
+        "Polyglot talent",
+        "+2 on mastery die for skills where Intelligence is the sole relevant attribute",
+        "+1 on mastery die for skills where Intelligence is one of multiple relevant attributes",
+        "4 free Literacy (Qarazi) skill purchases",
+        "2 free Astrology skill purchases",
+        "2 free First Aid skill purchases",
+        "1 free Mathematics skill purchase",
+        "1 free History skill purchase",
+        "1 free Glean Information skill purchase"
+      ],
+      "cons": [
+        "Conspiracy Theorist quirk (no BP gained)",
+        "Migraines flaw (no BP gained)"
+      ]
+    },
+    {
       "id": "vorova_female",
       "name": "Vorova (Female)",
       "category": "Demi-human",

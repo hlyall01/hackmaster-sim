@@ -1,5 +1,14 @@
 /target
 /.venv
 /secrets/codesign/
+/screenshots/
+/assets/sprites/
 *.pfx
 *.exe
+
+# Local analysis, simulation studies, and scratch helpers.
+/docs/analysis/
+/scripts/analysis/
+/examples/analysis_*.rs
+/examples/arthur_double_stats.rs
+/scripts/arthur_bp_bumps.py

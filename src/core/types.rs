@@ -1,6 +1,6 @@
 //! Core domain types (abilities, equipment, combatant sheet).
 
-use crate::character::AbilitySet;
+use crate::character::{AbilitySet, AbilitySetFull, Progression};
 use crate::core::ids::NpcPresetId;
 use serde::{Deserialize, Serialize};
 
@@ -10,7 +10,21 @@ pub struct PlayerProfile {
     pub level: u8,
     pub xp: u32,
     pub base_stats: AbilitySet,
+    pub ability_scores_full: AbilitySetFull,
+    pub progression: Progression,
+    pub points: PointPools,
+    pub banked_points: PointPools,
+    pub honor: i32,
+    pub alignment: Option<String>,
+    pub race_id: Option<String>,
+    pub background: Option<String>,
+    pub quirks: Vec<String>,
+    pub flaws: Vec<String>,
+    pub skills: Vec<String>,
+    pub skill_levels: Vec<SkillProgress>,
+    pub proficiencies: Vec<String>,
     pub talents: Vec<TalentSelection>,
+    pub weapon_masteries: Vec<WeaponMasteryProgress>,
 }
 
 impl PlayerProfile {
@@ -20,7 +34,21 @@ impl PlayerProfile {
             level: 1,
             xp: 0,
             base_stats,
+            ability_scores_full: AbilitySetFull::from(base_stats),
+            progression: Progression::default(),
+            points: PointPools::default(),
+            banked_points: PointPools::default(),
+            honor: 0,
+            alignment: None,
+            race_id: None,
+            background: None,
+            quirks: Vec::new(),
+            flaws: Vec::new(),
+            skills: Vec::new(),
+            skill_levels: Vec::new(),
+            proficiencies: Vec::new(),
             talents: Vec::new(),
+            weapon_masteries: Vec::new(),
         }
     }
 }
@@ -28,6 +56,46 @@ impl PlayerProfile {
 impl Default for PlayerProfile {
     fn default() -> Self {
         Self::new("Player", AbilitySet::default())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct SkillProgress {
+    pub id: String,
+    #[serde(default)]
+    pub level: u8,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub struct WeaponMasteryProgress {
+    pub group: String,
+    #[serde(default)]
+    pub experience: u32,
+    #[serde(default)]
+    pub unspent_points: u32,
+    #[serde(default)]
+    pub free_proficiency_tiers_claimed: i32,
+    #[serde(default)]
+    pub attack: i32,
+    #[serde(default)]
+    pub defense: i32,
+    #[serde(default)]
+    pub damage: i32,
+    #[serde(default)]
+    pub speed: i32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub struct PointPools {
+    pub bp: i32,
+    pub lp: i32,
+    pub ap: i32,
+    pub rp: i32,
+}
+
+impl PointPools {
+    pub fn new(bp: i32, lp: i32, ap: i32, rp: i32) -> Self {
+        Self { bp, lp, ap, rp }
     }
 }
 
@@ -112,7 +180,9 @@ impl AbilityKind {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TalentRequirement {
-    MinLevel { level: u8 },
+    MinLevel {
+        level: u8,
+    },
     MinStat {
         stat: AbilityKind,
         min_base: Option<u8>,
@@ -159,15 +229,35 @@ pub struct TalentSelection {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TalentEffect {
-    HitPointBonus { amount: i32 },
-    ArmorDrBonus { amount: i32 },
-    SpeedModBonus { amount: i32 },
-    InitiativeModBonus { amount: i32 },
-    AttackBonusWeapon { amount: i32 },
-    DamageBonusWeapon { amount: i32 },
-    DamageBonusWeaponGroup { amount: i32, weapon_group: String },
-    DefenseBonusWeapon { amount: i32 },
-    InitiativeDieBonus { steps: i32 },
+    HitPointBonus {
+        amount: i32,
+    },
+    EssenceAdvancement,
+    ArmorDrBonus {
+        amount: i32,
+    },
+    SpeedModBonus {
+        amount: i32,
+    },
+    InitiativeModBonus {
+        amount: i32,
+    },
+    AttackBonusWeapon {
+        amount: i32,
+    },
+    DamageBonusWeapon {
+        amount: i32,
+    },
+    DamageBonusWeaponGroup {
+        amount: i32,
+        weapon_group: String,
+    },
+    DefenseBonusWeapon {
+        amount: i32,
+    },
+    InitiativeDieBonus {
+        steps: i32,
+    },
     Dodge {
         defense_bonus: i32,
         allow_dex_ranged: bool,
@@ -176,8 +266,12 @@ pub enum TalentEffect {
         sides: i32,
         penetrating: bool,
     },
-    ThresholdOfPainMultiplier { multiplier: f32 },
-    ThresholdOfPainLevelBonus { per_level_pct: f32 },
+    ThresholdOfPainMultiplier {
+        multiplier: f32,
+    },
+    ThresholdOfPainLevelBonus {
+        per_level_pct: f32,
+    },
     FastHealer,
     WeaponSpeedBonus {
         amount: i32,
@@ -186,18 +280,273 @@ pub enum TalentEffect {
         #[serde(default)]
         weapon_group: Option<String>,
     },
-    WeaponReachBonus { amount: i32 },
-    RangeDistanceMultiplier { multiplier: f32 },
+    WeaponSpeedMultiplier {
+        multiplier: f32,
+        #[serde(default)]
+        min_multiplier: Option<f32>,
+        #[serde(default)]
+        weapon_groups: Vec<String>,
+        #[serde(default)]
+        weapon_names: Vec<String>,
+    },
+    WeaponSpeedFlatBonus {
+        amount: f32,
+        #[serde(default)]
+        min_reach_ft: Option<f32>,
+        #[serde(default)]
+        weapon_groups: Vec<String>,
+        #[serde(default)]
+        weapon_names: Vec<String>,
+    },
+    WeaponReachBonus {
+        amount: i32,
+    },
+    WeaponReachMultiplier {
+        multiplier: f32,
+        #[serde(default)]
+        weapon_groups: Vec<String>,
+        #[serde(default)]
+        weapon_names: Vec<String>,
+    },
+    WeaponReachFlatBonus {
+        amount: f32,
+        #[serde(default)]
+        min_reach_ft: Option<f32>,
+        #[serde(default)]
+        weapon_groups: Vec<String>,
+        #[serde(default)]
+        weapon_names: Vec<String>,
+    },
+    CloseHitDamageExpr {
+        expr: String,
+        margin_less_than: i32,
+        #[serde(default)]
+        weapon_groups: Vec<String>,
+        #[serde(default)]
+        weapon_names: Vec<String>,
+    },
+    WeaponAttackBonus {
+        amount: i32,
+        #[serde(default)]
+        weapon_groups: Vec<String>,
+        #[serde(default)]
+        weapon_names: Vec<String>,
+    },
+    CritMinRollWeaponGroup {
+        min_roll: i32,
+        #[serde(default)]
+        ranged_only: bool,
+    },
+    CritSeverityBonusWeaponGroup {
+        amount: i32,
+    },
+    WeaponDamageOptions {
+        #[serde(default)]
+        no_strength_bonus: bool,
+        #[serde(default)]
+        no_mastery_bonus: bool,
+        #[serde(default)]
+        force_nonpenetrating: bool,
+        #[serde(default)]
+        halve_damage: bool,
+        #[serde(default)]
+        ignore_all_dr: bool,
+        #[serde(default)]
+        internal_hemorrhage_damage: i32,
+        #[serde(default)]
+        melee_only: bool,
+        #[serde(default)]
+        hacking_or_piercing: Option<bool>,
+        #[serde(default)]
+        weapon_groups: Vec<String>,
+        #[serde(default)]
+        weapon_names: Vec<String>,
+    },
+    ExpandedPenetration {
+        #[serde(default)]
+        attack_defense_max_minus_one: bool,
+        #[serde(default)]
+        damage_max_minus_one: bool,
+        #[serde(default)]
+        weapon_groups: Vec<String>,
+        #[serde(default)]
+        weapon_names: Vec<String>,
+    },
+    OpeningEngagementExtraDamageDice {
+        dice: i32,
+        #[serde(default)]
+        min_reach_ft: Option<f32>,
+        #[serde(default)]
+        weapon_groups: Vec<String>,
+        #[serde(default)]
+        weapon_names: Vec<String>,
+    },
+    AlwaysInitialEngagementIfReachAtLeastOpponent {
+        #[serde(default)]
+        min_reach_ft: Option<f32>,
+        #[serde(default)]
+        weapon_groups: Vec<String>,
+        #[serde(default)]
+        weapon_names: Vec<String>,
+    },
+    IgnoreDefenderMovementDefenseBonus {
+        #[serde(default)]
+        weapon_groups: Vec<String>,
+        #[serde(default)]
+        weapon_names: Vec<String>,
+    },
+    KnockbackResetsWeaponCount {
+        #[serde(default)]
+        weapon_groups: Vec<String>,
+        #[serde(default)]
+        weapon_names: Vec<String>,
+    },
+    HitCriticalEffectsNoExtraDice {
+        #[serde(default)]
+        weapon_groups: Vec<String>,
+        #[serde(default)]
+        weapon_names: Vec<String>,
+    },
+    IntAttackBonusToDamageAndDefense {
+        fraction: f32,
+        #[serde(default)]
+        weapon_groups: Vec<String>,
+        #[serde(default)]
+        shield_names: Vec<String>,
+    },
+    ThrownFullStrengthDamage {
+        #[serde(default)]
+        thrown_only: bool,
+        #[serde(default)]
+        weapon_groups: Vec<String>,
+        #[serde(default)]
+        weapon_names: Vec<String>,
+    },
+    ConsecutiveHitsForceTraumaTwenty {
+        hits: i32,
+        #[serde(default)]
+        weapon_groups: Vec<String>,
+        #[serde(default)]
+        weapon_names: Vec<String>,
+    },
+    ShieldDrBonusFiltered {
+        amount: i32,
+        #[serde(default)]
+        shield_names: Vec<String>,
+    },
+    ShieldBreakageUsesShieldDr {
+        #[serde(default)]
+        shield_names: Vec<String>,
+    },
+    KnockbackStepBonus {
+        amount: i32,
+    },
+    IncomingCritExtraDamageHalved,
+    IncomingCritSeverityReduction {
+        amount: i32,
+    },
+    IgnoreAncillaryCritEffects,
+    IncomingCritDamageRollTwiceTakeLower,
+    Precognition,
+    Prescience,
+    Eyesmite,
+    Chronoblur,
+    Streamline,
+    Remarkability,
+    NearPerfectDefenseMinRoll {
+        roll: i32,
+    },
+    PerfectDefenseCounterForceCritical,
+    FightDefensivelyAttackPenaltyDivisor {
+        divisor: i32,
+    },
+    CalledShotDelayProfile {
+        profile: String,
+    },
+    CalledShotTargetDefenseBonusDivisor {
+        divisor: i32,
+    },
+    CalledShotSelfDefensePenalty {
+        amount: i32,
+    },
+    CalledShotDeceptiveDefender,
+    DualWieldOffhandDamagePenalty {
+        amount: i32,
+    },
+    DualWieldPrimaryRecoveryPenalty {
+        amount: f32,
+    },
+    DualWieldSecondaryRecoveryPenalty {
+        amount: f32,
+    },
+    PerfectTwoWeaponFighting,
+    RangeDistanceMultiplier {
+        multiplier: f32,
+    },
     ArmorInitiativePenaltyNegation,
     ArmorSpeedPenaltyNegation,
-    ArmorDrBonusArmored { amount: i32 },
-    LightArmorDefenseBonusFromDr { divisor: i32 },
-    MediumArmorDrBonus { amount: i32 },
-    MediumArmorDefensePenaltyReduction { amount: i32 },
-    HeavyArmorDamageBonusFromDr { divisor: i32 },
-    HeavyArmorDamageBonus { amount: i32 },
-    ShieldDefenseBonus { amount: i32 },
-    ShieldCoverValueAdjustment { amount: i32 },
+    ArmorDrBonusArmored {
+        amount: i32,
+    },
+    LightArmorDefenseBonusFromDr {
+        divisor: i32,
+    },
+    MediumArmorDrBonus {
+        amount: i32,
+    },
+    MediumArmorDefensePenaltyReduction {
+        amount: i32,
+    },
+    HeavyArmorDamageBonusFromDr {
+        divisor: i32,
+    },
+    HeavyArmorDamageBonus {
+        amount: i32,
+    },
+    ShieldDefenseBonus {
+        amount: i32,
+    },
+    ShieldCoverValueAdjustment {
+        amount: i32,
+    },
+    ForcedWeaponLoadout {
+        weapon_name: String,
+        #[serde(default)]
+        min_weapon_material_tier: Option<i32>,
+        #[serde(default)]
+        clear_projectile_material: bool,
+        #[serde(default)]
+        disable_offhand: bool,
+        #[serde(default)]
+        force_two_hand_grip: bool,
+        #[serde(default)]
+        force_no_shield: bool,
+        #[serde(default)]
+        d6_penetration_triggers: Vec<i32>,
+    },
+    LargeSwordShieldStyle,
+    ArmerociPoleStyle,
+    CrescentMoonStyle,
+    DoomrazorStyle,
+    FallingSunStyle,
+    FymblwngerStyle,
+    HammererStyle,
+    HobblerStyle,
+    IthicanPrinceStyle,
+    QuietRiverStyle,
+    RegenstatStyle,
+    ReturnerStyle,
+    RhdwngFlowStyle,
+    ScornOfTheDissendriStyle,
+    ShieldOfBladesStyle,
+    SixPathsStyle,
+    StormOfBladesStyle,
+    ThreeMountainsStyle,
+    UnbreakableWallStyle,
+    LeftHandOfEvoniaStyle,
+    OnePathStyle,
+    PilgrimsPathStyle,
+    ReaperOfTermonStyle,
 }
 
 fn default_talent_rank() -> u8 {

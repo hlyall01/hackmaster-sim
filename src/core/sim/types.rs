@@ -1,25 +1,70 @@
-use super::modifiers::{ModifierStack, StatIdF32, StatIdI32, TemporaryEffect};
+use super::modifiers::{
+    CHRONOBLUR_DURATION_SECONDS, CHRONOBLUR_EFFECT_ID, ModifierStack, STREAMLINE_DURATION_SECONDS,
+    STREAMLINE_EFFECT_ID, StatIdF32, StatIdI32, TemporaryEffect,
+};
 use crate::core::rules::DamageExprCache;
+use crate::core::tactics::TacticalPolicy;
 use std::sync::Arc;
+
+const DEFAULT_GRID_HEIGHT: i32 = 11;
+const DEFAULT_GRID_PADDING: i32 = 5;
+const DEFAULT_TILE_SIZE_FT: f32 = 1.0;
 
 #[derive(Clone, Copy, Debug)]
 pub struct SimConfig {
     pub start_distance: f32,
     pub stop_distance: f32,
+    pub grid_width: i32,
+    pub grid_height: i32,
+    pub tile_size_ft: f32,
 }
 
 impl SimConfig {
     pub fn new(start_distance: f32, stop_distance: f32) -> Self {
+        let start_tiles = (start_distance / DEFAULT_TILE_SIZE_FT).ceil() as i32;
+        let grid_width = (start_tiles + DEFAULT_GRID_PADDING * 2 + 1).max(10);
         Self {
             start_distance,
             stop_distance,
+            grid_width,
+            grid_height: DEFAULT_GRID_HEIGHT,
+            tile_size_ft: DEFAULT_TILE_SIZE_FT,
+        }
+    }
+
+    pub fn set_start_distance(&mut self, start_distance: f32) {
+        self.start_distance = start_distance;
+        let start_tiles = (start_distance / self.tile_size_ft.max(0.01)).ceil() as i32;
+        self.grid_width = (start_tiles + DEFAULT_GRID_PADDING * 2 + 1).max(10);
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GridPos {
+    pub x: i32,
+    pub y: i32,
+}
+
+impl GridPos {
+    pub fn new(x: i32, y: i32) -> Self {
+        Self { x, y }
+    }
+
+    pub fn manhattan_distance(self, other: GridPos) -> i32 {
+        (self.x - other.x).abs() + (self.y - other.y).abs()
+    }
+
+    pub fn clamp(self, width: i32, height: i32) -> Self {
+        Self {
+            x: self.x.clamp(0, width.saturating_sub(1)),
+            y: self.y.clamp(0, height.saturating_sub(1)),
         }
     }
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct SimActor {
-    pub position: f32,
+    pub position: GridPos,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,6 +77,8 @@ pub enum WeaponSlot {
 pub struct DamageDie {
     pub sides: i32,
     pub penetrating: bool,
+    pub penetration_triggers: Option<&'static [i32]>,
+    pub penetrate_on_max_minus_one: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -68,27 +115,128 @@ pub struct WeaponProfile {
     pub uses_projectiles: bool,
     pub is_small_weapon: bool,
     pub is_unarmed: bool,
+    pub hacking_or_piercing: bool,
+    pub force_nonpenetrating_damage: bool,
+    pub halve_damage: bool,
+    pub ignore_all_dr: bool,
+    pub internal_hemorrhage_damage: i32,
+    pub use_close_hit_damage_expr: Option<String>,
+    pub use_close_hit_damage_expr_cache: Option<DamageExprCache>,
+    pub use_close_hit_margin_less_than: i32,
     pub crit_min_roll: i32,
     pub crit_min_roll_ranged: Option<i32>,
     pub crit_severity_bonus: i32,
     pub defender_knockback_step_adjustment: i32,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+impl WeaponProfile {
+    pub fn damage_expr_for_attack(&self) -> &str {
+        if self.use_jab {
+            self.jab_special_expr
+                .as_deref()
+                .unwrap_or(self.damage_expr.as_str())
+        } else {
+            self.damage_expr.as_str()
+        }
+    }
+
+    pub fn damage_expr_cache_for_attack(&self) -> &DamageExprCache {
+        if self.use_jab {
+            self.jab_special_expr_cache
+                .as_ref()
+                .unwrap_or(&self.damage_expr_cache)
+        } else {
+            &self.damage_expr_cache
+        }
+    }
+
+    pub fn halves_damage_for_attack(&self) -> bool {
+        self.use_jab && self.jab_special_expr_cache.is_none()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CalledShotDelayProfile {
+    Standard,
+    PrecisionCombatant,
+    PrecisionAiming,
+}
+
+impl Default for CalledShotDelayProfile {
+    fn default() -> Self {
+        Self::Standard
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct ManeuverProfile {
     pub hold_at_bay: bool,
+    pub called_shot: bool,
+    pub called_shot_defense_bonus: i32,
+    pub called_shot_defense_penalty: i32,
+    pub called_shot_delay_profile: CalledShotDelayProfile,
+    pub called_shot_deceptive_defender: bool,
+    pub called_shot_target_defense_bonus_base: i32,
+    pub power_attack: bool,
     pub aggressive_attack: bool,
     pub charge: bool,
     pub ready_against_charge: bool,
     pub tactical_move: bool,
     pub fight_defensively: bool,
+    pub fight_defensively_attack_penalty: i32,
+    pub fight_defensively_defense_bonus: i32,
     pub full_parry: bool,
     pub give_ground: bool,
     pub scamper_back: bool,
     pub fighting_withdrawal: bool,
     pub flee: bool,
+    pub mounted: bool,
+    pub mounted_combat: super::MountedCombatConfig,
     pub defensive_dualwielding: bool,
     pub offensive_dualwielding: bool,
+    pub offensive_dualwielding_defense_penalty: bool,
+    pub dualwield_offhand_damage_penalty: i32,
+    pub dualwield_primary_recovery_penalty: f32,
+    pub dualwield_secondary_recovery_penalty: f32,
+    pub storm_of_blades: bool,
+    pub passive: bool,
+}
+
+impl Default for ManeuverProfile {
+    fn default() -> Self {
+        Self {
+            hold_at_bay: false,
+            called_shot: false,
+            called_shot_defense_bonus: 8,
+            called_shot_defense_penalty: 4,
+            called_shot_delay_profile: CalledShotDelayProfile::Standard,
+            called_shot_deceptive_defender: false,
+            called_shot_target_defense_bonus_base: 8,
+            power_attack: false,
+            aggressive_attack: false,
+            charge: false,
+            ready_against_charge: false,
+            tactical_move: false,
+            fight_defensively: false,
+            fight_defensively_attack_penalty: 0,
+            fight_defensively_defense_bonus: 0,
+            full_parry: false,
+            give_ground: false,
+            scamper_back: false,
+            fighting_withdrawal: false,
+            flee: false,
+            mounted: false,
+            mounted_combat: super::MountedCombatConfig::default(),
+            defensive_dualwielding: false,
+            offensive_dualwielding: false,
+            offensive_dualwielding_defense_penalty: false,
+            dualwield_offhand_damage_penalty: -2,
+            dualwield_primary_recovery_penalty: 2.0,
+            dualwield_secondary_recovery_penalty: 2.0,
+            storm_of_blades: false,
+            passive: false,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -113,8 +261,16 @@ pub struct OffhandProfile {
 pub struct DefenseProfile {
     pub defense_mod: i32,
     pub ranged_defense_mod: i32,
+    pub dex_defense_bonus: i32,
+    pub feat_of_agility: i32,
+    pub armor_feat_of_agility_penalty: i32,
+    pub precognition: bool,
+    pub prescience: bool,
+    pub eyesmite: bool,
     pub armor_dr: i32,
     pub natural_dr: i32,
+    /// Physical size, before Stout/Sturdy and temporary knock-back modifiers.
+    pub is_medium_sized: bool,
     pub knockback_step: i32,
     pub armor_is_heavy: bool,
     pub shield_name: Option<String>,
@@ -132,7 +288,9 @@ pub struct MobilityProfile {
 #[derive(Clone, Copy, Debug)]
 pub struct Vitals {
     pub max_hp: i32,
+    pub infinite_hp: bool,
     pub constitution: u8,
+    pub drain_resistance: i32,
     pub threshold_of_pain: i32,
     pub trauma_die_sides: i32,
     pub trauma_die_penetrating: bool,
@@ -156,18 +314,82 @@ pub struct CombatantState {
     pub next_attack_time_secondary: Option<f32>,
     pub defense_plus_four_ready: bool,
     pub moved_last_tick: bool,
+    pub charge_distance_ft: f32,
+    pub charge_target_idx: Option<usize>,
+    pub charge_attacks: u32,
+    pub saw_trauma: bool,
+    pub max_knockback_ft: f32,
+    pub max_crit_hit_dealt: i32,
+    pub max_noncrit_hit_dealt: i32,
+    pub max_shield_hit_dealt: i32,
+    pub total_hp_damage_dealt: u32,
+    pub total_hp_damage_taken: u32,
+    pub total_damage_rolled_dealt: i64,
+    pub total_damage_landed_dealt: i64,
+    pub damage_rolls_dealt: u32,
+    pub total_shield_damage_dealt: u32,
+    pub total_shield_damage_taken: u32,
+    pub shield_blocks_taken: u32,
+    pub total_shield_breaks_taken: u32,
+    pub total_shield_hits_survived_before_break: u32,
+    pub total_instakills_dealt: u32,
+    pub total_eyes_smote: u32,
+    pub total_trauma_seconds_suffered: u32,
+    pub total_knockback_inflicted_ft: f32,
+    pub total_knockback_taken_ft: f32,
+    pub charge_started_within_20ft: bool,
+    pub charge_threshold_started_within_20ft: bool,
     pub trauma_remaining_seconds: i32,
     pub knockback_immobile_seconds: i32,
     pub knockback_applied_this_tick: bool,
     pub shield_intact: bool,
+    pub precognition_space_available: bool,
+    pub has_attacked: bool,
+    pub armeroci_opening_strike_available: bool,
+    pub regenstat_stacks: i32,
+    pub returner_counter_available: bool,
+    pub returner_skip_opening_attack: bool,
+    pub returner_double_counter_ready: bool,
+    pub three_mountains_hit_streak: i32,
+    pub force_trauma_roll_20: bool,
+    pub deceptive_defender_seen_attackers: Vec<usize>,
+    pub tactical_give_ground_defense_bonus: i32,
+    pub tactical_next_attack_penalty: i32,
+    pub streamline_averages_incoming_damage: bool,
+    pub activated_style_ids: Vec<String>,
     pub active_effects: Vec<TemporaryEffect>,
     pub cache: CombatantCache,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TacticalProfileKey {
+    pub style_ids: Vec<String>,
+    pub use_jab: bool,
+    pub fight_defensively_penalty: Option<i32>,
+}
+
+#[derive(Clone, Debug)]
+pub struct CombatantTacticalProfile {
+    pub key: TacticalProfileKey,
+    pub sheet: CombatantSheet,
+    pub weapon_group: String,
+    pub armor_type: String,
 }
 
 #[derive(Clone, Debug)]
 pub struct Combatant {
     pub sheet: CombatantSheet,
     pub state: CombatantState,
+    pub team_id: u8,
+    /// Spatial resolution of the host engine: exact reach in duels, one cell in squads.
+    pub melee_reach_floor_ft: f32,
+    pub tactical_policy: TacticalPolicy,
+    pub tactical_profiles: Vec<CombatantTacticalProfile>,
+    pub active_style_ids: Vec<String>,
+    pub active_fight_defensively_penalty: Option<i32>,
+    pub last_tactical_directive: Option<String>,
+    pub weapon_group: String,
+    pub armor_type: String,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -188,6 +410,14 @@ pub struct CombatEvent {
 pub enum CombatEventKind {
     Attack(AttackEvent),
     KnockAside(KnockAsideEvent),
+    Tactical(TacticalEvent),
+}
+
+#[derive(Clone, Debug)]
+pub struct TacticalEvent {
+    pub rule_index: Option<usize>,
+    pub action: String,
+    pub message: String,
 }
 
 #[derive(Clone, Debug)]
@@ -245,6 +475,8 @@ pub struct AttackEvent {
     pub shield_damage: i32,
     pub knockback_ft: f32,
     pub hold_at_bay: bool,
+    pub is_charge: bool,
+    pub weapon_slot: WeaponSlot,
     pub use_jab: bool,
     pub is_ranged: bool,
     pub trauma_applied: bool,
@@ -297,6 +529,14 @@ impl Default for WeaponProfile {
             uses_projectiles: false,
             is_small_weapon: false,
             is_unarmed: false,
+            hacking_or_piercing: false,
+            force_nonpenetrating_damage: false,
+            halve_damage: false,
+            ignore_all_dr: false,
+            internal_hemorrhage_damage: 0,
+            use_close_hit_damage_expr: None,
+            use_close_hit_damage_expr_cache: None,
+            use_close_hit_margin_less_than: 0,
             crit_min_roll: 20,
             crit_min_roll_ranged: None,
             crit_severity_bonus: 0,
@@ -324,8 +564,15 @@ impl Default for DefenseProfile {
         Self {
             defense_mod: 0,
             ranged_defense_mod: 0,
+            dex_defense_bonus: 0,
+            feat_of_agility: 0,
+            armor_feat_of_agility_penalty: 0,
+            precognition: false,
+            prescience: false,
+            eyesmite: false,
             armor_dr: 0,
             natural_dr: 0,
+            is_medium_sized: true,
             knockback_step: 15,
             armor_is_heavy: false,
             shield_name: None,
@@ -347,7 +594,9 @@ impl Default for Vitals {
     fn default() -> Self {
         Self {
             max_hp: 10,
+            infinite_hp: false,
             constitution: 10,
+            drain_resistance: 0,
             threshold_of_pain: 3,
             trauma_die_sides: 20,
             trauma_die_penetrating: false,
@@ -371,17 +620,74 @@ impl Default for CombatantSheet {
 
 impl CombatantState {
     pub(crate) fn new(sheet: &CombatantSheet) -> Self {
+        let returner_style = sheet.modifiers.apply_i32(0, StatIdI32::FlagReturnerStyle) > 0;
+        let armeroci_style = sheet
+            .modifiers
+            .apply_i32(0, StatIdI32::FlagArmerociPoleStyle)
+            > 0;
+        let mut active_effects = Vec::new();
+        if sheet.modifiers.apply_i32(0, StatIdI32::FlagChronoblurSpell) > 0 {
+            active_effects.push(TemporaryEffect::new(
+                CHRONOBLUR_EFFECT_ID,
+                CHRONOBLUR_DURATION_SECONDS,
+            ));
+        }
+        if sheet.modifiers.apply_i32(0, StatIdI32::FlagStreamlineSpell) > 0 {
+            active_effects.push(TemporaryEffect::new(
+                STREAMLINE_EFFECT_ID,
+                STREAMLINE_DURATION_SECONDS,
+            ));
+        }
         let mut state = Self {
             hp: sheet.vitals.max_hp,
             next_attack_time_primary: None,
             next_attack_time_secondary: None,
             defense_plus_four_ready: false,
             moved_last_tick: false,
+            charge_distance_ft: 0.0,
+            charge_target_idx: None,
+            charge_attacks: 0,
+            saw_trauma: false,
+            max_knockback_ft: 0.0,
+            max_crit_hit_dealt: 0,
+            max_noncrit_hit_dealt: 0,
+            max_shield_hit_dealt: 0,
+            total_hp_damage_dealt: 0,
+            total_hp_damage_taken: 0,
+            total_damage_rolled_dealt: 0,
+            total_damage_landed_dealt: 0,
+            damage_rolls_dealt: 0,
+            total_shield_damage_dealt: 0,
+            total_shield_damage_taken: 0,
+            shield_blocks_taken: 0,
+            total_shield_breaks_taken: 0,
+            total_shield_hits_survived_before_break: 0,
+            total_instakills_dealt: 0,
+            total_eyes_smote: 0,
+            total_trauma_seconds_suffered: 0,
+            total_knockback_inflicted_ft: 0.0,
+            total_knockback_taken_ft: 0.0,
+            charge_started_within_20ft: false,
+            charge_threshold_started_within_20ft: false,
             trauma_remaining_seconds: 0,
             knockback_immobile_seconds: 0,
             knockback_applied_this_tick: false,
             shield_intact: sheet.defense.shield_name.is_some(),
-            active_effects: Vec::new(),
+            precognition_space_available: false,
+            has_attacked: false,
+            armeroci_opening_strike_available: armeroci_style,
+            regenstat_stacks: 0,
+            returner_counter_available: returner_style,
+            returner_skip_opening_attack: returner_style,
+            returner_double_counter_ready: false,
+            three_mountains_hit_streak: 0,
+            force_trauma_roll_20: false,
+            deceptive_defender_seen_attackers: Vec::new(),
+            tactical_give_ground_defense_bonus: 0,
+            tactical_next_attack_penalty: 0,
+            streamline_averages_incoming_damage: false,
+            activated_style_ids: Vec::new(),
+            active_effects,
             cache: CombatantCache::default(),
         };
         state.refresh_defense_plus_four_ready(sheet, 0.0);
@@ -395,6 +701,12 @@ impl CombatantState {
 
     pub fn add_effect(&mut self, effect: TemporaryEffect) {
         self.active_effects.push(effect);
+    }
+
+    pub fn has_active_effect(&self, id: &str) -> bool {
+        self.active_effects
+            .iter()
+            .any(|effect| effect.id == id && effect.remaining_seconds > 0)
     }
 
     pub fn tick_effects(&mut self) {
@@ -469,12 +781,172 @@ pub(crate) fn defense_plus_four_ready_at(
 
 impl Combatant {
     pub fn new(sheet: CombatantSheet) -> Self {
+        Self::new_with_team(sheet, 0)
+    }
+
+    pub fn new_with_team(sheet: CombatantSheet, team_id: u8) -> Self {
         let state = CombatantState::new(&sheet);
-        Self { sheet, state }
+        Self {
+            sheet,
+            state,
+            team_id,
+            melee_reach_floor_ft: 0.5,
+            tactical_policy: TacticalPolicy::default(),
+            tactical_profiles: Vec::new(),
+            active_style_ids: Vec::new(),
+            active_fight_defensively_penalty: None,
+            last_tactical_directive: None,
+            weapon_group: String::new(),
+            armor_type: String::new(),
+        }
     }
 
     pub(crate) fn reset_state(&mut self) {
         self.state = CombatantState::new(&self.sheet);
+        self.state.activated_style_ids = self.active_style_ids.clone();
+        self.last_tactical_directive = None;
+    }
+
+    pub fn configure_tactical_profiles(
+        &mut self,
+        policy: TacticalPolicy,
+        profiles: Vec<CombatantTacticalProfile>,
+        active_style_ids: Vec<String>,
+    ) {
+        self.tactical_policy = policy;
+        self.tactical_profiles = profiles;
+        self.active_style_ids = active_style_ids;
+        self.active_fight_defensively_penalty = None;
+        self.state.activated_style_ids = self.active_style_ids.clone();
+        let _ = self.activate_tactical_profile(false);
+    }
+
+    pub fn activate_tactical_profile(&mut self, use_jab: bool) -> bool {
+        let key = TacticalProfileKey {
+            style_ids: self.active_style_ids.clone(),
+            use_jab,
+            fight_defensively_penalty: self.active_fight_defensively_penalty,
+        };
+        let Some(profile) = self.tactical_profiles.iter().find(|profile| {
+            profile.key == key && (!use_jab || profile.sheet.offense.weapon.use_jab)
+        }) else {
+            return false;
+        };
+        self.sheet = profile.sheet.clone();
+        self.weapon_group = profile.weapon_group.clone();
+        self.armor_type = profile.armor_type.clone();
+        self.state.invalidate_weapon_cache(WeaponSlot::Primary);
+        self.state.invalidate_weapon_cache(WeaponSlot::Secondary);
+        true
+    }
+
+    pub fn tactical_jab_available(&self) -> bool {
+        self.tactical_profiles.iter().any(|profile| {
+            profile.key.style_ids == self.active_style_ids
+                && profile.key.use_jab
+                && profile.key.fight_defensively_penalty == self.active_fight_defensively_penalty
+                && profile.sheet.offense.weapon.use_jab
+        })
+    }
+
+    pub fn available_tactical_style_ids(&self) -> Vec<String> {
+        let mut styles = Vec::new();
+        for profile in &self.tactical_profiles {
+            for style_id in &profile.key.style_ids {
+                if !styles
+                    .iter()
+                    .any(|style: &String| style.eq_ignore_ascii_case(style_id))
+                {
+                    styles.push(style_id.clone());
+                }
+            }
+        }
+        styles
+    }
+
+    pub fn tactical_style_pair_allowed(&self) -> bool {
+        self.tactical_profiles.iter().any(|profile| {
+            profile.key.style_ids.len() == 2
+                && profile
+                    .key
+                    .style_ids
+                    .iter()
+                    .any(|style| style == crate::core::tactics::SHIELD_OF_BLADES_STYLE_ID)
+                && profile
+                    .key
+                    .style_ids
+                    .iter()
+                    .any(|style| style == crate::core::tactics::STORM_OF_BLADES_STYLE_ID)
+        })
+    }
+
+    pub fn switch_tactical_style(&mut self, style_ids: Vec<String>) -> bool {
+        let style_ids = crate::core::tactics::canonicalize_style_selection(style_ids);
+        if self.active_style_ids == style_ids {
+            return self.activate_tactical_profile(false);
+        }
+        let key = TacticalProfileKey {
+            style_ids: style_ids.clone(),
+            use_jab: false,
+            fight_defensively_penalty: self.active_fight_defensively_penalty,
+        };
+        let Some(profile) = self
+            .tactical_profiles
+            .iter()
+            .find(|profile| profile.key == key)
+        else {
+            return false;
+        };
+
+        let first_activation = style_ids.iter().any(|style_id| {
+            !self
+                .state
+                .activated_style_ids
+                .iter()
+                .any(|active| active.eq_ignore_ascii_case(style_id))
+        });
+        self.active_style_ids = style_ids.clone();
+        self.sheet = profile.sheet.clone();
+        self.weapon_group = profile.weapon_group.clone();
+        self.armor_type = profile.armor_type.clone();
+        self.state.regenstat_stacks = 0;
+        self.state.returner_counter_available = false;
+        self.state.returner_skip_opening_attack = false;
+        self.state.returner_double_counter_ready = false;
+        self.state.three_mountains_hit_streak = 0;
+        self.state.force_trauma_roll_20 = false;
+        self.state.armeroci_opening_strike_available = first_activation
+            && self
+                .sheet
+                .modifiers
+                .apply_i32(0, StatIdI32::FlagArmerociPoleStyle)
+                > 0;
+        if first_activation
+            && self
+                .sheet
+                .modifiers
+                .apply_i32(0, StatIdI32::FlagReturnerStyle)
+                > 0
+        {
+            self.state.returner_counter_available = true;
+            self.state.returner_skip_opening_attack = true;
+        }
+        for style_id in style_ids {
+            if !self
+                .state
+                .activated_style_ids
+                .iter()
+                .any(|active| active.eq_ignore_ascii_case(&style_id))
+            {
+                self.state.activated_style_ids.push(style_id);
+            }
+        }
+        if self.sheet.defense.shield_name.is_some() && self.state.total_shield_breaks_taken == 0 {
+            self.state.shield_intact = true;
+        }
+        self.state.invalidate_weapon_cache(WeaponSlot::Primary);
+        self.state.invalidate_weapon_cache(WeaponSlot::Secondary);
+        true
     }
 
     pub(crate) fn apply_i32(&self, stat: StatIdI32, base: i32) -> i32 {

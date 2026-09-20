@@ -153,7 +153,6 @@ pub(crate) fn range_modifier_for_weapon_with_scale(
     }
 }
 
-
 pub fn max_range_for_bands(bands: [f32; 4]) -> f32 {
     let bands = RangeBands::from_array(bands);
     bands
@@ -174,9 +173,8 @@ pub fn max_range_for_weapon_name(name: &str) -> Option<f32> {
 }
 
 pub fn range_bands_for_weapon_name(name: &str) -> Option<[f32; 4]> {
-    ranged_bands_for_weapon_name(name).map(|bands| {
-        [bands.band_0, bands.band_4, bands.band_6, bands.band_8]
-    })
+    ranged_bands_for_weapon_name(name)
+        .map(|bands| [bands.band_0, bands.band_4, bands.band_6, bands.band_8])
 }
 
 pub(crate) fn max_range_for_weapon(weapon: &WeaponProfile) -> Option<f32> {
