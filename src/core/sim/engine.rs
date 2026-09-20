@@ -79,6 +79,7 @@ pub struct SimState {
     pub last_event: Option<CombatEvent>,
     pub combat_events: Vec<CombatEvent>,
     pub log_events: bool,
+    pub collect_detailed_metrics: bool,
     pub first_attack_time: Option<u32>,
     pub trauma_first_exchange: bool,
     pub charges_started_within_20ft: u32,
@@ -255,6 +256,7 @@ impl SimState {
             last_event: None,
             combat_events: Vec::new(),
             log_events,
+            collect_detailed_metrics: false,
             first_attack_time: None,
             trauma_first_exchange: false,
             charges_started_within_20ft: 0,
@@ -421,7 +423,8 @@ impl SimState {
         let shield_damage_u32 = shield_damage.max(0) as u32;
         let knockback = knockback_ft.max(0.0);
 
-        if attempted {
+        self.combatants[attacker_idx].state.attack_events += 1;
+        if attempted && self.collect_detailed_metrics {
             let shield_hits_survived_before_break = if shield_broken {
                 self.combatants[defender_idx].state.shield_blocks_taken
             } else {
@@ -1601,13 +1604,13 @@ impl SimState {
     }
 
     fn remaining_team_count(&self) -> usize {
-        let mut teams = HashSet::new();
+        let mut teams = [false; 256];
         for combatant in &self.combatants {
             if combatant.state.hp > 0 {
-                teams.insert(combatant.team_id);
+                teams[usize::from(combatant.team_id)] = true;
             }
         }
-        teams.len()
+        teams.into_iter().filter(|present| *present).count()
     }
 
     fn active_pair(&self) -> Option<(usize, usize)> {
@@ -1653,16 +1656,8 @@ impl SimState {
             )
             .max(1.0);
         let simultaneous = (reach_a - reach_b).abs() < f32::EPSILON;
-        let state_snapshot = if simultaneous {
-            Some(
-                self.combatants
-                    .iter()
-                    .map(|combatant| combatant.state.clone())
-                    .collect::<Vec<_>>(),
-            )
-        } else {
-            None
-        };
+        let state_snapshot = simultaneous
+            .then(|| super::combat::CombatRoundSnapshot::capture(&self.combatants, a_idx, b_idx));
         let alive_start_a = self.combatants[a_idx].state.hp > 0;
         let alive_start_b = self.combatants[b_idx].state.hp > 0;
         let alive_start = |idx: usize| {
@@ -1774,7 +1769,7 @@ impl SimState {
                         attacker_idx,
                         defender_idx,
                         now,
-                        state_snapshot.as_deref(),
+                        state_snapshot.as_ref(),
                         &mut self.rng,
                     );
                     if event.success {
@@ -1986,7 +1981,7 @@ impl SimState {
                     attack_mode,
                     WeaponSlot::Primary,
                     now,
-                    state_snapshot.as_deref(),
+                    state_snapshot.as_ref(),
                     &mut self.rng,
                 );
                 self.combatants[defender_idx]
@@ -2288,7 +2283,7 @@ impl SimState {
                         AttackMode::Normal,
                         WeaponSlot::Secondary,
                         now,
-                        state_snapshot.as_deref(),
+                        state_snapshot.as_ref(),
                         &mut self.rng,
                     );
                     self.combatants[defender_idx]
@@ -3425,8 +3420,21 @@ pub fn bulk_simulate_with_seed(
     max_seconds: u32,
     seed: u64,
 ) -> BulkSimResult {
+    bulk_simulate_with_seed_controlled(config, combatants, runs, max_seconds, seed, |_| true)
+        .expect("uninterrupted simulation")
+}
+
+/// Returning false discards the partial batch; no incomplete stats are published.
+pub fn bulk_simulate_with_seed_controlled(
+    config: SimConfig,
+    combatants: Vec<Combatant>,
+    runs: u32,
+    max_seconds: u32,
+    seed: u64,
+    mut keep_running: impl FnMut(u32) -> bool,
+) -> Option<BulkSimResult> {
     if runs == 0 {
-        return BulkSimResult::default();
+        return Some(BulkSimResult::default());
     }
     let shields_present = combatants
         .iter()
@@ -3459,6 +3467,7 @@ pub fn bulk_simulate_with_seed(
         .collect();
     let mut sim = SimState::with_rng(config, SimRng::from_seed(seed));
     sim.log_events = false;
+    sim.collect_detailed_metrics = true;
     sim.reset_with_combatants(combatants);
     let mut wins = vec![0u32; team_ids.len()];
     let mut ties = 0u32;
@@ -3499,9 +3508,15 @@ pub fn bulk_simulate_with_seed(
             ..DetailedTeamAccumulator::default()
         })
         .collect();
-    for _ in 0..runs {
+    for run_idx in 0..runs {
+        if !keep_running(run_idx) {
+            return None;
+        }
         sim.reset_preserve_rng();
         while !sim.done && sim.elapsed_seconds < max_seconds {
+            if sim.elapsed_seconds.is_multiple_of(64) && !keep_running(run_idx) {
+                return None;
+            }
             sim.update(1.0);
         }
         let duration = sim.elapsed_seconds;
@@ -3806,7 +3821,10 @@ pub fn bulk_simulate_with_seed(
             .map(|accumulator| accumulator.finish(runs, total_seconds))
             .collect(),
     };
-    BulkSimResult {
+    if !keep_running(runs) {
+        return None;
+    }
+    Some(BulkSimResult {
         wins,
         ties,
         shields_present,
@@ -3840,7 +3858,7 @@ pub fn bulk_simulate_with_seed(
         max_total_knockback_one_side_ft,
         avg_max_knockback_one_side_ft: total_max_knockback_one_side_ft / runs as f32,
         detailed,
-    }
+    })
 }
 
 impl HoldAtBayState {

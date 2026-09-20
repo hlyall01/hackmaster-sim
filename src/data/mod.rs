@@ -1,6 +1,8 @@
 //! Data adapters for loading catalogs and presets from JSON.
 
 mod armor;
+mod atomic;
+pub use atomic::atomic_write;
 mod autobattler;
 mod autobattler_events;
 mod fighter_presets;
@@ -33,8 +35,7 @@ pub const TALENTS_PATH: &str = "data/sim/talents.json";
 
 fn mapped_data_subpath(path: &Path) -> PathBuf {
     let stripped = path.strip_prefix("data").unwrap_or(path);
-    let as_str = stripped.to_string_lossy();
-    if as_str.starts_with("sim/") || as_str.starts_with("autobattler/") {
+    if stripped.starts_with("sim") || stripped.starts_with("autobattler") {
         return stripped.to_path_buf();
     }
     let Some(file_name) = stripped.file_name().and_then(|name| name.to_str()) else {
@@ -51,69 +52,88 @@ fn mapped_data_subpath(path: &Path) -> PathBuf {
         | "npc_presets.json"
         | "races.json"
         | "talents.json"
+        | "tactical_presets.json"
         | "weapons.json" => PathBuf::from("sim").join(file_name),
         _ => stripped.to_path_buf(),
     }
 }
 
-pub fn resolve_data_path(path: &str) -> PathBuf {
-    let raw = Path::new(path);
-    if raw.is_absolute() {
-        return raw.to_path_buf();
-    }
-    let stripped = raw.strip_prefix("data").unwrap_or(raw);
-    let mapped = mapped_data_subpath(raw);
-    let mut candidates = Vec::new();
-    if let Ok(data_dir) = env::var("HACKMASTER_SIM_DATA_DIR") {
-        let base = PathBuf::from(data_dir);
-        candidates.push(base.join(stripped));
-        if mapped != stripped {
-            candidates.push(base.join(&mapped));
-        }
-    }
-    if let Ok(cwd) = env::current_dir() {
-        candidates.push(cwd.join("data").join(stripped));
-        if mapped != stripped {
-            candidates.push(cwd.join("data").join(&mapped));
-        }
-        candidates.push(cwd.join(raw));
-    } else {
-        candidates.push(raw.to_path_buf());
-    }
-    if let Ok(exe_path) = env::current_exe() {
-        if let Some(exe_dir) = exe_path.parent() {
-            candidates.push(exe_dir.join("data").join(stripped));
-            if mapped != stripped {
-                candidates.push(exe_dir.join("data").join(&mapped));
-            }
-        }
-    }
-    for candidate in candidates {
-        if candidate.exists() {
-            return candidate;
-        }
-    }
-    raw.to_path_buf()
+/// Bundled catalogs are read-only defaults. Saved overrides live outside build output.
+struct DataLocations {
+    override_dir: Option<PathBuf>,
+    user_dir: Option<PathBuf>,
+    cwd: Option<PathBuf>,
+    executable_dir: Option<PathBuf>,
 }
-
-pub fn resolve_writable_data_path(path: &str) -> PathBuf {
-    let raw = Path::new(path);
-    if raw.is_absolute() {
-        return raw.to_path_buf();
-    }
-    let mapped = mapped_data_subpath(raw);
-    if let Ok(data_dir) = env::var("HACKMASTER_SIM_DATA_DIR") {
-        return PathBuf::from(data_dir).join(mapped);
-    }
-    if let Ok(exe_path) = env::current_exe() {
-        if let Some(exe_dir) = exe_path.parent() {
-            return exe_dir.join("data").join(mapped);
+impl DataLocations {
+    fn current() -> Self {
+        let user_dir = if cfg!(target_os = "windows") {
+            env::var_os("LOCALAPPDATA").map(PathBuf::from)
+        } else {
+            env::var_os("XDG_DATA_HOME").map(PathBuf::from).or_else(|| {
+                env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share"))
+            })
+        }
+        .map(|base| base.join("HackmasterSim").join("data"));
+        Self {
+            override_dir: env::var_os("HACKMASTER_SIM_DATA_DIR").map(PathBuf::from),
+            user_dir,
+            cwd: env::current_dir().ok(),
+            executable_dir: env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(Path::to_path_buf)),
         }
     }
-    if let Ok(cwd) = env::current_dir() {
-        return cwd.join("data").join(mapped);
+    fn writable(&self, path: &str) -> PathBuf {
+        let raw = Path::new(path);
+        if raw.is_absolute() {
+            return raw.to_path_buf();
+        }
+        let base = self
+            .override_dir
+            .clone()
+            .or_else(|| self.user_dir.clone())
+            .or_else(|| self.executable_dir.as_ref().map(|p| p.join("user-data")))
+            .or_else(|| self.cwd.as_ref().map(|p| p.join("user-data")))
+            .unwrap_or_else(|| PathBuf::from("user-data"));
+        base.join(mapped_data_subpath(raw))
     }
-    raw.to_path_buf()
+    fn readable(&self, path: &str) -> PathBuf {
+        let raw = Path::new(path);
+        if raw.is_absolute() {
+            return raw.to_path_buf();
+        }
+        let mapped = mapped_data_subpath(raw);
+        let stripped = raw.strip_prefix("data").unwrap_or(raw);
+        // Always prefer the same path that writes target, including legacy aliases.
+        let writable = self.writable(path);
+        if writable.is_file() {
+            return writable;
+        }
+        let mut candidates = Vec::new();
+        if let Some(base) = &self.override_dir {
+            candidates.push(base.join(stripped));
+        }
+        if let Some(cwd) = &self.cwd {
+            candidates.push(cwd.join("data").join(&mapped));
+            candidates.push(cwd.join("data").join(stripped));
+            candidates.push(cwd.join(raw));
+        }
+        if let Some(base) = &self.executable_dir {
+            candidates.push(base.join("data").join(&mapped));
+            candidates.push(base.join("data").join(stripped));
+        }
+        candidates
+            .into_iter()
+            .find(|p| p.is_file())
+            .unwrap_or_else(|| raw.to_path_buf())
+    }
+}
+pub fn resolve_data_path(path: &str) -> PathBuf {
+    DataLocations::current().readable(path)
+}
+pub fn resolve_writable_data_path(path: &str) -> PathBuf {
+    DataLocations::current().writable(path)
 }
 
 pub fn ensure_parent_dir(path: &Path) -> Result<(), String> {
@@ -149,6 +169,67 @@ pub fn validate_required_data_files(paths: &[&str]) -> Result<(), Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saved_presets_override_bundled_data_across_cwd_and_rebuilds() {
+        let root = env::temp_dir().join(format!("hackmaster-paths-{}", std::process::id()));
+        let mut locations = DataLocations {
+            override_dir: None,
+            user_dir: Some(root.join("user")),
+            cwd: Some(root.join("repo")),
+            executable_dir: Some(root.join("build")),
+        };
+        let name = "data/sim/fighter_presets.json";
+        let bundled = root.join("repo/data/sim/fighter_presets.json");
+        atomic_write(&bundled, b"bundled").unwrap();
+        assert_eq!(locations.readable(name), bundled);
+        let saved = locations.writable(name);
+        atomic_write(&saved, b"saved").unwrap();
+        assert_eq!(locations.readable(name), saved);
+        assert_eq!(locations.readable("data/fighter_presets.json"), saved);
+        atomic_write(
+            &root.join("build/data/sim/fighter_presets.json"),
+            b"rebuilt",
+        )
+        .unwrap();
+        locations.cwd = None;
+        assert_eq!(fs::read(locations.readable(name)).unwrap(), b"saved");
+        locations.override_dir = Some(root.join("override"));
+        assert_eq!(
+            locations.writable(name),
+            root.join("override/sim/fighter_presets.json")
+        );
+        let absolute = root.join("explicit.json");
+        assert_eq!(locations.writable(absolute.to_str().unwrap()), absolute);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fighter_and_tactical_saves_round_trip_through_atomic_replacement() {
+        let dir = env::temp_dir().join(format!(
+            "hackmaster-preset-roundtrip-{}",
+            std::process::id()
+        ));
+        let fighter_path = dir.join("fighter_presets.json");
+        let tactical_path = dir.join("tactical_presets.json");
+        let fighters = crate::test_support::fighter_presets();
+        let tactics = crate::test_support::tactical_presets();
+        for _ in 0..2 {
+            save_fighter_presets(fighter_path.to_str().unwrap(), &fighters).unwrap();
+            save_tactical_presets(tactical_path.to_str().unwrap(), &tactics).unwrap();
+            let loaded = load_fighter_presets(fighter_path.to_str().unwrap()).unwrap();
+            assert_eq!(
+                serde_json::to_value(loaded.entries()).unwrap(),
+                serde_json::to_value(fighters.entries()).unwrap()
+            );
+            assert_eq!(
+                load_tactical_presets(tactical_path.to_str().unwrap()).unwrap(),
+                tactics
+            );
+        }
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 2);
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn maps_legacy_sim_paths_into_sim_namespace() {

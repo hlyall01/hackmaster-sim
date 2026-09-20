@@ -217,7 +217,7 @@ pub struct TalentSpec {
     pub effects: Vec<TalentEffect>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct TalentSelection {
     pub id: String,
     #[serde(default = "default_talent_rank")]

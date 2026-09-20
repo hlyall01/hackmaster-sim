@@ -309,6 +309,7 @@ pub struct CombatantSheet {
 
 #[derive(Clone, Debug)]
 pub struct CombatantState {
+    pub attack_events: u64,
     pub magic: super::magic::MagicState,
     pub hp: i32,
     pub next_attack_time_primary: Option<f32>,
@@ -386,7 +387,7 @@ pub struct Combatant {
     /// Spatial resolution of the host engine: exact reach in duels, one cell in squads.
     pub melee_reach_floor_ft: f32,
     pub tactical_policy: TacticalPolicy,
-    pub tactical_profiles: Vec<CombatantTacticalProfile>,
+    pub tactical_profiles: Arc<[CombatantTacticalProfile]>,
     pub active_style_ids: Vec<String>,
     pub active_fight_defensively_penalty: Option<i32>,
     pub last_tactical_directive: Option<String>,
@@ -650,6 +651,7 @@ impl CombatantState {
             ));
         }
         let mut state = Self {
+            attack_events: 0,
             magic: super::magic::MagicState::default(),
             hp: sheet.vitals.max_hp,
             next_attack_time_primary: None,
@@ -779,13 +781,27 @@ pub(crate) fn defense_plus_four_ready_at(
     state: &CombatantState,
     now: f32,
 ) -> bool {
+    defense_plus_four_ready_with_timing(
+        sheet,
+        state.trauma_remaining_seconds,
+        state.next_attack_time_primary,
+        now,
+    )
+}
+
+pub(crate) fn defense_plus_four_ready_with_timing(
+    sheet: &CombatantSheet,
+    trauma_remaining_seconds: i32,
+    next_attack_time_primary: Option<f32>,
+    now: f32,
+) -> bool {
     if !defense_plus_four_eligible(sheet) {
         return false;
     }
-    if state.trauma_remaining_seconds > 0 {
+    if trauma_remaining_seconds > 0 {
         return false;
     }
-    match state.next_attack_time_primary {
+    match next_attack_time_primary {
         Some(next_attack) => now + 0.0001 >= next_attack,
         None => true,
     }
@@ -805,7 +821,7 @@ impl Combatant {
             team_id,
             melee_reach_floor_ft: 0.5,
             tactical_policy: TacticalPolicy::default(),
-            tactical_profiles: Vec::new(),
+            tactical_profiles: Arc::from([]),
             active_style_ids: Vec::new(),
             active_fight_defensively_penalty: None,
             last_tactical_directive: None,
@@ -828,7 +844,7 @@ impl Combatant {
         active_style_ids: Vec<String>,
     ) {
         self.tactical_policy = policy;
-        self.tactical_profiles = profiles;
+        self.tactical_profiles = profiles.into();
         self.active_style_ids = active_style_ids;
         self.active_fight_defensively_penalty = None;
         self.state.activated_style_ids = self.active_style_ids.clone();
@@ -865,7 +881,7 @@ impl Combatant {
 
     pub fn available_tactical_style_ids(&self) -> Vec<String> {
         let mut styles = Vec::new();
-        for profile in &self.tactical_profiles {
+        for profile in self.tactical_profiles.iter() {
             for style_id in &profile.key.style_ids {
                 if !styles
                     .iter()
