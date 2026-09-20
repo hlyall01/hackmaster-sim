@@ -1,8 +1,17 @@
 //! Simulation engine and state transitions.
 
-mod combat;
+pub(crate) mod combat;
+pub(crate) mod magic;
 pub use combat::weapon_damage_expression;
+pub use magic::{
+    MagicProfile, MagicState, ScheduledEcho, SpellDefinition, SpellEffect, SpellEvent,
+    SpellEventKind, SpellRequest,
+};
+mod damage_sources;
+pub use damage_sources::{DamageSource, DamageSourceStats};
 mod engine;
+mod knockback;
+pub use knockback::{KnockbackRule, knockback_rule_for_attack};
 mod modifiers;
 mod movement;
 mod mounted;
@@ -21,11 +30,11 @@ pub use modifiers::{
 };
 pub use movement::{max_range_for_bands, max_range_for_weapon_name, range_bands_for_weapon_name};
 pub use types::{
-    AttackEvent, AttackRollBreakdown, CalledShotDelayProfile, CombatEvent, CombatEventKind,
-    Combatant, CombatantCache, CombatantSheet, CombatantState, CombatantTacticalProfile,
-    CriticalHit, DamageBreakdown, DamageDie, DefenseProfile, GridPos, KnockAsideEvent,
-    KnockAsideRollBreakdown, ManeuverProfile, MobilityProfile, OffenseProfile, OffhandProfile,
-    ShieldBreakageStep, ShieldDamageBreakdown, SimActor, SimConfig, TacticalEvent,
+    AttackEvent, AttackRollBreakdown, AttackSource, CalledShotDelayProfile, CombatEvent,
+    CombatEventKind, Combatant, CombatantCache, CombatantSheet, CombatantState,
+    CombatantTacticalProfile, CriticalHit, DamageBreakdown, DamageDie, DefenseProfile, GridPos,
+    KnockAsideEvent, KnockAsideRollBreakdown, ManeuverProfile, MobilityProfile, OffenseProfile,
+    OffhandProfile, ShieldBreakageStep, ShieldDamageBreakdown, SimActor, SimConfig, TacticalEvent,
     TacticalProfileKey, Vitals, WeaponCache, WeaponProfile, WeaponSlot,
 };
 
@@ -61,6 +70,7 @@ pub(crate) fn resolve_basic_attack(
     );
     let precognition_triggered = outcome.precognition_triggered;
     let event = AttackEvent {
+        source: crate::core::sim::AttackSource::Weapon,
         hit: outcome.hit,
         shield_block: outcome.shield_block,
         damage: outcome.damage,
@@ -101,6 +111,8 @@ pub(crate) fn resolve_basic_attack(
 mod tests;
 #[cfg(test)]
 mod weapon_style_tests;
+#[cfg(test)]
+mod magic_tests;
 
 #[derive(Clone, Debug)]
 pub(crate) struct BasicCounterAttack {
@@ -140,6 +152,7 @@ pub(crate) fn resolve_basic_style_strikes(
 
 pub(crate) fn counter_event(counter: combat::CounterAttackOutcome) -> AttackEvent {
     AttackEvent {
+        source: crate::core::sim::AttackSource::Weapon,
         hit: counter.hit,
         shield_block: counter.shield_block,
         damage: counter.damage,

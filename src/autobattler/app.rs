@@ -1356,6 +1356,7 @@ impl AutobattlerApp {
         creation.proficiencies = preset.proficiencies.clone();
         creation.player.proficiencies = preset.proficiencies.clone();
         creation.player.talents = preset.talents.clone();
+        creation.player.magic = preset.magic.clone();
         creation.player.race_id = preset.race_id.clone();
         creation.player.race_applied = preset.race_id.is_some();
         creation.player.knockback_step =
@@ -1431,6 +1432,7 @@ impl AutobattlerApp {
         creation.player.base_hp = preset.base_hp.max(1);
         creation.player.proficiencies = preset.proficiencies.clone();
         creation.player.talents = preset.talents.clone();
+        creation.player.magic = preset.magic.clone();
         creation.player.race_id = preset.race_id.clone();
         creation.player.race_applied = preset.race_id.is_some();
 

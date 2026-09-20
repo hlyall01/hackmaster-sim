@@ -5,6 +5,7 @@
 pub mod catalog;
 pub mod gameplay;
 pub mod ids;
+pub mod magic;
 pub mod rng;
 pub mod rules;
 pub mod sim;

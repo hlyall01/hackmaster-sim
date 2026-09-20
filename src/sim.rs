@@ -11,7 +11,17 @@ pub fn format_combat_event(event: &CombatEvent, combatants: &[Combatant]) -> Str
         .unwrap_or("Defender");
 
     match &event.kind {
+        CombatEventKind::Spell(spell) => format!("{attacker_name}: {}", spell.message),
         CombatEventKind::Attack(attack) => {
+            if attack.source == AttackSource::EchoStrike {
+                return format!(
+                    "{attacker_name} Echo Strike vs {defender_name}: {} (attack {}, defense {}, wound {})",
+                    if attack.hit { "hit" } else { "miss" },
+                    attack.roll.attack_total,
+                    attack.roll.defense_total,
+                    attack.damage
+                );
+            }
             let weapon_name = combatants
                 .get(event.attacker_idx)
                 .map(|combatant| match attack.weapon_slot {

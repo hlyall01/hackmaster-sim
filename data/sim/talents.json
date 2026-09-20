@@ -54,32 +54,6 @@
       ]
     },
     {
-      "id": "spell_chronoblur",
-      "name": "Chronoblur",
-      "description": "For the first 60 seconds of combat, your momentary past self blurs over your current position. If you moved during the previous second, gain +4 Defense against melee attacks, and missile attacks treat you as 20 feet farther away. This trait models Chronoblur cast on its owner at the start of combat.",
-      "cost_bp": 0,
-      "category": "Spells",
-      "max_rank": 1,
-      "effects": [
-        {
-          "type": "chronoblur"
-        }
-      ]
-    },
-    {
-      "id": "spell_streamline",
-      "name": "Streamline",
-      "description": "For the first 5 minutes of combat, project a 30-foot-radius field. Damage dice inflicted upon any target in the field are replaced by their mathematical average, rounded down, before modifiers and damage reduction. This trait models Streamline cast at the start of combat.",
-      "cost_bp": 0,
-      "category": "Spells",
-      "max_rank": 1,
-      "effects": [
-        {
-          "type": "streamline"
-        }
-      ]
-    },
-    {
       "id": "eyesmite",
       "name": "Eyesmite",
       "description": "Received upon reaching Exertion Proficiency IV. A near-perfect defense may be exchanged for an instantaneous called shot to the attacker's eye. A buckler or small shield is dropped to free the required hand. On a successful called shot, the target suffers 2d4p damage plus modifiers, all damage reduction is ignored, and Threshold of Pain is applied for 10 seconds per point of damage. The Missing Eye flaw is not tracked by the simulator.",
@@ -4196,6 +4170,245 @@
             5,
             6
           ]
+        }
+      ]
+    },
+    {
+      "id": "charm_resistant",
+      "name": "Charm Resistant",
+      "description": "Gain +12 on saving throws against magical charms.",
+      "cost_bp": 16,
+      "category": "Magic",
+      "requirements": [],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "magic_talent",
+          "talent": "charm_resistant"
+        }
+      ]
+    },
+    {
+      "id": "combat_casting",
+      "name": "Combat Casting",
+      "description": "Use normal defense while casting. Treat injury volatility as one category weaker, reduce equipment/encumbrance spell failure by 25 percentage points, and reduce the amplified-spell injury volatility penalty. Volatility is currently disabled.",
+      "cost_bp": 30,
+      "category": "Magic",
+      "requirements": [],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "magic_talent",
+          "talent": "combat_casting"
+        }
+      ]
+    },
+    {
+      "id": "diminish_spell_fatigue",
+      "name": "Diminish Spell Fatigue",
+      "description": "Recover from completed-spell fatigue one second sooner per rank, up to five ranks.",
+      "cost_bp": 10,
+      "category": "Magic",
+      "requirements": [],
+      "max_rank": 5,
+      "effects": [
+        {
+          "type": "magic_talent",
+          "talent": "diminish_spell_fatigue"
+        }
+      ]
+    },
+    {
+      "id": "mitigate_spell_fatigue",
+      "name": "Mitigate Spell Fatigue",
+      "description": "Spell fatigue defense penalty is -3 instead of -6. Move at full walking speed; running and sprinting remain prohibited.",
+      "cost_bp": 15,
+      "category": "Magic",
+      "requirements": [],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "magic_talent",
+          "talent": "mitigate_spell_fatigue"
+        }
+      ]
+    },
+    {
+      "id": "decimate_spell_fatigue",
+      "name": "Decimate Spell Fatigue",
+      "description": "Spell fatigue has no defense or skill penalty. Other actions take normal time and all movement modes are available. Weapon recovery begins when casting completes, allowing attacks once ready; casting still waits for fatigue to end.",
+      "cost_bp": 30,
+      "category": "Magic",
+      "requirements": [
+        {
+          "type": "requires_talent",
+          "id": "mitigate_spell_fatigue",
+          "min_rank": 1
+        }
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "magic_talent",
+          "talent": "decimate_spell_fatigue"
+        }
+      ]
+    },
+    {
+      "id": "eliminate_spell_fatigue",
+      "name": "Eliminate Spell Fatigue",
+      "description": "Remove casting-time fatigue after five Diminish Spell Fatigue ranks, eliminating completed-spell fatigue. Weapon recovery still resets on completion.",
+      "cost_bp": 25,
+      "category": "Magic",
+      "requirements": [
+        {
+          "type": "requires_talent",
+          "id": "decimate_spell_fatigue",
+          "min_rank": 1
+        },
+        {
+          "type": "requires_talent",
+          "id": "diminish_spell_fatigue",
+          "min_rank": 5
+        },
+        {
+          "type": "requires_talent",
+          "id": "mitigate_spell_fatigue",
+          "min_rank": 1
+        }
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "magic_talent",
+          "talent": "eliminate_spell_fatigue"
+        }
+      ]
+    },
+    {
+      "id": "illusion_resistant",
+      "name": "Illusion Resistant",
+      "description": "Gain +6 on saving throws against illusions.",
+      "cost_bp": 10,
+      "category": "Magic",
+      "requirements": [],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "magic_talent",
+          "talent": "illusion_resistant"
+        }
+      ]
+    },
+    {
+      "id": "magic_focus",
+      "name": "Magic Focus",
+      "description": "Add one sixth of the spell-associated ability score, rounded down, to the caster Magic Save roll.",
+      "cost_bp": 15,
+      "category": "Magic",
+      "requirements": [],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "magic_talent",
+          "talent": "magic_focus"
+        }
+      ]
+    },
+    {
+      "id": "magic_specialist",
+      "name": "Magic Specialist",
+      "description": "Improve Magic Focus to one fifth of the spell-associated ability score, rounded down.",
+      "cost_bp": 20,
+      "category": "Magic",
+      "requirements": [
+        {
+          "type": "requires_talent",
+          "id": "magic_focus",
+          "min_rank": 1
+        }
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "magic_talent",
+          "talent": "magic_specialist"
+        }
+      ]
+    },
+    {
+      "id": "magic_master",
+      "name": "Magic Master",
+      "description": "Improve Magic Focus to one quarter of the spell-associated ability score, rounded down.",
+      "cost_bp": 25,
+      "category": "Magic",
+      "requirements": [
+        {
+          "type": "requires_talent",
+          "id": "magic_specialist",
+          "min_rank": 1
+        }
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "magic_talent",
+          "talent": "magic_master"
+        }
+      ]
+    },
+    {
+      "id": "silent_casting",
+      "name": "Silent Casting",
+      "description": "Cast spells without their verbal component.",
+      "cost_bp": 20,
+      "category": "Magic",
+      "requirements": [
+        {
+          "type": "min_level",
+          "level": 6
+        }
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "magic_talent",
+          "talent": "silent_casting"
+        }
+      ]
+    },
+    {
+      "id": "still_casting",
+      "name": "Still Casting",
+      "description": "Cast spells without their somatic component.",
+      "cost_bp": 30,
+      "category": "Magic",
+      "requirements": [
+        {
+          "type": "min_level",
+          "level": 11
+        }
+      ],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "magic_talent",
+          "talent": "still_casting"
+        }
+      ]
+    },
+    {
+      "id": "sleep_resistant",
+      "name": "Sleep Resistant",
+      "description": "Gain +12 on saving throws against spells inducing drowsiness or sleep.",
+      "cost_bp": 12,
+      "category": "Magic",
+      "requirements": [],
+      "max_rank": 1,
+      "effects": [
+        {
+          "type": "magic_talent",
+          "talent": "sleep_resistant"
         }
       ]
     }

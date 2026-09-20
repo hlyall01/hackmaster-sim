@@ -255,6 +255,7 @@ pub struct AbilityDerived {
 pub enum ArmorRegion {
     Northern,
     Southern,
+    Raurosi,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

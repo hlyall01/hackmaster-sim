@@ -74,6 +74,7 @@ pub enum BattleUnitStatus {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SquadCombatEventKind {
+    Spell,
     Move,
     Attack,
     Miss,
@@ -273,14 +274,176 @@ impl SquadCombat {
             return;
         }
         self.advance_clock();
+        self.advance_spellcasting();
         self.begin_tactical_second();
         let skipped = self.tick_incapacitation();
         let plan = self.plan_tactical_second(&skipped);
         let attack_intents = self.resolve_ready_unit_actions(&plan.ready_indices);
         self.resolve_attack_phase(attack_intents);
         self.resolve_waiting_unit_movement(&plan.waiting_indices);
+        self.flush_spell_events();
         self.refresh_done();
         self.end_tactical_second();
+    }
+
+    pub fn cast_spell(
+        &mut self,
+        unit: usize,
+        request: crate::core::sim::SpellRequest,
+    ) -> Result<(), String> {
+        if self.done {
+            return Err("Combat has ended".into());
+        }
+        self.units
+            .get_mut(unit)
+            .and_then(|unit| unit.combatant.as_mut())
+            .ok_or("No spellcaster at this index")?
+            .cast_spell(request, self.elapsed_seconds, &mut self.rng)
+            .map_err(|error| error.to_string())?;
+        self.flush_spell_events();
+        Ok(())
+    }
+
+    pub fn stop_channeling(&mut self, unit: usize) -> Result<(), String> {
+        self.units
+            .get_mut(unit)
+            .and_then(|unit| unit.combatant.as_mut())
+            .ok_or("No spellcaster at this index")?
+            .stop_channeling(self.elapsed_seconds)
+            .map_err(|error| error.to_string())?;
+        self.flush_spell_events();
+        Ok(())
+    }
+
+    pub fn cast_echo_strike(&mut self, unit: usize) -> Result<(), String> {
+        if self.done {
+            return Err("Combat has ended".into());
+        }
+        self.units
+            .get_mut(unit)
+            .and_then(|unit| unit.combatant.as_mut())
+            .ok_or("No spellcaster at this index")?
+            .cast_echo_strike(self.elapsed_seconds)
+            .map_err(|error| error.to_string())?;
+        self.flush_spell_events();
+        Ok(())
+    }
+
+    pub fn cancel_spell(&mut self, unit: usize) -> Result<(), String> {
+        self.units
+            .get_mut(unit)
+            .and_then(|unit| unit.combatant.as_mut())
+            .ok_or("No spellcaster at this index")?
+            .cancel_spell(self.elapsed_seconds)
+            .map_err(|error| error.to_string())?;
+        self.flush_spell_events();
+        Ok(())
+    }
+
+    pub fn dismiss_echo_strike(&mut self, unit: usize) -> Result<(), String> {
+        self.units
+            .get_mut(unit)
+            .and_then(|unit| unit.combatant.as_mut())
+            .ok_or("No spellcaster at this index")?
+            .dismiss_echo_strike(self.elapsed_seconds)
+            .map_err(|error| error.to_string())?;
+        self.flush_spell_events();
+        Ok(())
+    }
+
+    fn flush_spell_events(&mut self) {
+        for index in 0..self.units.len() {
+            let spells = self.units[index]
+                .combatant
+                .as_mut()
+                .map(|actor| std::mem::take(&mut actor.state.magic.events))
+                .unwrap_or_default();
+            for spell in spells {
+                self.emit_simple_event(SquadCombatEventKind::Spell, index, None, spell.message);
+            }
+        }
+    }
+
+    fn advance_spellcasting(&mut self) {
+        use crate::core::sim::{combat, magic};
+        let now = self.elapsed_seconds;
+        for caster in 0..self.units.len() {
+            let in_reach = self.units.iter().any(|enemy| {
+                enemy.is_alive()
+                    && enemy.team_id != self.units[caster].team_id
+                    && self.grid.distance_ft(self.units[caster].pos, enemy.pos)
+                        <= self.melee_reach_ft(&self.units[caster])
+            });
+            if let Some(actor) = self.units[caster].combatant.as_mut() {
+                actor.advance_magic(now, &mut self.rng);
+                actor.try_auto_cast(now, in_reach);
+            }
+        }
+        // Preserve unit indices even when some test/demo units have no sheet.
+        let mut actors = self
+            .units
+            .iter()
+            .map(|unit| {
+                unit.combatant.clone().unwrap_or_else(|| {
+                    let mut actor = Combatant::default();
+                    actor.state.hp = unit.hp;
+                    actor.team_id = unit.team_id;
+                    actor
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut echoes = Vec::new();
+        for (caster, echo) in magic::take_due_echoes(&mut actors, now) {
+            let distance = self
+                .units
+                .get(echo.target)
+                .map(|target| self.grid.distance_ft(self.units[caster].pos, target.pos))
+                .unwrap_or(f32::INFINITY);
+            let evasion = self.precognition_evasion_destination(echo.target, caster);
+            if let Some(target) = actors.get_mut(echo.target) {
+                target.state.precognition_space_available = evasion.is_some();
+            }
+            if let Some((result, evaded)) =
+                combat::resolve_echo(&mut actors, caster, &echo, distance, now, &mut self.rng)
+            {
+                if evaded {
+                    if let Some(destination) = evasion {
+                        self.units[echo.target].pos = destination;
+                    }
+                }
+                echoes.push((caster, echo.target, result));
+            }
+        }
+        for (unit, actor) in self.units.iter_mut().zip(actors) {
+            unit.hp = actor.state.hp;
+            if unit.combatant.is_some() {
+                unit.combatant = Some(actor);
+            }
+        }
+        for (caster, target, attack) in echoes {
+            self.emit_attack_event(
+                caster,
+                target,
+                attack.damage,
+                attack.hit,
+                0.0,
+                attack.trauma_seconds,
+            );
+            if let Some(event) = self.events.last_mut() {
+                event.message = format!(
+                    "{} Echo Strike vs {}: {} (attack {}, defense {}, wound {})",
+                    self.units[caster].name,
+                    self.units[target].name,
+                    if attack.hit { "hit" } else { "miss" },
+                    attack.roll.attack_total,
+                    attack.roll.defense_total,
+                    attack.damage
+                );
+                self.log.push(event.message.clone());
+            }
+            self.emit_death_if_needed(target, Some(caster));
+        }
+        self.flush_spell_events();
     }
 
     fn advance_clock(&mut self) {
@@ -318,6 +481,24 @@ impl SquadCombat {
                 (current - 2).max(desired).max(0)
             } else {
                 current
+            };
+            let next = if let Some(actor) = unit.combatant.as_ref() {
+                if actor.state.magic.casting.is_some()
+                    || actor.state.magic.channeling.is_some()
+                    || actor.state.magic.fatigued()
+                {
+                    let feet = actor.apply_f32(
+                        crate::core::sim::StatIdF32::MoveSpeed,
+                        actor.sheet.mobility.move_speed,
+                    );
+                    let rate = feet.max(0.0) / self.grid.tile_size_ft;
+                    let now = self.elapsed_seconds as f32;
+                    next.min(((now * rate).floor() - ((now - 1.0) * rate).floor()) as i32)
+                } else {
+                    next
+                }
+            } else {
+                next
             };
             unit.current_speed_tiles = next;
             self.movement_budgets.insert(unit.id.clone(), next);
@@ -543,6 +724,13 @@ impl SquadCombat {
         if !self.units[idx].is_alive() || !self.units[target_idx].is_alive() {
             return None;
         }
+        let allow_attack = allow_attack
+            && self.units[idx].combatant.as_ref().is_none_or(|actor| {
+                actor.magic_can_attack(
+                    crate::core::sim::WeaponSlot::Primary,
+                    self.elapsed_seconds as f32,
+                )
+            });
         let mut current_distance = self
             .grid
             .distance_ft(self.units[idx].pos, self.units[target_idx].pos);
@@ -937,16 +1125,16 @@ impl SquadCombat {
                     combatant.state.has_active_effect(STREAMLINE_EFFECT_ID)
                 })
             })
-            .map(|unit| unit.pos)
+            .map(|unit| (unit.pos, unit.combatant.as_ref().map(|caster| caster.apply_f32(crate::core::sim::StatIdF32::StreamlineRadius, STREAMLINE_RADIUS_FEET)).unwrap_or(STREAMLINE_RADIUS_FEET)))
             .collect::<Vec<_>>();
         let tile_size_ft = self.grid.tile_size_ft.max(0.01);
         let coverage = self
             .units
             .iter()
             .map(|target| {
-                sources.iter().any(|source| {
+                sources.iter().any(|(source, radius)| {
                     source.manhattan_distance(target.pos) as f32 * tile_size_ft
-                        <= STREAMLINE_RADIUS_FEET
+                        <= *radius
                 })
             })
             .collect::<Vec<_>>();
@@ -965,6 +1153,15 @@ impl SquadCombat {
         let defender_idx = intent.defender_idx;
         let mut distance_ft = intent.distance_ft;
         let now = self.elapsed_seconds as f32;
+        if self.units[attacker_idx]
+            .combatant
+            .as_ref()
+            .is_some_and(|actor| {
+                !actor.magic_can_attack(crate::core::sim::WeaponSlot::Primary, now)
+            })
+        {
+            return;
+        }
         if !self.units[defender_idx].is_alive() {
             return;
         }
@@ -1516,7 +1713,17 @@ impl SquadCombat {
             .collect::<Vec<_>>();
         living_teams.sort_unstable();
         living_teams.dedup();
-        if living_teams.len() <= 1 {
+        let pending_echoes = self.units.iter().any(|unit| {
+            unit.combatant.as_ref().is_some_and(|actor| {
+                (!actor.magic.loadout.echo_requires_living_caster || actor.state.hp > 0)
+                    && actor.state.magic.echoes.iter().any(|echo| {
+                        self.units
+                            .get(echo.target)
+                            .is_some_and(|target| target.is_alive())
+                    })
+            })
+        });
+        if living_teams.len() <= 1 && !pending_echoes {
             self.done = true;
             self.winner_team = living_teams.first().copied();
         } else if self.elapsed_seconds >= self.max_seconds {
@@ -1576,6 +1783,10 @@ pub struct SquadCombatView {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct BattleUnitView {
+    pub essence: Vec<crate::core::magic::EssencePool>,
+    pub casting: bool,
+    pub spell_fatigue_seconds: u32,
+    pub pending_echoes: usize,
     pub id: String,
     pub name: String,
     pub team_id: u8,
@@ -1594,7 +1805,16 @@ pub struct BattleUnitView {
 
 impl From<&BattleUnit> for BattleUnitView {
     fn from(unit: &BattleUnit) -> Self {
+        let magic = unit.combatant.as_ref().map(|actor| &actor.state.magic);
         Self {
+            essence: magic
+                .map(|state| state.essences.clone())
+                .unwrap_or_default(),
+            casting: magic.is_some_and(|state| state.casting.is_some()),
+            spell_fatigue_seconds: magic
+                .and_then(|state| state.fatigue.map(|(_, end)| end.saturating_sub(state.now)))
+                .unwrap_or(0),
+            pending_echoes: magic.map(|state| state.echoes.len()).unwrap_or(0),
             id: unit.id.clone(),
             name: unit.name.clone(),
             team_id: unit.team_id,
@@ -1611,7 +1831,11 @@ impl From<&BattleUnit> for BattleUnitView {
             reach_ft: unit.reach_ft,
             max_range_ft: unit.max_range_ft,
             move_tiles: unit.move_tiles,
-            initiative: unit.initiative_ready_at,
+            initiative: unit.initiative_ready_at.max(
+                magic
+                    .map(|state| state.primary_recovery_until)
+                    .unwrap_or(0.0),
+            ),
             intent: unit.intent.clone(),
         }
     }

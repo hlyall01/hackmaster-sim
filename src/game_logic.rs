@@ -327,6 +327,11 @@ fn is_false(value: &bool) -> bool {
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct FighterPreset {
+    #[serde(
+        default,
+        skip_serializing_if = "crate::core::magic::MagicLoadout::is_default"
+    )]
+    pub magic: crate::core::magic::MagicLoadout,
     pub name: String,
     pub level: u8,
     pub progression: FighterProgression,
@@ -412,6 +417,7 @@ pub struct MiscRollModifiers {
 
 #[derive(Clone)]
 pub struct PlayerConfig {
+    pub magic: crate::core::magic::MagicLoadout,
     pub name: String,
     pub level: u8,
     pub progression: Progression,
@@ -481,6 +487,7 @@ impl PlayerConfig {
     pub fn new(name: &str, weapon_id: WeaponId) -> Self {
         Self {
             name: name.to_string(),
+            magic: crate::core::magic::MagicLoadout::default(),
             level: 1,
             progression: Progression::default(),
             base_hp: 10,
@@ -557,6 +564,7 @@ struct CloseHitDamageRule {
 
 #[derive(Clone, Debug)]
 struct TalentModifiers {
+    magic: crate::core::magic::MagicTalents,
     hp_bonus: i32,
     drain_resistance: i32,
     armor_dr_bonus: i32,
@@ -677,6 +685,7 @@ struct ForcedWeaponLoadout {
 impl Default for TalentModifiers {
     fn default() -> Self {
         Self {
+            magic: crate::core::magic::MagicTalents::default(),
             hp_bonus: 0,
             drain_resistance: 0,
             armor_dr_bonus: 0,
@@ -2032,7 +2041,7 @@ pub fn weapon_style_compatible_with_loadout(
         }
         TALENT_ID_QUIET_RIVER => {
             weapon.name.trim().eq_ignore_ascii_case("fist")
-                && armor.is_none()
+                && armor.is_none_or(|armor| armor.armor_type == ArmorType::None)
                 && standard_shield.is_none()
         }
         TALENT_ID_REGENSTAT => {
@@ -2257,10 +2266,13 @@ fn shield_of_blades_style_active(
 fn quiet_river_style_active(
     modifiers: &TalentModifiers,
     weapon: &WeaponPreset,
+    weapon_id: WeaponId,
     armor_type: ArmorType,
     shield: Option<&Shield>,
 ) -> bool {
-    modifiers.quiet_river_style
+    (modifiers.quiet_river_style
+        || modifiers.halve_damage_by_weapon.contains(&weapon_id)
+        || modifiers.ignore_all_dr_by_weapon.contains(&weapon_id))
         && weapon.name.trim().eq_ignore_ascii_case("fist")
         && matches!(armor_type, ArmorType::None)
         && shield.is_none()
@@ -2348,12 +2360,41 @@ fn twelve_paths_style_active(
             .unwrap_or(false)
 }
 
+/// Migrate saved spell-traits into the separate spell list without losing settings.
+pub fn migrate_legacy_spells(player: &mut PlayerConfig) {
+    for id in ["spell_chronoblur", "spell_streamline"] {
+        if player.talents.iter().any(|talent| talent.id == id && talent.rank > 0) {
+            if !player.magic.knows_spell(id) { player.magic.learn_spell(id); }
+        }
+        player.talents.retain(|talent| talent.id != id);
+    }
+    if player.magic.knows_echo_strike {
+        if !player.magic.known_spells.iter().any(|id| id == "echo_strike") {
+            player.magic.known_spells.push("echo_strike".into());
+        }
+        player.magic.knows_echo_strike = false;
+    }
+}
+
+fn player_spell_loadout(player: &PlayerConfig) -> crate::core::magic::MagicLoadout {
+    let mut magic = player.magic.clone();
+    for id in ["spell_chronoblur", "spell_streamline"] {
+        if player.talents.iter().any(|talent| talent.id == id && talent.rank > 0)
+            && !magic.knows_spell(id) {
+            magic.learn_spell(id);
+        }
+    }
+    magic
+}
+
 fn resolve_talent_modifiers(
     player: &PlayerConfig,
     talent_catalog: &TalentCatalog,
     weapon_catalog: &WeaponCatalog,
 ) -> TalentModifiers {
     let mut modifiers = TalentModifiers::default();
+    modifiers.chronoblur = player.magic.knows_spell("spell_chronoblur")
+        || player.talents.iter().any(|talent| talent.id == "spell_chronoblur" && talent.rank > 0);
     modifiers.perfect_two_weapon_fighting = has_perfect_two_weapon_fighting_effect(player);
     let stats = ability_set_from_player(player);
     let context = TalentContext {
@@ -2481,6 +2522,7 @@ fn resolve_talent_modifiers(
                     }
                 }
                 TalentEffect::FastHealer => {}
+                TalentEffect::MagicTalent { talent } => modifiers.magic.apply(*talent, rank as u8),
                 TalentEffect::WeaponSpeedBonus {
                     amount,
                     ranged_only,
@@ -3609,13 +3651,14 @@ fn defense_mastery_bonus(
     has_shield: bool,
     twelve_paths_active: bool,
     defensive_dualwielding: bool,
+    quiet_river_active: bool,
 ) -> i32 {
     let primary = player.mastery(weapon.group).defense;
     let shield = player.mastery(WeaponGroup::Shields).defense;
     if has_shield {
         return shield + if twelve_paths_active { primary } else { 0 };
     }
-    if defensive_dualwielding {
+    let mastery = if defensive_dualwielding {
         let secondary_group = player
             .offhand_weapon_id
             .and_then(|id| weapon_catalog.get(id))
@@ -3624,7 +3667,8 @@ fn defense_mastery_bonus(
         primary + player.mastery(secondary_group).defense
     } else {
         primary
-    }
+    };
+    mastery * if quiet_river_active { 2 } else { 1 }
 }
 
 pub fn effective_damage_mastery(player: &PlayerConfig, weapon: &WeaponPreset) -> i32 {
@@ -3644,6 +3688,8 @@ pub struct RollSummary {
     pub attack_bonus: i32,
     pub strength_damage: i32,
     pub is_ranged_weapon: bool,
+    attack_breakdown: StatBreakdown,
+    damage_breakdown: StatBreakdown,
 }
 
 pub struct DefenseDisplaySummary {
@@ -3655,12 +3701,13 @@ pub struct DefenseDisplaySummary {
     pub conditional_notes: Vec<String>,
 }
 
-fn chronoblur_defense_notes() -> [String; 2] {
+fn chronoblur_defense_notes(player: &PlayerConfig) -> [String; 2] {
+    let duration = 60_u64 + 30 * u64::from(player.magic.chronoblur_duration_ranks);
     [
-        format!("Chronoblur: +{} melee Defense if you moved in the previous second (first {} seconds).",
-            sim::CHRONOBLUR_MELEE_DEFENSE_BONUS, sim::CHRONOBLUR_DURATION_SECONDS),
-        format!("Chronoblur: missile attacks treat you as {} feet farther away if you moved in the previous second (first {} seconds).",
-            sim::CHRONOBLUR_RANGED_DISTANCE_FEET, sim::CHRONOBLUR_DURATION_SECONDS),
+        format!("Chronoblur: +{} melee Defense if you moved in the previous second ({} seconds after casting).",
+            sim::CHRONOBLUR_MELEE_DEFENSE_BONUS, duration),
+        format!("Chronoblur: missile attacks treat you as {} feet farther away if you moved in the previous second ({} seconds after casting).",
+            sim::CHRONOBLUR_RANGED_DISTANCE_FEET, duration),
     ]
 }
 
@@ -3881,6 +3928,13 @@ pub fn ability_set_from_player(player: &PlayerConfig) -> AbilitySet {
     }
 }
 
+/// The simulator and Derived consume this same resolved profile.
+pub struct ResolvedPlayerStats {
+    pub combatant: Combatant,
+    pub summary: PlayerSummary,
+    pub config: PlayerConfig,
+}
+
 pub fn player_summary(
     player: &PlayerConfig,
     weapon_catalog: &WeaponCatalog,
@@ -3888,112 +3942,8 @@ pub fn player_summary(
     shield_catalog: &ShieldCatalog,
     talent_catalog: &TalentCatalog,
 ) -> PlayerSummary {
-    let modifiers = resolve_talent_modifiers(player, talent_catalog, weapon_catalog);
-    let weapon = weapon_for_player_with_modifiers(player, weapon_catalog, &modifiers);
-    let character = build_character(
-        player,
-        weapon_catalog,
-        armor_catalog,
-        shield_catalog,
-        talent_catalog,
-    );
-    let misc_modifiers = resolve_misc_modifiers(player);
-    let armor_adjustments =
-        armor_talent_adjustments(character.equipment.armor.as_ref(), &modifiers);
-    let (defensive_dualwielding, offensive_dualwielding, perfect_two_weapon_fighting_active) =
-        dualwield_mode_flags_with_perfect(player, weapon, modifiers.perfect_two_weapon_fighting);
-    let weapon_id = weapon_id_for_player_with_modifiers(player, weapon_catalog, &modifiers);
-    let fight_defensively_attack_penalty =
-        fight_defensively_attack_penalty_with_modifiers(player, &modifiers);
-    let fight_defensively_defense_bonus = fight_defensively_defense_bonus_for_player(player);
-    let called_shot_defense_penalty = if player.called_shot {
-        called_shot_defense_penalty_with_modifiers(&modifiers)
-    } else {
-        0
-    };
-    let defense_bonus_weapon =
-        modifiers.defense_bonus_for_weapon(weapon_id) * if defensive_dualwielding { 2 } else { 1 };
-    let mut derived = character.derived();
-    derived.attack_bonus += misc_modifiers.attack_bonus + misc_modifiers.all_roll_bonus;
-    derived.speed_mod += armor_adjustments.speed_mod_bonus
-        + modifiers.speed_mod_bonus
-        + misc_modifiers.speed_mod_bonus;
-    derived.initiative_mod += armor_adjustments.initiative_mod_bonus
-        + modifiers.initiative_mod_bonus
-        + misc_modifiers.initiative_bonus
-        + misc_modifiers.all_roll_bonus;
-    derived.base_dv += armor_adjustments.base_dv_bonus;
-    derived.initiative_die = derived
-        .initiative_die
-        .improved(modifiers.initiative_die_bonus + misc_modifiers.initiative_die_bonus);
-    derived.hit_points =
-        (derived.hit_points as i32 + modifiers.hp_bonus + misc_modifiers.hp_bonus).max(1) as u32;
-    derived.drain_resistance += modifiers.drain_resistance;
-    derived.armor_dr = (derived.armor_dr
-        + armor_adjustments.armor_dr_bonus
-        + modifiers.armor_dr_bonus
-        + misc_modifiers.armor_dr_bonus)
-        .max(0);
-    if offensive_dualwielding && !perfect_two_weapon_fighting_active {
-        derived.base_dv = 0;
-    }
-    derived.base_dv += modifiers.defense_bonus
-        + defense_bonus_weapon
-        + misc_modifiers.defense_bonus
-        + misc_modifiers.all_roll_bonus;
-    let twelve_paths_active =
-        twelve_paths_style_active(&modifiers, weapon, character.equipment.shield.as_ref());
-    let ithican_prince_active =
-        ithican_prince_style_active(&modifiers, weapon, character.equipment.shield.as_ref());
-    let hobbler_active = hobbler_style_active(&modifiers, weapon);
-    let returner_active = returner_style_active(&modifiers, weapon);
-    let ithican_half_int_bonus = if ithican_prince_active {
-        character.ability_mods.intelligence.attack / 2
-    } else {
-        0
-    };
-    let style_defense_bonus = ithican_half_int_bonus
-        + new_style_defense_bonus(&modifiers, player, weapon, weapon_catalog)
-        - if returner_active {
-            RETURNER_DEFENSE_PENALTY
-        } else {
-            0
-        };
-    derived.base_dv += style_defense_bonus;
-    let defense = defense_display_summary(
-        player,
-        weapon,
-        weapon_catalog,
-        &character,
-        &derived,
-        &modifiers,
-        twelve_paths_active,
-        fight_defensively_defense_bonus,
-        called_shot_defense_penalty,
-    );
-    let roll = roll_summary(
-        player,
-        weapon,
-        weapon_catalog,
-        &character,
-        &derived,
-        &modifiers,
-        &misc_modifiers,
-        armor_adjustments.heavy_armor_damage_bonus,
-        twelve_paths_active,
-        if hobbler_active {
-            -HOBBLER_ATTACK_PENALTY
-        } else {
-            0
-        },
-        ithican_half_int_bonus,
-        fight_defensively_attack_penalty,
-    );
-    PlayerSummary {
-        derived,
-        roll,
-        defense,
-    }
+    resolve_player_stats(player, weapon_catalog, armor_catalog, shield_catalog,
+        &NpcPresetCatalog::new(Vec::new()), talent_catalog).summary
 }
 
 fn breakdown_talent_source<F>(
@@ -4077,10 +4027,7 @@ pub fn derived_stat_breakdowns(
         twelve_paths_style_active(&modifiers, weapon, character.equipment.shield.as_ref());
     let ithican_prince_active =
         ithican_prince_style_active(&modifiers, weapon, character.equipment.shield.as_ref());
-    let hobbler_active = hobbler_style_active(&modifiers, weapon);
     let returner_active = returner_style_active(&modifiers, weapon);
-    let fight_defensively_attack_penalty =
-        fight_defensively_attack_penalty_with_modifiers(player, &modifiers);
     let fight_defensively_defense_bonus = fight_defensively_defense_bonus_for_player(player);
     let called_shot_defense_penalty = if player.called_shot {
         called_shot_defense_penalty_with_modifiers(&modifiers)
@@ -4089,6 +4036,13 @@ pub fn derived_stat_breakdowns(
     };
     let defense_bonus_weapon =
         modifiers.defense_bonus_for_weapon(weapon_id) * if defensive_dualwielding { 2 } else { 1 };
+    let quiet_river_active = quiet_river_style_active(
+        &modifiers,
+        weapon,
+        weapon_id_for_player_with_modifiers(player, weapon_catalog, &modifiers),
+        character.equipment.armor.as_ref().map_or(ArmorType::None, |armor| armor.armor_type),
+        character.equipment.shield.as_ref(),
+    );
     let defense_mastery = defense_mastery_bonus(
         player,
         weapon,
@@ -4096,6 +4050,7 @@ pub fn derived_stat_breakdowns(
         has_shield,
         twelve_paths_active,
         defensive_dualwielding,
+        quiet_river_active,
     );
     let shield_of_blades_active = shield_of_blades_style_active(
         &modifiers,
@@ -4216,149 +4171,11 @@ pub fn derived_stat_breakdowns(
     }
     breakdowns.insert(DerivedStatId::AttackBonus, attack);
 
-    let is_ranged = is_ranged_weapon(weapon);
-    let projectile_weapon = uses_projectiles(&weapon.name, weapon.ammunition.is_some());
-    let (material_attack_bonus, material_damage_bonus) = material_bonuses(
-        weapon_material_tier_with_modifiers(player, weapon, &modifiers),
-        player.projectile_material_tier,
-        is_ranged,
-        projectile_weapon,
-    );
-    let attack_mastery = effective_attack_mastery(player, weapon);
-    let weapon_attack_bonus = modifiers.attack_bonus_for_weapon(weapon_id);
-    let power_attack_penalty = power_attack_attack_penalty(player, weapon, &character);
-    let style_attack_bonus = if hobbler_active {
-        -HOBBLER_ATTACK_PENALTY
-    } else {
-        0
-    };
-    let mut effective_attack = StatBreakdown::new(summary.roll.attack_bonus.to_string());
-    effective_attack.add_i32(summary.derived.attack_bonus, "Derived attack bonus");
-    if player.mounted {
-        effective_attack.add_i32(mounted_attack_bonus(player, weapon), "Mounted combat / Riding mastery");
-    }
-    if material_attack_bonus != 0 {
-        effective_attack.add_i32(material_attack_bonus, "Weapon/projectile material");
-    }
-    if attack_mastery != 0 {
-        effective_attack.add_i32(attack_mastery, "Attack mastery");
-    }
-    if weapon_attack_bonus != 0 {
-        effective_attack.add_i32(
-            weapon_attack_bonus,
-            breakdown_talent_source(player, talent_catalog, |effect| {
-                matches!(
-                    effect,
-                    TalentEffect::AttackBonusWeapon { .. } | TalentEffect::WeaponAttackBonus { .. }
-                )
-            }),
-        );
-    }
-    if style_attack_bonus != 0 {
-        effective_attack.add_i32(style_attack_bonus, "Weapon style: Hobbler");
-    }
-    if power_attack_penalty != 0 {
-        effective_attack.add_i32(-power_attack_penalty, "Power Attack");
-    }
-    if fight_defensively_attack_penalty != 0 {
-        effective_attack.add_i32(
-            -fight_defensively_attack_penalty,
-            if modifiers.fight_defensively_attack_penalty_divisor > 1 {
-                "Fight Defensively (reduced by Combat Expertise)"
-            } else {
-                "Fight Defensively"
-            },
-        );
-    }
-    breakdowns.insert(
-        DerivedStatId::EffectiveAttackBonus,
-        effective_attack.clone(),
-    );
+    let effective_attack = summary.roll.attack_breakdown.clone();
+    breakdowns.insert(DerivedStatId::EffectiveAttackBonus, effective_attack.clone());
     breakdowns.insert(DerivedStatId::MainhandAttackRoll, effective_attack);
-
-    let effective_two_hand = effective_two_hand_grip_with_modifiers(player, weapon, &modifiers);
-    let strength_damage_base =
-        strength_damage_for_weapon(weapon, character.ability_mods.strength.damage);
-    let two_hand_bonus = two_hand_damage_bonus(weapon, effective_two_hand);
-    let damage_mastery = effective_damage_mastery(player, weapon);
-    let weapon_damage_bonus = modifiers.damage_bonus_for_weapon(weapon_id);
-    let group_damage_bonus = modifiers.damage_bonus_for_group(weapon.group);
-    let armor_damage_bonus = if is_ranged {
-        0
-    } else {
-        armor_adjustments.heavy_armor_damage_bonus
-    };
-    let twelve_paths_damage = if twelve_paths_active {
-        -TWELVE_PATHS_DAMAGE_PENALTY
-    } else {
-        0
-    };
-    let power_attack_damage =
-        power_attack_strength_damage_bonus(player, weapon, character.ability_mods.strength.damage);
-    let mut effective_damage = StatBreakdown::new(summary.roll.strength_damage.to_string());
-    effective_damage.add_i32(
-        strength_damage_base,
-        format!(
-            "Strength {}/{} damage modifier",
-            player.strength_base, player.strength_pct
-        ),
-    );
-    if two_hand_bonus != 0 {
-        effective_damage.add_i32(two_hand_bonus, "Two-handed grip");
-    }
-    if material_damage_bonus != 0 {
-        effective_damage.add_i32(material_damage_bonus, "Weapon/projectile material");
-    }
-    if damage_mastery != 0 {
-        effective_damage.add_i32(damage_mastery, "Damage mastery");
-    }
-    if weapon_damage_bonus != 0 {
-        effective_damage.add_i32(
-            weapon_damage_bonus,
-            breakdown_talent_source(player, talent_catalog, |effect| {
-                matches!(effect, TalentEffect::DamageBonusWeapon { .. })
-            }),
-        );
-    }
-    if group_damage_bonus != 0 {
-        effective_damage.add_i32(
-            group_damage_bonus,
-            breakdown_talent_source(player, talent_catalog, |effect| {
-                matches!(effect, TalentEffect::DamageBonusWeaponGroup { .. })
-            }),
-        );
-    }
-    if misc.damage_bonus != 0 {
-        effective_damage.add_i32(misc.damage_bonus, "Miscellaneous damage modifier");
-    }
-    if misc.all_roll_bonus != 0 {
-        effective_damage.add_i32(misc.all_roll_bonus, "Miscellaneous all-roll modifier");
-    }
-    if armor_damage_bonus != 0 {
-        effective_damage.add_i32(
-            armor_damage_bonus,
-            breakdown_talent_source(player, talent_catalog, |effect| {
-                matches!(
-                    effect,
-                    TalentEffect::HeavyArmorDamageBonusFromDr { .. }
-                        | TalentEffect::HeavyArmorDamageBonus { .. }
-                )
-            }),
-        );
-    }
-    if twelve_paths_damage != 0 {
-        effective_damage.add_i32(twelve_paths_damage, "Weapon style: Twelve Paths");
-    }
-    if ithican_half_int_bonus != 0 {
-        effective_damage.add_i32(ithican_half_int_bonus, "Weapon style: Ithican Prince");
-    }
-    if power_attack_damage != 0 {
-        effective_damage.add_i32(power_attack_damage, "Power Attack");
-    }
-    breakdowns.insert(
-        DerivedStatId::EffectiveDamageBonus,
-        effective_damage.clone(),
-    );
+    let effective_damage = summary.roll.damage_breakdown.clone();
+    breakdowns.insert(DerivedStatId::EffectiveDamageBonus, effective_damage.clone());
     let mut mainhand_damage = effective_damage;
     let displayed_damage_dice = if one_path_active(&modifiers, player, weapon) {
         reduce_damage_dice(&weapon.damage_expr)
@@ -4660,7 +4477,9 @@ pub fn derived_stat_breakdowns(
     if defense_mastery != 0 {
         melee_defense.add_i32(
             defense_mastery,
-            if defensive_dualwielding {
+            if quiet_river_active {
+                "Defense mastery ×2 (Quiet River)"
+            } else if defensive_dualwielding {
                 "Defense mastery ×2 (defensive dual-wielding)"
             } else {
                 "Defense mastery"
@@ -4713,7 +4532,7 @@ pub fn derived_stat_breakdowns(
         );
     }
     if modifiers.chronoblur {
-        melee_defense.note(chronoblur_defense_notes()[0].clone());
+        melee_defense.note(chronoblur_defense_notes(player)[0].clone());
     }
     breakdowns.insert(DerivedStatId::MeleeDefense, melee_defense);
 
@@ -4759,7 +4578,7 @@ pub fn derived_stat_breakdowns(
         );
     }
     if modifiers.chronoblur {
-        ranged_defense.note(chronoblur_defense_notes()[1].clone());
+        ranged_defense.note(chronoblur_defense_notes(player)[1].clone());
     }
     breakdowns.insert(DerivedStatId::RangedDefense, ranged_defense);
 
@@ -4952,206 +4771,46 @@ pub fn derived_stat_breakdowns(
 
 fn defense_display_summary(
     player: &PlayerConfig,
-    weapon: &WeaponPreset,
-    weapon_catalog: &WeaponCatalog,
-    character: &Character,
-    derived: &DerivedStats,
+    combatant: &Combatant,
     modifiers: &TalentModifiers,
-    twelve_paths_active: bool,
-    fight_defensively_defense_bonus: i32,
-    called_shot_defense_penalty: i32,
 ) -> DefenseDisplaySummary {
-    let (defensive_dualwielding, offensive_dualwielding, perfect_two_weapon_fighting_active) =
-        dualwield_mode_flags_with_perfect(player, weapon, modifiers.perfect_two_weapon_fighting);
-    let shield_of_blades_active = shield_of_blades_style_active(
-        modifiers,
-        player,
-        weapon,
-        weapon_catalog,
-        defensive_dualwielding,
-    );
-    let weapon_defense_bonus_always = weapon.defense_bonus_always || shield_of_blades_active;
-    let has_shield = character.equipment.shield.is_some();
-    let defense_mastery = defense_mastery_bonus(
-        player,
-        weapon,
-        weapon_catalog,
-        has_shield,
-        twelve_paths_active,
-        defensive_dualwielding,
-    );
-    let shield_bonus = character
-        .equipment
-        .shield
-        .as_ref()
-        .map(|shield| shield.defense_bonus + modifiers.shield_defense_bonus);
-    let shield_cover_value = character
-        .equipment
-        .shield
-        .as_ref()
-        .map(|shield| (shield.cover_value + modifiers.shield_cover_value_adjustment).max(0));
-    let weapon_note = if weapon.defense_bonus_always {
-        " (+4 weapon)"
+    let preview = sim::combat::preview_defense(combatant);
+    let shield_bonus = combatant.state.shield_intact.then_some(combatant.sheet.defense.shield_defense_bonus);
+    let melee_bonus = preview.melee_bonus
+        + if combatant.sheet.offense.weapon.defense_bonus_always { 4 } else { 0 };
+    let weapon_note = if !combatant.sheet.offense.weapon.defense_bonus_always
+        && (combatant.sheet.maneuvers.defensive_dualwielding
+            || combatant.sheet.offense.weapon.two_hand_grip) {
+        " (+4 after you attack)"
+    } else { "" };
+    let melee_roll_label = if let Some(shield) = shield_bonus {
+        format!("Defense roll (melee): d{}p + {} + {shield}{weapon_note}",
+            preview.melee_die, melee_bonus + 4)
     } else {
-        ""
+        format!("Defense roll (melee): d{}p + {}{weapon_note}", preview.melee_die, melee_bonus)
     };
-    let melee_die = if offensive_dualwielding && !perfect_two_weapon_fighting_active {
-        "d10p"
+    let mut ranged_roll_label = if shield_bonus.is_some() {
+        format!("Defense roll (ranged): d{}p + {} (cover cap applies)",
+            preview.ranged_stationary_die, preview.ranged_bonus)
     } else {
-        "d20p"
+        let adjustment = if preview.ranged_bonus == 0 { String::new() }
+            else { format!(" {:+}", preview.ranged_bonus) };
+        format!("Defense roll (ranged): d{}p if stationary, else d{}p{adjustment}",
+            preview.ranged_stationary_die, preview.ranged_moving_die)
     };
-    let after_attack_bonus = (defensive_dualwielding
-        || effective_two_hand_grip_with_modifiers(player, weapon, modifiers))
-        && !weapon_defense_bonus_always;
-    let weapon_defense_bonus = if weapon_defense_bonus_always { 4 } else { 0 };
-    let shield_of_blades_defense_bonus = if shield_of_blades_active && !weapon.defense_bonus_always
-    {
-        4
-    } else {
-        0
-    };
-    let (melee_roll_label, melee_with_shield_dv) = if let Some(shield_bonus) = shield_bonus {
-        let melee_base = derived.base_dv
-            + mounted_defense_bonus(player)
-            + defense_mastery
-            + shield_of_blades_defense_bonus
-            + 4
-            + fight_defensively_defense_bonus
-            - called_shot_defense_penalty;
-        (
-            format!(
-                "Defense roll (melee): {melee_die} + {melee_base} + {shield_bonus}{weapon_note}"
-            ),
-            Some(
-                derived.base_dv
-                    + mounted_defense_bonus(player)
-                    + defense_mastery
-                    + weapon_defense_bonus
-                    + fight_defensively_defense_bonus
-                    - called_shot_defense_penalty
-                    + 4
-                    + shield_bonus,
-            ),
-        )
-    } else {
-        let dual_note = if after_attack_bonus {
-            " (+4 after you attack)"
-        } else {
-            ""
-        };
-        let melee_base = derived.base_dv
-            + mounted_defense_bonus(player)
-            + defense_mastery
-            + shield_of_blades_defense_bonus
-            + fight_defensively_defense_bonus
-            - called_shot_defense_penalty;
-        (
-            format!(
-                "Defense roll (melee): {melee_die} + {}{weapon_note}{dual_note}",
-                melee_base
-            ),
-            None,
-        )
-    };
-    let mut ranged_roll_label = if let Some(shield_bonus) = shield_bonus {
-        if called_shot_defense_penalty > 0 {
-            format!(
-                "Defense roll (ranged): d20p + {shield_bonus} - {called_shot_defense_penalty} (cover cap applies)"
-            )
-        } else {
-            format!("Defense roll (ranged): d20p + {shield_bonus} (cover cap applies)")
-        }
-    } else {
-        if called_shot_defense_penalty > 0 {
-            format!(
-                "Defense roll (ranged): d12p if stationary, else d20p - {called_shot_defense_penalty}"
-            )
-        } else {
-            "Defense roll (ranged): d12p if stationary, else d20p".to_string()
-        }
-    };
-
-    if modifiers.pilgrims_path_style {
-        ranged_roll_label.push_str(" + 4 (Pilgrim's Path)");
+    if combatant.sheet.maneuvers.mounted {
+        ranged_roll_label.push_str(" (mounted)");
     }
-    let mounted_defense = mounted_defense_bonus(player);
-    if mounted_defense != 0 {
-        ranged_roll_label.push_str(&format!(" + {mounted_defense} (mounted)"));
-    }
-
     DefenseDisplaySummary {
         shield_bonus,
-        shield_cover_value,
+        shield_cover_value: combatant.sheet.defense.shield_cover_value,
         melee_roll_label,
         ranged_roll_label,
-        melee_with_shield_dv,
+        melee_with_shield_dv: shield_bonus.map(|shield| preview.melee_bonus + 4 + shield
+            + if combatant.sheet.offense.weapon.defense_bonus_always { 4 } else { 0 }),
         conditional_notes: if modifiers.chronoblur {
-            chronoblur_defense_notes().into()
-        } else {
-            Vec::new()
-        },
-    }
-}
-
-fn roll_summary(
-    player: &PlayerConfig,
-    weapon: &WeaponPreset,
-    weapon_catalog: &WeaponCatalog,
-    character: &Character,
-    derived: &DerivedStats,
-    modifiers: &TalentModifiers,
-    misc_modifiers: &MiscRollModifiers,
-    armor_damage_bonus: i32,
-    twelve_paths_active: bool,
-    style_attack_bonus: i32,
-    style_damage_bonus: i32,
-    fight_defensively_attack_penalty: i32,
-) -> RollSummary {
-    let is_ranged_weapon = is_ranged_weapon(weapon);
-    let uses_projectiles = uses_projectiles(&weapon.name, weapon.ammunition.is_some());
-    let weapon_id = weapon_id_for_player_with_modifiers(player, weapon_catalog, modifiers);
-    let (material_attack_bonus, material_damage_bonus) = material_bonuses(
-        weapon_material_tier_with_modifiers(player, weapon, modifiers),
-        player.projectile_material_tier,
-        is_ranged_weapon,
-        uses_projectiles,
-    );
-    let attack_mastery = effective_attack_mastery(player, weapon);
-    let damage_mastery = effective_damage_mastery(player, weapon);
-    let power_attack_penalty = power_attack_attack_penalty(player, weapon, character);
-    let attack_bonus = derived.attack_bonus
-        + material_attack_bonus
-        + attack_mastery
-        + modifiers.attack_bonus_for_weapon(weapon_id)
-        + style_attack_bonus
-        + mounted_attack_bonus(player, weapon)
-        - power_attack_penalty
-        - fight_defensively_attack_penalty;
-    let effective_two_hand = effective_two_hand_grip_with_modifiers(player, weapon, modifiers);
-    let two_hand_bonus = two_hand_damage_bonus(weapon, effective_two_hand);
-    let mut strength_damage =
-        strength_damage_for_weapon(weapon, character.ability_mods.strength.damage)
-            + two_hand_bonus
-            + material_damage_bonus
-            + damage_mastery
-            + modifiers.damage_bonus_for_weapon(weapon_id)
-            + modifiers.damage_bonus_for_group(weapon.group)
-            + misc_modifiers.damage_bonus
-            + misc_modifiers.all_roll_bonus;
-    if !is_ranged_weapon {
-        strength_damage += armor_damage_bonus;
-    }
-    if twelve_paths_active {
-        strength_damage -= TWELVE_PATHS_DAMAGE_PENALTY;
-    }
-    strength_damage += style_damage_bonus;
-    strength_damage +=
-        power_attack_strength_damage_bonus(player, weapon, character.ability_mods.strength.damage);
-
-    RollSummary {
-        attack_bonus,
-        strength_damage,
-        is_ranged_weapon,
+            chronoblur_defense_notes(player).into()
+        } else { Vec::new() },
     }
 }
 
@@ -5302,7 +4961,7 @@ fn build_combatant_profile(
     shield_catalog: &ShieldCatalog,
     npc_presets: &NpcPresetCatalog,
     talent_catalog: &TalentCatalog,
-) -> Combatant {
+) -> ResolvedPlayerStats {
     let modifiers = resolve_talent_modifiers(player, talent_catalog, weapon_catalog);
     let weapon_preset = weapon_for_player_with_modifiers(player, weapon_catalog, &modifiers);
     let weapon_id = weapon_id_for_player_with_modifiers(player, weapon_catalog, &modifiers);
@@ -5439,13 +5098,9 @@ fn build_combatant_profile(
         || modifiers
             .hit_critical_effects_no_extra_dice_by_weapon
             .contains(&weapon_id);
-    let quiet_river_active =
-        quiet_river_style_active(&modifiers, weapon_preset, armor_type, shield_data)
-            || ((modifiers.halve_damage_by_weapon.contains(&weapon_id)
-                || modifiers.ignore_all_dr_by_weapon.contains(&weapon_id))
-                && weapon_preset.name.trim().eq_ignore_ascii_case("fist")
-                && matches!(armor_type, ArmorType::None)
-                && shield_data.is_none());
+    let quiet_river_active = quiet_river_style_active(
+        &modifiers, weapon_preset, weapon_id, armor_type, shield_data,
+    );
     let rhdwng_flow_active = rhdwng_flow_style_active(&modifiers, weapon_preset)
         || modifiers
             .thrown_full_strength_damage_by_weapon
@@ -5617,27 +5272,26 @@ fn build_combatant_profile(
         has_shield,
         twelve_paths_active,
         defensive_dualwielding,
+        quiet_river_active,
     );
     let defense_bonus_weapon =
         modifiers.defense_bonus_for_weapon(weapon_id) * if defensive_dualwielding { 2 } else { 1 };
     let defense_bonus =
         modifiers.defense_bonus + misc_modifiers.defense_bonus + misc_modifiers.all_roll_bonus;
     let damage_mastery = effective_damage_mastery(player, weapon_preset);
-    let mut attack_bonus = attack_bonus_base
-        + attack_mastery
-        + material_attack_bonus
-        + modifiers.attack_bonus_for_weapon(weapon_id);
+    let mut attack_breakdown = StatBreakdown::new("");
+    attack_breakdown.add_i32(derived.attack_bonus, "Derived attack bonus");
+    attack_breakdown.add_i32(-power_attack_penalty, "Power Attack");
+    attack_breakdown.add_i32(attack_mastery, "Attack mastery");
+    attack_breakdown.add_i32(material_attack_bonus, "Weapon/projectile material");
+    attack_breakdown.add_i32(modifiers.attack_bonus_for_weapon(weapon_id), "Weapon talents");
     if modifiers.hobbler_style && hobbler_style_active(&modifiers, weapon_preset) {
-        attack_bonus -= HOBBLER_ATTACK_PENALTY;
+        attack_breakdown.add_i32(-HOBBLER_ATTACK_PENALTY, "Weapon style: Hobbler");
         attack_bonus_base -= HOBBLER_ATTACK_PENALTY;
     } else if hobbler_active {
         attack_bonus_base -= HOBBLER_ATTACK_PENALTY;
     }
     let mut defense_mod = derived.base_dv + defense_mastery + defense_bonus + defense_bonus_weapon;
-    if quiet_river_active {
-        defense_mod =
-            derived.base_dv + (defense_mastery * 2) + defense_bonus + defense_bonus_weapon;
-    }
     if returner_active {
         defense_mod -= RETURNER_DEFENSE_PENALTY;
     }
@@ -5647,32 +5301,32 @@ fn build_combatant_profile(
     let mut strength_damage_base = character.ability_mods.strength.damage;
     let mut unarmed_damage_bonus = modifiers.damage_bonus_for_group(WeaponGroup::Unarmed)
         + player.mastery(WeaponGroup::Unarmed).damage;
-    let mut strength_damage = strength_damage_for_weapon(weapon_preset, strength_damage_base)
-        + two_hand_damage_bonus
-        + material_damage_bonus
-        + damage_mastery
-        + modifiers.damage_bonus_for_weapon(weapon_id)
-        + modifiers.damage_bonus_for_group(weapon_preset.group)
-        + misc_modifiers.damage_bonus
-        + misc_modifiers.all_roll_bonus;
+    let mut damage_breakdown = StatBreakdown::new("");
+    damage_breakdown.add_i32(strength_damage_for_weapon(weapon_preset, strength_damage_base), "Strength damage modifier");
+    damage_breakdown.add_i32(two_hand_damage_bonus, "Two-handed grip");
+    damage_breakdown.add_i32(material_damage_bonus, "Weapon/projectile material");
+    damage_breakdown.add_i32(damage_mastery, "Damage mastery");
+    damage_breakdown.add_i32(modifiers.damage_bonus_for_weapon(weapon_id), "Weapon talents");
+    damage_breakdown.add_i32(modifiers.damage_bonus_for_group(weapon_preset.group), "Weapon group talents");
+    damage_breakdown.add_i32(misc_modifiers.damage_bonus, "Miscellaneous damage modifier");
+    damage_breakdown.add_i32(misc_modifiers.all_roll_bonus, "Miscellaneous all-roll modifier");
     if !primary_is_ranged {
-        strength_damage += armor_adjustments.heavy_armor_damage_bonus;
+        damage_breakdown.add_i32(armor_adjustments.heavy_armor_damage_bonus, "Armor damage bonus");
     }
     if twelve_paths_active {
-        strength_damage -= TWELVE_PATHS_DAMAGE_PENALTY;
+        damage_breakdown.add_i32(-TWELVE_PATHS_DAMAGE_PENALTY, "Weapon style: Twelve Paths");
     }
     if ithican_prince_active {
         let half_int_bonus = character.ability_mods.intelligence.attack / 2;
         defense_mod += half_int_bonus;
-        strength_damage += half_int_bonus;
+        damage_breakdown.add_i32(half_int_bonus, "Weapon style: Ithican Prince");
     }
-    strength_damage +=
-        power_attack_strength_damage_bonus(player, weapon_preset, strength_damage_base);
+    damage_breakdown.add_i32(power_attack_strength_damage_bonus(player, weapon_preset, strength_damage_base), "Power Attack");
     if doomrazor_active || modifiers.no_strength_damage_by_weapon.contains(&weapon_id) {
-        strength_damage -= strength_damage_for_weapon(weapon_preset, strength_damage_base);
+        damage_breakdown.add_i32(-strength_damage_for_weapon(weapon_preset, strength_damage_base), "Weapon style removes Strength damage");
     }
     if doomrazor_active || modifiers.no_mastery_damage_by_weapon.contains(&weapon_id) {
-        strength_damage -= damage_mastery;
+        damage_breakdown.add_i32(-damage_mastery, "Weapon style removes mastery damage");
     }
     let mut max_hp =
         (derived.hit_points as i32 + modifiers.hp_bonus + misc_modifiers.hp_bonus).max(1);
@@ -5714,12 +5368,14 @@ fn build_combatant_profile(
         .unwrap_or((20, false));
     if let Some(preset) = player.npc_preset.and_then(|id| npc_presets.get(id)) {
         name = preset.name.clone();
-        attack_bonus = preset.attack_bonus;
+        attack_breakdown.lines.clear();
+        attack_breakdown.add_i32(preset.attack_bonus, "NPC attack bonus");
         attack_bonus_base = preset.attack_bonus;
         defense_mod = preset.defense_mod;
         armor_dr = preset.armor_dr;
         natural_dr = 0;
-        strength_damage = preset.damage_bonus;
+        damage_breakdown.lines.clear();
+        damage_breakdown.add_i32(preset.damage_bonus, "NPC damage bonus");
         strength_damage_base = 0;
         unarmed_damage_bonus = 0;
         max_hp = preset.hp.max(1);
@@ -5741,7 +5397,9 @@ fn build_combatant_profile(
         called_shot_target_defense_bonus_base = CALLED_SHOT_TARGET_DEFENSE_BONUS_MEDIUM;
     }
 
-    attack_bonus += mounted_attack_bonus(player, weapon_preset);
+    attack_breakdown.add_i32(mounted_attack_bonus(player, weapon_preset), "Mounted combat / Riding mastery");
+    let attack_bonus = attack_breakdown.additive_total() as i32;
+    let strength_damage = damage_breakdown.additive_total() as i32;
 
     let weapon_speed = if use_jab {
         jab_speed
@@ -6037,18 +5695,6 @@ fn build_combatant_profile(
             sim::ModifierOpI32::Set(1),
         );
     }
-    if modifiers.chronoblur {
-        sheet_modifiers.add_i32(
-            sim::StatIdI32::FlagChronoblurSpell,
-            sim::ModifierOpI32::Set(1),
-        );
-    }
-    if modifiers.streamline {
-        sheet_modifiers.add_i32(
-            sim::StatIdI32::FlagStreamlineSpell,
-            sim::ModifierOpI32::Set(1),
-        );
-    }
     let defender_knockback_step_adjustment =
         kanian_impaler_knockback_adjustment(modifiers.kanian_impaler_style, weapon_preset);
     let one_path = one_path_active(&modifiers, player, weapon_preset);
@@ -6259,9 +5905,47 @@ fn build_combatant_profile(
     };
 
     let mut combatant = Combatant::new(sheet);
+    combatant.configure_magic(sim::MagicProfile {
+        level: player.level,
+        loadout: player_spell_loadout(player),
+        talents: modifiers.magic,
+        saves: crate::core::magic::MagicSaveBonuses {
+            physical: character.ability_mods.constitution.physical_save,
+            mental: character.ability_mods.wisdom.mental_save,
+            dodge: character.ability_mods.dexterity.dodge_save,
+        },
+    });
     combatant.weapon_group = format!("{:?}", weapon_preset.group);
     combatant.armor_type = format!("{armor_type:?}");
-    combatant
+    derived.initiative_die = derived.initiative_die
+        .improved(modifiers.initiative_die_bonus + misc_modifiers.initiative_die_bonus);
+    derived.hit_points = combatant.sheet.vitals.max_hp as u32;
+    derived.drain_resistance = combatant.sheet.vitals.drain_resistance;
+    derived.armor_dr = combatant.sheet.defense.armor_dr;
+    // Base DV excludes mastery and situational bonuses. Both come from this
+    // profile's resolved combat values, not a second character calculation.
+    derived.base_dv = combatant.sheet.defense.defense_mod - defense_mastery
+        + sim::combat::persistent_defense_bonus(&combatant);
+    attack_breakdown.add_i32(-sim::combat::fight_defensively_attack_penalty(&combatant), "Fight Defensively");
+    attack_breakdown.result = sim::combat::preview_attack_bonus(&combatant, sim::WeaponSlot::Primary).to_string();
+    if primary_is_ranged && combatant.sheet.offense.weapon.uses_projectiles {
+        damage_breakdown.lines.clear();
+        damage_breakdown.add_i32(0, "Projectile attack uses its weapon damage expression");
+    }
+    damage_breakdown.result = sim::combat::preview_damage_bonus(&combatant, sim::WeaponSlot::Primary, primary_is_ranged).to_string();
+    let roll = RollSummary {
+        attack_breakdown,
+        damage_breakdown,
+        attack_bonus: sim::combat::preview_attack_bonus(&combatant, sim::WeaponSlot::Primary),
+        strength_damage: sim::combat::preview_damage_bonus(&combatant, sim::WeaponSlot::Primary, primary_is_ranged),
+        is_ranged_weapon: primary_is_ranged,
+    };
+    let defense = defense_display_summary(player, &combatant, &modifiers);
+    ResolvedPlayerStats {
+        combatant,
+        summary: PlayerSummary { derived, roll, defense },
+        config: player.clone(),
+    }
 }
 
 pub fn build_combatant(
@@ -6272,6 +5956,18 @@ pub fn build_combatant(
     npc_presets: &NpcPresetCatalog,
     talent_catalog: &TalentCatalog,
 ) -> Combatant {
+    resolve_player_stats(player, weapon_catalog, armor_catalog, shield_catalog,
+        npc_presets, talent_catalog).combatant
+}
+
+pub fn resolve_player_stats(
+    player: &PlayerConfig,
+    weapon_catalog: &WeaponCatalog,
+    armor_catalog: &ArmorCatalog,
+    shield_catalog: &ShieldCatalog,
+    npc_presets: &NpcPresetCatalog,
+    talent_catalog: &TalentCatalog,
+) -> ResolvedPlayerStats {
     let compatible_style_ids = compatible_weapon_style_ids(
         player,
         talent_catalog,
@@ -6340,9 +6036,9 @@ pub fn build_combatant(
                         use_jab,
                         fight_defensively_penalty,
                     },
-                    sheet: profile.sheet,
-                    weapon_group: profile.weapon_group,
-                    armor_type: profile.armor_type,
+                    sheet: profile.combatant.sheet,
+                    weapon_group: profile.combatant.weapon_group,
+                    armor_type: profile.combatant.armor_type,
                 });
             }
         }
@@ -6356,23 +6052,19 @@ pub fn build_combatant(
     } else {
         Vec::new()
     };
-    let initial_key = TacticalProfileKey {
-        style_ids: initial_style_ids.clone(),
-        use_jab: false,
-        fight_defensively_penalty: None,
-    };
-    let initial_sheet = profiles
-        .iter()
-        .find(|profile| profile.key == initial_key)
-        .map(|profile| profile.sheet.clone())
-        .unwrap_or_default();
-    let mut combatant = Combatant::new(initial_sheet);
-    combatant.configure_tactical_profiles(
-        player.tactical_policy.clone(),
-        profiles,
-        initial_style_ids,
+    let mut initial_player = player.clone();
+    initial_player.active_weapon_style_ids = Some(initial_style_ids.clone());
+    initial_player.use_jab = false;
+    initial_player.fight_defensively = false;
+    initial_player.fight_defensively_penalty = 2;
+    initial_player.give_ground = false;
+    let mut resolved = build_combatant_profile(
+        &initial_player, weapon_catalog, armor_catalog, shield_catalog, npc_presets, talent_catalog,
     );
-    combatant
+    resolved.combatant.configure_tactical_profiles(
+        player.tactical_policy.clone(), profiles, initial_style_ids,
+    );
+    resolved
 }
 
 pub fn stop_distance_for_players(
@@ -6579,6 +6271,108 @@ pub fn threshold_of_pain(max_hp: i32, level: u8) -> i32 {
 mod tests {
     use super::*;
     use crate::character;
+
+    #[test]
+    fn magic_talent_catalog_contains_all_costs_ranks_and_requirements() {
+        let catalog = crate::data::load_talents("data/sim/talents.json").unwrap();
+        for (id, cost, ranks) in [
+            ("charm_resistant", 16, 1),
+            ("combat_casting", 30, 1),
+            ("diminish_spell_fatigue", 10, 5),
+            ("mitigate_spell_fatigue", 15, 1),
+            ("decimate_spell_fatigue", 30, 1),
+            ("eliminate_spell_fatigue", 25, 1),
+            ("illusion_resistant", 10, 1),
+            ("magic_focus", 15, 1),
+            ("magic_specialist", 20, 1),
+            ("magic_master", 25, 1),
+            ("silent_casting", 20, 1),
+            ("still_casting", 30, 1),
+            ("sleep_resistant", 12, 1),
+        ] {
+            let spec = find_talent(&catalog, id).unwrap();
+            assert_eq!(spec.cost_bp, Some(cost), "{id}");
+            assert_eq!(spec.max_rank, ranks, "{id}");
+            assert!(matches!(
+                spec.effects.as_slice(),
+                [TalentEffect::MagicTalent { .. }]
+            ));
+        }
+        let eliminate = find_talent(&catalog, "eliminate_spell_fatigue").unwrap();
+        assert!(eliminate.requirements.iter().any(|requirement| matches!(requirement,
+            TalentRequirement::RequiresTalent { id, min_rank: Some(5) } if id == "diminish_spell_fatigue")));
+    }
+
+    #[test]
+    fn magic_talents_enforce_prerequisites_levels_and_capped_ranks_when_building() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = crate::data::load_talents("data/sim/talents.json").unwrap();
+        let npcs = NpcPresetCatalog::new(Vec::new());
+        let mut player = PlayerConfig::new("Mage", weapons.first_id().unwrap());
+        let selection = |id: &str, rank| TalentSelection {
+            id: id.into(),
+            rank,
+            weapon: None,
+        };
+        player.level = 5;
+        player.talents = vec![
+            selection("silent_casting", 1),
+            selection("still_casting", 1),
+            selection("decimate_spell_fatigue", 1),
+            selection("eliminate_spell_fatigue", 1),
+        ];
+        let build = |player: &PlayerConfig| {
+            build_combatant(player, &weapons, &armor, &shields, &npcs, &talents)
+        };
+        assert!(!build(&player).magic.talents.silent_casting);
+        assert!(!build(&player).magic.talents.decimate_spell_fatigue);
+        player.level = 6;
+        assert!(build(&player).magic.talents.silent_casting);
+        assert!(!build(&player).magic.talents.still_casting);
+        player.level = 11;
+        player.talents.push(selection("mitigate_spell_fatigue", 1));
+        player.talents.push(selection("diminish_spell_fatigue", 4));
+        assert!(build(&player).magic.talents.still_casting);
+        assert!(build(&player).magic.talents.decimate_spell_fatigue);
+        assert!(!build(&player).magic.talents.eliminate_spell_fatigue);
+        player.talents.last_mut().unwrap().rank = 5;
+        assert!(build(&player).magic.talents.eliminate_spell_fatigue);
+    }
+
+    #[test]
+    fn magic_configuration_and_talents_survive_tactical_profile_changes() {
+        use crate::core::magic::*;
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = crate::data::load_talents("data/sim/talents.json").unwrap();
+        let mut player = PlayerConfig::new("Mage", weapons.first_id().unwrap());
+        player.level = 10;
+        player.magic.knows_echo_strike = true;
+        player.magic.essences.push(EssencePool {
+            essence_id: "test".into(),
+            proficiency: EssenceProficiency::V,
+            capacity: 500,
+            current: 450,
+        });
+        player.talents.push(TalentSelection {
+            id: "combat_casting".into(),
+            rank: 1,
+            weapon: None,
+        });
+        player.tactical_policy.enabled = true;
+        let mut actor = build_combatant(
+            &player,
+            &weapons,
+            &armor,
+            &shields,
+            &NpcPresetCatalog::new(Vec::new()),
+            &talents,
+        );
+        actor.cast_echo_strike(0).unwrap();
+        actor.switch_tactical_style(Vec::new());
+        assert!(actor.state.magic.casting.is_some());
+        assert!(actor.magic.talents.combat_casting);
+        assert_eq!(actor.state.magic.essences[0].current, 450);
+    }
 
     fn sample_catalogs() -> (WeaponCatalog, ArmorCatalog, ShieldCatalog) {
         crate::data::load_catalogs().expect("Failed to load catalogs")
@@ -9671,6 +9465,187 @@ mod tests {
     }
 
     #[test]
+    fn quiet_river_derived_and_combat_agree_for_every_none_type_armor() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npcs = Catalog::new(Vec::new());
+        let fist = weapon_id_matching(&weapons, |weapon| weapon.name == "Fist");
+        for name in ["None", "Robe", "Kaftan", "Toga", "Subarmalis"] {
+            let armor_id = armor.entries().iter().position(|entry| {
+                entry.armor.as_ref().map_or(name == "None", |armor| armor.name == name)
+            }).and_then(|idx| armor.id_from_index(idx)).expect("missing None-type armor");
+            for tier in [0, 3] {
+                for mastery in [0, 3] {
+                    let mut player = base_player(fist);
+                    player.armor_id = armor_id;
+                    player.armor_material_tier = tier;
+                    player.mastery_mut(WeaponGroup::Unarmed).defense = mastery;
+                    player.proficiencies = vec!["Fist".into()];
+                    add_talent(&mut player, TALENT_ID_QUIET_RIVER, None);
+                    assert!(compatible_weapon_style_ids(&player, &talents, &weapons, &armor, &shields)
+                        .contains(&TALENT_ID_QUIET_RIVER.to_string()), "{name}, tier {tier}");
+                    let combatant = build_combatant(&player, &weapons, &armor, &shields, &npcs, &talents);
+                    let summary = player_summary(&player, &weapons, &armor, &shields, &talents);
+                    let breakdowns = derived_stat_breakdowns(&player, &weapons, &armor, &shields,
+                        &talents, &summary, &combatant);
+                    let breakdown = breakdowns.get(DerivedStatId::MeleeDefense).unwrap();
+                    assert_eq!(summary.defense.melee_roll_label,
+                        format!("Defense roll (melee): d20p + {}", combatant.sheet.defense.defense_mod),
+                        "{name}, tier {tier}, mastery {mastery}");
+                    assert_eq!(breakdown.lines.iter().filter_map(|line| line.numeric_amount).sum::<f64>(),
+                        f64::from(combatant.sheet.defense.defense_mod));
+                    assert_eq!(combatant.sheet.defense.defense_mod, summary.derived.base_dv + 2 * mastery);
+                    if mastery > 0 {
+                        assert!(breakdown.lines.iter().any(|line|
+                            line.source == "Defense mastery ×2 (Quiet River)"
+                                && line.numeric_amount == Some(f64::from(2 * mastery))));
+                    }
+                    assert!(combatant.sheet.offense.weapon.halve_damage);
+                    assert!(combatant.sheet.offense.weapon.ignore_all_dr);
+                    assert!(combatant.apply_i32(sim::StatIdI32::FlagQuietRiverStyle, 0) > 0);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn quiet_river_does_not_double_defense_with_armor_shields_weapons_or_inactive_style() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npcs = Catalog::new(Vec::new());
+        let fist = weapon_id_matching(&weapons, |weapon| weapon.name == "Fist");
+        for mode in 0..6 {
+            let mut player = base_player(fist);
+            player.proficiencies = vec!["Fist".into()];
+            player.mastery_mut(WeaponGroup::Unarmed).defense = 3;
+            add_talent(&mut player, TALENT_ID_QUIET_RIVER, None);
+            match mode {
+                0..=2 => {
+                    let kind = [ArmorType::Light, ArmorType::Medium, ArmorType::Heavy][mode];
+                    player.armor_id = find_armor(&armor, |entry| entry.armor_type == kind).0;
+                }
+                3 => player.shield_id = shields.entries().iter().position(|entry| entry.shield.is_some())
+                    .and_then(|idx| shields.id_from_index(idx)).unwrap(),
+                4 => player.weapon_id = weapon_id_matching(&weapons, |weapon| weapon.name == "Dagger"),
+                _ => player.active_weapon_style_ids = Some(Vec::new()),
+            }
+            if mode != 5 {
+                assert!(!weapon_style_compatible_with_loadout(&player, TALENT_ID_QUIET_RIVER,
+                    &weapons, &armor, &shields));
+            }
+            let combatant = build_combatant(&player, &weapons, &armor, &shields, &npcs, &talents);
+            let summary = player_summary(&player, &weapons, &armor, &shields, &talents);
+            let breakdowns = derived_stat_breakdowns(&player, &weapons, &armor, &shields,
+                &talents, &summary, &combatant);
+            assert_eq!(combatant.apply_i32(sim::StatIdI32::FlagQuietRiverStyle, 0), 0);
+            assert!(!breakdowns.get(DerivedStatId::MeleeDefense).unwrap().lines.iter()
+                .any(|line| line.source.contains("Quiet River")));
+            player.talents.clear();
+            let baseline = build_combatant(&player, &weapons, &armor, &shields, &npcs, &talents);
+            assert_eq!(combatant.sheet.defense.defense_mod, baseline.sheet.defense.defense_mod,
+                "mode {mode}");
+        }
+    }
+
+    #[test]
+    fn derived_resolved_values_match_actual_attack_rolls_across_weapons_and_stances() {
+        use crate::core::sim::combat::preview_defense;
+        use crate::core::sim::resolve_basic_attack;
+        use crate::core::rng::SimRng;
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npcs = Catalog::new(Vec::new());
+        for (idx, weapon) in weapons.entries().iter().enumerate() {
+            let weapon_id = weapons.id_from_index(idx).unwrap();
+            for mode in 0..4 {
+                let mut player = base_player(weapon_id);
+                player.mastery_mut(weapon.group).attack = 3;
+                player.mastery_mut(weapon.group).damage = 4;
+                player.mastery_mut(weapon.group).defense = 2;
+                player.proficiencies = vec![weapon.name.clone()];
+                player.fight_defensively = mode == 1;
+                player.fight_defensively_penalty = 4;
+                player.power_attack = mode == 2;
+                if mode == 2 { add_talent(&mut player, TALENT_ID_POWER_ATTACK, None); }
+                player.mounted = mode == 3;
+                player.mounted_combat.trot_or_faster = mode == 3;
+                if weapon.name == "Fist" { add_talent(&mut player, TALENT_ID_QUIET_RIVER, None); }
+                if weapon.name == "Dagger" { add_talent(&mut player, TALENT_ID_DOOMRAZOR, None); }
+                let resolved = resolve_player_stats(&player, &weapons, &armor, &shields, &npcs, &talents);
+                let direct = build_combatant(&player, &weapons, &armor, &shields, &npcs, &talents);
+                assert_eq!(resolved.combatant.sheet.offense.attack_bonus, direct.sheet.offense.attack_bonus);
+                assert_eq!(resolved.summary.derived.hit_points as i32, direct.sheet.vitals.max_hp);
+                assert_eq!(resolved.summary.derived.armor_dr, direct.sheet.defense.armor_dr);
+                assert_eq!(resolved.summary.roll.attack_breakdown.additive_total(), f64::from(resolved.summary.roll.attack_bonus));
+                assert_eq!(resolved.summary.roll.damage_breakdown.additive_total(), f64::from(resolved.summary.roll.strength_damage));
+                let mut dummy = Combatant::default();
+                dummy.sheet.vitals.infinite_hp = true;
+                dummy.sheet.maneuvers.passive = true;
+                dummy.sheet.defense.defense_mod = -100;
+                let mut actors = vec![resolved.combatant.clone(), dummy.clone()];
+                let outcome = resolve_basic_attack(&mut actors, 0, 1, 0, resolved.summary.roll.is_ranged_weapon,
+                    5.0, 0.0, &mut SimRng::from_seed(7)).event;
+                assert_eq!(outcome.roll.attack_bonus, resolved.summary.roll.attack_bonus,
+                    "{} mode {mode}", weapon.name);
+                if let Some(damage) = outcome.damage_breakdown {
+                    assert_eq!(damage.strength_damage, resolved.summary.roll.strength_damage,
+                        "{} mode {mode}", weapon.name);
+                }
+                for ranged in [false, true] {
+                    let preview = preview_defense(&resolved.combatant);
+                    let mut actors = vec![dummy.clone(), resolved.combatant.clone()];
+                    let outcome = resolve_basic_attack(&mut actors, 0, 1, 0, ranged, 5.0,
+                        0.0, &mut SimRng::from_seed(9)).event;
+                    let actual = outcome.roll.defense_base + outcome.roll.shield_defense_bonus;
+                    assert_eq!(actual, if ranged { preview.ranged_bonus } else { preview.melee_bonus },
+                        "{} mode {mode}, ranged {ranged}", weapon.name);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn derived_uses_the_same_initial_tactical_stance_as_simulation() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npcs = Catalog::new(Vec::new());
+        let mut player = base_player(jab_weapon_id(&weapons));
+        player.tactical_policy.enabled = true;
+        player.use_jab = true;
+        player.fight_defensively = true;
+        player.fight_defensively_penalty = 8;
+        let resolved = resolve_player_stats(&player, &weapons, &armor, &shields, &npcs, &talents);
+        let direct = build_combatant(&player, &weapons, &armor, &shields, &npcs, &talents);
+        assert!(!resolved.config.use_jab);
+        assert!(!resolved.config.fight_defensively);
+        assert_eq!(resolved.combatant.sheet.offense.weapon.speed, direct.sheet.offense.weapon.speed);
+        assert_eq!(resolved.summary.roll.attack_bonus,
+            sim::combat::preview_attack_bonus(&direct, sim::WeaponSlot::Primary));
+        assert_eq!(resolved.summary.roll.strength_damage,
+            sim::combat::preview_damage_bonus(&direct, sim::WeaponSlot::Primary, resolved.summary.roll.is_ranged_weapon));
+    }
+
+    #[test]
+    fn none_type_clothing_keeps_the_supplied_armor_stats() {
+        let (_, armor, _) = sample_catalogs();
+        for (name, region, defense, initiative, speed, weight) in [
+            ("Robe", character::ArmorRegion::Northern, -1, 0, 0, 5.0),
+            ("Kaftan", character::ArmorRegion::Southern, 0, 2, 0, 8.0),
+            ("Toga", character::ArmorRegion::Raurosi, 0, 0, 1, 3.0),
+            ("Subarmalis", character::ArmorRegion::Raurosi, 0, 1, 0, 2.0),
+        ] {
+            let (_, item) = find_armor(&armor, |entry| entry.name == name);
+            assert_eq!(item.armor_type, ArmorType::None);
+            assert_eq!(item.region, region);
+            assert_eq!(item.damage_reduction, 1);
+            assert_eq!(item.defense_adj, defense);
+            assert_eq!(item.initiative_mod, initiative);
+            assert_eq!(item.speed_mod, speed);
+            assert_eq!(item.weight_lbs, weight);
+        }
+    }
+
+    #[test]
     fn rhdwng_flow_marks_throwing_weapon_style_active() {
         let (weapons, armor, shields) = sample_catalogs();
         let talents = sample_talents();
@@ -11024,8 +10999,7 @@ mod tests {
             "precognition",
             "prescience",
             "eyesmite",
-            "spell_chronoblur",
-            "spell_streamline",
+
         ] {
             let spec = talents
                 .entries()
@@ -11063,48 +11037,36 @@ mod tests {
         assert!(notes[1].contains("20 feet farther away"));
         for (id, note) in [DerivedStatId::MeleeDefense, DerivedStatId::RangedDefense].into_iter().zip(notes) {
             assert!(note.contains("previous second"));
-            assert!(note.contains("first 60 seconds"));
+            assert!(note.contains("60 seconds after casting"));
             assert!(breakdowns.get(id).unwrap().notes.contains(note));
             assert!(!breakdowns.get(id).unwrap().lines.iter().any(|line| line.source.contains("Chronoblur")));
         }
     }
 
     #[test]
-    fn spell_traits_start_with_their_full_durations() {
+    fn legacy_spell_talents_migrate_to_castable_spells_in_both_build_paths() {
         let (weapons, armor, shields) = sample_catalogs();
         let talents = sample_talents();
         let npc_presets = sample_npc_presets();
         let weapon_id = one_handed_weapon_id(&weapons);
-
         for tactical_policy_enabled in [false, true] {
             let mut player = base_player(weapon_id);
+            player.level = 10;
             player.tactical_policy.enabled = tactical_policy_enabled;
             add_talent(&mut player, "spell_chronoblur", None);
             add_talent(&mut player, "spell_streamline", None);
-            let combatant =
-                build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
-
-            let chronoblur = combatant
-                .state
-                .active_effects
-                .iter()
-                .find(|effect| effect.id == sim::CHRONOBLUR_EFFECT_ID)
-                .expect("Chronoblur should be active at combat start");
-            assert_eq!(
-                chronoblur.remaining_seconds,
-                sim::CHRONOBLUR_DURATION_SECONDS
-            );
-
-            let streamline = combatant
-                .state
-                .active_effects
-                .iter()
-                .find(|effect| effect.id == sim::STREAMLINE_EFFECT_ID)
-                .expect("Streamline should be active at combat start");
-            assert_eq!(
-                streamline.remaining_seconds,
-                sim::STREAMLINE_DURATION_SECONDS
-            );
+            let mut combatant = build_combatant(&player, &weapons, &armor, &shields, &npc_presets, &talents);
+            assert!(combatant.magic.loadout.knows_spell("spell_chronoblur"));
+            assert!(combatant.magic.loadout.knows_spell("spell_streamline"));
+            assert!(!combatant.state.has_active_effect(sim::CHRONOBLUR_EFFECT_ID));
+            assert!(!combatant.state.has_active_effect(sim::STREAMLINE_EFFECT_ID));
+            combatant.try_auto_cast(0, false);
+            assert_eq!(combatant.state.magic.casting.as_ref().unwrap().definition.id, "spell_chronoblur");
+            migrate_legacy_spells(&mut player);
+            assert!(player.talents.is_empty());
+            assert!(player.magic.knows_spell("spell_chronoblur"));
+            assert!(player.magic.knows_spell("spell_streamline"));
+            assert!(!talents.entries().iter().any(|entry| entry.id == "spell_chronoblur" || entry.id == "spell_streamline"));
         }
     }
 

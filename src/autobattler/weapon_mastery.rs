@@ -503,6 +503,9 @@ fn collect_used_groups(
         let CombatEventKind::Attack(attack) = &event.kind else {
             continue;
         };
+        if attack.source != crate::core::sim::AttackSource::Weapon {
+            continue;
+        }
         let group = match attack.weapon_slot {
             WeaponSlot::Primary => primary_group,
             WeaponSlot::Secondary => offhand_group.or(primary_group),
@@ -671,6 +674,7 @@ mod tests {
             attacker_idx: 0,
             defender_idx: 1,
             kind: CombatEventKind::Attack(AttackEvent {
+                source: crate::core::sim::AttackSource::Weapon,
                 hit: true,
                 shield_block: false,
                 damage: 1,

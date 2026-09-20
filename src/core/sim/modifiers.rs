@@ -59,6 +59,7 @@ pub enum StatIdI32 {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum StatIdF32 {
+    StreamlineRadius,
     WeaponSpeed,
     WeaponReach,
     MoveSpeed,
