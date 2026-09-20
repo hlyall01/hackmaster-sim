@@ -49,14 +49,10 @@ impl Fixture {
 }
 
 #[test]
-fn arthurs_group_masteries_follow_the_weapon_without_leaking_to_other_groups() {
+fn group_masteries_follow_the_weapon_without_leaking_to_other_groups() {
     let f = Fixture::new();
-    let presets = data::load_fighter_presets("data/sim/fighter_presets.json").unwrap();
-    let arthur = presets
-        .entries()
-        .iter()
-        .find(|p| p.name == "Arthur Du Randt")
-        .unwrap();
+    let preset = crate::test_support::fighter("Halberd fixture");
+    let arthur = &preset;
     let mut player = f.player("Halberd");
     player.weapon_masteries = weapon_masteries_for_preset(arthur, &f.weapons);
     assert_eq!(
@@ -64,14 +60,14 @@ fn arthurs_group_masteries_follow_the_weapon_without_leaking_to_other_groups() {
         MasteryState {
             attack: 5,
             damage: 4,
-            speed: 4,
+            speed: 5,
             defense: 4
         }
     );
     assert_eq!(
         player.mastery(WeaponGroup::Spears),
         MasteryState {
-            attack: 2,
+            attack: 3,
             damage: 2,
             speed: 2,
             defense: 2
@@ -83,9 +79,9 @@ fn arthurs_group_masteries_follow_the_weapon_without_leaking_to_other_groups() {
         }
     }
     for (name, attack, damage, speed, defense) in [
-        ("Halberd", 5, 4, 4, 4),
-        ("Poleaxe", 5, 4, 4, 4),
-        ("Lance", 2, 2, 2, 2),
+        ("Halberd", 5, 4, 5, 4),
+        ("Poleaxe", 5, 4, 5, 4),
+        ("Lance", 3, 2, 2, 2),
         ("Longsword", 0, 0, 0, 0),
         ("Staff", 0, 0, 0, 0),
     ] {
@@ -217,8 +213,8 @@ fn evonia_uses_secondary_sword_mastery_independently_of_the_primary() {
 #[test]
 fn legacy_masteries_migrate_to_saved_weapon_groups_and_explicit_empty_overrides_them() {
     let f = Fixture::new();
-    let presets = data::load_fighter_presets("data/sim/fighter_presets.json").unwrap();
-    let mut json = serde_json::to_value(&presets.entries()[0]).unwrap();
+    let preset = crate::test_support::fighter("Halberd fixture");
+    let mut json = serde_json::to_value(preset).unwrap();
     json.as_object_mut().unwrap().remove("weapon_masteries");
     json["weapon"] = "Longsword".into();
     json["offhand_weapon"] = "Short sword".into();
@@ -238,8 +234,15 @@ fn legacy_masteries_migrate_to_saved_weapon_groups_and_explicit_empty_overrides_
 #[test]
 fn group_masteries_round_trip_including_unequipped_groups_and_have_no_legacy_values() {
     let f = Fixture::new();
-    let presets = data::load_fighter_presets("data/sim/fighter_presets.json").unwrap();
-    let preset = &presets.entries()[0];
+    let mut fixture = crate::test_support::fighter("Halberd fixture");
+    fixture
+        .weapon_masteries
+        .as_mut()
+        .unwrap()
+        .get_mut(&WeaponGroup::Spears)
+        .unwrap()
+        .attack = 2;
+    let preset = &fixture;
     let json = serde_json::to_value(preset).unwrap();
     assert!(json.get("masteries").is_none());
     assert_eq!(json["weapon_masteries"]["spears"]["attack"], 2);

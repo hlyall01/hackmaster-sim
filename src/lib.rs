@@ -13,3 +13,6 @@ pub mod squad_battler;
 #[cfg(feature = "bevy")]
 pub mod squad_battler_visuals;
 pub mod ui_widgets;
+
+#[cfg(test)]
+pub(crate) mod test_support;

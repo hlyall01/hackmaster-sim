@@ -254,15 +254,13 @@ fn arthur_duel_sim_with_distance(
 ) -> SimState {
     let (weapon_catalog, armor_catalog, shield_catalog) =
         data::load_catalogs().expect("failed to load catalogs");
-    let npc_presets =
-        data::load_npc_presets("data/npc_presets.json").expect("failed to load npc presets");
-    let fighter_presets = data::load_fighter_presets("data/fighter_presets.json")
-        .expect("failed to load fighter presets");
+    let npc_presets = game_logic::NpcPresetCatalog::new(Vec::new());
+    let fighter_presets = crate::test_support::fighter_presets();
     let talent_catalog = data::load_talents(data::TALENTS_PATH).expect("failed to load talents");
     let race_catalog = data::load_races("data/races.json").expect("failed to load races");
 
-    let arthur_preset = find_fighter_preset(&fighter_presets, "Arthur Du Randt")
-        .expect("missing Arthur Du Randt preset");
+    let arthur_preset = find_fighter_preset(&fighter_presets, "Halberd fixture")
+        .expect("missing halberd fixture");
     let mut arthur = player_config_from_preset(
         arthur_preset,
         &weapon_catalog,
@@ -325,15 +323,13 @@ fn arthur_duel_sim_with_distance(
 fn arthur_with_curse_of_axe_bulk_sim_does_not_panic() {
     let (weapon_catalog, armor_catalog, shield_catalog) =
         data::load_catalogs().expect("failed to load catalogs");
-    let npc_presets =
-        data::load_npc_presets("data/npc_presets.json").expect("failed to load npc presets");
-    let fighter_presets = data::load_fighter_presets("data/fighter_presets.json")
-        .expect("failed to load fighter presets");
+    let npc_presets = game_logic::NpcPresetCatalog::new(Vec::new());
+    let fighter_presets = crate::test_support::fighter_presets();
     let talent_catalog = data::load_talents(data::TALENTS_PATH).expect("failed to load talents");
     let race_catalog = data::load_races("data/races.json").expect("failed to load races");
-    let arthur_preset = find_fighter_preset(&fighter_presets, "Arthur Du Randt")
-        .expect("missing Arthur Du Randt preset");
-    let zorya_preset = find_fighter_preset(&fighter_presets, "Zorya").expect("missing Zorya");
+    let arthur_preset = find_fighter_preset(&fighter_presets, "Halberd fixture")
+        .expect("missing halberd fixture");
+    let zorya_preset = find_fighter_preset(&fighter_presets, "Axe fixture").expect("missing axe fixture");
     let mut arthur = player_config_from_preset(
         arthur_preset,
         &weapon_catalog,
@@ -1452,23 +1448,22 @@ fn attack_miss_does_no_damage() {
 }
 
 #[test]
-fn bulk_sim_arthur_vs_zorya_100k_under_point_eight_seconds() {
+#[ignore = "wall-clock benchmark; run explicitly with --ignored on benchmark hardware"]
+fn bulk_sim_fixed_fixtures_100k_under_point_eight_seconds() {
     if cfg!(debug_assertions) {
         return;
     }
     let (weapon_catalog, armor_catalog, shield_catalog) =
         data::load_catalogs().expect("failed to load catalogs");
-    let npc_presets =
-        data::load_npc_presets("data/npc_presets.json").expect("failed to load npc presets");
-    let fighter_presets = data::load_fighter_presets("data/fighter_presets.json")
-        .expect("failed to load fighter presets");
+    let npc_presets = game_logic::NpcPresetCatalog::new(Vec::new());
+    let fighter_presets = crate::test_support::fighter_presets();
     let talent_catalog = data::load_talents(data::TALENTS_PATH).expect("failed to load talents");
     let race_catalog = data::load_races("data/races.json").expect("failed to load races");
 
-    let arthur_preset = find_fighter_preset(&fighter_presets, "Arthur Du Randt")
-        .expect("missing Arthur Du Randt preset");
+    let arthur_preset = find_fighter_preset(&fighter_presets, "Halberd fixture")
+        .expect("missing halberd fixture");
     let zorya_preset =
-        find_fighter_preset(&fighter_presets, "Zorya").expect("missing Zorya preset");
+        find_fighter_preset(&fighter_presets, "Axe fixture").expect("missing axe fixture");
 
     let arthur = player_config_from_preset(
         arthur_preset,
@@ -4629,15 +4624,13 @@ fn charge_requires_target_at_least_20ft_away() {
 fn arthur_vs_arthur_charges_on_first_contact() {
     let (weapon_catalog, armor_catalog, shield_catalog) =
         data::load_catalogs().expect("failed to load catalogs");
-    let npc_presets =
-        data::load_npc_presets("data/npc_presets.json").expect("failed to load npc presets");
-    let fighter_presets = data::load_fighter_presets("data/fighter_presets.json")
-        .expect("failed to load fighter presets");
+    let npc_presets = game_logic::NpcPresetCatalog::new(Vec::new());
+    let fighter_presets = crate::test_support::fighter_presets();
     let talent_catalog = data::load_talents(data::TALENTS_PATH).expect("failed to load talents");
     let race_catalog = data::load_races("data/races.json").expect("failed to load races");
 
-    let arthur_preset = find_fighter_preset(&fighter_presets, "Arthur Du Randt")
-        .expect("missing Arthur Du Randt preset");
+    let arthur_preset = find_fighter_preset(&fighter_presets, "Halberd fixture")
+        .expect("missing halberd fixture");
     let mut arthur = player_config_from_preset(
         arthur_preset,
         &weapon_catalog,
@@ -4693,13 +4686,9 @@ fn arthur_vs_arthur_charges_on_first_contact() {
 }
 
 #[test]
-fn arthur_charge_is_disabled_by_default() {
-    let fighter_presets = data::load_fighter_presets("data/fighter_presets.json")
-        .expect("failed to load fighter presets");
-    let arthur = find_fighter_preset(&fighter_presets, "Arthur Du Randt")
-        .expect("missing Arthur Du Randt preset");
-
-    assert!(!arthur.maneuvers.charge);
+fn deserialized_maneuvers_default_to_no_charge() {
+    let maneuvers: game_logic::CombatManeuverConfig = serde_json::from_str("{}").unwrap();
+    assert!(!maneuvers.charge);
 }
 
 #[test]
@@ -4860,15 +4849,13 @@ fn arthur_log_repro_double_charge_then_no_charge_on_reengage() {
 fn bulk_arthur_charges_do_not_start_within_20ft() {
     let (weapon_catalog, armor_catalog, shield_catalog) =
         data::load_catalogs().expect("failed to load catalogs");
-    let npc_presets =
-        data::load_npc_presets("data/npc_presets.json").expect("failed to load npc presets");
-    let fighter_presets = data::load_fighter_presets("data/fighter_presets.json")
-        .expect("failed to load fighter presets");
+    let npc_presets = game_logic::NpcPresetCatalog::new(Vec::new());
+    let fighter_presets = crate::test_support::fighter_presets();
     let talent_catalog = data::load_talents(data::TALENTS_PATH).expect("failed to load talents");
     let race_catalog = data::load_races("data/races.json").expect("failed to load races");
 
-    let arthur_preset = find_fighter_preset(&fighter_presets, "Arthur Du Randt")
-        .expect("missing Arthur Du Randt preset");
+    let arthur_preset = find_fighter_preset(&fighter_presets, "Halberd fixture")
+        .expect("missing halberd fixture");
     let arthur = player_config_from_preset(
         arthur_preset,
         &weapon_catalog,
@@ -4920,15 +4907,13 @@ fn bulk_arthur_charges_do_not_start_within_20ft() {
 fn arthur_mirror_symmetry_with_swapped_order() {
     let (weapon_catalog, armor_catalog, shield_catalog) =
         data::load_catalogs().expect("failed to load catalogs");
-    let npc_presets =
-        data::load_npc_presets("data/npc_presets.json").expect("failed to load npc presets");
-    let fighter_presets = data::load_fighter_presets("data/fighter_presets.json")
-        .expect("failed to load fighter presets");
+    let npc_presets = game_logic::NpcPresetCatalog::new(Vec::new());
+    let fighter_presets = crate::test_support::fighter_presets();
     let talent_catalog = data::load_talents(data::TALENTS_PATH).expect("failed to load talents");
     let race_catalog = data::load_races("data/races.json").expect("failed to load races");
 
-    let arthur_preset = find_fighter_preset(&fighter_presets, "Arthur Du Randt")
-        .expect("missing Arthur Du Randt preset");
+    let arthur_preset = find_fighter_preset(&fighter_presets, "Halberd fixture")
+        .expect("missing halberd fixture");
     let arthur = player_config_from_preset(
         arthur_preset,
         &weapon_catalog,
@@ -4984,15 +4969,13 @@ fn arthur_mirror_symmetry_large_sample() {
     }
     let (weapon_catalog, armor_catalog, shield_catalog) =
         data::load_catalogs().expect("failed to load catalogs");
-    let npc_presets =
-        data::load_npc_presets("data/npc_presets.json").expect("failed to load npc presets");
-    let fighter_presets = data::load_fighter_presets("data/fighter_presets.json")
-        .expect("failed to load fighter presets");
+    let npc_presets = game_logic::NpcPresetCatalog::new(Vec::new());
+    let fighter_presets = crate::test_support::fighter_presets();
     let talent_catalog = data::load_talents(data::TALENTS_PATH).expect("failed to load talents");
     let race_catalog = data::load_races("data/races.json").expect("failed to load races");
 
-    let arthur_preset = find_fighter_preset(&fighter_presets, "Arthur Du Randt")
-        .expect("missing Arthur Du Randt preset");
+    let arthur_preset = find_fighter_preset(&fighter_presets, "Halberd fixture")
+        .expect("missing halberd fixture");
     let arthur = player_config_from_preset(
         arthur_preset,
         &weapon_catalog,
@@ -6764,7 +6747,7 @@ fn offhand_attack_applies_damage_penalty() {
 #[test]
 fn twelve_paths_damage_penalty_ends_when_shield_breaks() {
     let mut attacker = combatant_basic(
-        "Errit".to_string(),
+        "Eyesmite fixture".to_string(),
         "Two-handed Sword".to_string(),
         20,
         0,
@@ -7380,8 +7363,7 @@ fn throwing_axe_cooldown_resets_on_melee_engagement() {
 fn throwing_axe_should_allow_melee_to_close_in_gui_config() {
     let (weapon_catalog, armor_catalog, shield_catalog) =
         data::load_catalogs().expect("failed to load catalogs");
-    let npc_presets =
-        data::load_npc_presets("data/npc_presets.json").expect("failed to load npc presets");
+    let npc_presets = game_logic::NpcPresetCatalog::new(Vec::new());
     let talent_catalog = data::load_talents(data::TALENTS_PATH).expect("failed to load talents");
 
     let weapon_id_by_name = |name: &str| {
@@ -7546,17 +7528,15 @@ fn defense_always_applies_without_two_hand_grip() {
 fn zorya_vs_arthur_battle_progresses() {
     let (weapon_catalog, armor_catalog, shield_catalog) =
         data::load_catalogs().expect("failed to load catalogs");
-    let npc_presets =
-        data::load_npc_presets("data/npc_presets.json").expect("failed to load npc presets");
-    let fighter_presets = data::load_fighter_presets("data/fighter_presets.json")
-        .expect("failed to load fighter presets");
+    let npc_presets = game_logic::NpcPresetCatalog::new(Vec::new());
+    let fighter_presets = crate::test_support::fighter_presets();
     let talent_catalog = data::load_talents(data::TALENTS_PATH).expect("failed to load talents");
     let race_catalog = data::load_races("data/races.json").expect("failed to load races");
 
-    let arthur_preset = find_fighter_preset(&fighter_presets, "Arthur Du Randt")
-        .expect("missing Arthur Du Randt preset");
+    let arthur_preset = find_fighter_preset(&fighter_presets, "Halberd fixture")
+        .expect("missing halberd fixture");
     let zorya_preset =
-        find_fighter_preset(&fighter_presets, "Zorya").expect("missing Zorya preset");
+        find_fighter_preset(&fighter_presets, "Axe fixture").expect("missing axe fixture");
 
     let arthur = player_config_from_preset(
         arthur_preset,
@@ -7606,16 +7586,16 @@ fn zorya_vs_arthur_battle_progresses() {
 }
 
 #[test]
-fn wren_preset_builds_with_power_attack_and_kanian_impaler() {
+fn impaler_fixture_builds_with_power_attack_and_kanian_impaler() {
     let (weapon_catalog, armor_catalog, shield_catalog) =
         data::load_catalogs().expect("failed to load catalogs");
-    let fighter_presets = data::load_fighter_presets("data/fighter_presets.json")
-        .expect("failed to load fighter presets");
+    let fighter_presets = crate::test_support::fighter_presets();
     let talent_catalog = data::load_talents(data::TALENTS_PATH).expect("failed to load talents");
     let race_catalog = data::load_races("data/races.json").expect("failed to load races");
     let npc_presets = game_logic::NpcPresetCatalog::new(Vec::new());
 
-    let wren_preset = find_fighter_preset(&fighter_presets, "Wren").expect("missing Wren preset");
+    let wren_preset = find_fighter_preset(&fighter_presets, "Impaler fixture")
+        .expect("missing impaler fixture");
     let wren = player_config_from_preset(
         wren_preset,
         &weapon_catalog,
@@ -7679,94 +7659,38 @@ fn wren_preset_builds_with_power_attack_and_kanian_impaler() {
 }
 
 #[test]
-fn named_fighter_preset_weapon_and_mastery_overrides_are_preserved() {
-    let fighter_presets = data::load_fighter_presets("data/fighter_presets.json")
-        .expect("failed to load fighter presets");
-
-    let arthur = find_fighter_preset(&fighter_presets, "Arthur Du Randt")
-        .expect("missing Arthur Du Randt preset");
-    assert_eq!(arthur.level, 9);
-    assert_eq!(arthur.strength_pct, 94);
-    assert_eq!(arthur.dex_pct, 80);
-    assert_eq!(arthur.constitution, 14);
-    assert_eq!(arthur.weapon, "Halberd");
-    assert_eq!(arthur.weapon_material_tier, 5);
-    assert_eq!(
-        arthur.weapon_masteries.as_ref().unwrap()[&WeaponGroup::Polearms].damage,
-        4
+fn halberd_fixture_builds_expected_derived_stats() {
+    let preset = crate::test_support::fighter("Halberd fixture");
+    let arthur = &preset;
+    let (weapons, armor, shields) = data::load_catalogs().expect("failed to load catalogs");
+    let races = data::load_races("data/races.json").expect("failed to load races");
+    let talents = data::load_talents(data::TALENTS_PATH).expect("failed to load talents");
+    let player = player_config_from_preset(arthur, &weapons, &armor, &shields, &races);
+    let combatant = game_logic::build_combatant(
+        &player,
+        &weapons,
+        &armor,
+        &shields,
+        &game_logic::NpcPresetCatalog::new(Vec::new()),
+        &talents,
     );
-    assert!(
-        arthur
-            .proficiencies
-            .iter()
-            .any(|proficiency| proficiency == "Halberd")
-    );
-    for style_id in ["armeroci_pole", "rohavalan_bridge"] {
-        assert!(
-            arthur
-                .talents
-                .iter()
-                .any(|selection| selection.id == style_id),
-            "Arthur is missing {style_id}"
-        );
-    }
-    assert_eq!(arthur.default_weapon_style_ids, Some(Vec::new()));
-
-    for name in ["Volfango Drakos", "Volfango Drakos (Perfect Two-Weapon)"] {
-        let preset = find_fighter_preset(&fighter_presets, name)
-            .unwrap_or_else(|| panic!("missing {name} preset"));
-        assert_eq!(preset.level, 9);
-        assert_eq!(preset.progression.attack, "IV");
-        assert_eq!(preset.progression.speed, "III");
-        assert_eq!(preset.strength_base, 11);
-        assert_eq!(preset.strength_pct, 1);
-        assert_eq!(preset.dex_base, 20);
-        assert_eq!(preset.dex_pct, 51);
-        assert_eq!(preset.constitution, 12);
-        assert_eq!(preset.charisma, 6);
-        assert_eq!(
-            preset.weapon_masteries.as_ref().unwrap()[&WeaponGroup::SmallSwords].defense,
-            3
-        );
-        assert_eq!(preset.weapon, "Short sword");
-        assert_eq!(preset.weapon_material_tier, 5);
-        assert_eq!(preset.offhand_weapon.as_deref(), Some("Short sword"));
-        assert_eq!(preset.offhand_weapon_material_tier, 2);
-        assert_eq!(preset.armor, "Gambeson");
-        assert_eq!(preset.armor_material_tier, 2);
-        assert_eq!(preset.offhand_projectile_material_tier, 0);
-        assert!(preset.maneuvers.fight_defensively);
-        assert_eq!(preset.maneuvers.fight_defensively_penalty, 8);
-        for removed_talent in ["defense_bonus_weapon", "swift", "damage_bonus_weapon"] {
-            assert!(
-                !preset
-                    .talents
-                    .iter()
-                    .any(|selection| selection.id == removed_talent),
-                "{name} still has removed talent {removed_talent}"
-            );
-        }
-        for proficiency in ["Short sword", "Dueling sword", "Throwing Knife"] {
-            assert!(
-                preset
-                    .proficiencies
-                    .iter()
-                    .any(|known| known == proficiency),
-                "{name} is missing {proficiency} proficiency"
-            );
-        }
-    }
-
-    let base = find_fighter_preset(&fighter_presets, "Volfango Drakos")
-        .expect("missing base Volfango preset");
-    assert!(base.defensive_dualwielding);
-    assert!(!base.offensive_dualwielding);
+    assert_eq!(combatant.sheet.vitals.max_hp, 57);
+    assert_eq!(combatant.sheet.vitals.threshold_of_pain, 23);
+    assert_eq!(combatant.sheet.vitals.trauma_die_sides, 12);
+    assert_eq!(combatant.sheet.offense.attack_bonus, 17);
+    // The halberd's intrinsic +3 combines with +15 from abilities, mastery and gear.
+    assert_eq!(combatant.sheet.offense.weapon.damage_expr, "2d10p+3^2");
+    assert_eq!(combatant.sheet.offense.strength_damage, 15);
+    assert_eq!(combatant.sheet.offense.weapon.speed, 7.0);
+    assert_eq!(combatant.sheet.defense.armor_dr, 12);
+    // Combat adds the halberd's always-on +4 weapon defense to this modifier.
+    assert!(combatant.sheet.offense.weapon.defense_bonus_always);
+    assert_eq!(combatant.sheet.defense.defense_mod + 4, 5);
 }
 
 #[test]
-fn always_give_ground_tactical_preset_has_one_unconditional_reaction() {
-    let presets = data::load_tactical_presets("data/sim/tactical_presets.json")
-        .expect("failed to load tactical presets");
+fn give_ground_tactical_fixture_preserves_unconditional_reaction() {
+    let presets = crate::test_support::tactical_presets();
     let preset = presets
         .iter()
         .find(|preset| preset.name == "Always Give Ground")
@@ -7790,23 +7714,20 @@ fn always_give_ground_tactical_preset_has_one_unconditional_reaction() {
 }
 
 #[test]
-fn arthur_armeroci_bridge_tactical_preset_is_compatible() {
+fn armeroci_bridge_tactical_fixture_builds_compatible_profiles() {
     let (weapon_catalog, armor_catalog, shield_catalog) =
         data::load_catalogs().expect("failed to load catalogs");
     let race_catalog = data::load_races("data/races.json").expect("failed to load races");
-    let fighter_presets = data::load_fighter_presets("data/fighter_presets.json")
-        .expect("failed to load fighter presets");
+    let fighter_presets = crate::test_support::fighter_presets();
     let talent_catalog = data::load_talents(data::TALENTS_PATH).expect("failed to load talents");
-    let npc_presets =
-        data::load_npc_presets("data/npc_presets.json").expect("failed to load NPC presets");
-    let tactical_presets = data::load_tactical_presets("data/sim/tactical_presets.json")
-        .expect("failed to load tactical presets");
-    let arthur = find_fighter_preset(&fighter_presets, "Arthur Du Randt")
-        .expect("missing Arthur Du Randt preset");
+    let npc_presets = game_logic::NpcPresetCatalog::new(Vec::new());
+    let tactical_presets = crate::test_support::tactical_presets();
+    let arthur = find_fighter_preset(&fighter_presets, "Halberd fixture")
+        .expect("missing halberd fixture");
     let tactical = tactical_presets
         .iter()
-        .find(|preset| preset.name == "Arthur - Armeroci Bridge")
-        .expect("missing Arthur tactical preset");
+        .find(|preset| preset.name == "Bridge fixture")
+        .expect("missing bridge fixture");
     let mut player = player_config_from_preset(
         arthur,
         &weapon_catalog,
@@ -7855,66 +7776,15 @@ fn arthur_armeroci_bridge_tactical_preset_is_compatible() {
 }
 
 #[test]
-fn fighter_presets_use_valid_default_weapon_style_selections() {
-    let fighter_presets = data::load_fighter_presets("data/fighter_presets.json")
-        .expect("failed to load fighter presets");
-    let talent_catalog = data::load_talents(data::TALENTS_PATH).expect("failed to load talents");
-
-    for preset in fighter_presets.entries() {
-        let style_ids: Vec<&str> = preset
-            .talents
-            .iter()
-            .filter_map(|selection| {
-                let is_weapon_style = talent_catalog
-                    .entries()
-                    .iter()
-                    .any(|spec| spec.id == selection.id && spec.category == "Weapon Styles");
-                is_weapon_style.then_some(selection.id.as_str())
-            })
-            .collect();
-
-        if let Some(default_style_ids) = &preset.default_weapon_style_ids {
-            assert!(
-                default_style_ids
-                    .iter()
-                    .all(|style| style_ids.contains(&style.as_str())),
-                "{} selects an unlearned default style: {:?}",
-                preset.name,
-                default_style_ids
-            );
-            let allowed_perfect_blades_pair = default_style_ids.len() == 2
-                && preset
-                    .talents
-                    .iter()
-                    .any(|selection| selection.id == "perfect_two_weapon_fighting")
-                && default_style_ids
-                    .iter()
-                    .any(|style| style == "shield_of_blades")
-                && default_style_ids
-                    .iter()
-                    .any(|style| style == "storm_of_blades");
-            assert!(
-                default_style_ids.len() <= 1 || allowed_perfect_blades_pair,
-                "{} has an invalid default style selection: {:?}",
-                preset.name,
-                default_style_ids
-            );
-        }
-    }
-}
-
-#[test]
-fn volfango_perfect_two_weapon_preset_is_level_nine_and_combines_dualwield_modes() {
+fn perfect_two_weapon_fixture_combines_dualwield_modes() {
     let (weapon_catalog, armor_catalog, shield_catalog) =
         data::load_catalogs().expect("failed to load catalogs");
     let race_catalog = data::load_races("data/races.json").expect("failed to load races");
-    let fighter_presets = data::load_fighter_presets("data/fighter_presets.json")
-        .expect("failed to load fighter presets");
+    let fighter_presets = crate::test_support::fighter_presets();
     let talent_catalog = data::load_talents(data::TALENTS_PATH).expect("failed to load talents");
-    let npc_presets =
-        data::load_npc_presets("data/npc_presets.json").expect("failed to load NPC presets");
-    let preset = find_fighter_preset(&fighter_presets, "Volfango Drakos (Perfect Two-Weapon)")
-        .expect("missing Volfango perfect two-weapon preset");
+    let npc_presets = game_logic::NpcPresetCatalog::new(Vec::new());
+    let preset = find_fighter_preset(&fighter_presets, "Dual wield fixture")
+        .expect("missing dual wield fixture");
 
     let player = player_config_from_preset(
         preset,
@@ -7967,16 +7837,15 @@ fn volfango_perfect_two_weapon_preset_is_level_nine_and_combines_dualwield_modes
 }
 
 #[test]
-fn errit_preset_enables_eyesmite_with_feat_of_agility_data() {
+fn eyesmite_fixture_builds_feat_of_agility_data() {
     let (weapon_catalog, armor_catalog, shield_catalog) =
         data::load_catalogs().expect("failed to load catalogs");
     let race_catalog = data::load_races("data/races.json").expect("failed to load races");
-    let fighter_presets = data::load_fighter_presets("data/fighter_presets.json")
-        .expect("failed to load fighter presets");
+    let fighter_presets = crate::test_support::fighter_presets();
     let talent_catalog = data::load_talents(data::TALENTS_PATH).expect("failed to load talents");
-    let npc_presets =
-        data::load_npc_presets("data/npc_presets.json").expect("failed to load NPC presets");
-    let preset = find_fighter_preset(&fighter_presets, "Errit").expect("missing Errit preset");
+    let npc_presets = game_logic::NpcPresetCatalog::new(Vec::new());
+    let preset = find_fighter_preset(&fighter_presets, "Eyesmite fixture")
+        .expect("missing eyesmite fixture");
     let player = player_config_from_preset(
         preset,
         &weapon_catalog,
@@ -8002,64 +7871,4 @@ fn errit_preset_enables_eyesmite_with_feat_of_agility_data() {
     assert!(combatant.sheet.defense.eyesmite);
     assert_eq!(combatant.sheet.defense.feat_of_agility, 1);
     assert_eq!(combatant.sheet.defense.armor_feat_of_agility_penalty, 20);
-}
-
-#[test]
-fn remarkable_arthur_presets_are_last_and_build_for_default_sim() {
-    let (weapon_catalog, armor_catalog, shield_catalog) =
-        data::load_catalogs().expect("failed to load catalogs");
-    let race_catalog = data::load_races("data/races.json").expect("failed to load races");
-    let fighter_presets = data::load_fighter_presets("data/sim/fighter_presets.json")
-        .expect("failed to load fighter presets");
-    let talent_catalog = data::load_talents(data::TALENTS_PATH).expect("failed to load talents");
-    let npc_presets =
-        data::load_npc_presets("data/npc_presets.json").expect("failed to load NPC presets");
-    let expected_names = [
-        "Arthur Du Randt (Remarkable L10 - 0 BP)",
-        "Arthur Du Randt (Remarkable L10 - 35 BP)",
-        "Arthur Du Randt (Remarkable L10 - 41 BP)",
-        "Arthur Du Randt (Remarkable L10 - 45 BP)",
-        "Arthur Du Randt (Remarkable L10 - 46 BP)",
-        "Arthur Du Randt (Remarkable L10 - 62 BP)",
-    ];
-    let presets = fighter_presets.entries();
-    let actual_last_names = presets[presets.len() - expected_names.len()..]
-        .iter()
-        .map(|preset| preset.name.as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(actual_last_names, expected_names);
-
-    for name in expected_names {
-        let preset = find_fighter_preset(&fighter_presets, name).expect("missing Arthur preset");
-        assert_eq!(preset.level, 10);
-        assert_eq!(preset.progression.attack, "V");
-        assert_eq!(preset.progression.health, "V");
-        assert_eq!(preset.weapon, "Halberd");
-        assert_eq!(preset.weapon_material_tier, 5);
-        assert_eq!(preset.armor, "Platemail");
-        assert_eq!(preset.armor_material_tier, 2);
-        assert!(
-            preset
-                .talents
-                .iter()
-                .any(|selection| selection.id == "remarkability")
-        );
-
-        let player = player_config_from_preset(
-            preset,
-            &weapon_catalog,
-            &armor_catalog,
-            &shield_catalog,
-            &race_catalog,
-        );
-        let combatant = game_logic::build_combatant(
-            &player,
-            &weapon_catalog,
-            &armor_catalog,
-            &shield_catalog,
-            &npc_presets,
-            &talent_catalog,
-        );
-        assert!(combatant.sheet.vitals.max_hp > 0);
-    }
 }

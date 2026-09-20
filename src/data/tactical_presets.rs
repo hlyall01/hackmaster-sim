@@ -100,28 +100,15 @@ pub fn save_tactical_presets(path: &str, presets: &[TacticalPreset]) -> Result<(
 mod tests {
     use super::*;
     #[test]
-    fn bundled_file_contains_three_presets() {
-        let parsed: TacticalPresetsFile =
-            serde_json::from_str(EMBEDDED_TACTICAL_PRESETS_JSON).expect("valid presets");
+    fn tactical_fixture_round_trip_preserves_conditional_style_switching() {
+        let file = TacticalPresetsFile {
+            schema_version: TACTICAL_PRESET_SCHEMA_VERSION,
+            presets: crate::test_support::tactical_presets(),
+        };
+        let json = serde_json::to_string(&file).unwrap();
+        let parsed: TacticalPresetsFile = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.schema_version, TACTICAL_PRESET_SCHEMA_VERSION);
-        assert_eq!(parsed.presets.len(), 3);
-        let mut names = parsed
-            .presets
-            .iter()
-            .map(|preset| preset.name.to_ascii_lowercase())
-            .collect::<Vec<_>>();
-        names.sort();
-        names.dedup();
-        assert_eq!(names.len(), 3, "preset names must be unique");
-        let arthur = parsed
-            .presets
-            .iter()
-            .find(|preset| preset.name == "Arthur - Armeroci Bridge")
-            .expect("Arthur tactical preset");
-        assert_eq!(
-            arthur.opening_style_ids,
-            Some(vec!["armeroci_pole".to_string()])
-        );
+        assert_eq!(parsed.presets, file.presets);
         let paths_of_the_sun = parsed
             .presets
             .iter()

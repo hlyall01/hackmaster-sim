@@ -95,6 +95,7 @@ struct AttackMetricSample {
     direct_hit: bool,
     shield_block: bool,
     hp_damage: u32,
+    knockback_ft: f32,
     critical: bool,
     killing_blow: bool,
     raw_damage: u32,
@@ -427,6 +428,7 @@ impl SimState {
                 direct_hit,
                 shield_block,
                 hp_damage: hp_damage_u32,
+                knockback_ft: knockback,
                 critical,
                 killing_blow: defender_hp_after <= 0,
                 raw_damage: damage_rolled.unwrap_or(shield_damage.max(0)).max(0) as u32,
@@ -636,23 +638,20 @@ impl SimState {
                             self.move_toward(b_idx, a_idx, step_b, max_reach);
                         }
                     }
-                } else if distance > 5.0 && (eyesmite_a || eyesmite_b) {
-                    if eyesmite_a && !self.hold_at_bay.blocks_advance(a_idx) {
-                        self.move_toward(a_idx, b_idx, step_a, 5.0);
+                } else if distance > min_reach || (distance > 5.0 && (eyesmite_a || eyesmite_b)) {
+                    // Eyesmite changes its user's preferred distance, but must not
+                    // prevent the opponent from closing to their own weapon reach.
+                    if (eyesmite_a || reach_a < reach_b)
+                        && !self.hold_at_bay.blocks_advance(a_idx)
+                    {
+                        let stop_distance = if eyesmite_a { reach_a.min(5.0) } else { reach_a };
+                        self.move_toward(a_idx, b_idx, step_a, stop_distance);
                     }
-                    let distance = self.distance_between(a_idx, b_idx).unwrap_or(0.0);
-                    if eyesmite_b && distance > 5.0 && !self.hold_at_bay.blocks_advance(b_idx) {
-                        self.move_toward(b_idx, a_idx, step_b, 5.0);
-                    }
-                } else if distance > min_reach {
-                    if reach_a < reach_b {
-                        if !self.hold_at_bay.blocks_advance(a_idx) {
-                            self.move_toward(a_idx, b_idx, step_a, reach_a);
-                        }
-                    } else if reach_b < reach_a {
-                        if !self.hold_at_bay.blocks_advance(b_idx) {
-                            self.move_toward(b_idx, a_idx, step_b, reach_b);
-                        }
+                    if (eyesmite_b || reach_b < reach_a)
+                        && !self.hold_at_bay.blocks_advance(b_idx)
+                    {
+                        let stop_distance = if eyesmite_b { reach_b.min(5.0) } else { reach_b };
+                        self.move_toward(b_idx, a_idx, step_b, stop_distance);
                     }
                 }
             }
@@ -2322,6 +2321,76 @@ mod tests {
     }
 
     #[test]
+    fn melee_fighter_closes_on_traumatized_eyesmite_opponent() {
+        for attacker_idx in 0..2 {
+            let defender_idx = 1 - attacker_idx;
+            let mut attacker = Combatant::default();
+            attacker.team_id = 0;
+            attacker.sheet.mobility.move_speed = 20.0;
+            attacker.sheet.maneuvers.called_shot = true;
+            attacker.sheet.maneuvers.called_shot_delay_profile =
+                CalledShotDelayProfile::PrecisionCombatant;
+            std::sync::Arc::make_mut(&mut attacker.sheet.offense.weapon).reach_ft = 2.0;
+
+            let mut defender = Combatant::default();
+            defender.team_id = 1;
+            defender.sheet.defense.eyesmite = true;
+            defender.sheet.vitals.infinite_hp = true;
+            std::sync::Arc::make_mut(&mut defender.sheet.offense.weapon).reach_ft = 6.0;
+
+            let mut fighters = vec![attacker, defender];
+            if attacker_idx == 1 {
+                fighters.swap(0, 1);
+            }
+            // A five-foot knockback from short-sword range leaves a seven-foot gap.
+            let mut sim = SimState::with_rng(SimConfig::new(7.0, 1.0), SimRng::from_seed(1));
+            sim.reset_with_combatants(fighters);
+            sim.combatants[defender_idx].state.trauma_remaining_seconds = 1_440;
+            let defender_position = sim.actors[defender_idx].position;
+
+            sim.tick();
+            assert_eq!(sim.distance(), 6.0);
+            sim.tick();
+            assert_eq!(
+                sim.distance(),
+                2.0,
+                "the conscious fighter must close to sword reach"
+            );
+            assert_eq!(sim.actors[defender_idx].position, defender_position);
+
+            for _ in 0..30 {
+                sim.tick();
+                if sim.combatants[attacker_idx].state.has_attacked {
+                    break;
+                }
+            }
+            assert!(sim.combatants[attacker_idx].state.has_attacked);
+            assert!(sim.combatants[defender_idx].state.trauma_remaining_seconds > 1_400);
+            assert!(sim.combatants[defender_idx].state.hp > 0);
+        }
+    }
+
+    #[test]
+    fn eyesmite_melee_approach_uses_one_movement_budget() {
+        let mut attacker = Combatant::default();
+        attacker.team_id = 0;
+        attacker.sheet.defense.eyesmite = true;
+        attacker.sheet.mobility.move_speed = 2.0;
+        std::sync::Arc::make_mut(&mut attacker.sheet.offense.weapon).reach_ft = 2.0;
+        let mut defender = Combatant::default();
+        defender.team_id = 1;
+        defender.sheet.maneuvers.passive = true;
+        std::sync::Arc::make_mut(&mut defender.sheet.offense.weapon).reach_ft = 6.0;
+        let mut sim = SimState::with_rng(SimConfig::new(6.0, 1.0), SimRng::from_seed(1));
+        sim.reset_with_combatants(vec![attacker, defender]);
+
+        sim.tick();
+        assert_eq!(sim.distance(), 4.0);
+        sim.tick();
+        assert_eq!(sim.distance(), 2.0);
+    }
+
+    #[test]
     fn called_shot_delay_requires_called_shot_toggle() {
         let attacker = Combatant::default();
         let defender = Combatant::default();
@@ -2886,6 +2955,8 @@ pub struct DetailedTeamStats {
     pub shield_blocks: u64,
     pub misses: u64,
     pub hp_hits: u64,
+    /// Individual attacks (including counters) that inflict at least 10 ft of knockback.
+    pub knockbacks_10ft: u64,
     pub critical_hits: u64,
     pub kills: u64,
     pub eyesmite_available: bool,
@@ -2895,6 +2966,7 @@ pub struct DetailedTeamStats {
     pub contact_rate: f32,
     pub shield_block_rate: f32,
     pub hp_hit_rate: f32,
+    pub knockback_10ft_rate_per_attack: f32,
     pub critical_rate_per_attack: f32,
     pub critical_rate_per_direct_hit: f32,
     pub avg_hp_damage_per_fight: f32,
@@ -2932,6 +3004,7 @@ struct DetailedTeamAccumulator {
     direct_hits: u64,
     shield_blocks: u64,
     hp_hits: u64,
+    knockbacks_10ft: u64,
     critical_hits: u64,
     kills: u64,
     eyesmite_available: bool,
@@ -3040,6 +3113,7 @@ impl DetailedTeamAccumulator {
             shield_blocks: self.shield_blocks,
             misses,
             hp_hits: self.hp_hits,
+            knockbacks_10ft: self.knockbacks_10ft,
             critical_hits: self.critical_hits,
             kills: self.kills,
             eyesmite_available: self.eyesmite_available,
@@ -3049,6 +3123,7 @@ impl DetailedTeamAccumulator {
             contact_rate: rate(self.direct_hits + self.shield_blocks, attempts),
             shield_block_rate: rate(self.shield_blocks, attempts),
             hp_hit_rate: rate(self.hp_hits, attempts),
+            knockback_10ft_rate_per_attack: rate(self.knockbacks_10ft, attempts),
             critical_rate_per_attack: rate(self.critical_hits, attempts),
             critical_rate_per_direct_hit: rate(self.critical_hits, self.direct_hits),
             avg_hp_damage_per_fight: rate(self.total_hp_damage, u64::from(runs)),
@@ -3322,6 +3397,9 @@ pub fn bulk_simulate_with_seed(
             }
             if sample.critical {
                 attacker_stats.critical_hits = attacker_stats.critical_hits.saturating_add(1);
+            }
+            if sample.knockback_ft >= 10.0 {
+                attacker_stats.knockbacks_10ft = attacker_stats.knockbacks_10ft.saturating_add(1);
             }
             if sample.killing_blow {
                 attacker_stats.kills = attacker_stats.kills.saturating_add(1);

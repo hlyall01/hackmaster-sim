@@ -25,6 +25,8 @@ mod mounted;
 pub use mounted::*;
 mod masteries;
 pub use masteries::*;
+mod ego;
+pub use ego::*;
 #[cfg(test)]
 mod mastery_tests;
 mod weapon_styles;
@@ -6587,7 +6589,7 @@ mod tests {
     }
 
     fn sample_npc_presets() -> NpcPresetCatalog {
-        crate::data::load_npc_presets("data/npc_presets.json").expect("Failed to load NPC presets")
+        NpcPresetCatalog::new(Vec::new())
     }
 
     fn one_handed_weapon_id(weapons: &WeaponCatalog) -> WeaponId {

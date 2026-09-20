@@ -547,8 +547,7 @@ fn new_style_switches_remove_and_restore_effects_without_changing_hp_or_timers()
 
 #[test]
 fn new_style_options_survive_preset_round_trips_and_default_for_legacy_presets() {
-    let presets = data::load_fighter_presets("data/sim/fighter_presets.json").unwrap();
-    let mut preset = presets.entries().first().unwrap().clone();
+    let mut preset = crate::test_support::fighter("Halberd fixture");
     preset.one_path_piercing = true;
     preset.decline_pursuit = true;
     let mut json = serde_json::to_value(&preset).unwrap();

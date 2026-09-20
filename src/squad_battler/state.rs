@@ -1196,9 +1196,35 @@ fn find_weapon_id_by_name(catalog: &WeaponCatalog, name: &str) -> Option<WeaponI
 mod tests {
     use super::*;
 
+    fn app_fixture() -> SquadBattlerApp {
+        let (weapon_catalog, armor_catalog, shield_catalog) = data::load_catalogs().unwrap();
+        let enemy_weapon_id = find_weapon_id_by_name(&weapon_catalog, "Battle Axe").unwrap();
+        SquadBattlerApp {
+            weapon_catalog,
+            armor_catalog,
+            shield_catalog,
+            npc_presets: NpcPresetCatalog::new(vec![game_logic::NpcPreset {
+                name: "Formation test opponent".into(),
+                hp: 20,
+                attack_bonus: 2,
+                damage_bonus: 1,
+                defense_mod: 0,
+                armor_dr: 0,
+                top: 5,
+            }]),
+            talent_catalog: data::load_talents(data::TALENTS_PATH).unwrap(),
+            enemy_weapon_id,
+            xp_curve: XpCurve {
+                base: 45,
+                per_level: 55,
+            },
+            session: None,
+        }
+    }
+
     #[test]
     fn formation_move_is_used_for_fight_spawn() {
-        let mut app = SquadBattlerApp::new().expect("app should load");
+        let mut app = app_fixture();
         let view = app.new_run(Some(0x5155_4144_4256_0001));
         let node_id = view
             .available_nodes
@@ -1234,7 +1260,7 @@ mod tests {
 
     #[test]
     fn fight_starts_players_at_full_combat_sheet_hp() {
-        let mut app = SquadBattlerApp::new().expect("app should load");
+        let mut app = app_fixture();
         let view = app.new_run(Some(0x5155_4144_4256_0001));
         assert!(
             view.squad
@@ -1273,7 +1299,7 @@ mod tests {
 
     #[test]
     fn formation_swap_prevents_overlapping_slots() {
-        let mut app = SquadBattlerApp::new().expect("app should load");
+        let mut app = app_fixture();
         let view = app.new_run(Some(0x5155_4144_4256_0001));
         let node_id = view
             .available_nodes

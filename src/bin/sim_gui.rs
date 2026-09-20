@@ -66,6 +66,7 @@ impl MainTab {
 enum ToolTab {
     WoundHealing,
     EssenceWounds,
+    EgoGeneration,
 }
 
 impl ToolTab {
@@ -73,6 +74,7 @@ impl ToolTab {
         match self {
             ToolTab::WoundHealing => "Wound Healing",
             ToolTab::EssenceWounds => "Essence Wounds",
+            ToolTab::EgoGeneration => "Ego Generation",
         }
     }
 }
@@ -187,6 +189,7 @@ struct SimGuiApp {
     essence_tool_maximum: u32,
     essence_tool_starting: u32,
     essence_tool_change: i64,
+    ego_tool: game_logic::EgoGenerationInput,
     damage_plot_iterations: [String; 2],
     damage_roll_plots: [Option<DamageRollPlotData>; 2],
 }
@@ -230,8 +233,6 @@ struct DpsTestResult {
 
 impl SimGuiApp {
     fn new() -> Self {
-        let (weapon_catalog, armor_catalog, shield_catalog) = data::load_catalogs()
-            .unwrap_or_else(|err| panic!("Failed to load JSON catalogs: {err}"));
         let npc_presets = match data::load_npc_presets("data/npc_presets.json") {
             Ok(presets) => presets,
             Err(err) => {
@@ -254,6 +255,22 @@ impl SimGuiApp {
                     (Vec::new(), Some(err))
                 }
             };
+        Self::with_presets(
+            npc_presets,
+            fighter_presets,
+            tactical_presets,
+            tactical_load_error,
+        )
+    }
+
+    fn with_presets(
+        npc_presets: NpcPresetCatalog,
+        fighter_presets: FighterPresetCatalog,
+        tactical_presets: Vec<TacticalPreset>,
+        tactical_load_error: Option<String>,
+    ) -> Self {
+        let (weapon_catalog, armor_catalog, shield_catalog) = data::load_catalogs()
+            .unwrap_or_else(|err| panic!("Failed to load JSON catalogs: {err}"));
         let talent_catalog = match data::load_talents(data::TALENTS_PATH) {
             Ok(talents) => talents,
             Err(err) => {
@@ -334,11 +351,26 @@ impl SimGuiApp {
             essence_tool_maximum: 1000,
             essence_tool_starting: 500,
             essence_tool_change: 0,
+            ego_tool: game_logic::EgoGenerationInput {
+                maximum: 1000.0,
+                current: 0.0,
+                days: 7,
+                wisdom: 10,
+                charisma: 10,
+            },
             damage_plot_iterations: ["10000".to_string(), "10000".to_string()],
             damage_roll_plots: [None, None],
         };
         app.apply_default_fighter_preset(0, "Arthur Du Randt");
         app.apply_default_fighter_preset(1, "Zorya");
+        if let Some(preset) = app
+            .fighter_presets
+            .entries()
+            .iter()
+            .find(|preset| preset.name.eq_ignore_ascii_case("Arthur Du Randt"))
+        {
+            app.ego_tool.use_fighter_preset(preset);
+        }
         app.tactical_drafts = [
             app.players[0].tactical_policy.clone(),
             app.players[1].tactical_policy.clone(),
@@ -1181,6 +1213,8 @@ impl eframe::App for SimGuiApp {
                     &mut self.essence_tool_maximum,
                     &mut self.essence_tool_starting,
                     &mut self.essence_tool_change,
+                    &mut self.ego_tool,
+                    &self.fighter_presets,
                 );
             });
             return;
@@ -1659,6 +1693,8 @@ fn render_tools_tab(
     maximum_essence: &mut u32,
     starting_essence: &mut u32,
     essence_change: &mut i64,
+    ego: &mut game_logic::EgoGenerationInput,
+    fighter_presets: &FighterPresetCatalog,
 ) {
     ui.heading("Tools");
     ui.horizontal(|ui| {
@@ -1672,6 +1708,7 @@ fn render_tools_tab(
             ToolTab::EssenceWounds,
             ToolTab::EssenceWounds.label(),
         );
+        ui.selectable_value(active_tool_tab, ToolTab::EgoGeneration, ToolTab::EgoGeneration.label());
     });
     ui.separator();
     match *active_tool_tab {
@@ -1690,7 +1727,133 @@ fn render_tools_tab(
             ui.heading("Essence Wound Calculator");
             render_essence_wound_calculator(ui, maximum_essence, starting_essence, essence_change);
         }
+        ToolTab::EgoGeneration => render_ego_calculator(
+            ui,
+            ego,
+            fighter_presets
+                .entries()
+                .iter()
+                .find(|preset| preset.name.eq_ignore_ascii_case("Arthur Du Randt")),
+        ),
     }
+}
+
+fn render_ego_calculator(
+    ui: &mut egui::Ui,
+    input: &mut game_logic::EgoGenerationInput,
+    arthur: Option<&FighterPreset>,
+) {
+    ui.heading("Ego Generation Calculator");
+    ui.label("Find the best daily choice to maximize Ego over the selected days.");
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Maximum Ego");
+        ui.add(
+            egui::DragValue::new(&mut input.maximum)
+                .clamp_range(0.0..=u32::MAX as f64)
+                .speed(5.0),
+        );
+        input.current = input.current.min(input.maximum);
+        ui.label("Current Ego");
+        ui.add(
+            egui::DragValue::new(&mut input.current)
+                .clamp_range(0.0..=input.maximum)
+                .speed(5.0),
+        );
+        ui.label("Days");
+        ui.add(
+            egui::DragValue::new(&mut input.days)
+                .clamp_range(0..=game_logic::MAX_EGO_GENERATION_DAYS),
+        );
+        ui.label("Wis");
+        ui.add(egui::DragValue::new(&mut input.wisdom).clamp_range(0..=u32::MAX));
+        ui.label("Cha");
+        ui.add(egui::DragValue::new(&mut input.charisma).clamp_range(0..=u32::MAX));
+        if ui
+            .add_enabled(arthur.is_some(), egui::Button::new("Arthur's Wis / Cha"))
+            .on_hover_text("Load Arthur's Wisdom and Charisma from his saved fighter preset.")
+            .clicked()
+        {
+            if let Some(preset) = arthur {
+                input.use_fighter_preset(preset);
+            }
+        }
+    });
+    ui.small(format!(
+        "Wisdom restores {}% of missing Ego. Charisma adds {}% of current Ego.",
+        u64::from(input.wisdom) * 2,
+        u64::from(input.charisma) * 2,
+    ));
+    ui.small("Each day's gain is rounded to the nearest 5 (halfway rounds up), then capped at Maximum Ego. Days count morning generations; no spending is included.");
+    let plan = match game_logic::calculate_ego_generation(*input) {
+        Ok(plan) => plan,
+        Err(message) => {
+            ui.colored_label(Color32::RED, message);
+            return;
+        }
+    };
+    ui.separator();
+    ui.strong(format!(
+        "Final Ego: {:.2} / {:.2}     Total gained: {:.2}",
+        plan.final_ego, input.maximum, plan.total_gain
+    ));
+    let choice_label = |choice| match choice {
+        game_logic::EgoChoice::Wisdom => "Wisdom",
+        game_logic::EgoChoice::Charisma => "Charisma",
+        game_logic::EgoChoice::Either => "Either (tie)",
+    };
+    if let Some(first) = plan.days.first() {
+        ui.label(format!(
+            "Next morning: {} (+{:.2} Ego)",
+            choice_label(first.choice),
+            first.ending - first.starting
+        ));
+    } else {
+        ui.label("Zero days: no generation.");
+    }
+    ui.small("Both gains below include rounding and the maximum cap. The highlighted choice gives the best final total.");
+    let column_widths = [40.0, 100.0, 100.0, 100.0, 115.0, 100.0];
+    ui.horizontal(|ui| {
+        for (label, width) in [
+            "Day",
+            "Starting Ego",
+            "Wis gain",
+            "Cha gain",
+            "Best choice",
+            "Ending Ego",
+        ]
+        .into_iter()
+        .zip(column_widths)
+        {
+            ui.add_sized(
+                [width, 20.0],
+                egui::Label::new(egui::RichText::new(label).strong()),
+            );
+        }
+    });
+    egui::ScrollArea::vertical()
+        .id_source("ego_daily_plan")
+        .show_rows(ui, 22.0, plan.days.len(), |ui, range| {
+            for day in &plan.days[range] {
+                ui.horizontal(|ui| {
+                    let cells = [
+                        day.day.to_string(),
+                        format!("{:.2}", day.starting),
+                        format!("+{:.2}", day.wisdom_gain),
+                        format!("+{:.2}", day.charisma_gain),
+                        choice_label(day.choice).to_string(),
+                        format!("{:.2}", day.ending),
+                    ];
+                    for (index, (text, width)) in cells.into_iter().zip(column_widths).enumerate() {
+                        let text = if index == 4 {
+                            egui::RichText::new(text).strong()
+                        } else {
+                            egui::RichText::new(text)
+                        };
+                        ui.add_sized([width, 22.0], egui::Label::new(text));
+                    }
+                });
+            }
+        });
 }
 
 fn render_detailed_stats_tab(
@@ -1884,6 +2047,14 @@ fn render_detailed_team_stats(ui: &mut egui::Ui, stats: &sim::DetailedTeamStats,
         stats.hp_hits,
         stats.hp_hit_rate * 100.0,
     ));
+    ui.label(format!(
+        "10+ft knockbacks: {} ({:.1}% of attacks)",
+        stats.knockbacks_10ft,
+        stats.knockback_10ft_rate_per_attack * 100.0,
+    ))
+    .on_hover_text(
+        "Individual attacks, including counters, that inflict at least 10 feet of knockback.",
+    );
     ui.label(format!(
         "Criticals: {} ({:.2}% / attack, {:.2}% / direct hit)",
         stats.critical_hits,
@@ -5927,6 +6098,39 @@ fn main() -> eframe::Result<()> {
 mod tests {
     use super::*;
 
+    fn app_fixture() -> SimGuiApp {
+        SimGuiApp::with_presets(
+            Catalog::new(Vec::new()),
+            Catalog::new(Vec::new()),
+            Vec::new(),
+            None,
+        )
+    }
+
+    #[test]
+    fn ego_calculator_starts_with_arthurs_saved_attributes() {
+        let fixtures: Vec<FighterPreset> =
+            serde_json::from_str(include_str!("../test_support/fighters.json")).unwrap();
+        let arthur = fixtures
+            .into_iter()
+            .find(|p| p.name == "Halberd fixture")
+            .unwrap();
+        for (wisdom, charisma) in [(13, 9), (17, 11)] {
+            let mut preset = arthur.clone();
+            preset.name = "Arthur Du Randt".to_string();
+            preset.wisdom = wisdom;
+            preset.charisma = charisma;
+            let app = SimGuiApp::with_presets(
+                Catalog::new(Vec::new()),
+                Catalog::new(vec![preset]),
+                Vec::new(),
+                None,
+            );
+            assert_eq!(app.ego_tool.wisdom, u32::from(wisdom));
+            assert_eq!(app.ego_tool.charisma, u32::from(charisma));
+        }
+    }
+
     #[test]
     fn reopening_customize_refreshes_tactical_draft_from_live_policy() {
         let active = TacticalPolicy {
@@ -6031,7 +6235,7 @@ mod tests {
 
     #[test]
     fn simulation_rebuild_uses_policy_applied_from_tactical_ui() {
-        let mut app = SimGuiApp::new();
+        let mut app = app_fixture();
         let draft = TacticalPolicy {
             enabled: true,
             rules: vec![TacticalRule::new(
@@ -6060,7 +6264,7 @@ mod tests {
 
     #[test]
     fn changing_start_distance_resizes_grid_and_respawns_at_requested_distance() {
-        let mut app = SimGuiApp::new();
+        let mut app = app_fixture();
 
         app.sim.config.set_start_distance(MAX_START_DISTANCE_FT);
         app.reset_positions();
@@ -6071,7 +6275,7 @@ mod tests {
 
     #[test]
     fn every_tactical_policy_change_preserves_cached_winrate() {
-        let mut app = SimGuiApp::new();
+        let mut app = app_fixture();
         app.bulk_runs = 1;
         app.run_bulk_sim();
         assert!(app.bulk_result.is_some());
@@ -6160,7 +6364,7 @@ mod tests {
 
     #[test]
     fn fighter_editor_round_trip_preserves_each_group_even_when_unequipped() {
-        let app = SimGuiApp::new();
+        let app = app_fixture();
         let mut player = app.players[0].clone();
         player.mastery_mut(WeaponGroup::Axes).attack = 3;
         player.mastery_mut(WeaponGroup::Spears).damage = 2;

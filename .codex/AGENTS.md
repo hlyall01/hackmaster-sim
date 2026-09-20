@@ -10,6 +10,12 @@
 - You can generate and inspect screenshots as part of visual verification; store outputs in `screenshots/`.
 - Do not run `sudo` commands; ask the user to perform privileged steps.
 
+## Analysis and Working Tree Hygiene
+- The user requires generated analysis, simulation results, reports, logs, and scratch helpers to be Git-ignored every time. Before creating them, choose an ignored destination or add a narrowly scoped `.gitignore` entry.
+- Prefer `docs/analysis/` for local reports/results, `scripts/analysis/` for analysis scripts, and `target/` for temporary files. Cargo study runners can use `examples/analysis_*.rs`.
+- Verify artifact paths with `git check-ignore` and check `git status --short` before finishing. Generated analysis must not appear as untracked or modified project files.
+- Keep intentional source, tests, configuration, and fighter preset changes visible for review. Preserve existing user changes; do not discard, stage, commit, or hide them just to make Git status look clean.
+
 ## References
 - Use the `references/` materials (tables, rules notes) as authoritative inputs when implementing mechanics.
 - If a rule is missing or ambiguous, ask for clarification before guessing.
