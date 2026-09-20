@@ -964,6 +964,10 @@ mod tests {
             done: false,
             winner_team: None,
             combatants: vec![BattleUnitView {
+                essence: Vec::new(),
+                casting: false,
+                spell_fatigue_seconds: 0,
+                pending_echoes: 0,
                 id: "enemy-1-0".to_string(),
                 name: "Test Enemy".to_string(),
                 team_id: 1,

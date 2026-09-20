@@ -456,6 +456,7 @@ fn player_config_from_preset(
     player.offensive_dualwielding = preset.offensive_dualwielding;
     player.proficiencies = preset.proficiencies.clone();
     player.talents = preset.talents.clone();
+    player.magic = preset.magic.clone();
     player.default_weapon_style_ids = preset.default_weapon_style_ids.clone();
     player.race_id = preset.race_id.clone();
     player.race_applied = false;
@@ -5256,6 +5257,15 @@ fn bulk_average_damage_splits_rolled_and_landed_hit_damage() {
     assert_eq!(attacker_stats.hp_damage_p90, 10);
     assert_eq!(attacker_stats.hp_damage_p99, 10);
     assert_eq!(attacker_stats.avg_hp_damage_per_fight, 10.0);
+    assert_eq!(attacker_stats.damage_by_source.len(), 1);
+    let source = &attacker_stats.damage_by_source[0];
+    assert_eq!(source.source, DamageSource::Weapon {
+        name: "Test Blade".into(), slot: WeaponSlot::Primary,
+    });
+    // Attribute HP damage after armor, including the existing overkill convention.
+    assert_eq!(source.total_hp_damage, 10);
+    assert_eq!(source.damage_share, 1.0);
+    assert_eq!(source.combat_dps, attacker_stats.combat_dps);
     assert_eq!(
         attacker_stats.avg_winning_duration_seconds,
         Some(result.avg_duration)
@@ -6455,6 +6465,9 @@ fn bulk_stats_show_eyes_smote_only_for_an_eyesmite_team() {
     assert_eq!(result.detailed.teams[0].eyes_smote, 0);
     assert!(result.detailed.teams[1].eyesmite_available);
     assert!(result.detailed.teams[1].eyes_smote > 0);
+    assert!(result.detailed.teams[1].damage_by_source.iter().any(|row|
+        row.source == DamageSource::Ability { name: "Eyesmite".into() }
+        && row.total_hp_damage > 0));
 }
 
 #[test]

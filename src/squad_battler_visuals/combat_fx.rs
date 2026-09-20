@@ -308,8 +308,10 @@ fn play_event(
                 }
             }
         }
-        SquadCombatEventKind::Move | SquadCombatEventKind::Skip | SquadCombatEventKind::Timeout => {
-        }
+        SquadCombatEventKind::Spell
+        | SquadCombatEventKind::Move
+        | SquadCombatEventKind::Skip
+        | SquadCombatEventKind::Timeout => {}
     }
 }
 
@@ -520,6 +522,7 @@ fn event_kind_id(kind: &SquadCombatEventKind) -> u8 {
         SquadCombatEventKind::Knockback => 5,
         SquadCombatEventKind::Skip => 6,
         SquadCombatEventKind::Timeout => 7,
+        SquadCombatEventKind::Spell => 8,
     }
 }
 

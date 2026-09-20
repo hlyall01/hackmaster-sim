@@ -1,4 +1,5 @@
 use crate::core::rng::SimRng;
+use super::damage_sources::{DamageSource, DamageSourceStats};
 use crate::core::rules::roll_damage_expr;
 use crate::core::tactics::{
     TacticalAction, TacticalChannel, TacticalContext, TacticalDecisionPoint, evaluate_channel,
@@ -89,6 +90,7 @@ pub struct SimState {
 
 #[derive(Clone, Debug)]
 struct AttackMetricSample {
+    damage_source: DamageSource,
     time: u32,
     attacker_idx: usize,
     defender_idx: usize,
@@ -107,6 +109,7 @@ struct AttackMetricSample {
 }
 
 struct RecordedAttackMetrics {
+    damage_source: DamageSource,
     attacker_idx: usize,
     defender_idx: usize,
     hp_damage: i32,
@@ -134,6 +137,7 @@ impl RecordedAttackMetrics {
             event.shield_damage_breakdown.as_ref(),
         );
         Self {
+            damage_source: event.damage_source.clone(),
             attacker_idx: event.attacker_idx,
             defender_idx: event.defender_idx,
             hp_damage: event.damage,
@@ -179,6 +183,7 @@ impl RecordedAttackMetrics {
             event.shield_damage_breakdown.as_ref(),
         );
         Self {
+            damage_source: event.damage_source.clone(),
             attacker_idx: event.attacker_idx,
             defender_idx: event.defender_idx,
             hp_damage: event.damage,
@@ -392,6 +397,7 @@ impl SimState {
 
     fn record_attack_metrics(&mut self, metrics: RecordedAttackMetrics) {
         let RecordedAttackMetrics {
+            damage_source,
             attacker_idx,
             defender_idx,
             hp_damage,
@@ -422,6 +428,7 @@ impl SimState {
                 0
             };
             self.attack_metrics.push(AttackMetricSample {
+                damage_source,
                 time: self.elapsed_seconds,
                 attacker_idx,
                 defender_idx,
@@ -510,6 +517,7 @@ impl SimState {
         if self.actors.len() != self.combatants.len() {
             self.actors = self.spawn_positions();
         }
+        self.advance_spellcasting();
         for combatant in &mut self.combatants {
             combatant.state.knockback_applied_this_tick = false;
             if combatant.state.trauma_remaining_seconds > 0 {
@@ -706,7 +714,158 @@ impl SimState {
                 .state
                 .refresh_defense_plus_four_ready(&combatant.sheet, now);
         }
-        self.done = self.remaining_team_count() <= 1;
+        self.flush_spell_events();
+        self.done =
+            self.remaining_team_count() <= 1 && !super::magic::has_pending_echoes(&self.combatants);
+    }
+
+    pub fn cast_spell(
+        &mut self,
+        caster: usize,
+        request: super::SpellRequest,
+    ) -> Result<(), crate::core::magic::MagicError> {
+        if self.done {
+            return Err(crate::core::magic::MagicError::Incapacitated);
+        }
+        self.combatants
+            .get_mut(caster)
+            .ok_or(crate::core::magic::MagicError::Incapacitated)?
+            .cast_spell(request, self.elapsed_seconds, &mut self.rng)?;
+        self.flush_spell_events();
+        Ok(())
+    }
+
+    pub fn stop_channeling(&mut self, caster: usize) -> Result<(), crate::core::magic::MagicError> {
+        self.combatants
+            .get_mut(caster)
+            .ok_or(crate::core::magic::MagicError::Incapacitated)?
+            .stop_channeling(self.elapsed_seconds)?;
+        self.flush_spell_events();
+        Ok(())
+    }
+
+    pub fn cast_echo_strike(
+        &mut self,
+        caster: usize,
+    ) -> Result<(), crate::core::magic::MagicError> {
+        if self.done {
+            return Err(crate::core::magic::MagicError::Incapacitated);
+        }
+        self.combatants
+            .get_mut(caster)
+            .ok_or(crate::core::magic::MagicError::Incapacitated)?
+            .cast_echo_strike(self.elapsed_seconds)?;
+        self.flush_spell_events();
+        Ok(())
+    }
+
+    pub fn cancel_spell(&mut self, caster: usize) -> Result<(), crate::core::magic::MagicError> {
+        self.combatants
+            .get_mut(caster)
+            .ok_or(crate::core::magic::MagicError::Incapacitated)?
+            .cancel_spell(self.elapsed_seconds)?;
+        self.flush_spell_events();
+        Ok(())
+    }
+
+    pub fn dismiss_echo_strike(
+        &mut self,
+        caster: usize,
+    ) -> Result<(), crate::core::magic::MagicError> {
+        self.combatants
+            .get_mut(caster)
+            .ok_or(crate::core::magic::MagicError::Incapacitated)?
+            .dismiss_echo_strike(self.elapsed_seconds)?;
+        self.flush_spell_events();
+        Ok(())
+    }
+
+    fn flush_spell_events(&mut self) {
+        for (caster, combatant) in self.combatants.iter_mut().enumerate() {
+            for spell in combatant.state.magic.events.drain(..) {
+                if self.log_events {
+                    let event = CombatEvent {
+                        time: spell.time,
+                        attacker_idx: caster,
+                        defender_idx: caster,
+                        kind: CombatEventKind::Spell(spell),
+                    };
+                    self.last_event = Some(event.clone());
+                    self.combat_events.push(event);
+                }
+            }
+        }
+    }
+
+    fn advance_spellcasting(&mut self) {
+        let now = self.elapsed_seconds;
+        for caster in 0..self.combatants.len() {
+            self.combatants[caster].advance_magic(now, &mut self.rng);
+            let in_reach = self.combatants.iter().enumerate().any(|(target, enemy)| {
+                enemy.team_id != self.combatants[caster].team_id
+                    && enemy.state.hp > 0
+                    && self
+                        .distance_between(caster, target)
+                        .is_some_and(|distance| {
+                            distance <= self.combatants[caster].sheet.offense.weapon.reach_ft
+                        })
+            });
+            self.combatants[caster].try_auto_cast(now, in_reach);
+        }
+        self.flush_spell_events();
+        for (caster, echo) in super::magic::take_due_echoes(&mut self.combatants, now) {
+            let distance = self
+                .distance_between(caster, echo.target)
+                .unwrap_or(f32::INFINITY);
+            let evasion = self.precognition_evasion_destination(echo.target, caster);
+            if let Some(target) = self.combatants.get_mut(echo.target) {
+                target.state.precognition_space_available = evasion.is_some();
+            }
+            if let Some((attack, evaded)) = super::combat::resolve_echo(
+                &mut self.combatants,
+                caster,
+                &echo,
+                distance,
+                now,
+                &mut self.rng,
+            ) {
+                if evaded {
+                    self.apply_precognition_evasion(echo.target, evasion);
+                }
+                self.record_attack_metrics(RecordedAttackMetrics {
+                    damage_source: DamageSource::Spell { name: "Echo Strike".into() },
+                    attacker_idx: caster,
+                    defender_idx: echo.target,
+                    hp_damage: attack.damage,
+                    damage_rolled: None,
+                    damage_landed: Some(attack.damage),
+                    highest_hit_bucket: Some(false),
+                    instant_kill: false,
+                    shield_block: false,
+                    shield_broken: false,
+                    shield_damage: 0,
+                    knockback_ft: 0.0,
+                    attempted: true,
+                    direct_hit: attack.hit,
+                    critical: false,
+                    trauma_applied: attack.trauma_applied,
+                    defender_hp_after: attack.defender_hp_after,
+                    armor_prevented: 0,
+                    shield_prevented: 0,
+                });
+                if self.log_events {
+                    let event = CombatEvent {
+                        time: now,
+                        attacker_idx: caster,
+                        defender_idx: echo.target,
+                        kind: CombatEventKind::Attack(attack),
+                    };
+                    self.last_event = Some(event.clone());
+                    self.combat_events.push(event);
+                }
+            }
+        }
+        self.flush_spell_events();
     }
 
     pub fn distance(&self) -> f32 {
@@ -724,16 +883,16 @@ impl SimState {
             .iter()
             .enumerate()
             .filter(|(_, combatant)| combatant.state.has_active_effect(STREAMLINE_EFFECT_ID))
-            .filter_map(|(idx, _)| self.actors.get(idx).map(|actor| actor.position))
+            .filter_map(|(idx, caster)| self.actors.get(idx).map(|actor| (actor.position, caster.apply_f32(StatIdF32::StreamlineRadius, STREAMLINE_RADIUS_FEET))))
             .collect::<Vec<_>>();
         let tile_size_ft = self.config.tile_size_ft.max(0.01);
         let coverage = self
             .actors
             .iter()
             .map(|target| {
-                sources.iter().any(|source| {
+                sources.iter().any(|(source, radius)| {
                     source.manhattan_distance(target.position) as f32 * tile_size_ft
-                        <= STREAMLINE_RADIUS_FEET
+                        <= *radius
                 })
             })
             .collect::<Vec<_>>();
@@ -1128,7 +1287,8 @@ impl SimState {
         slot: WeaponSlot,
         ranged: bool,
     ) -> bool {
-        if self.combatants[attacker].state.hp <= 0
+        if !self.combatants[attacker].magic_can_attack(slot, self.elapsed_seconds as f32)
+            || self.combatants[attacker].state.hp <= 0
             || self.combatants[defender].state.hp <= 0
             || self.combatants[attacker].state.trauma_remaining_seconds > 0
         {
@@ -1192,6 +1352,14 @@ impl SimState {
             return 0;
         }
         let tile_size_ft = self.config.tile_size_ft.max(0.01);
+        if combatant.state.magic.casting.is_some()
+            || combatant.state.magic.channeling.is_some()
+            || combatant.state.magic.fatigued()
+        {
+            let rate = speed_ft / tile_size_ft;
+            return (((self.elapsed_seconds + 1) as f32 * rate).floor()
+                - (self.elapsed_seconds as f32 * rate).floor()) as i32;
+        }
         let tiles = (speed_ft / tile_size_ft).round();
         if tiles <= 0.0 { 1 } else { tiles as i32 }
     }
@@ -1256,7 +1424,7 @@ impl SimState {
             let (charge_enabled, reach, current_target) = {
                 let combatant = &self.combatants[idx];
                 (
-                    combatant.sheet.maneuvers.charge,
+                    combatant.sheet.maneuvers.charge && !combatant.magic_blocks_running(),
                     combatant
                         .apply_f32(
                             StatIdF32::WeaponReach,
@@ -1511,6 +1679,16 @@ impl SimState {
             order.swap(0, 1);
         }
         for (attacker_idx, defender_idx) in order {
+            if !self.combatants[attacker_idx].magic_can_attack(WeaponSlot::Primary, now)
+                && (self.combatants[attacker_idx]
+                    .sheet
+                    .offense
+                    .offhand
+                    .is_none()
+                    || !self.combatants[attacker_idx].magic_can_attack(WeaponSlot::Secondary, now))
+            {
+                continue;
+            }
             self.refresh_streamline_coverage();
             if self.combatants[attacker_idx].sheet.maneuvers.passive {
                 self.combatants[attacker_idx].state.clear_attack_timers();
@@ -1659,6 +1837,7 @@ impl SimState {
             }
             if attack_mode == AttackMode::Normal
                 && self.combatants[attacker_idx].sheet.maneuvers.charge
+                && !self.combatants[attacker_idx].magic_blocks_running()
                 && !use_ranged
                 && self.combatants[attacker_idx].state.charge_target_idx == Some(defender_idx)
                 && self.combatants[attacker_idx].state.charge_distance_ft >= CHARGE_MIN_DISTANCE_FT
@@ -1849,6 +2028,7 @@ impl SimState {
                         attacker_idx: event.attacker_idx,
                         defender_idx: event.defender_idx,
                         kind: CombatEventKind::Attack(AttackEvent {
+                            source: crate::core::sim::AttackSource::Weapon,
                             hit: event.hit,
                             shield_block: event.shield_block,
                             damage: event.damage,
@@ -1905,6 +2085,7 @@ impl SimState {
                             attacker_idx: counter.attacker_idx,
                             defender_idx: counter.defender_idx,
                             kind: CombatEventKind::Attack(AttackEvent {
+                                source: crate::core::sim::AttackSource::Weapon,
                                 hit: counter.hit,
                                 shield_block: counter.shield_block,
                                 damage: counter.damage,
@@ -2145,6 +2326,7 @@ impl SimState {
                             attacker_idx: event.attacker_idx,
                             defender_idx: event.defender_idx,
                             kind: CombatEventKind::Attack(AttackEvent {
+                                source: crate::core::sim::AttackSource::Weapon,
                                 hit: event.hit,
                                 shield_block: event.shield_block,
                                 damage: event.damage,
@@ -2201,6 +2383,7 @@ impl SimState {
                                 attacker_idx: counter.attacker_idx,
                                 defender_idx: counter.defender_idx,
                                 kind: CombatEventKind::Attack(AttackEvent {
+                                    source: crate::core::sim::AttackSource::Weapon,
                                     hit: counter.hit,
                                     shield_block: counter.shield_block,
                                     damage: counter.damage,
@@ -2858,6 +3041,9 @@ mod tests {
                 .combat_events
                 .iter()
                 .map(|event| match &event.kind {
+                    CombatEventKind::Spell(spell) => {
+                        format!("{}:spell:{:?}:{}", event.time, spell.kind, spell.message)
+                    }
                     CombatEventKind::Attack(attack) => format!(
                         "{}:{}:{}:{}:{}",
                         event.time, event.attacker_idx, attack.use_jab, attack.hit, attack.damage
@@ -2941,6 +3127,7 @@ pub struct DetailedSimStats {
 
 #[derive(Clone, Debug, Default)]
 pub struct DetailedTeamStats {
+    pub damage_by_source: Vec<DamageSourceStats>,
     pub team_id: u8,
     pub wins: u32,
     pub win_rate: f32,
@@ -2998,6 +3185,7 @@ pub struct DetailedTeamStats {
 
 #[derive(Default)]
 struct DetailedTeamAccumulator {
+    damage_by_source: BTreeMap<DamageSource, u64>,
     team_id: u8,
     wins: u32,
     attack_attempts: u64,
@@ -3092,7 +3280,21 @@ impl DetailedTeamAccumulator {
         let winning_hp_count = histogram_count(&self.winning_hp_histogram);
         let winning_duration_count = histogram_count(&self.winning_duration_seconds_histogram);
         let prevented = self.total_armor_prevented + self.total_shield_prevented;
+        let mut damage_by_source: Vec<_> = self.damage_by_source.into_iter()
+            .map(|(source, total_hp_damage)| DamageSourceStats {
+                source,
+                total_hp_damage,
+                avg_hp_damage_per_fight: rate(total_hp_damage, u64::from(runs)),
+                damage_share: rate(total_hp_damage, self.total_hp_damage),
+                combat_dps: rate(total_hp_damage, total_seconds),
+            })
+            .collect();
+        damage_by_source.sort_by(|a, b| {
+            b.total_hp_damage.cmp(&a.total_hp_damage)
+                .then_with(|| a.source.cmp(&b.source))
+        });
         DetailedTeamStats {
+            damage_by_source,
             team_id: self.team_id,
             wins: self.wins,
             win_rate: rate(u64::from(self.wins), u64::from(runs)),
@@ -3381,6 +3583,8 @@ pub fn bulk_simulate_with_seed(
                 continue;
             };
             let attacker_stats = &mut detailed_accumulators[attacker_team_idx];
+            *attacker_stats.damage_by_source
+                .entry(sample.damage_source.clone()).or_default() += u64::from(sample.hp_damage);
             attacker_stats.attack_attempts = attacker_stats.attack_attempts.saturating_add(1);
             if sample.direct_hit {
                 attacker_stats.direct_hits = attacker_stats.direct_hits.saturating_add(1);

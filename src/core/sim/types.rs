@@ -67,7 +67,7 @@ pub struct SimActor {
     pub position: GridPos,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum WeaponSlot {
     Primary,
     Secondary,
@@ -309,6 +309,7 @@ pub struct CombatantSheet {
 
 #[derive(Clone, Debug)]
 pub struct CombatantState {
+    pub magic: super::magic::MagicState,
     pub hp: i32,
     pub next_attack_time_primary: Option<f32>,
     pub next_attack_time_secondary: Option<f32>,
@@ -378,6 +379,7 @@ pub struct CombatantTacticalProfile {
 
 #[derive(Clone, Debug)]
 pub struct Combatant {
+    pub magic: super::magic::MagicProfile,
     pub sheet: CombatantSheet,
     pub state: CombatantState,
     pub team_id: u8,
@@ -408,6 +410,7 @@ pub struct CombatEvent {
 
 #[derive(Clone, Debug)]
 pub enum CombatEventKind {
+    Spell(super::magic::SpellEvent),
     Attack(AttackEvent),
     KnockAside(KnockAsideEvent),
     Tactical(TacticalEvent),
@@ -467,8 +470,16 @@ pub struct CriticalHit {
     pub instant_kill: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AttackSource {
+    #[default]
+    Weapon,
+    EchoStrike,
+}
+
 #[derive(Clone, Debug)]
 pub struct AttackEvent {
+    pub source: AttackSource,
     pub hit: bool,
     pub shield_block: bool,
     pub damage: i32,
@@ -639,6 +650,7 @@ impl CombatantState {
             ));
         }
         let mut state = Self {
+            magic: super::magic::MagicState::default(),
             hp: sheet.vitals.max_hp,
             next_attack_time_primary: None,
             next_attack_time_secondary: None,
@@ -787,6 +799,7 @@ impl Combatant {
     pub fn new_with_team(sheet: CombatantSheet, team_id: u8) -> Self {
         let state = CombatantState::new(&sheet);
         Self {
+            magic: super::magic::MagicProfile::default(),
             sheet,
             state,
             team_id,
@@ -803,6 +816,7 @@ impl Combatant {
 
     pub(crate) fn reset_state(&mut self) {
         self.state = CombatantState::new(&self.sheet);
+        self.state.magic = super::magic::MagicState::new(&self.magic);
         self.state.activated_style_ids = self.active_style_ids.clone();
         self.last_tactical_directive = None;
     }
@@ -961,6 +975,17 @@ impl Combatant {
         let mut value = self.sheet.modifiers.apply_f32(base, stat);
         for effect in &self.state.active_effects {
             value = effect.modifiers.apply_f32(value, stat);
+        }
+        if stat == StatIdF32::MoveSpeed {
+            if self.state.magic.casting.is_some() || self.state.magic.channeling.is_some() {
+                value = value.min(5.0);
+            }
+            if self.state.magic.fatigued()
+                && !self.magic.talents.fatigue_penalties().can_run_or_sprint
+            {
+                value = value.min(10.0);
+            }
+            value *= self.state.magic.movement_multiplier(self.magic.talents);
         }
         value
     }

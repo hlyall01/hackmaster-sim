@@ -1243,6 +1243,7 @@ fn player_config_from_preset(
     player.offensive_dualwielding = preset.offensive_dualwielding;
     player.proficiencies = preset.proficiencies.clone();
     player.talents = preset.talents.clone();
+    player.magic = preset.magic.clone();
     player.race_id = preset.race_id.clone();
     player.race_applied = player.race_id.is_some();
     player.knockback_step =

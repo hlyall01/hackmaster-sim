@@ -72,6 +72,7 @@ fn armor_region_from_str(region: &str) -> Option<ArmorRegion> {
     match region {
         "Northern" => Some(ArmorRegion::Northern),
         "Southern" => Some(ArmorRegion::Southern),
+        "Raurosi" => Some(ArmorRegion::Raurosi),
         _ => None,
     }
 }

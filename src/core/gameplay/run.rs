@@ -401,6 +401,7 @@ mod tests {
             attacker_idx: 1,
             defender_idx,
             kind: CombatEventKind::Attack(AttackEvent {
+                source: crate::core::sim::AttackSource::Weapon,
                 hit: true,
                 shield_block: false,
                 damage,
@@ -550,6 +551,9 @@ mod tests {
         events
             .iter()
             .map(|event| match &event.kind {
+                CombatEventKind::Spell(spell) => {
+                    format!("{}:spell:{:?}:{}", event.time, spell.kind, spell.message)
+                }
                 CombatEventKind::Attack(attack) => format!(
                     "t={} a={} d={} hit={} sb={} dmg={} sd={} kb={:.1} charge={} ranged={} hp={}",
                     event.time,

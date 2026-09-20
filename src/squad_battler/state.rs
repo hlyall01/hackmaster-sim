@@ -274,6 +274,9 @@ impl SquadBattlerApp {
             return Err("There is no live fight.".to_string());
         };
         match command {
+            FightCommand::CastEchoStrike { unit } => fight.cast_echo_strike(unit)?,
+            FightCommand::CancelSpell { unit } => fight.cancel_spell(unit)?,
+            FightCommand::DismissEchoStrike { unit } => fight.dismiss_echo_strike(unit)?,
             FightCommand::Play => fight.running = true,
             FightCommand::Pause => fight.running = false,
             FightCommand::Step | FightCommand::Tick => {
@@ -758,6 +761,9 @@ pub struct EnemyView {
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FightCommand {
+    CastEchoStrike { unit: usize },
+    CancelSpell { unit: usize },
+    DismissEchoStrike { unit: usize },
     Play,
     Pause,
     Step,

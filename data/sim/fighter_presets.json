@@ -1008,8 +1008,31 @@
           "id": "prescience",
           "rank": 1,
           "weapon": null
+        },
+        {
+          "id": "diminish_spell_fatigue",
+          "rank": 5,
+          "weapon": null
+        },
+        {
+          "id": "mitigate_spell_fatigue",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "decimate_spell_fatigue",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "eliminate_spell_fatigue",
+          "rank": 1,
+          "weapon": null
         }
-      ]
+      ],
+      "magic": {
+        "known_spells": ["echo_strike"]
+      }
     },
     {
       "name": "Volfango Drakos (Perfect Two-Weapon)",
@@ -1173,8 +1196,31 @@
           "id": "prescience",
           "rank": 1,
           "weapon": null
+        },
+        {
+          "id": "diminish_spell_fatigue",
+          "rank": 5,
+          "weapon": null
+        },
+        {
+          "id": "mitigate_spell_fatigue",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "decimate_spell_fatigue",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "eliminate_spell_fatigue",
+          "rank": 1,
+          "weapon": null
         }
-      ]
+      ],
+      "magic": {
+        "known_spells": ["echo_strike"]
+      }
     },
     {
       "name": "Vill",

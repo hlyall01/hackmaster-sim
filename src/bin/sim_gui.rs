@@ -87,6 +87,7 @@ enum PlayerEditorTab {
     Tactics,
     Stats,
     Talents,
+    Magic,
     Derived,
     Tools,
 }
@@ -100,19 +101,21 @@ impl PlayerEditorTab {
             PlayerEditorTab::Tactics => "Tactics",
             PlayerEditorTab::Stats => "Stats",
             PlayerEditorTab::Talents => "Talents",
+            PlayerEditorTab::Magic => "Spells",
             PlayerEditorTab::Derived => "Derived",
             PlayerEditorTab::Tools => "Tools",
         }
     }
 }
 
-const PLAYER_EDITOR_TABS: [PlayerEditorTab; 8] = [
+const PLAYER_EDITOR_TABS: [PlayerEditorTab; 9] = [
     PlayerEditorTab::Core,
     PlayerEditorTab::Gear,
     PlayerEditorTab::CombatManeuvers,
     PlayerEditorTab::Tactics,
     PlayerEditorTab::Stats,
     PlayerEditorTab::Talents,
+    PlayerEditorTab::Magic,
     PlayerEditorTab::Derived,
     PlayerEditorTab::Tools,
 ];
@@ -143,6 +146,7 @@ const WEAPON_GROUP_LABELS: [&str; 13] = [
 
 struct SimGuiApp {
     running: bool,
+    spell_error: Option<(usize, String)>,
     sim: SimState,
     players: [PlayerConfig; 2],
     player_colors: [Color32; 2],
@@ -299,10 +303,11 @@ impl SimGuiApp {
             .unwrap_or(WeaponId::new(0));
         let mut app = Self {
             running: false,
+            spell_error: None,
             sim,
             players: [
                 PlayerConfig::new("Arthur Du Randt", weapon_a),
-                PlayerConfig::new("Zorya", weapon_b),
+                PlayerConfig::new("Volfango Drakos", weapon_b),
             ],
             player_colors: [
                 Color32::from_rgb(214, 93, 69),
@@ -315,7 +320,7 @@ impl SimGuiApp {
             talent_catalog,
             npc_presets,
             fighter_presets,
-            fighter_preset_names: ["Arthur Du Randt".to_string(), "Zorya".to_string()],
+            fighter_preset_names: ["Arthur Du Randt".to_string(), "Volfango Drakos".to_string()],
             tactical_presets,
             tactical_drafts: [TacticalPolicy::default(), TacticalPolicy::default()],
             tactical_preset_indices: [0, 0],
@@ -362,7 +367,7 @@ impl SimGuiApp {
             damage_roll_plots: [None, None],
         };
         app.apply_default_fighter_preset(0, "Arthur Du Randt");
-        app.apply_default_fighter_preset(1, "Zorya");
+        app.apply_default_fighter_preset(1, "Volfango Drakos");
         if let Some(preset) = app
             .fighter_presets
             .entries()
@@ -404,6 +409,7 @@ impl SimGuiApp {
     }
 
     fn reset_positions(&mut self) {
+        self.spell_error = None;
         self.sanitize_players();
         let combatants = game_logic::build_combatants(
             &self.players,
@@ -414,6 +420,31 @@ impl SimGuiApp {
             &self.talent_catalog,
         );
         self.sim.reset_with_combatants(combatants);
+    }
+
+    fn prepare_to_advance(&mut self) {
+        // Initial character edits still need a rebuild, but an action queued
+        // at second zero is already part of the fight and must survive Start.
+        let has_spell_action = self.sim.combatants.iter()
+            .any(|actor| actor.state.magic.last_cast_at.is_some());
+        if self.sim.done || (self.sim.elapsed_seconds == 0 && !has_spell_action) {
+            self.reset_positions();
+        }
+    }
+
+    fn handle_spell_action(&mut self, caster: usize, action: u8) {
+        let result = match action {
+            0 => self.sim.cast_echo_strike(caster),
+            1 => self.sim.cancel_spell(caster),
+            2 => self.sim.dismiss_echo_strike(caster),
+            4 | 5 => {
+                let id = if action == 4 { "spell_chronoblur" } else { "spell_streamline" };
+                hackmaster_sim::core::sim::SpellRequest::from_loadout(id, &self.sim.combatants[caster].magic.loadout)
+                    .and_then(|request| self.sim.cast_spell(caster, request))
+            }
+            _ => self.sim.stop_channeling(caster),
+        };
+        self.spell_error = result.err().map(|error| (caster, error.to_string()));
     }
 
     fn run_bulk_sim(&mut self) {
@@ -522,7 +553,10 @@ impl SimGuiApp {
             attacks = attacks.saturating_add(
                 sim.combat_events
                     .iter()
-                    .filter(|event| event.attacker_idx == attacker_idx)
+                    .filter(|event| {
+                        event.attacker_idx == attacker_idx
+                            && matches!(event.kind, sim::CombatEventKind::Attack(_))
+                    })
                     .count() as u64,
             );
         }
@@ -647,7 +681,7 @@ impl SimGuiApp {
                 painter.text(
                     Pos2::new(x, ground_y - 56.0),
                     egui::Align2::CENTER_CENTER,
-                    "knocked",
+                    "knocked down",
                     egui::TextStyle::Small.resolve(ui.style()),
                     Color32::from_rgb(230, 160, 90),
                 );
@@ -760,7 +794,7 @@ impl SimGuiApp {
         let body_color = Color32::from_gray(230);
         let stroke = (2.0, body_color);
 
-        if downed {
+        if downed || knocked_back {
             let torso_start = Pos2::new(base.x - facing * 2.0, base.y - 4.0);
             let torso_end = Pos2::new(base.x + facing * 16.0, base.y - 4.0);
             let head = Pos2::new(base.x + facing * 22.0, base.y - 6.0);
@@ -781,33 +815,6 @@ impl SimGuiApp {
             draw_weapon_icon(
                 painter,
                 Pos2::new(base.x + facing * 6.0, base.y - 10.0),
-                facing,
-                weapon_icon,
-            );
-            return;
-        }
-
-        if knocked_back {
-            let torso_start = Pos2::new(base.x, base.y - 8.0);
-            let torso_end = Pos2::new(base.x + facing * 16.0, base.y - 20.0);
-            let head = Pos2::new(base.x + facing * 20.0, base.y - 24.0);
-            painter.line_segment([torso_start, torso_end], stroke);
-            painter.line_segment(
-                [torso_start, Pos2::new(base.x - facing * 6.0, base.y - 2.0)],
-                stroke,
-            );
-            painter.line_segment(
-                [torso_start, Pos2::new(base.x + facing * 6.0, base.y - 2.0)],
-                stroke,
-            );
-            painter.circle_filled(head, 6.0, head_color);
-            painter.line_segment(
-                [torso_end, Pos2::new(base.x + facing * 26.0, base.y - 14.0)],
-                stroke,
-            );
-            draw_weapon_icon(
-                painter,
-                Pos2::new(base.x + facing * 26.0, base.y - 14.0),
                 facing,
                 weapon_icon,
             );
@@ -1162,8 +1169,8 @@ impl eframe::App for SimGuiApp {
                         .button(if self.running { "Pause" } else { "Start" })
                         .clicked()
                     {
-                        if !self.running && (self.sim.done || self.sim.elapsed_seconds == 0) {
-                            self.reset_positions();
+                        if !self.running {
+                            self.prepare_to_advance();
                         }
                         self.running = !self.running;
                     }
@@ -1173,9 +1180,7 @@ impl eframe::App for SimGuiApp {
                     }
                     if !self.running {
                         if ui.button("Next second").clicked() {
-                            if self.sim.done || self.sim.elapsed_seconds == 0 {
-                                self.reset_positions();
-                            }
+                            self.prepare_to_advance();
                             self.sim.tick();
                         }
                     }
@@ -1255,10 +1260,14 @@ impl eframe::App for SimGuiApp {
                         .map(|weapon| weapon.name.as_str())
                         .unwrap_or("Unarmed");
                     ui.horizontal(|ui| {
-                        ui.label(format!("{} ({})", self.players[idx].name, weapon_name));
-                        if ui.button("Customize").clicked() {
-                            self.show_player_editor[idx] = true;
-                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Customize").clicked() {
+                                self.show_player_editor[idx] = true;
+                            }
+                            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                                truncated_label(ui, format!("{} ({})", self.players[idx].name, weapon_name));
+                            });
+                        });
                     });
                     ui.label(format!("Move: {:.0} ft/s", self.players[idx].move_speed));
                     if idx == 0 {
@@ -1268,7 +1277,7 @@ impl eframe::App for SimGuiApp {
                 ui.separator();
                 ui.heading("Bulk sim");
                 ui.horizontal(|ui| {
-                    ui.label("Runs");
+                    truncated_label(ui, "Runs");
                     ui.add(
                         egui::DragValue::new(&mut self.bulk_runs)
                             .clamp_range(1..=u32::MAX)
@@ -1289,82 +1298,82 @@ impl eframe::App for SimGuiApp {
                                 .max(1) as f32;
                             let wins_a = result.wins.get(0).copied().unwrap_or(0);
                             let wins_b = result.wins.get(1).copied().unwrap_or(0);
-                            ui.label(format!(
+                            truncated_label(ui, format!(
                                 "{} wins: {} ({:.1}%)",
                                 self.players[0].name,
                                 wins_a,
                                 wins_a as f32 * 100.0 / total_runs
                             ));
-                            ui.label(format!(
+                            truncated_label(ui, format!(
                                 "{} wins: {} ({:.1}%)",
                                 self.players[1].name,
                                 wins_b,
                                 wins_b as f32 * 100.0 / total_runs
                             ));
                             if result.ties > 0 {
-                                ui.label(format!(
+                                truncated_label(ui, format!(
                                     "Ties/timeouts: {} ({:.1}%)",
                                     result.ties,
                                     result.ties as f32 * 100.0 / total_runs
                                 ));
                             }
-                            ui.label(format!("Avg duration: {:.1}s", result.avg_duration));
+                            truncated_label(ui, format!("Avg duration: {:.1}s", result.avg_duration));
                             egui::CollapsingHeader::new("Detailed metrics")
                                 .default_open(true)
                                 .show(ui, |ui| {
-                                    ui.label(format!(
+                                    truncated_label(ui, format!(
                                         "Shortest fight: {}s",
                                         result.shortest_duration
                                     ));
-                                    ui.label(format!(
+                                    truncated_label(ui, format!(
                                         "Longest fight: {}s",
                                         result.longest_duration
                                     ));
-                                    ui.label(format!(
+                                    truncated_label(ui, format!(
                                         "Highest crit HP hit: {}",
                                         result.highest_single_crit_hit
                                     ));
-                                    ui.label(format!(
+                                    truncated_label(ui, format!(
                                         "Highest non-crit HP hit: {}",
                                         result.highest_single_noncrit_hit
                                     ));
-                                    ui.label(format!(
+                                    truncated_label(ui, format!(
                                         "Highest shield hit: {}",
                                         result.highest_single_shield_hit
                                     ));
                                     if result.shields_present {
-                                        ui.label(format!(
+                                        truncated_label(ui, format!(
                                             "Shield breaks: {}",
                                             result.shield_breaks
                                         ));
                                         if result.shield_breaks > 0 {
-                                            ui.label(format!(
+                                            truncated_label(ui, format!(
                                                 "Avg hits shield survived: {:.2}",
                                                 result.avg_hits_shield_survived
                                             ));
                                         } else {
-                                            ui.label("Avg hits shield survived: n/a (no breaks)");
+                                            truncated_label(ui, "Avg hits shield survived: n/a (no breaks)");
                                         }
                                     }
-                                    ui.label(format!("Instakills: {}", result.instakills));
-                                    ui.label(format!(
+                                    truncated_label(ui, format!("Instakills: {}", result.instakills));
+                                    truncated_label(ui, format!(
                                         "Max one-side knockback in a fight: {:.1} ft",
                                         result.max_total_knockback_one_side_ft
                                     ));
                                     ui.separator();
-                                    ui.label(format!(
+                                    truncated_label(ui, format!(
                                         "Fights w/ 2+ charges: {}",
                                         result.fights_with_second_charge
                                     ));
-                                    ui.label(format!(
+                                    truncated_label(ui, format!(
                                         "Fights w/ trauma: {}",
                                         result.fights_with_trauma
                                     ));
-                                    ui.label(format!(
+                                    truncated_label(ui, format!(
                                         "Fights w/ trauma on first exchange: {}",
                                         result.fights_with_trauma_first_exchange
                                     ));
-                                    ui.label(format!(
+                                    truncated_label(ui, format!(
                                         "Fights w/ 20ft knockback: {}",
                                         result.fights_with_knockback_20ft
                                     ));
@@ -1416,38 +1425,38 @@ impl eframe::App for SimGuiApp {
                                             .copied()
                                             .unwrap_or(0);
                                         ui.separator();
-                                        ui.label(format!("{name} avg dmg dealt: {:.1}", avg_dealt));
-                                        ui.label(format!("{name} avg dmg taken: {:.1}", avg_taken));
-                                        ui.label(format!(
+                                        truncated_label(ui, format!("{name} avg dmg dealt: {:.1}", avg_dealt));
+                                        truncated_label(ui, format!("{name} avg dmg taken: {:.1}", avg_taken));
+                                        truncated_label(ui, format!(
                                             "{name} average damage rolled: {:.1}",
                                             avg_rolled
                                         ));
-                                        ui.label(format!(
+                                        truncated_label(ui, format!(
                                             "{name} average damage landed: {:.1}",
                                             avg_landed
                                         ));
-                                        ui.label(format!("{name} avg remaining HP: {:.1}", avg_hp));
-                                        ui.label(format!(
+                                        truncated_label(ui, format!("{name} avg remaining HP: {:.1}", avg_hp));
+                                        truncated_label(ui, format!(
                                             "{name} highest crit hit: {}",
                                             top_crit_hit
                                         ));
-                                        ui.label(format!(
+                                        truncated_label(ui, format!(
                                             "{name} highest non-crit hit: {}",
                                             top_noncrit_hit
                                         ));
-                                        ui.label(format!(
+                                        truncated_label(ui, format!(
                                             "{name} highest shield hit: {}",
                                             top_shield_hit
                                         ));
-                                        ui.label(format!("{name} instakills: {}", instakills));
+                                        truncated_label(ui, format!("{name} instakills: {}", instakills));
                                     }
                                 });
                             if let Some(duration) = self.bulk_sim_duration {
-                                ui.label(format!("Sim time: {:.2}s", duration.as_secs_f64()));
+                                truncated_label(ui, format!("Sim time: {:.2}s", duration.as_secs_f64()));
                             }
                         } else {
-                            ui.label("No bulk results yet.");
-                            ui.label("Click 'Run bulk' to generate metrics.");
+                            truncated_label(ui, "No bulk results yet.");
+                            truncated_label(ui, "Click 'Run bulk' to generate metrics.");
                         }
                     });
             });
@@ -1477,7 +1486,82 @@ impl eframe::App for SimGuiApp {
                     "{} HP: {}",
                     self.sim.combatants[1].sheet.name, self.sim.combatants[1].state.hp
                 ));
-                for combatant in &self.sim.combatants {
+                let mut spell_action = None;
+                for (index, combatant) in self.sim.combatants.iter().enumerate() {
+                    if combatant.magic.loadout.knows_echo_strike
+                        || !combatant.magic.loadout.known_spells.is_empty()
+                    {
+                        ui.push_id(("magic_status", index), |ui| {
+                            ui.separator();
+                            ui.label(format!("{} — Magic", combatant.sheet.name));
+                            if let Some((caster, error)) = &self.spell_error {
+                                if *caster == index {
+                                    ui.colored_label(egui::Color32::YELLOW, error);
+                                }
+                            }
+                            let state = &combatant.state.magic;
+                            if let Some(cast) = &state.casting {
+                                ui.label(format!(
+                                    "Casting {}: {}s",
+                                    cast.definition.name,
+                                    cast.completes_at.saturating_sub(self.sim.elapsed_seconds)
+                                ));
+                                if !self.running {
+                                    ui.small("Paused — press Start or Next second to advance casting.");
+                                }
+                                if ui.button("Cancel cast").clicked() {
+                                    spell_action = Some((index, 1));
+                                }
+                            } else {
+                                for (id, label, action) in [
+                                    ("echo_strike", "Cast Echo Strike", 0),
+                                    ("spell_chronoblur", "Cast Chronoblur", 4),
+                                    ("spell_streamline", "Cast Streamline", 5),
+                                ] {
+                                    if combatant.magic.loadout.knows_spell(id)
+                                        && ui.add_enabled(!self.sim.done, egui::Button::new(label)).clicked() {
+                                        spell_action = Some((index, action));
+                                    }
+                                }
+                            }
+                            if let Some(channel) = &state.channeling {
+                                ui.label(format!("Channelling {}", channel.definition.name));
+                                if ui.button("Stop channelling").clicked() {
+                                    spell_action = Some((index, 3));
+                                }
+                            }
+                            if let Some((_, end)) = state.fatigue {
+                                ui.small(format!(
+                                    "Spell fatigue: {}s",
+                                    end.saturating_sub(self.sim.elapsed_seconds)
+                                ));
+                            }
+                            for spell in hackmaster_sim::core::magic::SPELL_CATALOG {
+                                if let Some(effect) = combatant.state.active_effects.iter().find(|effect| effect.id == spell.id && effect.remaining_seconds > 0) {
+                                    ui.small(format!("{} active: {}s", spell.name, effect.remaining_seconds));
+                                }
+                            }
+                            if let Some(buff) = &state.armed_echo {
+                                ui.small(format!(
+                                    "Echo armed: {}s",
+                                    buff.expires_at.saturating_sub(self.sim.elapsed_seconds)
+                                ));
+                            }
+                            for echo in &state.echoes {
+                                ui.small(format!(
+                                    "Echo {} in {}s: {} damage",
+                                    echo.ordinal + 1,
+                                    echo.due_at.saturating_sub(self.sim.elapsed_seconds),
+                                    echo.damage
+                                ));
+                            }
+                            if (state.armed_echo.is_some() || !state.echoes.is_empty())
+                                && ui.button("Dismiss Echo Strike").clicked()
+                            {
+                                spell_action = Some((index, 2));
+                            }
+                        });
+                    }
                     if combatant.tactical_policy.enabled {
                         let styles = if combatant.active_style_ids.is_empty() {
                             "No style".to_string()
@@ -1489,6 +1573,10 @@ impl eframe::App for SimGuiApp {
                             ui.small(format!("Last: {directive}"));
                         }
                     }
+                }
+                if let Some((caster, action)) = spell_action {
+                    self.handle_spell_action(caster, action);
+                    ctx.request_repaint();
                 }
                 if let Some(event) = &self.sim.last_event {
                     ui.separator();
@@ -1630,6 +1718,12 @@ impl eframe::App for SimGuiApp {
             ctx.request_repaint();
         }
     }
+}
+
+fn truncated_label(ui: &mut egui::Ui, text: impl Into<String>) -> egui::Response {
+    let text = text.into();
+    ui.add(egui::Label::new(&text).truncate(true))
+        .on_hover_text(text)
 }
 
 fn render_player_editor_tabs(ui: &mut egui::Ui, id_prefix: &str, active_tab: &mut PlayerEditorTab) {
@@ -2080,6 +2174,35 @@ fn render_detailed_team_stats(ui: &mut egui::Ui, stats: &sim::DetailedTeamStats,
         "Damaging-hit distribution: median {} | p90 {} | p99 {}",
         stats.hp_damage_p50, stats.hp_damage_p90, stats.hp_damage_p99,
     ));
+
+    ui.add_space(4.0);
+    if stats.damage_by_source.is_empty() {
+        ui.small("No damage sources recorded.");
+    } else {
+        egui::Grid::new(("damage_by_source", stats.team_id))
+            .striped(true)
+            .spacing([10.0, 4.0])
+            .show(ui, |ui| {
+                ui.strong("Source");
+                ui.strong("HP / fight");
+                ui.strong("Share");
+                ui.strong("DPS");
+                ui.end_row();
+                for row in &stats.damage_by_source {
+                    let label = row.source.to_string();
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(180.0, 18.0),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| { truncated_label(ui, label); },
+                    );
+                    ui.label(format!("{:.2}", row.avg_hp_damage_per_fight))
+                        .on_hover_text(format!("{} total HP damage across all fights", row.total_hp_damage));
+                    ui.label(format!("{:.1}%", row.damage_share * 100.0));
+                    ui.label(format!("{:.3}", row.combat_dps));
+                    ui.end_row();
+                }
+            });
+    }
 
     ui.add_space(8.0);
     ui.strong("Timing and control");
@@ -3485,6 +3608,7 @@ fn render_player_editor(
         ui.label("Weapon catalog is empty.");
         return;
     }
+    game_logic::migrate_legacy_spells(player);
     game_logic::sanitize_player_ids(
         player,
         weapon_catalog,
@@ -4476,29 +4600,23 @@ fn render_player_editor(
                 );
             });
         }
+        PlayerEditorTab::Magic => {
+            render_magic_editor(ui, id_prefix, player);
+            if ui.button("Apply spells and reset combat").clicked() { *tactics_applied = true; }
+        },
         PlayerEditorTab::Derived => {
             let npc_active = player.npc_preset.is_some();
             if npc_active {
                 ui.label("Derived stats ignored while NPC preset is active.");
                 return;
             }
-            let summary = game_logic::player_summary(
-                player,
-                weapon_catalog,
-                armor_catalog,
-                shield_catalog,
-                talent_catalog,
+            let resolved = game_logic::resolve_player_stats(
+                player, weapon_catalog, armor_catalog, shield_catalog, npc_presets, talent_catalog,
             );
-            let combatant = game_logic::build_combatant(
-                player,
-                weapon_catalog,
-                armor_catalog,
-                shield_catalog,
-                npc_presets,
-                talent_catalog,
-            );
+            let summary = resolved.summary;
+            let combatant = resolved.combatant;
             let mut breakdowns = game_logic::derived_stat_breakdowns(
-                player,
+                &resolved.config,
                 weapon_catalog,
                 armor_catalog,
                 shield_catalog,
@@ -4625,6 +4743,23 @@ fn render_player_editor(
                 npc_presets,
                 talent_catalog,
             );
+            for (slot, label) in [(sim::WeaponSlot::Primary, "Main hand"), (sim::WeaponSlot::Secondary, "Off hand")] {
+                let weapon = match slot {
+                    sim::WeaponSlot::Primary => &combatant.sheet.offense.weapon,
+                    sim::WeaponSlot::Secondary => {
+                        let Some(hand) = combatant.sheet.offense.offhand.as_ref() else { continue; };
+                        &hand.weapon
+                    }
+                };
+                let ranged = sim::max_range_for_weapon_name(&weapon.name).is_some()
+                    || weapon.range_bands_feet.is_some();
+                let rule = sim::knockback_rule_for_attack(&combatant, &opponent_combatant,
+                    Some(slot), ranged, false);
+                ui.label(format!("{label} knockback vs current target: 5 ft per {} impact damage", rule.damage_per_step))
+                    .on_hover_text(format!("Target threshold {} {:+} weapon/style {:+} mounted movement. Shield hits also use damage before reduction.",
+                        rule.base_threshold, rule.weapon_adjustment, rule.mounted_adjustment));
+            }
+            ui.small("Charges double damage for knockback before calculating the distance.");
             let target_armor_dr = opponent_combatant.sheet.defense.armor_dr.max(0);
             game_logic::apply_target_damage_breakdowns(
                 &mut breakdowns, &combatant, &opponent_combatant, roll.is_ranged_weapon,
@@ -4802,6 +4937,101 @@ fn render_player_editor(
                 run_dps_test,
             );
         }
+    });
+}
+
+fn render_magic_editor(ui: &mut egui::Ui, id_prefix: &str, player: &mut PlayerConfig) {
+    use hackmaster_sim::core::magic::{AutoCast, Encumbrance, SpellCastAi, SPELL_CATALOG};
+    game_logic::migrate_legacy_spells(player);
+    ui.push_id((id_prefix, "spells"), |ui| {
+        ui.heading("Spells");
+        ui.label("Add spells, choose their empowerments, and decide when to cast them. EP is ignored.");
+        let magic = &mut player.magic;
+        magic.use_essence_costs = false;
+        magic.auto_cast = AutoCast::SpellPolicies;
+        for spell in SPELL_CATALOG {
+            ui.push_id(spell.id, |ui| {
+                ui.group(|ui| {
+                    let learned = magic.knows_spell(spell.id);
+                    ui.horizontal(|ui| {
+                        ui.strong(spell.name);
+                        if spell.level > 0 { ui.label(format!("Level {}", spell.level)); }
+                        if learned {
+                            if ui.small_button("Remove").clicked() { magic.forget_spell(spell.id); }
+                        } else if ui.small_button("Add spell").clicked() {
+                            magic.learn_spell(spell.id);
+                        }
+                    });
+                    ui.label(spell.description);
+                    if !magic.knows_spell(spell.id) { return; }
+                    let mut ai = magic.ai_for(spell.id);
+                    egui::ComboBox::from_id_source("casting_ai").selected_text(ai.label()).show_ui(ui, |ui| {
+                        for choice in [SpellCastAi::WhenUseful, SpellCastAi::AsOftenAsPossible, SpellCastAi::AtFightStart, SpellCastAi::Manual] {
+                            ui.selectable_value(&mut ai, choice, choice.label());
+                        }
+                    });
+                    magic.spell_ai.insert(spell.id.to_owned(), ai);
+                    ui.small(match ai {
+                        SpellCastAi::WhenUseful => spell.ai_description,
+                        SpellCastAi::AsOftenAsPossible => "Recast whenever casting is allowed and this buff is no longer active. Pending echoes continue independently.",
+                        SpellCastAi::AtFightStart => "Cast once at the first available opening; opening spells queue behind each other.",
+                        SpellCastAi::Manual => "Only cast when you press the spell's button during combat.",
+                    });
+                    if spell.id == "echo_strike" {
+                        ui.separator();
+                        ui.label("Empowerments");
+                        ui.horizontal(|ui| {
+                            ui.label("Extra duration");
+                            ui.add(egui::DragValue::new(&mut magic.echo_strike.extra_duration_seconds).clamp_range(0..=3600).suffix(" s"));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Echo delay");
+                            ui.add(egui::DragValue::new(&mut magic.echo_strike.delay_seconds).clamp_range(1..=10).suffix(" s"));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Additional echoes");
+                            ui.add(egui::DragValue::new(&mut magic.echo_strike.additional_echoes).clamp_range(0..=100));
+                        });
+                        ui.checkbox(&mut magic.echo_strike.full_damage, "Full damage");
+                        ui.small(format!("Armed for {}s · {} echo(s) · {} damage", magic.echo_strike.duration_seconds().unwrap_or(15), magic.echo_strike.additional_echoes.saturating_add(1), if magic.echo_strike.full_damage { "full" } else { "half, rounded down" }));
+                        if let Err(error) = magic.validate_echo(player.level) {
+                            ui.colored_label(egui::Color32::YELLOW, error.to_string());
+                        }
+                    } else {
+                        ui.separator();
+                        ui.label("Empowerments");
+                        if spell.id == "spell_chronoblur" {
+                            ui.small("2-second cast · Touch (casts on self)");
+                            ui.horizontal(|ui| {
+                                ui.label("Extra duration (30-second increments)");
+                                ui.add(egui::DragValue::new(&mut magic.chronoblur_duration_ranks).clamp_range(0..=120));
+                            });
+                            ui.label(format!("Duration: {}s", 60 + 30 * u64::from(magic.chronoblur_duration_ranks)));
+                        } else {
+                            ui.small("5-second cast · Field centered on caster");
+                            ui.horizontal(|ui| {
+                                ui.label("Extra duration (minutes)");
+                                ui.add(egui::DragValue::new(&mut magic.streamline_duration_ranks).clamp_range(0..=120));
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Extra radius (10-foot increments)");
+                                ui.add(egui::DragValue::new(&mut magic.streamline_radius_ranks).clamp_range(0..=100));
+                            });
+                            ui.label(format!("Duration: {}s · Radius: {} ft", 300 + 60 * u64::from(magic.streamline_duration_ranks), 30 + 10 * u64::from(magic.streamline_radius_ranks)));
+                        }
+                    }
+                });
+            });
+        }
+        ui.collapsing("Casting conditions", |ui| {
+            egui::ComboBox::from_id_source("encumbrance").selected_text(format!("Encumbrance: {:?}", magic.encumbrance)).show_ui(ui, |ui| {
+                for value in [Encumbrance::None, Encumbrance::Light, Encumbrance::Moderate, Encumbrance::Heavy] {
+                    ui.selectable_value(&mut magic.encumbrance, value, format!("{value:?}"));
+                }
+            });
+            ui.checkbox(&mut magic.arms_restricted, "Arms restricted (blocks somatic components)");
+            ui.checkbox(&mut magic.silenced, "Unable to speak (blocks verbal components)");
+        });
     });
 }
 
@@ -5200,6 +5430,8 @@ fn apply_fighter_preset(
     player.misc_modifiers = game_logic::MiscRollModifiers::default();
     player.proficiencies = preset.proficiencies.clone();
     player.talents = preset.talents.clone();
+    player.magic = preset.magic.clone();
+    game_logic::migrate_legacy_spells(player);
     player.default_weapon_style_ids = preset.default_weapon_style_ids.clone();
     player.weapon_id = find_weapon_id_by_name(weapon_catalog, &preset.weapon)
         .or_else(|| weapon_catalog.first_id())
@@ -5247,6 +5479,7 @@ fn fighter_preset_from_player(
         .and_then(|id| weapon_catalog.get(id))
         .map(|weapon| weapon.name.clone());
     FighterPreset {
+        magic: player.magic.clone(),
         name: name.to_string(),
         level: player.level,
         progression: FighterProgression {
@@ -6105,6 +6338,258 @@ mod tests {
             Vec::new(),
             None,
         )
+    }
+
+    #[test]
+    fn knockdown_draws_fighter_on_ground_in_both_directions() {
+        let app = app_fixture();
+        for facing in [-1.0, 1.0] {
+            for knocked_back in [false, true] {
+                let context = egui::Context::default();
+                let base = Pos2::new(100.0, 100.0);
+                let output = context.run(egui::RawInput::default(), |ctx| {
+                    let painter = ctx.layer_painter(egui::LayerId::background());
+                    app.draw_person(
+                        &painter, base, facing, Color32::RED, false, knocked_back,
+                        WeaponIcon::Other, false,
+                    );
+                });
+                let head = output.shapes.iter().find_map(|shape| match &shape.shape {
+                    egui::Shape::Circle(circle) if circle.fill == Color32::RED => Some(circle.center),
+                    _ => None,
+                }).expect("fighter head should be drawn");
+                assert_eq!(head, if knocked_back {
+                    Pos2::new(base.x + facing * 22.0, base.y - 6.0)
+                } else {
+                    Pos2::new(base.x, base.y - 34.0)
+                });
+            }
+        }
+    }
+
+    fn manual_spell_app() -> SimGuiApp {
+        use hackmaster_sim::core::magic::SpellCastAi;
+        let mut app = app_fixture();
+        app.players[0].level = 10;
+        for id in ["echo_strike", "spell_chronoblur", "spell_streamline"] {
+            app.players[0].magic.learn_spell(id);
+            app.players[0].magic.spell_ai.insert(id.into(), SpellCastAi::Manual);
+        }
+        app.reset_positions();
+        app
+    }
+
+    #[test]
+    fn manual_echo_at_second_zero_survives_start_and_arms() {
+        let mut app = manual_spell_app();
+        app.handle_spell_action(0, 0);
+        assert!(app.spell_error.is_none());
+        assert!(app.sim.combatants[0].state.magic.casting.is_some());
+        app.prepare_to_advance();
+        assert!(app.sim.combatants[0].state.magic.casting.is_some());
+        app.running = true;
+        app.update_sim(1.0);
+        app.update_sim(1.0);
+        assert!(app.sim.combatants[0].state.magic.armed_echo.is_some());
+    }
+
+    #[test]
+    fn manual_spells_survive_next_second_without_restarting_cast_timers() {
+        for (action, id, seconds) in [(0, "echo_strike", 1), (4, "spell_chronoblur", 2), (5, "spell_streamline", 5)] {
+            let mut app = manual_spell_app();
+            app.handle_spell_action(0, action);
+            for _ in 0..=seconds {
+                app.prepare_to_advance();
+                app.sim.tick();
+            }
+            assert!(app.sim.combatants[0].state.magic.casting.is_none());
+            assert!(app.sim.combatants[0].state.magic.started_spells.iter().any(|started| started == id));
+            if id == "echo_strike" {
+                assert!(app.sim.combatants[0].state.magic.armed_echo.is_some());
+            } else {
+                assert!(app.sim.combatants[0].state.has_active_effect(id));
+            }
+        }
+    }
+
+    #[test]
+    fn failed_cast_error_persists_until_success_or_reset() {
+        let mut app = manual_spell_app();
+        app.sim.combatants[0].magic.loadout.arms_restricted = true;
+        app.handle_spell_action(0, 0);
+        assert!(app.spell_error.as_ref().unwrap().1.contains("Somatic"));
+        app.update_sim(0.1);
+        assert!(app.spell_error.is_some());
+        app.sim.combatants[0].magic.loadout.arms_restricted = false;
+        app.handle_spell_action(0, 0);
+        assert!(app.spell_error.is_none());
+        app.handle_spell_action(0, 0);
+        assert!(app.spell_error.is_some());
+        app.reset_positions();
+        assert!(app.spell_error.is_none());
+    }
+
+    #[test]
+    fn cancelling_before_next_second_has_no_fatigue_or_recovery_penalty() {
+        for action in [0, 4, 5] {
+            let mut app = manual_spell_app();
+            let recovery = app.sim.combatants[0].state.magic.primary_recovery_until;
+            app.handle_spell_action(0, action);
+            app.handle_spell_action(0, 1);
+            assert!(app.spell_error.is_none());
+            assert!(app.sim.combatants[0].state.magic.fatigue.is_none());
+            assert_eq!(app.sim.combatants[0].state.magic.primary_recovery_until, recovery);
+            app.prepare_to_advance();
+            app.sim.tick();
+            assert!(app.sim.combatants[0].state.magic.fatigue.is_none());
+            assert!(app.sim.combatants[0].state.magic.casting.is_none());
+        }
+    }
+
+    #[test]
+    fn starting_a_fresh_fight_still_applies_character_edits() {
+        let mut app = manual_spell_app();
+        app.players[0].level = 15;
+        app.prepare_to_advance();
+        assert_eq!(app.sim.combatants[0].magic.level, 15);
+        app.handle_spell_action(0, 0);
+        app.sim.done = true;
+        app.prepare_to_advance();
+        assert!(!app.sim.done);
+        assert!(app.sim.combatants[0].state.magic.casting.is_none());
+    }
+
+    #[test]
+    fn mounted_wren_impaler_against_errit_uses_five_damage_knockback_steps() {
+        let presets = data::load_fighter_presets("data/sim/fighter_presets.json").unwrap();
+        let mut app = app_fixture();
+        for (index, name) in [(0, "Wren"), (1, "Errit")] {
+            let preset = presets.entries().iter().find(|p| p.name == name).unwrap();
+            apply_fighter_preset(&mut app.players[index], preset, &app.weapon_catalog,
+                &app.armor_catalog, &app.shield_catalog, &app.race_catalog);
+        }
+        app.players[0].weapon_id = find_weapon_id_by_name(&app.weapon_catalog, "Lance").unwrap();
+        app.players[0].mounted = true;
+        app.players[0].mounted_combat.trot_or_faster = true;
+        app.reset_positions();
+        let rule = sim::knockback_rule_for_attack(&app.sim.combatants[0], &app.sim.combatants[1],
+            Some(sim::WeaponSlot::Primary), false, false);
+        assert_eq!(rule.base_threshold, 15);
+        assert_eq!(rule.weapon_adjustment, -5);
+        assert_eq!(rule.mounted_adjustment, -5);
+        assert_eq!(rule.damage_per_step, 5);
+        assert_eq!(rule.distance_ft(38), 35.0);
+    }
+
+    #[test]
+    fn both_volfango_presets_can_cast_echo_without_completed_spell_fatigue() {
+        let presets = hackmaster_sim::data::load_fighter_presets("data/sim/fighter_presets.json").unwrap();
+        let volfangos: Vec<_> = presets.entries().iter().filter(|preset| preset.name.starts_with("Volfango Drakos")).collect();
+        assert_eq!(volfangos.len(), 2);
+        for preset in volfangos {
+            let mut app = app_fixture();
+            apply_fighter_preset(&mut app.players[0], preset, &app.weapon_catalog, &app.armor_catalog, &app.shield_catalog, &app.race_catalog);
+            app.reset_positions();
+            assert_eq!(app.players[0].level, 9);
+            let talents = app.sim.combatants[0].magic.talents;
+            assert_eq!(talents.diminish_spell_fatigue, 5);
+            assert!(talents.mitigate_spell_fatigue);
+            assert!(talents.decimate_spell_fatigue);
+            assert!(talents.eliminate_spell_fatigue);
+            assert_eq!(talents.fatigue_seconds(1), 0);
+            app.handle_spell_action(0, 0);
+            assert!(app.spell_error.is_none(), "{:?}", app.spell_error);
+            app.prepare_to_advance();
+            app.sim.tick();
+            app.sim.tick();
+            assert!(app.sim.combatants[0].state.magic.armed_echo.is_some());
+            assert!(app.sim.combatants[0].state.magic.fatigue.is_none());
+            assert!(app.sim.combatants[0].state.magic.primary_recovery_until > 1.0);
+        }
+    }
+
+    #[test]
+    fn magic_preset_save_load_and_simulation_reset_preserve_configuration() {
+        use hackmaster_sim::core::magic::*;
+        let mut app = app_fixture();
+        app.players[0].level = 10;
+        app.players[0].magic = MagicLoadout {
+            known_spells: vec!["echo_strike".into(), "spell_chronoblur".into(), "spell_streamline".into()],
+            spell_ai: [("echo_strike".into(), SpellCastAi::AsOftenAsPossible), ("spell_chronoblur".into(), SpellCastAi::Manual)].into(),
+            chronoblur_duration_ranks: 2,
+            streamline_duration_ranks: 3,
+            streamline_radius_ranks: 4,
+            auto_cast: AutoCast::AtStart,
+            echo_strike: EchoStrikeOptions {
+                full_damage: true,
+                ..EchoStrikeOptions::default()
+            },
+            essences: vec![EssencePool {
+                essence_id: "test".into(),
+                proficiency: EssenceProficiency::V,
+                capacity: 500,
+                current: 450,
+            }],
+            ..MagicLoadout::default()
+        };
+        let saved = fighter_preset_from_player(
+            &app.players[0],
+            &app.weapon_catalog,
+            &app.armor_catalog,
+            &app.shield_catalog,
+            "Magic fixture",
+        );
+        let restored: FighterPreset =
+            serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        let mut loaded = PlayerConfig::new("Loaded", app.players[0].weapon_id);
+        apply_fighter_preset(
+            &mut loaded,
+            &restored,
+            &app.weapon_catalog,
+            &app.armor_catalog,
+            &app.shield_catalog,
+            &app.race_catalog,
+        );
+        assert_eq!(loaded.magic, app.players[0].magic);
+        app.players[0] = loaded;
+        app.reset_positions();
+        assert_eq!(app.sim.combatants[0].magic.loadout, app.players[0].magic);
+        app.sim.tick();
+        assert!(app.sim.combatants[0].state.magic.casting.is_some());
+    }
+
+    #[test]
+    fn spell_picker_renders_with_ep_ignored_and_preserves_legacy_pool_data() {
+        use hackmaster_sim::core::magic::*;
+        let app = app_fixture();
+        let mut player = app.players[0].clone();
+        for spell in SPELL_CATALOG { player.magic.learn_spell(spell.id); }
+        let ctx = egui::Context::default();
+        for count in [0, 2] {
+            player.magic.essences = (0..count)
+                .map(|index| EssencePool {
+                    essence_id: format!("Essence {index}"),
+                    proficiency: EssenceProficiency::V,
+                    capacity: 500,
+                    current: 450,
+                })
+                .collect();
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(560.0, 740.0),
+                )),
+                ..Default::default()
+            };
+            let output = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    egui::ScrollArea::vertical()
+                        .show(ui, |ui| render_magic_editor(ui, "test_magic", &mut player));
+                });
+            });
+            assert!(!output.shapes.is_empty());
+            assert_eq!(player.magic.essences.len(), count);
+        }
     }
 
     #[test]
