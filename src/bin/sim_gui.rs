@@ -5,6 +5,7 @@ use eframe::egui::{self, Color32, Pos2, Rect};
 use egui_plot::{
     GridInput, GridMark, HLine, Legend, Line, Plot, PlotPoint, PlotPoints, Points, Text, VLine,
 };
+use game_logic::simulation_jobs::{self, DpsConfig, DpsTestResult, JobControl};
 use game_logic::{
     ArmorCatalog, ArmorEntry, ArmorId, FighterMasteries, FighterPreset, FighterPresetCatalog,
     FighterProgression, NpcPresetCatalog, PlayerConfig, ShieldCatalog, ShieldId, TalentCatalog,
@@ -12,7 +13,6 @@ use game_logic::{
 };
 use hackmaster_sim::core::catalog::Catalog;
 use hackmaster_sim::core::gameplay::run::{Wound, heal_wounds, required_healing_steps};
-use hackmaster_sim::core::rng::SimRng;
 use hackmaster_sim::core::tactics::{
     MAX_TACTICAL_CONDITIONS, NumericComparison, RelativeComparison, SpeedComparison,
     TacticalAction, TacticalCondition, TacticalPolicy, TacticalPreset, TacticalRule,
@@ -21,10 +21,11 @@ use hackmaster_sim::core::tactics::{
 use hackmaster_sim::core::types::{RaceSpec, TalentSelection, TalentSpec};
 use hackmaster_sim::ui_widgets::searchable_select;
 use hackmaster_sim::{character, data, game_logic, sim};
-use rand::SeedableRng;
-use rand::rngs::StdRng;
-use sim::{BulkSimResult, SimConfig, SimState, bulk_simulate_with_seed};
-use std::{collections::BTreeMap, time::Instant};
+use sim::{BulkSimResult, SimConfig, SimState};
+#[path = "sim_gui/jobs.rs"]
+mod jobs;
+use jobs::{BackgroundJob, JobKind, JobOutput};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Copy)]
 enum WeaponIcon {
@@ -145,6 +146,10 @@ const WEAPON_GROUP_LABELS: [&str; 13] = [
 ];
 
 struct SimGuiApp {
+    background_job: Option<BackgroundJob>,
+    job_message: Option<String>,
+    derived_cache: [Option<DerivedCache>; 2],
+    stop_distance_players: Option<[PlayerConfig; 2]>,
     running: bool,
     spell_error: Option<(usize, String)>,
     sim: SimState,
@@ -215,24 +220,13 @@ struct DamageRollPlotData {
     y_max: f64,
 }
 
-#[derive(Clone, Debug)]
-struct DpsTestResult {
-    attacker_idx: usize,
-    defender_idx: usize,
-    iterations: u32,
-    duration_seconds: u32,
-    total_damage: u64,
-    total_landed_damage: i64,
-    total_rolled_damage: i64,
-    damage_rolls: u64,
-    attacks: u64,
-    highest_crit_hit: i32,
-    highest_noncrit_hit: i32,
-    highest_shield_hit: i32,
-    instakills: u32,
-    dps: f64,
-    avg_damage_per_run: f64,
-    avg_attacks_per_run: f64,
+struct DerivedCache {
+    player: PlayerConfig,
+    opponent: PlayerConfig,
+    summary: game_logic::PlayerSummary,
+    combatant: sim::Combatant,
+    opponent_combatant: sim::Combatant,
+    breakdowns: game_logic::DerivedStatBreakdowns,
 }
 
 impl SimGuiApp {
@@ -302,6 +296,10 @@ impl SimGuiApp {
             .or_else(|| weapon_catalog.first_id())
             .unwrap_or(WeaponId::new(0));
         let mut app = Self {
+            background_job: None,
+            job_message: None,
+            derived_cache: [None, None],
+            stop_distance_players: None,
             running: false,
             spell_error: None,
             sim,
@@ -447,141 +445,117 @@ impl SimGuiApp {
         self.spell_error = result.err().map(|error| (caster, error.to_string()));
     }
 
-    fn run_bulk_sim(&mut self) {
-        self.bulk_result = None;
-        self.bulk_sim_duration = None;
+    fn start_job(&mut self, kind: JobKind) -> bool {
+        if self.background_job.is_some() {
+            self.job_message = Some(
+                "A calculation is already running. Cancel it or wait for it to finish.".into(),
+            );
+            return false;
+        }
         self.sanitize_players();
-        let combatants = game_logic::build_combatants(
-            &self.players,
-            &self.weapon_catalog,
-            &self.armor_catalog,
-            &self.shield_catalog,
-            &self.npc_presets,
-            &self.talent_catalog,
-        );
-        let config = SimConfig::new(
-            self.sim.config.start_distance,
-            self.sim.config.stop_distance,
-        );
+        self.refresh_stop_distance();
+        self.job_message = None;
+        self.background_job = Some(BackgroundJob::spawn(self, kind));
+        true
+    }
+
+    fn run_bulk_sim(&mut self) {
         let seed = self.bulk_seed;
-        self.bulk_last_seed = Some(seed);
-        self.bulk_seed = self.bulk_seed.wrapping_add(1).max(1);
-        let start = Instant::now();
-        let result = bulk_simulate_with_seed(
-            config,
-            combatants,
-            self.bulk_runs,
-            BULK_SIM_MAX_SECONDS,
+        if self.start_job(JobKind::Bulk {
+            runs: self.bulk_runs,
             seed,
-        );
-        self.bulk_result = Some(result);
-        self.bulk_sim_duration = Some(start.elapsed());
+        }) {
+            self.bulk_result = None;
+            self.bulk_sim_duration = None;
+            self.bulk_last_seed = Some(seed);
+            self.bulk_seed = seed.wrapping_add(1).max(1);
+        }
     }
 
     fn run_dps_test(&mut self) {
-        self.dps_result = None;
-        self.dps_sim_duration = None;
-        self.sanitize_players();
-
-        let attacker_idx = self.dps_attacker_idx.min(1);
-        let mut defender_idx = self.dps_defender_idx.min(1);
-        if defender_idx == attacker_idx {
-            defender_idx = 1usize.saturating_sub(attacker_idx);
+        self.dps_attacker_idx = self.dps_attacker_idx.min(1);
+        self.dps_defender_idx = 1 - self.dps_attacker_idx;
+        self.dps_iterations = self.dps_iterations.max(1);
+        self.dps_duration_seconds = self.dps_duration_seconds.max(1);
+        let request = DpsConfig {
+            attacker_idx: self.dps_attacker_idx,
+            iterations: self.dps_iterations,
+            duration_seconds: self.dps_duration_seconds,
+            seed: self.dps_seed,
+        };
+        if self.start_job(JobKind::Dps(request)) {
+            self.dps_result = None;
+            self.dps_sim_duration = None;
+            self.dps_seed = self.dps_seed.wrapping_add(1).max(1);
         }
-        self.dps_attacker_idx = attacker_idx;
-        self.dps_defender_idx = defender_idx;
-        let iterations = self.dps_iterations.max(1);
-        let duration_seconds = self.dps_duration_seconds.max(1);
-        self.dps_iterations = iterations;
-        self.dps_duration_seconds = duration_seconds;
+    }
 
-        let mut combatants = game_logic::build_combatants(
-            &self.players,
-            &self.weapon_catalog,
-            &self.armor_catalog,
-            &self.shield_catalog,
-            &self.npc_presets,
-            &self.talent_catalog,
-        );
-        if let Some(defender) = combatants.get_mut(defender_idx) {
-            defender.sheet.maneuvers.passive = true;
-            defender.sheet.vitals.infinite_hp = true;
-        }
-
-        let config = SimConfig::new(
-            self.sim.config.start_distance,
-            game_logic::stop_distance_for_players(
+    fn refresh_stop_distance(&mut self) {
+        if self.stop_distance_players.as_ref() != Some(&self.players) {
+            self.sim.config.stop_distance = game_logic::stop_distance_for_players(
                 &self.players,
                 &self.weapon_catalog,
                 &self.talent_catalog,
-            ),
-        );
-        let seed = self.dps_seed;
-        self.dps_seed = self.dps_seed.wrapping_add(1).max(1);
-
-        let start = Instant::now();
-        let mut total_damage = 0u64;
-        let mut total_landed_damage = 0i64;
-        let mut total_rolled_damage = 0i64;
-        let mut damage_rolls = 0u64;
-        let mut attacks = 0u64;
-        let mut highest_crit_hit = 0i32;
-        let mut highest_noncrit_hit = 0i32;
-        let mut highest_shield_hit = 0i32;
-        let mut instakills = 0u32;
-
-        for run_idx in 0..iterations {
-            let run_seed = seed.wrapping_add(u64::from(run_idx));
-            let mut sim = SimState::with_rng(config, SimRng::from_seed(run_seed));
-            sim.log_events = true;
-            sim.reset_with_combatants(combatants.clone());
-            while sim.elapsed_seconds < duration_seconds {
-                sim.tick();
-            }
-
-            let attacker_state = &sim.combatants[attacker_idx].state;
-            total_damage =
-                total_damage.saturating_add(u64::from(attacker_state.total_hp_damage_dealt));
-            total_landed_damage += attacker_state.total_damage_landed_dealt;
-            total_rolled_damage += attacker_state.total_damage_rolled_dealt;
-            damage_rolls =
-                damage_rolls.saturating_add(u64::from(attacker_state.damage_rolls_dealt));
-            highest_crit_hit = highest_crit_hit.max(attacker_state.max_crit_hit_dealt);
-            highest_noncrit_hit = highest_noncrit_hit.max(attacker_state.max_noncrit_hit_dealt);
-            highest_shield_hit = highest_shield_hit.max(attacker_state.max_shield_hit_dealt);
-            instakills = instakills.saturating_add(attacker_state.total_instakills_dealt);
-            attacks = attacks.saturating_add(
-                sim.combat_events
-                    .iter()
-                    .filter(|event| {
-                        event.attacker_idx == attacker_idx
-                            && matches!(event.kind, sim::CombatEventKind::Attack(_))
-                    })
-                    .count() as u64,
             );
+            self.stop_distance_players = Some(self.players.clone());
         }
+    }
 
-        let total_seconds = iterations as f64 * duration_seconds as f64;
-        let dps = total_damage as f64 / total_seconds.max(1.0);
-        self.dps_result = Some(DpsTestResult {
-            attacker_idx,
-            defender_idx,
-            iterations,
-            duration_seconds,
-            total_damage,
-            total_landed_damage,
-            total_rolled_damage,
-            damage_rolls,
-            attacks,
-            highest_crit_hit,
-            highest_noncrit_hit,
-            highest_shield_hit,
-            instakills,
-            dps,
-            avg_damage_per_run: total_damage as f64 / iterations as f64,
-            avg_attacks_per_run: attacks as f64 / iterations as f64,
-        });
-        self.dps_sim_duration = Some(start.elapsed());
+    fn poll_job(&mut self) {
+        let Some(job) = self.background_job.as_ref() else {
+            return;
+        };
+        let message = match job.receiver.try_recv() {
+            Ok(message) => message,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                Err("Calculation stopped unexpectedly.".into())
+            }
+        };
+        let job = self.background_job.take().unwrap();
+        if !job.control.keep_running(job.control.completed()) {
+            self.job_message = Some("Calculation cancelled.".into());
+            return;
+        }
+        if job.players != self.players || job.start_distance != self.sim.config.start_distance {
+            self.job_message = Some("Fighter settings changed during the calculation. Run it again to use the new settings.".into());
+            return;
+        }
+        match message {
+            Ok((Some(JobOutput::Bulk(result)), elapsed)) => {
+                self.bulk_result = Some(*result);
+                self.bulk_sim_duration = Some(elapsed);
+            }
+            Ok((Some(JobOutput::Dps(result)), elapsed)) => {
+                self.dps_result = Some(result);
+                self.dps_sim_duration = Some(elapsed);
+            }
+            Ok((Some(JobOutput::Plot(idx, result)), _)) => {
+                self.damage_roll_plots[idx] = Some(DamageRollPlotData {
+                    lines: result
+                        .lines
+                        .into_iter()
+                        .enumerate()
+                        .map(|(hand, line)| DamageRollLine {
+                            name: line.name,
+                            color: if hand == 0 {
+                                Color32::from_rgb(214, 93, 69)
+                            } else {
+                                Color32::from_rgb(70, 140, 210)
+                            },
+                            points: line.points,
+                            values: line.values,
+                            average: line.average,
+                        })
+                        .collect(),
+                    iterations: result.iterations,
+                    x_max: result.x_max,
+                    y_max: result.y_max,
+                });
+            }
+            Ok((None, _)) => self.job_message = Some("Calculation cancelled.".into()),
+            Err(error) => self.job_message = Some(error),
+        }
     }
 
     fn sanitize_players(&mut self) {
@@ -1143,14 +1117,31 @@ impl eframe::App for SimGuiApp {
             self.last_screen_size = screen_rect.size();
             ctx.request_repaint();
         }
-        self.sim.config.stop_distance = game_logic::stop_distance_for_players(
-            &self.players,
-            &self.weapon_catalog,
-            &self.talent_catalog,
-        );
+        self.refresh_stop_distance();
+        self.poll_job();
+        if self.background_job.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
         self.update_sim(dt);
 
         egui::TopBottomPanel::top("controls").show(ctx, |ui| {
+            if let Some(job) = &self.background_job {
+                ui.horizontal(|ui| {
+                    ui.label(job.label);
+                    ui.add(
+                        egui::ProgressBar::new(
+                            job.control.completed() as f32 / job.control.total().max(1) as f32,
+                        )
+                        .show_percentage(),
+                    );
+                    if ui.button("Cancel calculation").clicked() {
+                        job.control.cancel();
+                    }
+                });
+            }
+            if let Some(message) = &self.job_message {
+                ui.label(message);
+            }
             ui.horizontal(|ui| {
                 ui.selectable_value(
                     &mut self.active_tab,
@@ -1639,6 +1630,7 @@ impl eframe::App for SimGuiApp {
             let mut open = self.show_player_editor[idx];
             let title = format!("Customize {name}");
             let mut run_dps_test = false;
+            let mut plot_request = None;
             let mut tactics_applied = false;
             egui::Window::new(title)
                 .id(egui::Id::new(format!("player_editor_{idx}")))
@@ -1682,6 +1674,8 @@ impl eframe::App for SimGuiApp {
                         &mut self.talent_category_tabs[idx],
                         damage_plot_iterations,
                         damage_roll_plot,
+                        &mut plot_request,
+                        &mut self.derived_cache[idx],
                         &player_names,
                         &mut self.dps_attacker_idx,
                         &mut self.dps_defender_idx,
@@ -1704,6 +1698,12 @@ impl eframe::App for SimGuiApp {
                     );
                 });
             self.show_player_editor[idx] = open;
+            if let Some(iterations) = plot_request {
+                self.start_job(JobKind::Plot {
+                    player_idx: idx,
+                    iterations,
+                });
+            }
             if run_dps_test {
                 self.running = false;
                 self.run_dps_test();
@@ -1714,8 +1714,12 @@ impl eframe::App for SimGuiApp {
             }
         }
 
-        if self.running {
-            ctx.request_repaint();
+        if self.running || self.background_job.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(if self.running {
+                0
+            } else {
+                50
+            }));
         }
     }
 }
@@ -3584,6 +3588,8 @@ fn render_player_editor(
     talent_category_tab: &mut String,
     damage_plot_iterations: &mut String,
     damage_roll_plot: &mut Option<DamageRollPlotData>,
+    plot_request: &mut Option<usize>,
+    derived_cache: &mut Option<DerivedCache>,
     player_names: &[String; 2],
     dps_attacker_idx: &mut usize,
     dps_defender_idx: &mut usize,
@@ -4610,20 +4616,35 @@ fn render_player_editor(
                 ui.label("Derived stats ignored while NPC preset is active.");
                 return;
             }
-            let resolved = game_logic::resolve_player_stats(
-                player, weapon_catalog, armor_catalog, shield_catalog, npc_presets, talent_catalog,
-            );
-            let summary = resolved.summary;
-            let combatant = resolved.combatant;
-            let mut breakdowns = game_logic::derived_stat_breakdowns(
-                &resolved.config,
-                weapon_catalog,
-                armor_catalog,
-                shield_catalog,
-                talent_catalog,
-                &summary,
-                &combatant,
-            );
+            if derived_cache
+                .as_ref()
+                .is_none_or(|cached| &cached.player != player || &cached.opponent != opponent)
+            {
+                let resolved = game_logic::resolve_player_stats(
+                    player, weapon_catalog, armor_catalog, shield_catalog, npc_presets, talent_catalog,
+                );
+                let summary = resolved.summary;
+                let combatant = resolved.combatant;
+                let mut breakdowns = game_logic::derived_stat_breakdowns(
+                    &resolved.config, weapon_catalog, armor_catalog, shield_catalog, talent_catalog,
+                    &summary, &combatant,
+                );
+                let opponent_combatant = game_logic::build_combatant(
+                    opponent, weapon_catalog, armor_catalog, shield_catalog, npc_presets, talent_catalog,
+                );
+                game_logic::apply_target_damage_breakdowns(
+                    &mut breakdowns, &combatant, &opponent_combatant, summary.roll.is_ranged_weapon,
+                );
+                *derived_cache = Some(DerivedCache {
+                    player: player.clone(), opponent: opponent.clone(), summary,
+                    combatant, opponent_combatant, breakdowns,
+                });
+            }
+            let cached = derived_cache.as_ref().unwrap();
+            let summary = &cached.summary;
+            let combatant = &cached.combatant;
+            let opponent_combatant = &cached.opponent_combatant;
+            let breakdowns = &cached.breakdowns;
             let derived = &summary.derived;
             let roll = &summary.roll;
             let defense = &summary.defense;
@@ -4735,14 +4756,6 @@ fn render_player_editor(
 
             let attack_bonus = roll.attack_bonus;
             let strength_damage = roll.strength_damage;
-            let opponent_combatant = game_logic::build_combatant(
-                opponent,
-                weapon_catalog,
-                armor_catalog,
-                shield_catalog,
-                npc_presets,
-                talent_catalog,
-            );
             for (slot, label) in [(sim::WeaponSlot::Primary, "Main hand"), (sim::WeaponSlot::Secondary, "Off hand")] {
                 let weapon = match slot {
                     sim::WeaponSlot::Primary => &combatant.sheet.offense.weapon,
@@ -4761,9 +4774,6 @@ fn render_player_editor(
             }
             ui.small("Charges double damage for knockback before calculating the distance.");
             let target_armor_dr = opponent_combatant.sheet.defense.armor_dr.max(0);
-            game_logic::apply_target_damage_breakdowns(
-                &mut breakdowns, &combatant, &opponent_combatant, roll.is_ranged_weapon,
-            );
             let target_natural_dr = opponent_combatant.sheet.defense.natural_dr.max(0);
             let called_shot_target_bonus_vs_opponent =
                 game_logic::called_shot_target_defense_bonus_against_target(
@@ -4918,14 +4928,9 @@ fn render_player_editor(
             render_player_tools_tab(
                 ui,
                 id_prefix,
-                player,
-                weapon_catalog,
-                armor_catalog,
-                shield_catalog,
-                npc_presets,
-                talent_catalog,
                 damage_plot_iterations,
                 damage_roll_plot,
+                plot_request,
                 player_names,
                 dps_attacker_idx,
                 dps_defender_idx,
@@ -5038,14 +5043,9 @@ fn render_magic_editor(ui: &mut egui::Ui, id_prefix: &str, player: &mut PlayerCo
 fn render_player_tools_tab(
     ui: &mut egui::Ui,
     id_prefix: &str,
-    player: &PlayerConfig,
-    weapon_catalog: &WeaponCatalog,
-    armor_catalog: &ArmorCatalog,
-    shield_catalog: &ShieldCatalog,
-    npc_presets: &NpcPresetCatalog,
-    talent_catalog: &TalentCatalog,
     damage_plot_iterations: &mut String,
     damage_roll_plot: &mut Option<DamageRollPlotData>,
+    plot_request: &mut Option<usize>,
     player_names: &[String; 2],
     dps_attacker_idx: &mut usize,
     dps_defender_idx: &mut usize,
@@ -5083,15 +5083,7 @@ fn render_player_tools_tab(
         {
             if let Some(iterations) = iterations {
                 let iterations = iterations.clamp(1, MAX_DAMAGE_PLOT_ITERATIONS);
-                *damage_roll_plot = Some(build_damage_roll_plot(
-                    player,
-                    weapon_catalog,
-                    armor_catalog,
-                    shield_catalog,
-                    npc_presets,
-                    talent_catalog,
-                    iterations,
-                ));
+                *plot_request = Some(iterations.clamp(1, MAX_DAMAGE_PLOT_ITERATIONS));
             }
         }
         ui.label("Iterations");
@@ -5130,112 +5122,6 @@ fn parse_damage_plot_iterations(input: &str) -> Option<usize> {
         .collect::<String>();
     let value = cleaned.trim().parse::<usize>().ok()?;
     (value > 0).then_some(value)
-}
-
-fn build_damage_roll_plot(
-    player: &PlayerConfig,
-    weapon_catalog: &WeaponCatalog,
-    armor_catalog: &ArmorCatalog,
-    shield_catalog: &ShieldCatalog,
-    npc_presets: &NpcPresetCatalog,
-    talent_catalog: &TalentCatalog,
-    iterations: usize,
-) -> DamageRollPlotData {
-    let combatant = game_logic::build_combatant(
-        player,
-        weapon_catalog,
-        armor_catalog,
-        shield_catalog,
-        npc_presets,
-        talent_catalog,
-    );
-    let mut rng = StdRng::from_entropy();
-    let mut entries = vec![(
-        format!("Mainhand: {}", combatant.sheet.offense.weapon.name),
-        combatant.sheet.offense.weapon.clone(),
-        combatant.sheet.offense.strength_damage,
-        0,
-        Color32::from_rgb(214, 93, 69),
-    )];
-    if let Some(offhand) = combatant.sheet.offense.offhand.as_ref() {
-        entries.push((
-            format!("Offhand: {}", offhand.weapon.name),
-            offhand.weapon.clone(),
-            offhand.strength_damage,
-            combatant.sheet.maneuvers.dualwield_offhand_damage_penalty,
-            Color32::from_rgb(70, 140, 210),
-        ));
-    }
-
-    let mut lines = Vec::with_capacity(entries.len());
-    let mut x_max = 0usize;
-    let mut y_max = 0.0f64;
-
-    for (name, weapon, strength_damage, damage_penalty, color) in entries {
-        let mut counts = Vec::<usize>::new();
-        let mut total = 0i64;
-        for _ in 0..iterations {
-            let raw =
-                roll_weapon_raw_damage(weapon.as_ref(), strength_damage, damage_penalty, &mut rng);
-            let raw_idx = raw.max(0) as usize;
-            if raw_idx >= counts.len() {
-                counts.resize(raw_idx + 1, 0);
-            }
-            counts[raw_idx] += 1;
-            total += i64::from(raw);
-        }
-
-        let mut points = Vec::with_capacity(counts.len());
-        let mut values = Vec::with_capacity(counts.len());
-        let denom = iterations.max(1) as f64;
-        for (damage, count) in counts.into_iter().enumerate() {
-            let frequency = count as f64 / denom;
-            points.push([damage as f64, frequency]);
-            values.push(frequency);
-            y_max = y_max.max(frequency);
-            x_max = x_max.max(damage);
-        }
-
-        lines.push(DamageRollLine {
-            name,
-            color,
-            points,
-            values,
-            average: total as f64 / denom,
-        });
-    }
-
-    DamageRollPlotData {
-        lines,
-        iterations,
-        x_max: x_max.max(1),
-        y_max: y_max.max(0.01),
-    }
-}
-
-fn roll_weapon_raw_damage(
-    weapon: &sim::WeaponProfile,
-    strength_damage: i32,
-    damage_penalty: i32,
-    rng: &mut impl rand::Rng,
-) -> i32 {
-    let nonpenetrating = if weapon.use_jab {
-        true
-    } else {
-        weapon.force_nonpenetrating_damage
-    };
-    let rolled_damage = weapon
-        .damage_expr_cache_for_attack()
-        .roll(rng, nonpenetrating);
-    let mut raw = rolled_damage + strength_damage;
-    if weapon.halves_damage_for_attack() {
-        raw /= 2;
-    }
-    if weapon.halve_damage {
-        raw /= 2;
-    }
-    raw += damage_penalty;
-    raw.max(0)
 }
 
 fn show_damage_roll_plot(ui: &mut egui::Ui, plot_id: &str, plot: &DamageRollPlotData) {
@@ -6329,6 +6215,63 @@ fn main() -> eframe::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    fn finish_calculation(app: &mut SimGuiApp) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while app.background_job.is_some() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "background calculation failed to finish"
+            );
+            app.poll_job();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn long_running_bulk_job_can_be_cancelled_from_ui() {
+        let mut app = SimGuiApp::new();
+        app.bulk_runs = 1_000_000;
+        app.run_bulk_sim();
+        assert!(app.background_job.is_some());
+        assert!(app.bulk_result.is_none());
+        app.background_job.as_ref().unwrap().control.cancel();
+        finish_calculation(&mut app);
+        assert!(app.bulk_result.is_none());
+        assert_eq!(app.job_message.as_deref(), Some("Calculation cancelled."));
+    }
+
+    #[test]
+    fn changed_fighters_do_not_receive_results_from_old_settings() {
+        let mut app = SimGuiApp::new();
+        app.bulk_runs = 1;
+        app.run_bulk_sim();
+        app.players[0].level += 1;
+        finish_calculation(&mut app);
+        assert!(app.bulk_result.is_none());
+        assert!(app.job_message.unwrap().contains("settings changed"));
+    }
+
+    #[test]
+    fn dps_and_damage_plot_workers_publish_complete_results() {
+        let mut app = SimGuiApp::new();
+        app.dps_iterations = 2;
+        app.dps_duration_seconds = 10;
+        app.run_dps_test();
+        finish_calculation(&mut app);
+        assert_eq!(app.dps_result.as_ref().unwrap().iterations, 2);
+        assert!(app.start_job(super::JobKind::Plot {
+            player_idx: 0,
+            iterations: 100
+        }));
+        finish_calculation(&mut app);
+        let plot = app.damage_roll_plots[0].as_ref().unwrap();
+        assert_eq!(plot.iterations, 100);
+        assert!(!plot.lines.is_empty());
+        for line in &plot.lines {
+            assert!((line.values.iter().sum::<f64>() - 1.0).abs() < 1e-9);
+        }
+    }
+
     use super::*;
 
     fn app_fixture() -> SimGuiApp {
@@ -6763,6 +6706,12 @@ mod tests {
         let mut app = app_fixture();
         app.bulk_runs = 1;
         app.run_bulk_sim();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while app.background_job.is_some() {
+            assert!(std::time::Instant::now() < deadline);
+            app.poll_job();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
         assert!(app.bulk_result.is_some());
 
         let enabled_draft = TacticalPolicy {

@@ -61,6 +61,18 @@ pub fn load_weapon_catalog(path: &str) -> Result<WeaponCatalog, String> {
     let parsed: WeaponsFile = serde_json::from_str(&data).map_err(|err| err.to_string())?;
     let mut catalog = Vec::new();
     for entry in parsed.weapons {
+        for expression in [
+            entry.damage.as_deref(),
+            entry.shield_damage.as_deref(),
+            entry.jab_special.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            crate::core::rules::DamageExprCache::try_new(expression).map_err(|err| {
+                format!("Invalid damage for '{}': {expression}: {err}", entry.name)
+            })?;
+        }
         let group = match weapon_group_from_str(&entry.group) {
             Some(group) => group,
             None => continue,
@@ -274,4 +286,25 @@ fn parse_range_bands_feet(values: &[f32]) -> Option<[f32; 4]> {
         return None;
     }
     Some([values[0], values[1], values[2], values[3]])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn malformed_damage_in_editable_catalog_is_reported() {
+        let path = std::env::temp_dir().join(format!(
+            "hackmaster-invalid-weapon-{}.json",
+            std::process::id()
+        ));
+        let mut catalog: serde_json::Value = serde_json::from_str(EMBEDDED_WEAPONS_JSON).unwrap();
+        catalog["weapons"][0]["damage"] = "d6)".into();
+        std::fs::write(&path, serde_json::to_vec(&catalog).unwrap()).unwrap();
+        let error = load_weapon_catalog(path.to_str().unwrap())
+            .err()
+            .expect("invalid catalog must fail");
+        std::fs::remove_file(path).unwrap();
+        assert!(error.contains("Invalid damage"));
+        assert!(error.contains("d6)"));
+    }
 }

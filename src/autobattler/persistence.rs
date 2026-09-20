@@ -94,13 +94,13 @@ pub fn scan_run_save_entries() -> Vec<SaveEntry> {
 pub fn write_character_save(path: &Path, save: &CharacterSave) -> Result<(), String> {
     data::ensure_parent_dir(path)?;
     let json = serde_json::to_string_pretty(save).map_err(|err| err.to_string())?;
-    fs::write(path, json).map_err(|err| err.to_string())
+    data::atomic_write(path, json.as_bytes()).map_err(|err| err.to_string())
 }
 
 pub fn write_run_save(path: &Path, save: &RunSave) -> Result<(), String> {
     data::ensure_parent_dir(path)?;
     let json = serde_json::to_string_pretty(save).map_err(|err| err.to_string())?;
-    fs::write(path, json).map_err(|err| err.to_string())
+    data::atomic_write(path, json.as_bytes()).map_err(|err| err.to_string())
 }
 
 pub fn read_character_save(path: &Path) -> Result<CharacterSave, String> {

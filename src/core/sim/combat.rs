@@ -459,6 +459,65 @@ fn attack_profile_for_slot(attacker: &Combatant, slot: WeaponSlot) -> Option<Att
     }
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct AttackStateSnapshot {
+    pub next_attack_time_primary: Option<f32>,
+    pub next_attack_time_secondary: Option<f32>,
+    pub trauma_remaining_seconds: i32,
+    shield_intact: bool,
+    moved_last_tick: bool,
+    regenstat_stacks: i32,
+    chronoblur_active: bool,
+    deceptive_defender_seen_attacker: bool,
+}
+impl AttackStateSnapshot {
+    pub fn capture(combatant: &Combatant, opponent_idx: usize) -> Self {
+        let state = &combatant.state;
+        Self {
+            next_attack_time_primary: state.next_attack_time_primary,
+            next_attack_time_secondary: state.next_attack_time_secondary,
+            trauma_remaining_seconds: state.trauma_remaining_seconds,
+            shield_intact: state.shield_intact,
+            moved_last_tick: state.moved_last_tick,
+            regenstat_stacks: state.regenstat_stacks,
+            chronoblur_active: chronoblur_active_for_moved_defender(state),
+            deceptive_defender_seen_attacker: state
+                .deceptive_defender_seen_attackers
+                .contains(&opponent_idx),
+        }
+    }
+    fn defense_ready(&self, sheet: &super::types::CombatantSheet, now: f32) -> bool {
+        super::types::defense_plus_four_ready_with_timing(
+            sheet,
+            self.trauma_remaining_seconds,
+            self.next_attack_time_primary,
+            now,
+        )
+    }
+    fn chronoblur_bonus(&self) -> i32 {
+        if self.chronoblur_active {
+            CHRONOBLUR_MELEE_DEFENSE_BONUS
+        } else {
+            0
+        }
+    }
+}
+pub(crate) struct CombatRoundSnapshot([(usize, AttackStateSnapshot); 2]);
+impl CombatRoundSnapshot {
+    pub fn capture(combatants: &[Combatant], a: usize, b: usize) -> Self {
+        Self([
+            (a, AttackStateSnapshot::capture(&combatants[a], b)),
+            (b, AttackStateSnapshot::capture(&combatants[b], a)),
+        ])
+    }
+    pub fn get(&self, idx: usize) -> Option<&AttackStateSnapshot> {
+        self.0
+            .iter()
+            .find(|(index, _)| *index == idx)
+            .map(|(_, state)| state)
+    }
+}
+
 fn regenstat_stack_from_state(state: &CombatantState) -> i32 {
     state.regenstat_stacks.clamp(0, REGENSTAT_STACK_CAP)
 }
@@ -1354,7 +1413,7 @@ fn resolve_eyesmite(
         combatants[attacker_idx].sheet.offense.unarmed_damage_bonus,
     );
 
-    let defender_state = combatants[defender_idx].state.clone();
+    let defender_state = AttackStateSnapshot::capture(&combatants[defender_idx], attacker_idx);
     let defender = &combatants[defender_idx];
     let defender_infinite_hp = defender.sheet.vitals.infinite_hp;
     let defender_total_dr = defender.sheet.defense.armor_dr + defender.sheet.defense.natural_dr;
@@ -1363,8 +1422,8 @@ fn resolve_eyesmite(
         + mounted_defense_bonus(defender)
         + fight_defensively_defense_bonus(defender)
         - called_shot_defense_penalty(defender)
-        + chronoblur_melee_defense_bonus(&defender_state);
-    let defense_ready = defense_plus_four_ready_at(&defender.sheet, &defender_state, now);
+        + defender_state.chronoblur_bonus();
+    let defense_ready = defender_state.defense_ready(&defender.sheet, now);
     let weapon_defense_bonus =
         if defender.sheet.offense.weapon.defense_bonus_always || defense_ready {
             4
@@ -1534,7 +1593,7 @@ fn resolve_counter_attack(
         .tactical_next_attack_penalty
         .max(0);
     combatants[attacker_idx].state.tactical_next_attack_penalty = 0;
-    let defender_state = combatants[defender_idx].state.clone();
+    let defender_state = AttackStateSnapshot::capture(&combatants[defender_idx], attacker_idx);
     let average_damage = combatants[defender_idx]
         .state
         .streamline_averages_incoming_damage;
@@ -1553,7 +1612,9 @@ fn resolve_counter_attack(
         0
     };
     let defender_regenstat_bonus = if regenstat_active(combatants, defender_idx) {
-        regenstat_stack_from_state(&defender_state)
+        defender_state
+            .regenstat_stacks
+            .clamp(0, REGENSTAT_STACK_CAP)
     } else {
         0
     };
@@ -1674,7 +1735,7 @@ fn resolve_counter_attack(
                 + defender_regenstat_bonus
                 + defender_fight_defensively_bonus
                 - defender_called_shot_penalty
-                + chronoblur_melee_defense_bonus(&defender_state),
+                + defender_state.chronoblur_bonus(),
             defender.apply_i32(StatIdI32::ArmorDr, defender.sheet.defense.armor_dr),
             defender.apply_i32(StatIdI32::NaturalDr, defender.sheet.defense.natural_dr),
             defender.sheet.defense.armor_is_heavy,
@@ -1703,8 +1764,7 @@ fn resolve_counter_attack(
             defender.apply_i32(StatIdI32::FlagFallingSunStyle, 0) > 0,
         )
     };
-    let defense_ready =
-        defense_plus_four_ready_at(&combatants[defender_idx].sheet, &defender_state, now);
+    let defense_ready = defender_state.defense_ready(&combatants[defender_idx].sheet, now);
     let weapon_defense_bonus = if defender_weapon_defense_always || defense_ready {
         4
     } else {
@@ -2109,7 +2169,7 @@ pub(crate) fn resolve_attack(
     attack_mode: AttackMode,
     weapon_slot: WeaponSlot,
     now: f32,
-    state_snapshot: Option<&[CombatantState]>,
+    state_snapshot: Option<&CombatRoundSnapshot>,
     rng: &mut impl Rng,
 ) -> AttackOutcome {
     let tactical_attack_penalty = combatants[attacker_idx]
@@ -2119,12 +2179,12 @@ pub(crate) fn resolve_attack(
     combatants[attacker_idx].state.tactical_next_attack_penalty = 0;
     let defender_state = state_snapshot
         .and_then(|snapshot| snapshot.get(defender_idx))
-        .cloned()
-        .unwrap_or_else(|| combatants[defender_idx].state.clone());
+        .copied()
+        .unwrap_or_else(|| AttackStateSnapshot::capture(&combatants[defender_idx], attacker_idx));
     let attacker_state = state_snapshot
         .and_then(|snapshot| snapshot.get(attacker_idx))
-        .cloned()
-        .unwrap_or_else(|| combatants[attacker_idx].state.clone());
+        .copied()
+        .unwrap_or_else(|| AttackStateSnapshot::capture(&combatants[attacker_idx], defender_idx));
     let average_damage = combatants[defender_idx]
         .state
         .streamline_averages_incoming_damage;
@@ -2149,12 +2209,16 @@ pub(crate) fn resolve_attack(
     let attacker_armeroci =
         combatants[attacker_idx].apply_i32(StatIdI32::FlagArmerociPoleStyle, 0) > 0;
     let attacker_regenstat_bonus = if regenstat_active(combatants, attacker_idx) {
-        regenstat_stack_from_state(&attacker_state)
+        attacker_state
+            .regenstat_stacks
+            .clamp(0, REGENSTAT_STACK_CAP)
     } else {
         0
     };
     let defender_regenstat_bonus = if regenstat_active(combatants, defender_idx) {
-        regenstat_stack_from_state(&defender_state)
+        defender_state
+            .regenstat_stacks
+            .clamp(0, REGENSTAT_STACK_CAP)
     } else {
         0
     };
@@ -2218,9 +2282,7 @@ pub(crate) fn resolve_attack(
         .maneuvers
         .called_shot_deceptive_defender
     {
-        let seen_in_snapshot = defender_state
-            .deceptive_defender_seen_attackers
-            .contains(&attacker_idx);
+        let seen_in_snapshot = defender_state.deceptive_defender_seen_attacker;
         let seen_in_live = combatants[defender_idx]
             .state
             .deceptive_defender_seen_attackers
@@ -2277,14 +2339,18 @@ pub(crate) fn resolve_attack(
     let use_jab = attack_profile.use_jab;
     let damage_penalty = attack_profile.damage_penalty;
     let weapon = attack_profile.weapon;
-    let mounted_plan = mounted_damage_plan(&combatants[attacker_idx],
-        &combatants[defender_idx], &weapon, is_ranged);
+    let mounted_plan = mounted_damage_plan(
+        &combatants[attacker_idx],
+        &combatants[defender_idx],
+        &weapon,
+        is_ranged,
+    );
     let reaper_multiplier = reaper_extra_dice_multiplier(&combatants[attacker_idx], Some(&weapon));
-    let chronoblur_active = chronoblur_active_for_moved_defender(&defender_state);
+    let chronoblur_active = defender_state.chronoblur_active;
     let chronoblur_melee_bonus = if is_ranged {
         0
     } else {
-        chronoblur_melee_defense_bonus(&defender_state)
+        defender_state.chronoblur_bonus()
     };
     let (range_mod, chronoblur_out_of_range) = if is_ranged && chronoblur_active {
         let range_scale = combatants[attacker_idx].apply_f32(
@@ -2372,7 +2438,7 @@ pub(crate) fn resolve_attack(
     let defense_ready = if is_ranged {
         false
     } else {
-        defense_plus_four_ready_at(&combatants[defender_idx].sheet, &defender_state, now)
+        defender_state.defense_ready(&combatants[defender_idx].sheet, now)
     };
     let weapon_defense_bonus = if is_ranged {
         0
@@ -3039,7 +3105,7 @@ pub(crate) fn resolve_knock_aside(
     attacker_idx: usize,
     defender_idx: usize,
     now: f32,
-    state_snapshot: Option<&[CombatantState]>,
+    state_snapshot: Option<&CombatRoundSnapshot>,
     rng: &mut impl Rng,
 ) -> KnockAsideOutcome {
     let tactical_attack_penalty = combatants[attacker_idx]
@@ -3049,7 +3115,8 @@ pub(crate) fn resolve_knock_aside(
     combatants[attacker_idx].state.tactical_next_attack_penalty = 0;
     let defender_state = state_snapshot
         .and_then(|snapshot| snapshot.get(defender_idx))
-        .unwrap_or(&combatants[defender_idx].state);
+        .copied()
+        .unwrap_or_else(|| AttackStateSnapshot::capture(&combatants[defender_idx], attacker_idx));
     let attacker = &combatants[attacker_idx];
     let defender = &combatants[defender_idx];
     let attacker_fight_defensively_penalty = fight_defensively_attack_penalty(attacker);
@@ -3077,7 +3144,7 @@ pub(crate) fn resolve_knock_aside(
         ),
         rng,
     );
-    let defense_ready = defense_plus_four_ready_at(&defender.sheet, defender_state, now);
+    let defense_ready = defender_state.defense_ready(&defender.sheet, now);
     let weapon_defense_bonus =
         if defender.sheet.offense.weapon.defense_bonus_always || defense_ready {
             4
@@ -3088,7 +3155,7 @@ pub(crate) fn resolve_knock_aside(
         .apply_i32(StatIdI32::DefenseMod, defender.sheet.defense.defense_mod)
         + defender_fight_defensively_bonus
         - defender_called_shot_penalty
-        + chronoblur_melee_defense_bonus(defender_state);
+        + defender_state.chronoblur_bonus();
     let defense_roll = defense_die + defense_base + weapon_defense_bonus;
     let success = attack_roll >= defense_roll;
     let roll = KnockAsideRollBreakdown {

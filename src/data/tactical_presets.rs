@@ -93,7 +93,7 @@ pub fn save_tactical_presets(path: &str, presets: &[TacticalPreset]) -> Result<(
     .map_err(|err| err.to_string())?;
     let output_path = resolve_writable_data_path(path);
     ensure_parent_dir(&output_path)?;
-    fs::write(output_path, data).map_err(|err| err.to_string())
+    crate::data::atomic_write(&output_path, data.as_bytes()).map_err(|err| err.to_string())
 }
 
 #[cfg(test)]

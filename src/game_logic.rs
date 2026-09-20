@@ -1,3 +1,4 @@
+pub mod simulation_jobs;
 use crate::character::{
     AbilityDerived, AbilityScore, AbilitySet, Armor, ArmorType, Character, DerivedStats, Equipment,
     Progression, Shield, Weapon, WeaponGroup, WeaponMastery,
@@ -385,7 +386,7 @@ pub struct FighterPreset {
     pub default_weapon_style_ids: Option<Vec<String>>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EnvironmentConfig {
     pub temperature_c: i32,
     pub natural_surroundings: bool,
@@ -402,7 +403,7 @@ impl Default for EnvironmentConfig {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct MiscRollModifiers {
     pub all_roll_bonus: i32,
     pub attack_bonus: i32,
@@ -415,7 +416,7 @@ pub struct MiscRollModifiers {
     pub initiative_die_bonus: i32,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct PlayerConfig {
     pub magic: crate::core::magic::MagicLoadout,
     pub name: String,
@@ -2404,14 +2405,15 @@ fn resolve_talent_modifiers(
         proficiencies: &player.proficiencies,
         weapon_catalog: Some(weapon_catalog),
     };
-    let mut weapon_id_lookup: HashMap<String, WeaponId> = HashMap::new();
-    for (idx, weapon) in weapon_catalog.entries().iter().enumerate() {
-        if let Some(id) = weapon_catalog.id_from_index(idx) {
-            weapon_id_lookup.insert(weapon.name.to_ascii_lowercase(), id);
-        }
-    }
-    let weapon_id_by_name_cached =
-        |name: &str| weapon_id_lookup.get(&name.to_ascii_lowercase()).copied();
+    // Only a few talent effects need this lookup. Avoid allocating a complete
+    // lowercase catalog index on every summary/profile calculation.
+    let weapon_id_by_name = |name: &str| {
+        weapon_catalog
+            .entries()
+            .iter()
+            .position(|weapon| weapon.name.eq_ignore_ascii_case(name))
+            .and_then(|index| weapon_catalog.id_from_index(index))
+    };
     let active_weapon_style_ids: HashSet<&str> =
         active_weapon_style_specs(player, talent_catalog, Some(weapon_catalog))
             .into_iter()
@@ -2455,7 +2457,7 @@ fn resolve_talent_modifiers(
                 }
                 TalentEffect::AttackBonusWeapon { amount } => {
                     if let Some(weapon_name) = selection.weapon.as_deref() {
-                        if let Some(weapon_id) = weapon_id_by_name_cached(weapon_name) {
+                        if let Some(weapon_id) = weapon_id_by_name(weapon_name) {
                             let entry = modifiers
                                 .attack_bonus_by_weapon
                                 .entry(weapon_id)
@@ -2466,7 +2468,7 @@ fn resolve_talent_modifiers(
                 }
                 TalentEffect::DamageBonusWeapon { amount } => {
                     if let Some(weapon_name) = selection.weapon.as_deref() {
-                        if let Some(weapon_id) = weapon_id_by_name_cached(weapon_name) {
+                        if let Some(weapon_id) = weapon_id_by_name(weapon_name) {
                             let entry = modifiers
                                 .damage_bonus_by_weapon
                                 .entry(weapon_id)
@@ -2487,7 +2489,7 @@ fn resolve_talent_modifiers(
                 }
                 TalentEffect::DefenseBonusWeapon { amount } => {
                     if let Some(weapon_name) = selection.weapon.as_deref() {
-                        if let Some(weapon_id) = weapon_id_by_name_cached(weapon_name) {
+                        if let Some(weapon_id) = weapon_id_by_name(weapon_name) {
                             let entry = modifiers
                                 .defense_bonus_by_weapon
                                 .entry(weapon_id)
@@ -2540,7 +2542,7 @@ fn resolve_talent_modifiers(
                         }
                         player.weapon_id
                     } else if let Some(weapon_name) = selection.weapon.as_deref() {
-                        let Some(weapon_id) = weapon_id_by_name_cached(weapon_name) else {
+                        let Some(weapon_id) = weapon_id_by_name(weapon_name) else {
                             continue;
                         };
                         weapon_id
@@ -2615,7 +2617,7 @@ fn resolve_talent_modifiers(
                 }
                 TalentEffect::WeaponReachBonus { amount } => {
                     if let Some(weapon_name) = selection.weapon.as_deref() {
-                        if let Some(weapon_id) = weapon_id_by_name_cached(weapon_name) {
+                        if let Some(weapon_id) = weapon_id_by_name(weapon_name) {
                             if let Some(weapon) = weapon_catalog.get(weapon_id) {
                                 let entry = modifiers
                                     .reach_bonus_by_group
@@ -4858,7 +4860,25 @@ pub fn build_character(
     talent_catalog: &TalentCatalog,
 ) -> Character {
     let modifiers = resolve_talent_modifiers(player, talent_catalog, weapon_catalog);
-    let weapon_preset = weapon_for_player_with_modifiers(player, weapon_catalog, &modifiers);
+    build_character_with_modifiers(
+        player,
+        weapon_catalog,
+        armor_catalog,
+        shield_catalog,
+        talent_catalog,
+        &modifiers,
+    )
+}
+
+fn build_character_with_modifiers(
+    player: &PlayerConfig,
+    weapon_catalog: &WeaponCatalog,
+    armor_catalog: &ArmorCatalog,
+    shield_catalog: &ShieldCatalog,
+    talent_catalog: &TalentCatalog,
+    modifiers: &TalentModifiers,
+) -> Character {
+    let weapon_preset = weapon_for_player_with_modifiers(player, weapon_catalog, modifiers);
     let weapon = Weapon {
         name: weapon_preset.name.clone(),
         group: weapon_preset.group,
@@ -4965,12 +4985,13 @@ fn build_combatant_profile(
     let modifiers = resolve_talent_modifiers(player, talent_catalog, weapon_catalog);
     let weapon_preset = weapon_for_player_with_modifiers(player, weapon_catalog, &modifiers);
     let weapon_id = weapon_id_for_player_with_modifiers(player, weapon_catalog, &modifiers);
-    let character = build_character(
+    let character = build_character_with_modifiers(
         player,
         weapon_catalog,
         armor_catalog,
         shield_catalog,
         talent_catalog,
+        &modifiers,
     );
     let misc_modifiers = resolve_misc_modifiers(player);
     let armor_adjustments =

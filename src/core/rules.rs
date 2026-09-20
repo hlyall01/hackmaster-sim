@@ -1,29 +1,38 @@
 //! Pure rule helpers (damage, mastery, thresholds, range math).
 
 use rand::Rng;
+mod compiled;
+pub use compiled::DamageExprError;
+use compiled::Expression;
 
 #[derive(Clone, Debug)]
 pub struct DamageExprCache {
-    cleaned: String,
-    cleaned_nonpenetrating: String,
+    expression: Expression,
     is_lower_of: bool,
     d6_penetration_triggers: Option<Vec<i32>>,
     penetrate_on_max_minus_one: bool,
 }
 
 impl DamageExprCache {
+    /// Invalid expressions evaluate to zero; data loaders should use `try_new`
+    /// to report invalid editable data before starting a simulation.
     pub fn new(expr: &str) -> Self {
-        let lower = expr.to_ascii_lowercase();
-        let is_lower_of = lower.contains("lower of");
-        let cleaned = clean_damage_expr(expr);
-        let cleaned_nonpenetrating = cleaned.replace('p', "");
-        Self {
-            cleaned,
-            cleaned_nonpenetrating,
-            is_lower_of,
+        Self::try_new(expr).unwrap_or_else(|_| Self {
+            expression: Expression::empty(),
+            is_lower_of: false,
             d6_penetration_triggers: None,
             penetrate_on_max_minus_one: false,
-        }
+        })
+    }
+
+    pub fn try_new(expr: &str) -> Result<Self, DamageExprError> {
+        let cleaned = clean_damage_expr(expr);
+        Ok(Self {
+            expression: Expression::parse(&cleaned)?,
+            is_lower_of: expr.to_ascii_lowercase().contains("lower of"),
+            d6_penetration_triggers: None,
+            penetrate_on_max_minus_one: false,
+        })
     }
 
     pub fn new_with_d6_penetration_triggers(expr: &str, triggers: &[i32]) -> Self {
@@ -48,35 +57,30 @@ impl DamageExprCache {
     }
 
     pub fn roll(&self, rng: &mut impl Rng, nonpenetrating: bool) -> i32 {
-        if nonpenetrating {
-            roll_damage_expr_cached(
-                &self.cleaned_nonpenetrating,
-                self.is_lower_of,
-                None,
-                false,
+        let a = self.expression.roll(
+            rng,
+            nonpenetrating,
+            self.d6_penetration_triggers.as_deref(),
+            self.penetrate_on_max_minus_one,
+        );
+        if self.is_lower_of {
+            a.min(self.expression.roll(
                 rng,
-            )
-        } else {
-            roll_damage_expr_cached(
-                &self.cleaned,
-                self.is_lower_of,
+                nonpenetrating,
                 self.d6_penetration_triggers.as_deref(),
                 self.penetrate_on_max_minus_one,
-                rng,
-            )
+            ))
+        } else {
+            a
         }
     }
 
     pub fn expected(&self, nonpenetrating: bool) -> f64 {
-        if nonpenetrating {
-            expected_expression(&self.cleaned_nonpenetrating, None, false)
-        } else {
-            expected_expression(
-                &self.cleaned,
-                self.d6_penetration_triggers.as_ref().map(Vec::len),
-                self.penetrate_on_max_minus_one,
-            )
-        }
+        self.expression.expected(
+            nonpenetrating,
+            self.d6_penetration_triggers.as_deref(),
+            self.penetrate_on_max_minus_one,
+        )
     }
 
     pub fn d6_penetration_triggers(&self) -> Option<&[i32]> {
@@ -104,6 +108,9 @@ fn roll_damage_expr_with_detail_inner(
     rng: &mut impl Rng,
     nonpenetrating: bool,
 ) -> (i32, String) {
+    if DamageExprCache::try_new(expr).is_err() {
+        return (0, "[invalid damage expression]".to_string());
+    }
     let lower = expr.to_ascii_lowercase();
     let is_lower_of = lower.contains("lower of");
     let cleaned = clean_damage_expr(expr);
@@ -125,60 +132,14 @@ fn roll_damage_expr_with_detail_inner(
 }
 
 pub fn roll_damage_expr(expr: &str, rng: &mut impl Rng, nonpenetrating: bool) -> i32 {
-    let lower = expr.to_ascii_lowercase();
-    let is_lower_of = lower.contains("lower of");
-    let cleaned = clean_damage_expr(expr);
-    let cleaned = if nonpenetrating {
-        cleaned.replace('p', "")
-    } else {
-        cleaned
-    };
-    if is_lower_of {
-        let a_total = evaluate_expression(&cleaned, None, false, rng);
-        let b_total = evaluate_expression(&cleaned, None, false, rng);
-        a_total.min(b_total)
-    } else {
-        evaluate_expression(&cleaned, None, false, rng)
-    }
-}
-
-fn roll_damage_expr_cached(
-    cleaned: &str,
-    is_lower_of: bool,
-    d6_penetration_triggers: Option<&[i32]>,
-    penetrate_on_max_minus_one: bool,
-    rng: &mut impl Rng,
-) -> i32 {
-    if is_lower_of {
-        let a_total = evaluate_expression(
-            cleaned,
-            d6_penetration_triggers,
-            penetrate_on_max_minus_one,
-            rng,
-        );
-        let b_total = evaluate_expression(
-            cleaned,
-            d6_penetration_triggers,
-            penetrate_on_max_minus_one,
-            rng,
-        );
-        a_total.min(b_total)
-    } else {
-        evaluate_expression(
-            cleaned,
-            d6_penetration_triggers,
-            penetrate_on_max_minus_one,
-            rng,
-        )
-    }
+    DamageExprCache::new(expr).roll(rng, nonpenetrating)
 }
 
 pub fn expected_damage_expr(expr: &str) -> f64 {
     if expr.trim().is_empty() {
         return 0.0;
     }
-    let cleaned = clean_damage_expr(expr).to_ascii_lowercase();
-    expected_expression(&cleaned, None, false)
+    DamageExprCache::new(&expr.to_ascii_lowercase()).expected(false)
 }
 
 pub fn effective_armor_value(raw: f64, armor_pen: i32) -> f64 {
@@ -214,6 +175,7 @@ pub fn clean_damage_expr(expr: &str) -> String {
     }
 }
 
+#[cfg(test)]
 fn evaluate_expression(
     expr: &str,
     d6_penetration_triggers: Option<&[i32]>,
@@ -267,6 +229,7 @@ fn evaluate_expression(
     total
 }
 
+#[cfg(test)]
 fn expected_expression(
     expr: &str,
     d6_penetration_trigger_count: Option<usize>,
@@ -321,6 +284,7 @@ fn expected_expression(
     total
 }
 
+#[cfg(test)]
 fn evaluate_term(
     term: &str,
     d6_penetration_triggers: Option<&[i32]>,
@@ -376,6 +340,7 @@ fn evaluate_term(
     }
 }
 
+#[cfg(test)]
 fn expected_term(
     term: &str,
     d6_penetration_trigger_count: Option<usize>,
@@ -430,6 +395,9 @@ fn expected_term(
 }
 
 pub(crate) fn evaluate_expression_with_detail(expr: &str, rng: &mut impl Rng) -> (i32, String) {
+    if Expression::parse(expr).is_err() {
+        return (0, "invalid damage expression".to_string());
+    }
     let mut total = 0;
     let mut detail = String::new();
     let mut idx = 0;
@@ -594,11 +562,11 @@ pub fn penetrating_roll_trigger_set_with(
     if sides < 0 {
         sides = 0;
     }
-    let triggers = triggers
-        .iter()
-        .copied()
-        .filter(|roll| (1..=sides).contains(roll))
-        .collect::<Vec<_>>();
+    // A trigger set covering every face can never terminate. Treat it as a
+    // standard roll, matching expected_die_with_trigger_count's fallback.
+    if triggers.len() >= sides as usize && (1..=sides).all(|face| triggers.contains(&face)) {
+        return next_roll().clamp(1, sides);
+    }
     let mut total = 0;
     let mut first = true;
     loop {
@@ -693,6 +661,107 @@ fn has_top_level_operator(s: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn malformed_expressions_are_rejected_without_hanging() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+        for expression in ["d6)", "(d6", "d6+", "()", "d0", "2dd6", "999999999999d6"] {
+            assert!(
+                super::DamageExprCache::try_new(expression).is_err(),
+                "{expression}"
+            );
+            assert_eq!(super::roll_damage_expr(expression, &mut rng, false), 0);
+            assert_eq!(super::expected_damage_expr(expression), 0.0);
+            assert_eq!(
+                super::roll_damage_expr_with_detail(expression, &mut rng).0,
+                0
+            );
+        }
+        let nested = format!("{}d6{}", "(".repeat(65), ")".repeat(65));
+        assert!(super::DamageExprCache::try_new(&nested).is_err());
+    }
+
+    #[test]
+    fn compiled_catalog_rolls_preserve_results_and_rng_sequence() {
+        use super::*;
+        use rand::{RngCore, SeedableRng, rngs::StdRng};
+        let catalog: serde_json::Value =
+            serde_json::from_str(include_str!("../../data/sim/weapons.json")).unwrap();
+        let mut expressions = vec!["-(d4p-2)+d6p".to_string(), "lower of 2d8p".to_string()];
+        for weapon in catalog["weapons"].as_array().unwrap() {
+            for key in ["damage", "shield_damage", "jab_special"] {
+                if let Some(expr) = weapon[key].as_str() {
+                    expressions.push(expr.to_owned());
+                }
+            }
+        }
+        assert!(expressions.len() > 90);
+        for expr in expressions {
+            for mode in 0..3 {
+                let cache = match mode {
+                    1 => DamageExprCache::new_with_d6_penetration_triggers(&expr, &[5, 6]),
+                    2 => DamageExprCache::new_with_max_minus_one_penetration(&expr),
+                    _ => DamageExprCache::try_new(&expr).unwrap(),
+                };
+                for nonpenetrating in [false, true] {
+                    let cleaned = clean_damage_expr(&expr);
+                    let cleaned = if nonpenetrating {
+                        cleaned.replace('p', "")
+                    } else {
+                        cleaned
+                    };
+                    assert!(
+                        (cache.expected(nonpenetrating)
+                            - expected_expression(
+                                &cleaned,
+                                cache.d6_penetration_triggers().map(<[i32]>::len),
+                                mode == 2
+                            ))
+                        .abs()
+                            < 1e-9,
+                        "{expr}"
+                    );
+                    for seed in 0..32 {
+                        let mut old_rng = StdRng::seed_from_u64(seed);
+                        let mut new_rng = old_rng.clone();
+                        let mut expected = evaluate_expression(
+                            &cleaned,
+                            cache.d6_penetration_triggers(),
+                            mode == 2,
+                            &mut old_rng,
+                        );
+                        if cache.is_lower_of {
+                            expected = expected.min(evaluate_expression(
+                                &cleaned,
+                                cache.d6_penetration_triggers(),
+                                mode == 2,
+                                &mut old_rng,
+                            ));
+                        }
+                        assert_eq!(
+                            cache.roll(&mut new_rng, nonpenetrating),
+                            expected,
+                            "{expr}: mode={mode} nonpenetrating={nonpenetrating} seed={seed}"
+                        );
+                        assert_eq!(
+                            new_rng.next_u64(),
+                            old_rng.next_u64(),
+                            "{expr}: RNG consumption changed"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn penetration_covering_every_face_terminates() {
+        assert_eq!(
+            super::penetrating_roll_trigger_set_with(2, &[1, 2], || 2),
+            2
+        );
+    }
+
     use super::*;
 
     #[test]
