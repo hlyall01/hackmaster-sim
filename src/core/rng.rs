@@ -13,10 +13,6 @@ impl SimRng {
             rng: rand::rngs::StdRng::seed_from_u64(seed),
         }
     }
-
-    pub fn from_rng(rng: rand::rngs::StdRng) -> Self {
-        Self { rng }
-    }
 }
 
 impl Default for SimRng {
@@ -43,27 +39,4 @@ impl RngCore for SimRng {
     fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand::Error> {
         self.rng.try_fill_bytes(dest)
     }
-}
-
-pub fn derive_seed(base: u64, domain: &str, index: u64) -> u64 {
-    let domain_hash = fnv1a64(domain.as_bytes());
-    let mixed = base ^ domain_hash ^ index.wrapping_mul(0x9E3779B97F4A7C15);
-    splitmix64(mixed)
-}
-
-fn fnv1a64(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf29ce484222325u64;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    hash
-}
-
-fn splitmix64(mut state: u64) -> u64 {
-    state = state.wrapping_add(0x9E3779B97F4A7C15);
-    let mut z = state;
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
-    z ^ (z >> 31)
 }

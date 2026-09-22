@@ -980,9 +980,9 @@ fn parse_damage_dice(
         }
         i += 1;
     }
-    let mut indexed: Vec<(usize, DamageDie)> = dice.into_iter().enumerate().collect();
-    indexed.sort_by_key(|(idx, die)| (die.sides, *idx));
-    indexed.into_iter().map(|(_, die)| die).collect()
+    // Stable sorting preserves the original roll order among equally sized dice.
+    dice.sort_by_key(|die| die.sides);
+    dice
 }
 
 pub(crate) fn extra_damage_dice_sequence(
@@ -1002,20 +1002,22 @@ fn extra_damage_dice_sequence_from_cache(
     dice: i32,
     force_nonpenetrating: bool,
 ) -> Vec<DamageDie> {
-    if dice <= 0 || pool.is_empty() {
-        return Vec::new();
-    }
-    let mut sequence = Vec::new();
-    for idx in 0..dice {
-        let mut die = pool[idx as usize % pool.len()];
+    extra_damage_dice_iter(pool, dice, force_nonpenetrating).collect()
+}
+
+fn extra_damage_dice_iter(
+    pool: &[DamageDie],
+    dice: i32,
+    force_nonpenetrating: bool,
+) -> impl Iterator<Item = DamageDie> + '_ {
+    pool.iter().copied().cycle().take(dice.max(0) as usize).map(move |mut die| {
         if force_nonpenetrating {
             die.penetrating = false;
             die.penetration_triggers = None;
             die.penetrate_on_max_minus_one = false;
         }
-        sequence.push(die);
-    }
-    sequence
+        die
+    })
 }
 
 fn average_damage_cache_rounded_down(cache: &DamageExprCache, nonpenetrating: bool) -> i32 {
@@ -1105,11 +1107,12 @@ fn mounted_damage_plan(
 }
 
 fn mounted_extra_dice(pool: &[DamageDie], plan: MountedDamagePlan) -> Vec<DamageDie> {
-    let mut extra = if plan.double_base_dice { pool.to_vec() } else { Vec::new() };
-    if let Some(smallest) = pool.first() {
-        extra.extend(std::iter::repeat_n(*smallest, plan.extra_smallest));
-    }
-    extra
+    mounted_extra_dice_iter(pool, plan).collect()
+}
+
+fn mounted_extra_dice_iter(pool: &[DamageDie], plan: MountedDamagePlan) -> impl Iterator<Item = DamageDie> + '_ {
+    pool.iter().copied().take(if plan.double_base_dice { pool.len() } else { 0 })
+        .chain(pool.first().copied().into_iter().cycle().take(plan.extra_smallest))
 }
 
 fn format_damage_dice(dice: &[DamageDie]) -> String {
@@ -1212,10 +1215,10 @@ fn roll_mounted_weapon_damage(
     }
     let pool = parse_damage_dice(expr, nonpenetrating, cache.d6_penetration_triggers(),
         cache.penetrate_on_max_minus_one());
-    let extra = mounted_extra_dice(&pool, plan);
+    let extra = mounted_extra_dice_iter(&pool, plan);
     if average {
         return (cache.expected(nonpenetrating)
-            + extra.iter().copied().map(expected_damage_die).sum::<f64>()).floor() as i32;
+            + extra.map(expected_damage_die).sum::<f64>()).floor() as i32;
     }
     let mut result = cache.roll(rng, nonpenetrating);
     for die in extra {
@@ -1293,9 +1296,9 @@ fn roll_extra_damage_cached(
     rng: &mut impl Rng,
 ) -> i32 {
     let pool = cached_damage_dice(cache, weapon, use_jab);
-    let sequence = extra_damage_dice_sequence_from_cache(pool, dice, force_nonpenetrating);
+    let sequence = extra_damage_dice_iter(pool, dice, force_nonpenetrating);
     if average {
-        return average_extra_damage_rounded_down(&sequence);
+        return sequence.map(expected_damage_die).sum::<f64>().floor() as i32;
     }
     let mut total = 0;
     for die in sequence {

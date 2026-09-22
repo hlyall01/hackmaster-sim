@@ -457,6 +457,7 @@ fn player_config_from_preset(
     player.proficiencies = preset.proficiencies.clone();
     player.talents = preset.talents.clone();
     player.magic = preset.magic.clone();
+    player.tactical_policy = preset.tactical_policy.clone();
     player.default_weapon_style_ids = preset.default_weapon_style_ids.clone();
     player.race_id = preset.race_id.clone();
     player.race_applied = false;

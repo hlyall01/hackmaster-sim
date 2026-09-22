@@ -349,8 +349,8 @@ fn saves_use_ties_and_natural_ones_as_specified() {
 #[test]
 fn spell_selections_ai_and_empowerments_round_trip_without_essence_setup() {
     let mut loadout = MagicLoadout::default();
-    for spell in SPELL_CATALOG {
-        loadout.learn_spell(spell.id);
+    for spell in spell_catalog() {
+        loadout.learn_spell(&spell.id);
     }
     loadout
         .spell_ai

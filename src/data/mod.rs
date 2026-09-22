@@ -3,10 +3,7 @@
 mod armor;
 mod atomic;
 pub use atomic::atomic_write;
-mod autobattler;
-mod autobattler_events;
 mod fighter_presets;
-mod materials;
 mod npc_presets;
 mod races;
 mod tactical_presets;
@@ -19,10 +16,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub use armor::load_armor_catalog;
-pub use autobattler::load_autobattler_config;
-pub use autobattler_events::load_autobattler_events;
 pub use fighter_presets::{load_fighter_presets, save_fighter_presets};
-pub use materials::load_materials;
 pub use npc_presets::load_npc_presets;
 pub use races::load_races;
 pub use tactical_presets::{
@@ -35,20 +29,15 @@ pub const TALENTS_PATH: &str = "data/sim/talents.json";
 
 fn mapped_data_subpath(path: &Path) -> PathBuf {
     let stripped = path.strip_prefix("data").unwrap_or(path);
-    if stripped.starts_with("sim") || stripped.starts_with("autobattler") {
+    if stripped.starts_with("sim") {
         return stripped.to_path_buf();
     }
     let Some(file_name) = stripped.file_name().and_then(|name| name.to_str()) else {
         return stripped.to_path_buf();
     };
     match file_name {
-        "autobattler_config.json"
-        | "autobattler_quick_starts.json"
-        | "events_v1.json"
-        | "events_v1_handcrafted.json" => PathBuf::from("autobattler").join(file_name),
         "armor.json"
         | "fighter_presets.json"
-        | "materials.json"
         | "npc_presets.json"
         | "races.json"
         | "talents.json"
@@ -144,26 +133,9 @@ pub fn ensure_parent_dir(path: &Path) -> Result<(), String> {
 }
 
 pub fn load_catalogs() -> Result<(WeaponCatalog, ArmorCatalog, ShieldCatalog), String> {
-    let weapons = load_weapon_catalog("data/sim/weapons.json")?;
+    let (weapons, shields) = weapons::load_weapon_and_shield_catalogs("data/sim/weapons.json")?;
     let armor = load_armor_catalog("data/sim/armor.json")?;
-    let shields = load_shield_catalog("data/sim/weapons.json")?;
-    let _materials = load_materials("data/sim/materials.json")?;
     Ok((weapons, armor, shields))
-}
-
-pub fn validate_required_data_files(paths: &[&str]) -> Result<(), Vec<String>> {
-    let mut missing = Vec::new();
-    for path in paths {
-        let resolved = resolve_data_path(path);
-        if !resolved.exists() {
-            missing.push(format!("{path} (resolved: {})", resolved.display()));
-        }
-    }
-    if missing.is_empty() {
-        Ok(())
-    } else {
-        Err(missing)
-    }
 }
 
 #[cfg(test)]
@@ -237,12 +209,4 @@ mod tests {
         assert_eq!(mapped, PathBuf::from("sim").join("weapons.json"));
     }
 
-    #[test]
-    fn maps_legacy_autobattler_paths_into_autobattler_namespace() {
-        let mapped = mapped_data_subpath(Path::new("data/autobattler_config.json"));
-        assert_eq!(
-            mapped,
-            PathBuf::from("autobattler").join("autobattler_config.json")
-        );
-    }
 }

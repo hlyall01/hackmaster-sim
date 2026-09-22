@@ -1,119 +1,6 @@
 //! Core domain types (abilities, equipment, combatant sheet).
 
-use crate::character::{AbilitySet, AbilitySetFull, Progression};
-use crate::core::ids::NpcPresetId;
 use serde::{Deserialize, Serialize};
-
-#[derive(Clone, Debug)]
-pub struct PlayerProfile {
-    pub name: String,
-    pub level: u8,
-    pub xp: u32,
-    pub base_stats: AbilitySet,
-    pub ability_scores_full: AbilitySetFull,
-    pub progression: Progression,
-    pub points: PointPools,
-    pub banked_points: PointPools,
-    pub honor: i32,
-    pub alignment: Option<String>,
-    pub race_id: Option<String>,
-    pub background: Option<String>,
-    pub quirks: Vec<String>,
-    pub flaws: Vec<String>,
-    pub skills: Vec<String>,
-    pub skill_levels: Vec<SkillProgress>,
-    pub proficiencies: Vec<String>,
-    pub talents: Vec<TalentSelection>,
-    pub weapon_masteries: Vec<WeaponMasteryProgress>,
-}
-
-impl PlayerProfile {
-    pub fn new(name: impl Into<String>, base_stats: AbilitySet) -> Self {
-        Self {
-            name: name.into(),
-            level: 1,
-            xp: 0,
-            base_stats,
-            ability_scores_full: AbilitySetFull::from(base_stats),
-            progression: Progression::default(),
-            points: PointPools::default(),
-            banked_points: PointPools::default(),
-            honor: 0,
-            alignment: None,
-            race_id: None,
-            background: None,
-            quirks: Vec::new(),
-            flaws: Vec::new(),
-            skills: Vec::new(),
-            skill_levels: Vec::new(),
-            proficiencies: Vec::new(),
-            talents: Vec::new(),
-            weapon_masteries: Vec::new(),
-        }
-    }
-}
-
-impl Default for PlayerProfile {
-    fn default() -> Self {
-        Self::new("Player", AbilitySet::default())
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
-pub struct SkillProgress {
-    pub id: String,
-    #[serde(default)]
-    pub level: u8,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
-pub struct WeaponMasteryProgress {
-    pub group: String,
-    #[serde(default)]
-    pub experience: u32,
-    #[serde(default)]
-    pub unspent_points: u32,
-    #[serde(default)]
-    pub free_proficiency_tiers_claimed: i32,
-    #[serde(default)]
-    pub attack: i32,
-    #[serde(default)]
-    pub defense: i32,
-    #[serde(default)]
-    pub damage: i32,
-    #[serde(default)]
-    pub speed: i32,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
-pub struct PointPools {
-    pub bp: i32,
-    pub lp: i32,
-    pub ap: i32,
-    pub rp: i32,
-}
-
-impl PointPools {
-    pub fn new(bp: i32, lp: i32, ap: i32, rp: i32) -> Self {
-        Self { bp, lp, ap, rp }
-    }
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Inventory {
-    pub gold: u32,
-    pub items: Vec<String>,
-}
-
-impl Inventory {
-    pub fn add_gold(&mut self, amount: u32) {
-        self.gold = self.gold.saturating_add(amount);
-    }
-
-    pub fn add_item(&mut self, item: impl Into<String>) {
-        self.items.push(item.into());
-    }
-}
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct AbilityAdjustments {
@@ -558,12 +445,6 @@ fn default_talent_rank() -> u8 {
 
 fn default_talent_category() -> String {
     "Uncategorized".to_string()
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct EnemyProfile {
-    pub level: u8,
-    pub preset_id: NpcPresetId,
 }
 
 #[cfg(test)]

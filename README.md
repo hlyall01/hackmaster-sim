@@ -1,45 +1,67 @@
-# Hackmaster Sim
+# Hackmaster Simulator
 
-## Squad battler demo
+This project ships one application: `sim_gui`, the desktop combat simulator.
 
-Run the separate squad battler browser demo on port 8788:
-
-```bash
-cargo run --bin squad_battler_demo -- --port 8788
-```
-
-Then open `http://127.0.0.1:8788`.
-
-QA commands:
+## Run
 
 ```bash
-cargo check --bin squad_battler_demo
-cargo check --bin sim_gui
-test ! -f src/bin/autobattler_v2_demo.rs || cargo check --bin autobattler_v2_demo
-python3 scripts/squad_battler_api_smoke.py --base-url http://127.0.0.1:8788 --seed 8788
+cargo run --release
+# Equivalent: cargo run --release --bin sim_gui
+# Development shortcut: cargo sim
 ```
 
-See [docs/squad_battler_qa.md](docs/squad_battler_qa.md) for the smoke script,
-deterministic replay check, API shape checks, and integration checklist.
+The simulator includes live/step combat, bulk win-rate and detailed statistics,
+DPS and damage-distribution plots, fighter and NPC presets, character and gear
+editors, weapon styles and conditional tactics, spells, and wound-healing,
+essence-wound and Ego calculators. `--console` enables diagnostics on Windows.
 
-## WSL build + Windows signing
+## Code and data
 
-### One-time: create a dev signing cert
+- `src/bin/sim_gui.rs`, `src/bin/sim_gui/`: GUI and background-job scheduling.
+- `src/game_logic.rs`, `src/game_logic/`: character setup, stat derivation and calculation jobs.
+- `src/core/`: combat, magic, tactics, healing, dice and deterministic RNG.
+- `src/character.rs`: ability and progression tables and derived character stats.
+- `src/data/`, `data/sim/`: simulator catalog/preset adapters and bundled data.
+- `src/sim.rs`, `src/ui_widgets.rs`, `src/assets.rs`, `src/console.rs`: display helpers and desktop support.
+- `references/`: rules references. Older root-level application plans are historical.
+
+Saved fighter/tactical presets are kept outside build output, under
+`%LOCALAPPDATA%/HackmasterSim/data/sim` on Windows or
+`$XDG_DATA_HOME/HackmasterSim/data/sim` (default `~/.local/share`) on Linux.
+`HACKMASTER_SIM_DATA_DIR` selects an explicit data root. Existing saved presets
+and legacy `data/*.json` simulator aliases remain supported. Missing catalog
+files have bundled defaults; spell definitions are currently embedded at build time.
+
+The separate campaign, autobattler, squad, browser-demo and weapon-plotter apps
+have been retired. Their dependencies and runtime content are no longer built
+or packaged. Simulator plots, combat rules and NPC/fighter data remain.
+
+## Validate
+
 ```bash
-export CODESIGN_PFX_PASSWORD="your-strong-password"
-./scripts/create_cert.sh
+cargo test --lib --bin sim_gui
+cargo check --all-targets
+cargo run --example sim_capabilities
 ```
-This creates `secrets/codesign/mygame-dev.pfx` and `secrets/codesign/thumbprint.txt` on the Windows side.
 
-### Build + sign from WSL
+The capability-report example is a simulator diagnostic. GUI smoke tests cover
+all main tabs, editor tabs and calculators without opening a native window.
+
+## Windows builds
+
+From WSL with the Windows GNU toolchain installed:
+
 ```bash
-export CODESIGN_PFX_PASSWORD="your-strong-password"
-./scripts/build_release_signed.sh
+cargo build --release --bin sim_gui --target x86_64-pc-windows-gnu
 ```
-This builds in WSL and then signs any `target/**/release/*.exe` using Windows `signtool.exe`.
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(wslpath -w /home/hazzal/projects/HackmasterSim/installer/build_installer.ps1)"
+The executable is `target/x86_64-pc-windows-gnu/release/sim_gui.exe`.
+`scripts/build_sim_gui_to_desktop.bat` uses native Visual Studio tools and copies
+the executable to the desktop. `installer/build_installer.ps1` packages only the
+simulator and `data/sim` catalogs using Inno Setup.
 
-### Notes
-- If `signtool.exe` is missing, install the Windows SDK or Visual Studio Build Tools with the Windows SDK + Signing Tools components.
-- Self-signed certs remove warnings only on your machine; SmartScreen will still warn on other machines.
+For signing, create a local development certificate using
+`scripts/create_cert.sh`, then set `WIN_TARGET` and `CODESIGN_PFX_PASSWORD` and run
+`scripts/build_release_signed.sh`. It signs only the newly built simulator;
+stale executables in `target/` are excluded. Windows SDK signing tools are required.
+See `installer/README.md` for installer options.

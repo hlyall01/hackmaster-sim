@@ -16,7 +16,7 @@ pub(super) enum JobKind {
     },
 }
 pub(super) enum JobOutput {
-    Bulk(Box<BulkSimResult>),
+    Bulk(Box<BulkSimResult>, u64),
     Dps(DpsTestResult),
     Plot(usize, simulation_jobs::DamageRollPlotData),
 }
@@ -70,7 +70,7 @@ impl BackgroundJob {
                             seed,
                             |completed| worker_control.keep_running(completed),
                         )
-                        .map(|result| JobOutput::Bulk(Box::new(result))),
+                        .map(|result| JobOutput::Bulk(Box::new(result), seed)),
                         JobKind::Dps(request) => simulation_jobs::run_dps_test(
                             config,
                             combatants,

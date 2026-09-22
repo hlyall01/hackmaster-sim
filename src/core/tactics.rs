@@ -218,6 +218,7 @@ pub enum TacticalAction {
     #[default]
     NormalAttack,
     Jab,
+    CalledShot,
     NeutralStance,
     FightDefensively {
         penalty: i32,
@@ -233,7 +234,7 @@ impl TacticalAction {
             Self::RetainWeaponStyle | Self::NeutralWeaponStyle | Self::UseWeaponStyle { .. } => {
                 TacticalChannel::WeaponStyle
             }
-            Self::NormalAttack | Self::Jab => TacticalChannel::AttackMode,
+            Self::NormalAttack | Self::Jab | Self::CalledShot => TacticalChannel::AttackMode,
             Self::NeutralStance | Self::FightDefensively { .. } => TacticalChannel::Stance,
             Self::StandGround | Self::GiveGround | Self::ScamperBack => TacticalChannel::Reaction,
         }
@@ -255,6 +256,7 @@ impl TacticalAction {
             }
             Self::NormalAttack => "Normal attack".to_string(),
             Self::Jab => "Jab".to_string(),
+            Self::CalledShot => "Called shot".to_string(),
             Self::NeutralStance => "Neutral stance".to_string(),
             Self::FightDefensively { penalty } => {
                 format!("Fight defensively (-{penalty}/+{})", penalty / 2)
@@ -294,6 +296,12 @@ pub struct TacticalPolicy {
     pub enabled: bool,
     #[serde(default)]
     pub rules: Vec<TacticalRule>,
+}
+
+impl TacticalPolicy {
+    pub fn is_default(&self) -> bool {
+        !self.enabled && self.rules.is_empty()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]

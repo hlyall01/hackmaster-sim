@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub enum ProgressionTier {
@@ -143,45 +142,6 @@ pub struct AbilitySet {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-pub struct AbilitySetFull {
-    pub strength: AbilityScore,
-    pub intelligence: AbilityScore,
-    pub wisdom: AbilityScore,
-    pub dexterity: AbilityScore,
-    pub constitution: AbilityScore,
-    pub looks: AbilityScore,
-    pub charisma: AbilityScore,
-}
-
-impl From<AbilitySet> for AbilitySetFull {
-    fn from(set: AbilitySet) -> Self {
-        Self {
-            strength: set.strength,
-            intelligence: AbilityScore::new(set.intelligence, 1),
-            wisdom: AbilityScore::new(set.wisdom, 1),
-            dexterity: set.dexterity,
-            constitution: AbilityScore::new(set.constitution, 1),
-            looks: AbilityScore::new(set.looks, 1),
-            charisma: AbilityScore::new(set.charisma, 1),
-        }
-    }
-}
-
-impl From<AbilitySetFull> for AbilitySet {
-    fn from(set: AbilitySetFull) -> Self {
-        Self {
-            strength: set.strength,
-            intelligence: set.intelligence.base,
-            wisdom: set.wisdom.base,
-            dexterity: set.dexterity,
-            constitution: set.constitution.base,
-            looks: set.looks.base,
-            charisma: set.charisma.base,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default)]
 pub struct StrengthMods {
     pub damage: i32,
     pub feat: i32,
@@ -308,14 +268,6 @@ pub enum WeaponGroup {
     Shields,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum MasteryAspect {
-    Attack,
-    Defense,
-    Damage,
-    Speed,
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct MasteryState {
@@ -323,22 +275,6 @@ pub struct MasteryState {
     pub defense: i32,
     pub damage: i32,
     pub speed: i32,
-}
-
-impl MasteryState {
-    pub fn max_tier(&self) -> i32 {
-        self.attack
-            .min(self.defense)
-            .min(self.damage)
-            .min(self.speed)
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct WeaponMastery {
-    pub group: WeaponGroup,
-    pub points: MasteryState,
-    pub base_threshold: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -352,29 +288,11 @@ pub struct Weapon {
     pub defense_bonus_always: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MaterialKind {
-    Metal,
-    Fabric,
-    Wood,
-}
-
-#[derive(Clone, Debug)]
-pub struct Material {
-    pub tier: i32,
-    pub name: String,
-    pub weight_mult: f32,
-    pub kind: MaterialKind,
-}
-
 #[derive(Clone, Debug, Default)]
 pub struct Equipment {
     pub weapon: Option<Weapon>,
     pub shield: Option<Shield>,
     pub armor: Option<Armor>,
-    pub weapon_material: Option<Material>,
-    pub armor_material: Option<Material>,
-    pub shield_material: Option<Material>,
 }
 
 #[derive(Clone, Debug)]
@@ -385,7 +303,6 @@ pub struct Character {
     pub base_hp: u32,
     pub abilities: AbilitySet,
     pub ability_mods: AbilityDerived,
-    pub weapon_masteries: HashMap<WeaponGroup, WeaponMastery>,
     pub equipment: Equipment,
 }
 
@@ -519,7 +436,6 @@ pub struct CharacterBuilder {
     progression: Progression,
     base_hp: u32,
     abilities: AbilitySet,
-    weapon_masteries: HashMap<WeaponGroup, WeaponMastery>,
     equipment: Equipment,
 }
 
@@ -531,7 +447,6 @@ impl CharacterBuilder {
             progression: Progression::default(),
             base_hp: 10,
             abilities: AbilitySet::default(),
-            weapon_masteries: HashMap::new(),
             equipment: Equipment::default(),
         }
     }
@@ -552,11 +467,6 @@ impl CharacterBuilder {
         self
     }
 
-    pub fn weapon_mastery(mut self, mastery: WeaponMastery) -> Self {
-        self.weapon_masteries.insert(mastery.group, mastery);
-        self
-    }
-
     pub fn equipment(mut self, equipment: Equipment) -> Self {
         self.equipment = equipment;
         self
@@ -571,7 +481,6 @@ impl CharacterBuilder {
             base_hp: self.base_hp,
             abilities: self.abilities,
             ability_mods,
-            weapon_masteries: self.weapon_masteries,
             equipment: self.equipment,
         }
     }
@@ -3030,24 +2939,12 @@ fn lookup_looks(score: u8) -> LooksMods {
         .unwrap_or_default()
 }
 
-pub fn looks_charisma_adjustment(score: u8) -> i32 {
-    lookup_looks(score).charisma
-}
-
-pub fn looks_honor_adjustment(score: u8) -> i32 {
-    lookup_looks(score).honor
-}
-
 fn lookup_cha(score: u8) -> ChaMods {
     CHA_TABLE
         .iter()
         .find(|row| row.score == score)
         .map(|row| row.mods)
         .unwrap_or_default()
-}
-
-pub fn charisma_honor_adjustment(score: u8) -> i32 {
-    lookup_cha(score).honor
 }
 
 // --- Advancement tables (data from references) ---
@@ -3274,15 +3171,6 @@ const HEALTH_TABLE: [[f32; 5]; 20] = [
 ];
 
 // --- Utility helpers ---
-
-pub fn mastery_threshold(base_threshold: f32, intelligence: u8, completed_tiers: i32) -> f32 {
-    let int_mod = lookup_int(intelligence).weapon_exp_threshold_pct as f32 / 100.0;
-    let mut threshold = base_threshold * (1.0 + int_mod);
-    if completed_tiers > 0 {
-        threshold *= 1.0 + (0.2 * completed_tiers as f32);
-    }
-    threshold
-}
 
 #[cfg(test)]
 mod tests {

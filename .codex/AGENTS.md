@@ -1,13 +1,13 @@
 # Agent Instructions
 
-## Core Plan
-- Use `battle_sim_plan.md` and `autobattler_rpg_plan.md` as the source of truth for scope, rules coverage, and implementation steps.
-- Keep changes aligned with the plan's goals and sequencing; update the plan only if explicitly asked.
-- Ensure that the `sim_gui.rs` is JUST for gui stuff and the logic is kept in `game_logic.rs`
-- Rethink implementations when beneficial; piping precomputed or different information through is acceptable and preferred if it improves clarity, correctness, or performance.
-- Render scenes headlessly via `cargo run --bin autobattler -- --headless-screenshots --auto-screenshots --auto-start-run --auto-screenshot-count 1` and inspect `screenshots/latest.png` (renders the game view only, no egui).
-- For sprite/weapon verification, run `cargo run --bin autobattler -- --sprite-review --headless-screenshots` and inspect `screenshots/sprite_review_*`.
-- You can generate and inspect screenshots as part of visual verification; store outputs in `screenshots/`.
+## Simulator scope
+- This project ships only `sim_gui`. Preserve all simulator, character-editor, plotting, preset, tactical, spell, and calculator functionality.
+- Keep `sim_gui.rs` for GUI work and calculation/domain logic in `game_logic` or the pure `core` modules.
+- The old autobattler/Bevy plans are historical; do not reintroduce those applications or use their commands to validate this project.
+- Use `references/` for game rules. Do not edit historical plans unless explicitly asked.
+- Run `cargo test --lib --bin sim_gui` and `cargo check --all-targets` for shared-code changes. The GUI smoke tests render all tabs without a native window.
+- Validate Windows packaging with `cargo build --release --bin sim_gui --target x86_64-pc-windows-gnu` when changing builds or assets.
+- Store visual verification outputs in `screenshots/`.
 - Do not run `sudo` commands; ask the user to perform privileged steps.
 
 ## Analysis and Working Tree Hygiene

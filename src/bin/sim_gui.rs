@@ -12,7 +12,7 @@ use game_logic::{
     WeaponCatalog, WeaponHandedness, WeaponId, WeaponSize,
 };
 use hackmaster_sim::core::catalog::Catalog;
-use hackmaster_sim::core::gameplay::run::{Wound, heal_wounds, required_healing_steps};
+use hackmaster_sim::core::healing::{Wound, heal_wounds, required_healing_steps};
 use hackmaster_sim::core::tactics::{
     MAX_TACTICAL_CONDITIONS, NumericComparison, RelativeComparison, SpeedComparison,
     TacticalAction, TacticalCondition, TacticalPolicy, TacticalPreset, TacticalRule,
@@ -24,6 +24,8 @@ use hackmaster_sim::{character, data, game_logic, sim};
 use sim::{BulkSimResult, SimConfig, SimState};
 #[path = "sim_gui/jobs.rs"]
 mod jobs;
+#[path = "sim_gui/combat_log.rs"]
+mod combat_log;
 use jobs::{BackgroundJob, JobKind, JobOutput};
 use std::collections::BTreeMap;
 
@@ -147,6 +149,7 @@ const WEAPON_GROUP_LABELS: [&str; 13] = [
 
 struct SimGuiApp {
     background_job: Option<BackgroundJob>,
+    combat_log: combat_log::CombatLogView,
     job_message: Option<String>,
     derived_cache: [Option<DerivedCache>; 2],
     stop_distance_players: Option<[PlayerConfig; 2]>,
@@ -297,6 +300,7 @@ impl SimGuiApp {
             .unwrap_or(WeaponId::new(0));
         let mut app = Self {
             background_job: None,
+            combat_log: Default::default(),
             job_message: None,
             derived_cache: [None, None],
             stop_distance_players: None,
@@ -407,6 +411,7 @@ impl SimGuiApp {
     }
 
     fn reset_positions(&mut self) {
+        self.combat_log.clear();
         self.spell_error = None;
         self.sanitize_players();
         let combatants = game_logic::build_combatants(
@@ -430,18 +435,8 @@ impl SimGuiApp {
         }
     }
 
-    fn handle_spell_action(&mut self, caster: usize, action: u8) {
-        let result = match action {
-            0 => self.sim.cast_echo_strike(caster),
-            1 => self.sim.cancel_spell(caster),
-            2 => self.sim.dismiss_echo_strike(caster),
-            4 | 5 => {
-                let id = if action == 4 { "spell_chronoblur" } else { "spell_streamline" };
-                hackmaster_sim::core::sim::SpellRequest::from_loadout(id, &self.sim.combatants[caster].magic.loadout)
-                    .and_then(|request| self.sim.cast_spell(caster, request))
-            }
-            _ => self.sim.stop_channeling(caster),
-        };
+    fn handle_spell_action(&mut self, caster: usize, action: game_logic::SpellAction) {
+        let result = game_logic::apply_spell_action(&mut self.sim, caster, action);
         self.spell_error = result.err().map(|error| (caster, error.to_string()));
     }
 
@@ -465,9 +460,6 @@ impl SimGuiApp {
             runs: self.bulk_runs,
             seed,
         }) {
-            self.bulk_result = None;
-            self.bulk_sim_duration = None;
-            self.bulk_last_seed = Some(seed);
             self.bulk_seed = seed.wrapping_add(1).max(1);
         }
     }
@@ -484,8 +476,6 @@ impl SimGuiApp {
             seed: self.dps_seed,
         };
         if self.start_job(JobKind::Dps(request)) {
-            self.dps_result = None;
-            self.dps_sim_duration = None;
             self.dps_seed = self.dps_seed.wrapping_add(1).max(1);
         }
     }
@@ -522,9 +512,10 @@ impl SimGuiApp {
             return;
         }
         match message {
-            Ok((Some(JobOutput::Bulk(result)), elapsed)) => {
+            Ok((Some(JobOutput::Bulk(result, seed)), elapsed)) => {
                 self.bulk_result = Some(*result);
                 self.bulk_sim_duration = Some(elapsed);
+                self.bulk_last_seed = Some(seed);
             }
             Ok((Some(JobOutput::Dps(result)), elapsed)) => {
                 self.dps_result = Some(result);
@@ -1110,6 +1101,12 @@ fn draw_weapon_icon(painter: &egui::Painter, pos: Pos2, facing: f32, icon: Weapo
 
 impl eframe::App for SimGuiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.show(ctx);
+    }
+}
+
+impl SimGuiApp {
+    fn show(&mut self, ctx: &egui::Context) {
         let player_editors_were_open = self.show_player_editor;
         let dt = ctx.input(|i| i.unstable_dt).min(0.05) * self.time_scale;
         let screen_rect = ctx.input(|i| i.screen_rect);
@@ -1124,21 +1121,42 @@ impl eframe::App for SimGuiApp {
         }
         self.update_sim(dt);
 
-        egui::TopBottomPanel::top("controls").show(ctx, |ui| {
-            if let Some(job) = &self.background_job {
-                ui.horizontal(|ui| {
-                    ui.label(job.label);
-                    ui.add(
-                        egui::ProgressBar::new(
-                            job.control.completed() as f32 / job.control.total().max(1) as f32,
-                        )
-                        .show_percentage(),
+        if let Some(job) = &self.background_job {
+            let progress = (job.control.completed() as f32
+                / job.control.total().max(1) as f32)
+                .clamp(0.0, 1.0);
+            // Float over the viewport so starting a job never changes panel sizes.
+            egui::Area::new(egui::Id::new("calculation_progress_overlay"))
+                .fixed_pos(egui::pos2(screen_rect.left(), screen_rect.bottom() - 3.0))
+                .movable(false)
+                .constrain(false)
+                .order(egui::Order::Foreground)
+                .show(ctx, |ui| {
+                    let (rect, response) = ui.allocate_exact_size(
+                        egui::vec2(screen_rect.width(), 3.0),
+                        egui::Sense::click(),
                     );
-                    if ui.button("Cancel calculation").clicked() {
+                    ui.painter().rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
+                    let filled = Rect::from_min_size(
+                        rect.min,
+                        egui::vec2(rect.width() * progress, rect.height()),
+                    );
+                    ui.painter()
+                        .rect_filled(filled, 0.0, ui.visuals().selection.bg_fill);
+                    if response
+                        .on_hover_text(format!(
+                            "{}: {:.0}% — Click to cancel",
+                            job.label,
+                            progress * 100.0
+                        ))
+                        .clicked()
+                    {
                         job.control.cancel();
                     }
                 });
-            }
+        }
+
+        egui::TopBottomPanel::top("controls").show(ctx, |ui| {
             if let Some(message) = &self.job_message {
                 ui.label(message);
             }
@@ -1287,26 +1305,20 @@ impl eframe::App for SimGuiApp {
                             let total_runs = (result.wins.iter().copied().sum::<u32>()
                                 + result.ties)
                                 .max(1) as f32;
-                            let wins_a = result.wins.get(0).copied().unwrap_or(0);
-                            let wins_b = result.wins.get(1).copied().unwrap_or(0);
-                            truncated_label(ui, format!(
-                                "{} wins: {} ({:.1}%)",
-                                self.players[0].name,
-                                wins_a,
-                                wins_a as f32 * 100.0 / total_runs
-                            ));
-                            truncated_label(ui, format!(
-                                "{} wins: {} ({:.1}%)",
-                                self.players[1].name,
-                                wins_b,
-                                wins_b as f32 * 100.0 / total_runs
-                            ));
+                            for (idx, player) in self.players.iter().enumerate() {
+                                let wins = result.wins.get(idx).copied().unwrap_or(0);
+                                truncated_label_with_suffix(
+                                    ui,
+                                    &player.name,
+                                    format!("wins: {wins} ({:.1}%)", wins as f32 * 100.0 / total_runs),
+                                );
+                            }
                             if result.ties > 0 {
-                                truncated_label(ui, format!(
-                                    "Ties/timeouts: {} ({:.1}%)",
-                                    result.ties,
-                                    result.ties as f32 * 100.0 / total_runs
-                                ));
+                                truncated_label_with_suffix(
+                                    ui,
+                                    "Ties/timeouts:",
+                                    format!("{} ({:.1}%)", result.ties, result.ties as f32 * 100.0 / total_runs),
+                                );
                             }
                             truncated_label(ui, format!("Avg duration: {:.1}s", result.avg_duration));
                             egui::CollapsingHeader::new("Detailed metrics")
@@ -1501,24 +1513,20 @@ impl eframe::App for SimGuiApp {
                                     ui.small("Paused — press Start or Next second to advance casting.");
                                 }
                                 if ui.button("Cancel cast").clicked() {
-                                    spell_action = Some((index, 1));
+                                    spell_action = Some((index, game_logic::SpellAction::Cancel));
                                 }
                             } else {
-                                for (id, label, action) in [
-                                    ("echo_strike", "Cast Echo Strike", 0),
-                                    ("spell_chronoblur", "Cast Chronoblur", 4),
-                                    ("spell_streamline", "Cast Streamline", 5),
-                                ] {
-                                    if combatant.magic.loadout.knows_spell(id)
-                                        && ui.add_enabled(!self.sim.done, egui::Button::new(label)).clicked() {
-                                        spell_action = Some((index, action));
+                                for spell in hackmaster_sim::core::magic::spell_catalog() {
+                                    if combatant.magic.loadout.knows_spell(&spell.id)
+                                        && ui.add_enabled(!self.sim.done, egui::Button::new(format!("Cast {}", spell.name))).clicked() {
+                                        spell_action = Some((index, game_logic::SpellAction::Cast(spell.id.clone())));
                                     }
                                 }
                             }
                             if let Some(channel) = &state.channeling {
                                 ui.label(format!("Channelling {}", channel.definition.name));
                                 if ui.button("Stop channelling").clicked() {
-                                    spell_action = Some((index, 3));
+                                    spell_action = Some((index, game_logic::SpellAction::StopChanneling));
                                 }
                             }
                             if let Some((_, end)) = state.fatigue {
@@ -1527,29 +1535,19 @@ impl eframe::App for SimGuiApp {
                                     end.saturating_sub(self.sim.elapsed_seconds)
                                 ));
                             }
-                            for spell in hackmaster_sim::core::magic::SPELL_CATALOG {
+                            for spell in hackmaster_sim::core::magic::spell_catalog() {
                                 if let Some(effect) = combatant.state.active_effects.iter().find(|effect| effect.id == spell.id && effect.remaining_seconds > 0) {
                                     ui.small(format!("{} active: {}s", spell.name, effect.remaining_seconds));
                                 }
                             }
-                            if let Some(buff) = &state.armed_echo {
-                                ui.small(format!(
-                                    "Echo armed: {}s",
-                                    buff.expires_at.saturating_sub(self.sim.elapsed_seconds)
-                                ));
-                            }
-                            for echo in &state.echoes {
-                                ui.small(format!(
-                                    "Echo {} in {}s: {} damage",
-                                    echo.ordinal + 1,
-                                    echo.due_at.saturating_sub(self.sim.elapsed_seconds),
-                                    echo.damage
-                                ));
+                            for line in game_logic::echo_status_lines(state, self.sim.elapsed_seconds) {
+                                ui.small(line);
                             }
                             if (state.armed_echo.is_some() || !state.echoes.is_empty())
-                                && ui.button("Dismiss Echo Strike").clicked()
+                                && ui.button(&hackmaster_sim::core::magic::SpellKind::EchoStrike
+                                    .catalog_entry().echo_status.as_ref().expect("validated echo status").dismiss).clicked()
                             {
-                                spell_action = Some((index, 2));
+                                spell_action = Some((index, game_logic::SpellAction::DismissEcho));
                             }
                         });
                     }
@@ -1599,13 +1597,7 @@ impl eframe::App for SimGuiApp {
                 ));
                 ui.separator();
                 ui.label("Combat log");
-                egui::ScrollArea::vertical()
-                    .max_height(180.0)
-                    .show(ui, |ui| {
-                        for event in &self.sim.combat_events {
-                            ui.label(sim::format_combat_event_line(event, &self.sim.combatants));
-                        }
-                    });
+                self.combat_log.show(ui, &self.sim);
             });
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -1730,6 +1722,21 @@ fn truncated_label(ui: &mut egui::Ui, text: impl Into<String>) -> egui::Response
         .on_hover_text(text)
 }
 
+fn truncated_label_with_suffix(ui: &mut egui::Ui, label: &str, suffix: String) -> egui::Response {
+    let full_text = format!("{label} {suffix}");
+    ui.horizontal(|ui| {
+        // Reserve the result's width before giving the name the remaining space.
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add(egui::Label::new(suffix).wrap(false));
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.add(egui::Label::new(label).truncate(true));
+            });
+        });
+    })
+    .response
+    .on_hover_text(full_text)
+}
+
 fn render_player_editor_tabs(ui: &mut egui::Ui, id_prefix: &str, active_tab: &mut PlayerEditorTab) {
     ui.push_id(format!("{id_prefix}_tabs"), |ui| {
         ui.horizontal_wrapped(|ui| {
@@ -1836,6 +1843,18 @@ fn render_tools_tab(
     }
 }
 
+type CachedEgoPlan = std::sync::Arc<Result<game_logic::EgoGenerationPlan, &'static str>>;
+
+fn cached_ego_plan(ui: &egui::Ui, input: game_logic::EgoGenerationInput) -> CachedEgoPlan {
+    let id = ui.make_persistent_id("ego_generation_plan");
+    if let Some((previous, plan)) = ui.data(|data| data.get_temp::<(game_logic::EgoGenerationInput, CachedEgoPlan)>(id)) {
+        if previous == input { return plan; }
+    }
+    let plan = std::sync::Arc::new(game_logic::calculate_ego_generation(input));
+    ui.data_mut(|data| data.insert_temp(id, (input, plan.clone())));
+    plan
+}
+
 fn render_ego_calculator(
     ui: &mut egui::Ui,
     input: &mut game_logic::EgoGenerationInput,
@@ -1882,10 +1901,11 @@ fn render_ego_calculator(
         u64::from(input.charisma) * 2,
     ));
     ui.small("Each day's gain is rounded to the nearest 5 (halfway rounds up), then capped at Maximum Ego. Days count morning generations; no spending is included.");
-    let plan = match game_logic::calculate_ego_generation(*input) {
+    let cached_plan = cached_ego_plan(ui, *input);
+    let plan = match cached_plan.as_ref() {
         Ok(plan) => plan,
         Err(message) => {
-            ui.colored_label(Color32::RED, message);
+            ui.colored_label(Color32::RED, *message);
             return;
         }
     };
@@ -2924,6 +2944,7 @@ fn tactical_action_editor(
         TacticalAction::StandGround => 7,
         TacticalAction::GiveGround => 8,
         TacticalAction::ScamperBack => 9,
+        TacticalAction::CalledShot => 10,
     };
     let old_kind = kind;
     let labels = [
@@ -2937,6 +2958,7 @@ fn tactical_action_editor(
         "Stand ground",
         "Give Ground",
         "Scamper Back",
+        "Called shot",
     ];
     egui::ComboBox::from_id_source(format!("{id_prefix}_action"))
         .selected_text(labels[kind])
@@ -2958,7 +2980,8 @@ fn tactical_action_editor(
             6 => TacticalAction::FightDefensively { penalty: 2 },
             7 => TacticalAction::StandGround,
             8 => TacticalAction::GiveGround,
-            _ => TacticalAction::ScamperBack,
+            9 => TacticalAction::ScamperBack,
+            _ => TacticalAction::CalledShot,
         };
     }
     match action {
@@ -3682,6 +3705,7 @@ fn render_player_editor(
                                     shield_catalog,
                                     race_catalog,
                                 );
+                                *tactical_draft = player.tactical_policy.clone();
                                 player.npc_preset = None;
                                 fighter_preset_name.clear();
                                 fighter_preset_name.push_str(preset.name.as_str());
@@ -3759,11 +3783,18 @@ fn render_player_editor(
                         &mut selection,
                         options,
                     );
-                    player.npc_preset = if selection == usize::MAX {
-                        None
-                    } else {
-                        npc_presets.id_from_index(selection)
-                    };
+                    let selected_preset = npc_presets.id_from_index(selection);
+                    if selected_preset != player.npc_preset {
+                        if let Some(id) = selected_preset {
+                            if let Err(error) = game_logic::apply_npc_preset(
+                                player, id, npc_presets, weapon_catalog, armor_catalog, shield_catalog,
+                            ) {
+                                ui.colored_label(Color32::RED, error);
+                            }
+                        } else {
+                            player.npc_preset = None;
+                        }
+                    }
                 });
                 if let Some(preset) = player.npc_preset.and_then(|id| npc_presets.get(id)) {
                     player.name = preset.name.clone();
@@ -3776,6 +3807,12 @@ fn render_player_editor(
                         preset.damage_bonus,
                         preset.top
                     ));
+                    if let Some(speed) = preset.speed_mod {
+                        ui.label(format!("SP {speed:+}"));
+                    }
+                    if let Some(dr) = preset.shield_dr {
+                        ui.label(format!("Shield DR {dr}"));
+                    }
                 }
             }
 
@@ -4225,7 +4262,7 @@ fn render_player_editor(
             if tactics_controlled {
                 ui.colored_label(
                     Color32::LIGHT_BLUE,
-                    "Jab, Fight Defensively, Give Ground, and Scamper Back are controlled by Tactical Directives.",
+                    "Jab, Called shot, Fight Defensively, Give Ground, and Scamper Back are controlled by Tactical Directives.",
                 );
             }
             ui.separator();
@@ -4250,7 +4287,9 @@ fn render_player_editor(
             }
             ui.checkbox(&mut player.hold_at_bay, "Hold at bay");
             ui.horizontal(|ui| {
-                ui.checkbox(&mut player.called_shot, "Called shot");
+                ui.add_enabled_ui(!tactics_controlled, |ui| {
+                    ui.checkbox(&mut player.called_shot, "Called shot");
+                });
                 let (called_shot_light_bonus, called_shot_medium_bonus, called_shot_heavy_bonus) =
                     game_logic::called_shot_target_defense_bonuses_for_player(player);
                 let called_shot_self_penalty =
@@ -4946,7 +4985,16 @@ fn render_player_editor(
 }
 
 fn render_magic_editor(ui: &mut egui::Ui, id_prefix: &str, player: &mut PlayerConfig) {
-    use hackmaster_sim::core::magic::{AutoCast, Encumbrance, SpellCastAi, SPELL_CATALOG};
+    render_magic_editor_with_catalog(ui, id_prefix, player, hackmaster_sim::core::magic::spell_catalog());
+}
+
+fn render_magic_editor_with_catalog(
+    ui: &mut egui::Ui,
+    id_prefix: &str,
+    player: &mut PlayerConfig,
+    catalog: &[hackmaster_sim::core::magic::SpellCatalogEntry],
+) {
+    use hackmaster_sim::core::magic::{AutoCast, Encumbrance, SpellCastAi, SpellEmpowerment};
     game_logic::migrate_legacy_spells(player);
     ui.push_id((id_prefix, "spells"), |ui| {
         ui.heading("Spells");
@@ -4954,76 +5002,49 @@ fn render_magic_editor(ui: &mut egui::Ui, id_prefix: &str, player: &mut PlayerCo
         let magic = &mut player.magic;
         magic.use_essence_costs = false;
         magic.auto_cast = AutoCast::SpellPolicies;
-        for spell in SPELL_CATALOG {
-            ui.push_id(spell.id, |ui| {
+        for spell in catalog {
+            ui.push_id(&spell.id, |ui| {
                 ui.group(|ui| {
-                    let learned = magic.knows_spell(spell.id);
+                    let learned = magic.knows_spell(&spell.id);
                     ui.horizontal(|ui| {
-                        ui.strong(spell.name);
+                        ui.strong(&spell.name);
                         if spell.level > 0 { ui.label(format!("Level {}", spell.level)); }
                         if learned {
-                            if ui.small_button("Remove").clicked() { magic.forget_spell(spell.id); }
+                            if ui.small_button("Remove").clicked() { magic.forget_spell(&spell.id); }
                         } else if ui.small_button("Add spell").clicked() {
-                            magic.learn_spell(spell.id);
+                            magic.learn_spell(&spell.id);
                         }
                     });
-                    ui.label(spell.description);
-                    if !magic.knows_spell(spell.id) { return; }
-                    let mut ai = magic.ai_for(spell.id);
+                    ui.label(&spell.description);
+                    if !magic.knows_spell(&spell.id) { return; }
+                    let mut ai = magic.ai_for(&spell.id);
                     egui::ComboBox::from_id_source("casting_ai").selected_text(ai.label()).show_ui(ui, |ui| {
-                        for choice in [SpellCastAi::WhenUseful, SpellCastAi::AsOftenAsPossible, SpellCastAi::AtFightStart, SpellCastAi::Manual] {
+                        for choice in SpellCastAi::ALL {
                             ui.selectable_value(&mut ai, choice, choice.label());
                         }
                     });
-                    magic.spell_ai.insert(spell.id.to_owned(), ai);
-                    ui.small(match ai {
-                        SpellCastAi::WhenUseful => spell.ai_description,
-                        SpellCastAi::AsOftenAsPossible => "Recast whenever casting is allowed and this buff is no longer active. Pending echoes continue independently.",
-                        SpellCastAi::AtFightStart => "Cast once at the first available opening; opening spells queue behind each other.",
-                        SpellCastAi::Manual => "Only cast when you press the spell's button during combat.",
-                    });
-                    if spell.id == "echo_strike" {
-                        ui.separator();
-                        ui.label("Empowerments");
-                        ui.horizontal(|ui| {
-                            ui.label("Extra duration");
-                            ui.add(egui::DragValue::new(&mut magic.echo_strike.extra_duration_seconds).clamp_range(0..=3600).suffix(" s"));
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Echo delay");
-                            ui.add(egui::DragValue::new(&mut magic.echo_strike.delay_seconds).clamp_range(1..=10).suffix(" s"));
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Additional echoes");
-                            ui.add(egui::DragValue::new(&mut magic.echo_strike.additional_echoes).clamp_range(0..=100));
-                        });
-                        ui.checkbox(&mut magic.echo_strike.full_damage, "Full damage");
-                        ui.small(format!("Armed for {}s · {} echo(s) · {} damage", magic.echo_strike.duration_seconds().unwrap_or(15), magic.echo_strike.additional_echoes.saturating_add(1), if magic.echo_strike.full_damage { "full" } else { "half, rounded down" }));
-                        if let Err(error) = magic.validate_echo(player.level) {
-                            ui.colored_label(egui::Color32::YELLOW, error.to_string());
+                    magic.spell_ai.insert(spell.id.clone(), ai);
+                    ui.small(spell.casting_help.for_mode(ai));
+                    ui.separator();
+                    ui.label("Empowerments");
+                    ui.small(&spell.casting_description);
+                    for empowerment in &spell.empowerments {
+                        match empowerment {
+                            SpellEmpowerment::Number { field, label, min, max, suffix } => {
+                                ui.horizontal(|ui| {
+                                    ui.label(label);
+                                    ui.add(egui::DragValue::new(field.value_mut(magic))
+                                        .clamp_range(*min..=*max).suffix(suffix));
+                                });
+                            }
+                            SpellEmpowerment::Toggle { field, label } => {
+                                ui.checkbox(field.value_mut(magic), label);
+                            }
                         }
-                    } else {
-                        ui.separator();
-                        ui.label("Empowerments");
-                        if spell.id == "spell_chronoblur" {
-                            ui.small("2-second cast · Touch (casts on self)");
-                            ui.horizontal(|ui| {
-                                ui.label("Extra duration (30-second increments)");
-                                ui.add(egui::DragValue::new(&mut magic.chronoblur_duration_ranks).clamp_range(0..=120));
-                            });
-                            ui.label(format!("Duration: {}s", 60 + 30 * u64::from(magic.chronoblur_duration_ranks)));
-                        } else {
-                            ui.small("5-second cast · Field centered on caster");
-                            ui.horizontal(|ui| {
-                                ui.label("Extra duration (minutes)");
-                                ui.add(egui::DragValue::new(&mut magic.streamline_duration_ranks).clamp_range(0..=120));
-                            });
-                            ui.horizontal(|ui| {
-                                ui.label("Extra radius (10-foot increments)");
-                                ui.add(egui::DragValue::new(&mut magic.streamline_radius_ranks).clamp_range(0..=100));
-                            });
-                            ui.label(format!("Duration: {}s · Radius: {} ft", 300 + 60 * u64::from(magic.streamline_duration_ranks), 30 + 10 * u64::from(magic.streamline_radius_ranks)));
-                        }
+                    }
+                    match game_logic::spell_editor_summary(spell, magic) {
+                        Ok(summary) => { ui.small(summary); }
+                        Err(error) => { ui.colored_label(egui::Color32::YELLOW, error.to_string()); }
                     }
                 });
             });
@@ -5317,6 +5338,7 @@ fn apply_fighter_preset(
     player.proficiencies = preset.proficiencies.clone();
     player.talents = preset.talents.clone();
     player.magic = preset.magic.clone();
+    player.tactical_policy = preset.tactical_policy.clone();
     game_logic::migrate_legacy_spells(player);
     player.default_weapon_style_ids = preset.default_weapon_style_ids.clone();
     player.weapon_id = find_weapon_id_by_name(weapon_catalog, &preset.weapon)
@@ -5365,6 +5387,7 @@ fn fighter_preset_from_player(
         .and_then(|id| weapon_catalog.get(id))
         .map(|weapon| weapon.name.clone());
     FighterPreset {
+        tactical_policy: player.tactical_policy.clone(),
         magic: player.magic.clone(),
         name: name.to_string(),
         level: player.level,
@@ -5788,7 +5811,7 @@ fn render_talent_selector(
     }
 
     let active_race = race_for_player(player, race_catalog);
-    let mut categories: BTreeMap<String, Vec<&TalentSpec>> = BTreeMap::new();
+    let mut categories: BTreeMap<&str, Vec<&TalentSpec>> = BTreeMap::new();
     for spec in talent_catalog.entries() {
         if !racial_talent_matches(spec, active_race) {
             continue;
@@ -5799,20 +5822,18 @@ fn render_talent_selector(
             spec.category.as_str()
         };
         categories
-            .entry(category.to_string())
+            .entry(category)
             .or_default()
             .push(spec);
     }
     categories
-        .entry(TALENT_TAB_RACIALS.to_string())
+        .entry(TALENT_TAB_RACIALS)
         .or_default();
-    let mut categories: Vec<(String, Vec<&TalentSpec>)> = categories.into_iter().collect();
-    let total_count: usize = categories.iter().map(|(_, specs)| specs.len()).sum();
-    categories.sort_by(|a, b| a.0.cmp(&b.0));
+    let total_count: usize = categories.values().map(Vec::len).sum();
 
     if active_category != TALENT_TAB_ALL
         && active_category != TALENT_TAB_LEARNED
-        && !categories.iter().any(|(name, _)| name == active_category)
+        && !categories.contains_key(active_category.as_str())
     {
         active_category.clear();
         active_category.push_str(TALENT_TAB_ALL);
@@ -5841,7 +5862,7 @@ fn render_talent_selector(
         for (category, specs) in &categories {
             let label = format!("{category} ({})", specs.len());
             if ui
-                .selectable_label(active_category.as_str() == category.as_str(), label)
+                .selectable_label(active_category.as_str() == *category, label)
                 .clicked()
             {
                 active_category.clear();
@@ -5894,7 +5915,7 @@ fn render_talent_selector(
                 continue;
             }
             ui.separator();
-            ui.label(category.as_str());
+            ui.label(*category);
             for spec in specs {
                 render_talent_entry(
                     ui,
@@ -5910,9 +5931,9 @@ fn render_talent_selector(
                 );
             }
         }
-    } else if let Some((name, specs)) = categories.iter().find(|(name, _)| name == active_category)
+    } else if let Some((name, specs)) = categories.get_key_value(active_category.as_str())
     {
-        if name == TALENT_TAB_RACIALS && specs.is_empty() {
+        if *name == TALENT_TAB_RACIALS && specs.is_empty() {
             if active_race.is_some() {
                 ui.label("No racial talents available for the selected race.");
             } else {
@@ -6199,7 +6220,7 @@ fn main() -> eframe::Result<()> {
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size([980.0, 560.0])
         .with_min_inner_size([640.0, 360.0]);
-    if let Some(icon) = hackmaster_sim::assets::app_icon(hackmaster_sim::assets::AppIcon::SimGui) {
+    if let Some(icon) = hackmaster_sim::assets::app_icon() {
         viewport = viewport.with_icon(icon);
     }
     let options = eframe::NativeOptions {
@@ -6214,7 +6235,40 @@ fn main() -> eframe::Result<()> {
 }
 
 #[cfg(test)]
+#[path = "sim_gui/smoke_tests.rs"]
+mod smoke_tests;
+
+#[cfg(test)]
 mod tests {
+    #[test]
+    fn ego_cache_reuses_unchanged_results_and_invalidates_each_input() {
+        use std::sync::Arc;
+        let ctx = egui::Context::default();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let original = game_logic::EgoGenerationInput {
+                    maximum: 1000.0, current: 100.0, days: 4, wisdom: 10, charisma: 12,
+                };
+                let first = cached_ego_plan(ui, original);
+                assert!(Arc::ptr_eq(&first, &cached_ego_plan(ui, original)));
+                for changed in [
+                    game_logic::EgoGenerationInput { maximum: 900.0, ..original },
+                    game_logic::EgoGenerationInput { current: 200.0, ..original },
+                    game_logic::EgoGenerationInput { days: 5, ..original },
+                    game_logic::EgoGenerationInput { wisdom: 15, ..original },
+                    game_logic::EgoGenerationInput { charisma: 17, ..original },
+                    game_logic::EgoGenerationInput { current: -1.0, ..original },
+                ] {
+                    let cached = cached_ego_plan(ui, changed);
+                    assert!(!Arc::ptr_eq(&first, &cached));
+                    assert!(Arc::ptr_eq(&cached, &cached_ego_plan(ui, changed)));
+                    assert_eq!(format!("{:?}", cached.as_ref()),
+                        format!("{:?}", game_logic::calculate_ego_generation(changed)));
+                }
+                assert!(cached_ego_plan(ui, original).is_ok());
+            });
+        });
+    }
     fn finish_calculation(app: &mut SimGuiApp) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         while app.background_job.is_some() {
@@ -6325,7 +6379,7 @@ mod tests {
     #[test]
     fn manual_echo_at_second_zero_survives_start_and_arms() {
         let mut app = manual_spell_app();
-        app.handle_spell_action(0, 0);
+        app.handle_spell_action(0, game_logic::SpellAction::Cast("echo_strike".into()));
         assert!(app.spell_error.is_none());
         assert!(app.sim.combatants[0].state.magic.casting.is_some());
         app.prepare_to_advance();
@@ -6338,9 +6392,9 @@ mod tests {
 
     #[test]
     fn manual_spells_survive_next_second_without_restarting_cast_timers() {
-        for (action, id, seconds) in [(0, "echo_strike", 1), (4, "spell_chronoblur", 2), (5, "spell_streamline", 5)] {
+        for (id, seconds) in [("echo_strike", 1), ("spell_chronoblur", 2), ("spell_streamline", 5)] {
             let mut app = manual_spell_app();
-            app.handle_spell_action(0, action);
+            app.handle_spell_action(0, game_logic::SpellAction::Cast(id.into()));
             for _ in 0..=seconds {
                 app.prepare_to_advance();
                 app.sim.tick();
@@ -6359,14 +6413,14 @@ mod tests {
     fn failed_cast_error_persists_until_success_or_reset() {
         let mut app = manual_spell_app();
         app.sim.combatants[0].magic.loadout.arms_restricted = true;
-        app.handle_spell_action(0, 0);
+        app.handle_spell_action(0, game_logic::SpellAction::Cast("echo_strike".into()));
         assert!(app.spell_error.as_ref().unwrap().1.contains("Somatic"));
         app.update_sim(0.1);
         assert!(app.spell_error.is_some());
         app.sim.combatants[0].magic.loadout.arms_restricted = false;
-        app.handle_spell_action(0, 0);
+        app.handle_spell_action(0, game_logic::SpellAction::Cast("echo_strike".into()));
         assert!(app.spell_error.is_none());
-        app.handle_spell_action(0, 0);
+        app.handle_spell_action(0, game_logic::SpellAction::Cast("echo_strike".into()));
         assert!(app.spell_error.is_some());
         app.reset_positions();
         assert!(app.spell_error.is_none());
@@ -6374,11 +6428,11 @@ mod tests {
 
     #[test]
     fn cancelling_before_next_second_has_no_fatigue_or_recovery_penalty() {
-        for action in [0, 4, 5] {
+        for id in ["echo_strike", "spell_chronoblur", "spell_streamline"] {
             let mut app = manual_spell_app();
             let recovery = app.sim.combatants[0].state.magic.primary_recovery_until;
-            app.handle_spell_action(0, action);
-            app.handle_spell_action(0, 1);
+            app.handle_spell_action(0, game_logic::SpellAction::Cast(id.into()));
+            app.handle_spell_action(0, game_logic::SpellAction::Cancel);
             assert!(app.spell_error.is_none());
             assert!(app.sim.combatants[0].state.magic.fatigue.is_none());
             assert_eq!(app.sim.combatants[0].state.magic.primary_recovery_until, recovery);
@@ -6395,7 +6449,7 @@ mod tests {
         app.players[0].level = 15;
         app.prepare_to_advance();
         assert_eq!(app.sim.combatants[0].magic.level, 15);
-        app.handle_spell_action(0, 0);
+        app.handle_spell_action(0, game_logic::SpellAction::Cast("echo_strike".into()));
         app.sim.done = true;
         app.prepare_to_advance();
         assert!(!app.sim.done);
@@ -6425,6 +6479,93 @@ mod tests {
     }
 
     #[test]
+    fn volfango_presets_load_and_save_conditional_called_shot_tactics() {
+        use hackmaster_sim::core::tactics::{
+            TacticalChannel, TacticalContext, TacticalDecisionPoint, evaluate_channel,
+        };
+        let presets = data::load_fighter_presets("data/sim/fighter_presets.json").unwrap();
+        let mut app = app_fixture();
+        let volfangos: Vec<_> = presets
+            .entries()
+            .iter()
+            .filter(|preset| preset.name.starts_with("Volfango Drakos"))
+            .collect();
+        assert_eq!(volfangos.len(), 2);
+        for preset in volfangos {
+            apply_fighter_preset(
+                &mut app.players[0],
+                preset,
+                &app.weapon_catalog,
+                &app.armor_catalog,
+                &app.shield_catalog,
+                &app.race_catalog,
+            );
+            let policy = &app.players[0].tactical_policy;
+            assert!(policy.enabled);
+            for (dr, expected) in [
+                (6.0, TacticalAction::NormalAttack),
+                (7.0, TacticalAction::NormalAttack),
+                (8.0, TacticalAction::CalledShot),
+            ] {
+                let context = TacticalContext {
+                    enemy_dr: dr,
+                    ..Default::default()
+                };
+                assert_eq!(
+                    evaluate_channel(
+                        policy,
+                        TacticalDecisionPoint::NextAttackOpportunity,
+                        TacticalChannel::AttackMode,
+                        &context
+                    )
+                    .action,
+                    expected
+                );
+                assert_eq!(
+                    evaluate_channel(
+                        policy,
+                        TacticalDecisionPoint::NextAttackOpportunity,
+                        TacticalChannel::Stance,
+                        &context
+                    )
+                    .action,
+                    TacticalAction::FightDefensively { penalty: 8 }
+                );
+            }
+            let saved = fighter_preset_from_player(
+                &app.players[0],
+                &app.weapon_catalog,
+                &app.armor_catalog,
+                &app.shield_catalog,
+                &preset.name,
+            );
+            let restored: FighterPreset =
+                serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+            assert_eq!(restored.tactical_policy, *policy);
+            app.reset_positions();
+            assert_eq!(
+                app.sim.combatants[0].tactical_policy,
+                preset.tactical_policy
+            );
+        }
+        // Loading an older preset without tactics also clears the previous fighter's rules.
+        let legacy = presets
+            .entries()
+            .iter()
+            .find(|preset| preset.name == "Arthur Du Randt")
+            .unwrap();
+        apply_fighter_preset(
+            &mut app.players[0],
+            legacy,
+            &app.weapon_catalog,
+            &app.armor_catalog,
+            &app.shield_catalog,
+            &app.race_catalog,
+        );
+        assert!(app.players[0].tactical_policy.is_default());
+    }
+
+    #[test]
     fn both_volfango_presets_can_cast_echo_without_completed_spell_fatigue() {
         let presets = hackmaster_sim::data::load_fighter_presets("data/sim/fighter_presets.json").unwrap();
         let volfangos: Vec<_> = presets.entries().iter().filter(|preset| preset.name.starts_with("Volfango Drakos")).collect();
@@ -6440,7 +6581,7 @@ mod tests {
             assert!(talents.decimate_spell_fatigue);
             assert!(talents.eliminate_spell_fatigue);
             assert_eq!(talents.fatigue_seconds(1), 0);
-            app.handle_spell_action(0, 0);
+            app.handle_spell_action(0, game_logic::SpellAction::Cast("echo_strike".into()));
             assert!(app.spell_error.is_none(), "{:?}", app.spell_error);
             app.prepare_to_advance();
             app.sim.tick();
@@ -6502,11 +6643,63 @@ mod tests {
     }
 
     #[test]
+    fn spell_editor_renders_json_help_for_each_spell_and_mode() {
+        use hackmaster_sim::core::magic::*;
+        fn collect_text(shape: &egui::epaint::Shape, text: &mut String) {
+            match shape {
+                egui::epaint::Shape::Text(shape) => {
+                    text.push_str(&shape.galley.job.text);
+                    text.push('\n');
+                }
+                egui::epaint::Shape::Vec(shapes) => {
+                    for shape in shapes { collect_text(shape, text); }
+                }
+                _ => {}
+            }
+        }
+        let app = app_fixture();
+        for original in spell_catalog() {
+            for mode in SpellCastAi::ALL {
+                let mut player = app.players[0].clone();
+                player.magic = MagicLoadout::default();
+                player.magic.learn_spell(&original.id);
+                player.magic.spell_ai.insert(original.id.clone(), mode);
+                let mut spell = original.clone();
+                let expected = format!("JSON help for {} in {}", spell.id, mode.label());
+                match mode {
+                    SpellCastAi::AtFightStart => spell.casting_help.use_once = expected.clone(),
+                    SpellCastAi::Manual => spell.casting_help.manual = expected.clone(),
+                    SpellCastAi::AsOftenAsPossible => spell.casting_help.as_often_as_possible = expected.clone(),
+                }
+                let ctx = egui::Context::default();
+                let input = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 1000.0))),
+                    ..Default::default()
+                };
+                let output = ctx.run(input, |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        render_magic_editor_with_catalog(ui, "json_test", &mut player, std::slice::from_ref(&spell));
+                    });
+                });
+                let mut text = String::new();
+                for shape in output.shapes { collect_text(&shape.shape, &mut text); }
+                assert!(text.contains(&expected), "Missing catalog help: {text}");
+                assert!(text.contains(mode.label()));
+                assert!(!text.contains("recommended timing"));
+                if spell.kind != SpellKind::EchoStrike {
+                    assert!(!text.to_lowercase().contains("echo"));
+                }
+                assert_eq!(player.magic.ai_for(&spell.id), mode);
+            }
+        }
+    }
+
+    #[test]
     fn spell_picker_renders_with_ep_ignored_and_preserves_legacy_pool_data() {
         use hackmaster_sim::core::magic::*;
         let app = app_fixture();
         let mut player = app.players[0].clone();
-        for spell in SPELL_CATALOG { player.magic.learn_spell(spell.id); }
+        for spell in spell_catalog() { player.magic.learn_spell(&spell.id); }
         let ctx = egui::Context::default();
         for count in [0, 2] {
             player.magic.essences = (0..count)

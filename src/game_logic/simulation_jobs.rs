@@ -14,6 +14,13 @@ pub struct JobControl {
     total: Arc<AtomicU32>,
 }
 impl JobControl {
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Relaxed)
+    }
+    fn advance(&self, amount: u32) -> bool {
+        self.completed.fetch_add(amount, Ordering::Relaxed);
+        !self.is_cancelled()
+    }
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Relaxed);
     }
@@ -59,7 +66,89 @@ pub struct DpsConfig {
     pub duration_seconds: u32,
     pub seed: u64,
 }
+// Limit parallel workers so calculations leave capacity for the UI and other
+// applications. Small requests stay on the calling worker to avoid thread overhead.
+fn worker_count(work: usize, minimum_chunk: usize) -> usize {
+    std::thread::available_parallelism()
+        .map_or(1, |n| n.get())
+        .min(8)
+        .min((work / minimum_chunk).max(1))
+}
+
 pub fn run_dps_test(
+    config: SimConfig,
+    combatants: Vec<sim::Combatant>,
+    request: DpsConfig,
+    control: &JobControl,
+) -> Option<DpsTestResult> {
+    let workers = worker_count(
+        request.iterations.max(1) as usize * request.duration_seconds.max(1) as usize,
+        20_000,
+    );
+    run_dps_with_workers(config, combatants, request, control, workers)
+}
+
+fn run_dps_with_workers(
+    config: SimConfig,
+    combatants: Vec<sim::Combatant>,
+    mut request: DpsConfig,
+    control: &JobControl,
+    workers: usize,
+) -> Option<DpsTestResult> {
+    request.iterations = request.iterations.max(1);
+    request.duration_seconds = request.duration_seconds.max(1);
+    control.set_total(request.iterations);
+    if !control.keep_running(0) {
+        return None;
+    }
+    let workers = workers.max(1).min(request.iterations as usize);
+    if workers == 1 {
+        return run_dps_chunk(config, combatants, request, control);
+    }
+    let chunks = std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(workers);
+        for worker in 0..workers {
+            let start = (u64::from(request.iterations) * worker as u64 / workers as u64) as u32;
+            let end = (u64::from(request.iterations) * (worker + 1) as u64 / workers as u64) as u32;
+            let combatants = combatants.clone();
+            let chunk = DpsConfig {
+                iterations: end - start,
+                seed: request.seed.wrapping_add(u64::from(start)),
+                ..request
+            };
+            handles.push(scope.spawn(move || run_dps_chunk(config, combatants, chunk, control)));
+        }
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("DPS worker panicked"))
+            .collect::<Option<Vec<_>>>()
+    })?;
+    let mut chunks = chunks.into_iter();
+    let mut result = chunks.next()?;
+    for chunk in chunks {
+        result.total_damage = result.total_damage.saturating_add(chunk.total_damage);
+        result.total_landed_damage += chunk.total_landed_damage;
+        result.total_rolled_damage += chunk.total_rolled_damage;
+        result.damage_rolls = result.damage_rolls.saturating_add(chunk.damage_rolls);
+        result.attacks = result.attacks.saturating_add(chunk.attacks);
+        result.highest_crit_hit = result.highest_crit_hit.max(chunk.highest_crit_hit);
+        result.highest_noncrit_hit = result.highest_noncrit_hit.max(chunk.highest_noncrit_hit);
+        result.highest_shield_hit = result.highest_shield_hit.max(chunk.highest_shield_hit);
+        result.instakills = result.instakills.saturating_add(chunk.instakills);
+    }
+    result.iterations = request.iterations;
+    result.dps =
+        result.total_damage as f64 / (request.iterations as f64 * request.duration_seconds as f64);
+    result.avg_damage_per_run = result.total_damage as f64 / request.iterations as f64;
+    result.avg_attacks_per_run = result.attacks as f64 / request.iterations as f64;
+    if control.is_cancelled() {
+        None
+    } else {
+        Some(result)
+    }
+}
+
+fn run_dps_chunk(
     config: SimConfig,
     mut combatants: Vec<sim::Combatant>,
     request: DpsConfig,
@@ -72,7 +161,6 @@ pub fn run_dps_test(
     let defender_idx = 1 - attacker_idx;
     let iterations = request.iterations.max(1);
     let duration_seconds = request.duration_seconds.max(1);
-    control.set_total(iterations);
     let seed = request.seed;
     combatants[defender_idx].sheet.maneuvers.passive = true;
     combatants[defender_idx].sheet.vitals.infinite_hp = true;
@@ -87,7 +175,7 @@ pub fn run_dps_test(
     let mut instakills = 0u32;
 
     for run_idx in 0..iterations {
-        if !control.keep_running(run_idx) {
+        if control.is_cancelled() {
             return None;
         }
         let run_seed = seed.wrapping_add(u64::from(run_idx));
@@ -95,7 +183,7 @@ pub fn run_dps_test(
         sim.log_events = false;
         sim.reset_with_combatants(combatants.clone());
         while !sim.done && sim.elapsed_seconds < duration_seconds {
-            if !control.keep_running(run_idx) {
+            if control.is_cancelled() {
                 return None;
             }
             sim.tick();
@@ -111,11 +199,14 @@ pub fn run_dps_test(
         highest_shield_hit = highest_shield_hit.max(attacker_state.max_shield_hit_dealt);
         instakills = instakills.saturating_add(attacker_state.total_instakills_dealt);
         attacks = attacks.saturating_add(attacker_state.attack_events);
+        if !control.advance(1) {
+            return None;
+        }
     }
 
     let total_seconds = iterations as f64 * duration_seconds as f64;
     let dps = total_damage as f64 / total_seconds.max(1.0);
-    if !control.keep_running(iterations) {
+    if control.is_cancelled() {
         return None;
     }
     Some(DpsTestResult {
@@ -160,7 +251,6 @@ pub fn build_damage_roll_plot(
     iterations: usize,
     control: &JobControl,
 ) -> Option<DamageRollPlotData> {
-    let mut rng = StdRng::from_entropy();
     let mut entries = vec![(
         format!("Mainhand: {}", combatant.sheet.offense.weapon.name),
         combatant.sheet.offense.weapon.clone(),
@@ -182,22 +272,43 @@ pub fn build_damage_roll_plot(
 
     let hand_count = entries.len();
     control.set_total((hand_count * iterations) as u32);
-    for (hand, (name, weapon, strength_damage, damage_penalty)) in entries.into_iter().enumerate() {
+    if !control.keep_running(0) {
+        return None;
+    }
+    for (name, weapon, strength_damage, damage_penalty) in entries {
+        let workers = worker_count(iterations, 100_000);
+        let samples = if workers == 1 {
+            vec![sample_damage(
+                weapon.as_ref(),
+                strength_damage,
+                damage_penalty,
+                iterations,
+                control,
+            )?]
+        } else {
+            std::thread::scope(|scope| {
+                let mut handles = Vec::with_capacity(workers);
+                for worker in 0..workers {
+                    let count = iterations / workers + usize::from(worker < iterations % workers);
+                    let weapon = weapon.as_ref();
+                    handles.push(scope.spawn(move || {
+                        sample_damage(weapon, strength_damage, damage_penalty, count, control)
+                    }));
+                }
+                handles
+                    .into_iter()
+                    .map(|h| h.join().expect("Damage plot worker panicked"))
+                    .collect::<Option<Vec<_>>>()
+            })?
+        };
         let mut counts = Vec::<usize>::new();
         let mut total = 0i64;
-        for iteration in 0..iterations {
-            if iteration % 256 == 0 && !control.keep_running((hand * iterations + iteration) as u32)
-            {
-                return None;
+        for (sample_counts, sample_total) in samples {
+            counts.resize(counts.len().max(sample_counts.len()), 0);
+            for (count, sample) in counts.iter_mut().zip(sample_counts) {
+                *count += sample;
             }
-            let raw =
-                roll_weapon_raw_damage(weapon.as_ref(), strength_damage, damage_penalty, &mut rng);
-            let raw_idx = raw.max(0) as usize;
-            if raw_idx >= counts.len() {
-                counts.resize(raw_idx + 1, 0);
-            }
-            counts[raw_idx] += 1;
-            total += i64::from(raw);
+            total += sample_total;
         }
 
         let mut points = Vec::with_capacity(counts.len());
@@ -228,6 +339,64 @@ pub fn build_damage_roll_plot(
         x_max: x_max.max(1),
         y_max: y_max.max(0.01),
     })
+}
+
+fn sample_damage(
+    weapon: &sim::WeaponProfile,
+    strength_damage: i32,
+    damage_penalty: i32,
+    iterations: usize,
+    control: &JobControl,
+) -> Option<(Vec<usize>, i64)> {
+    sample_damage_with_rng(
+        weapon,
+        strength_damage,
+        damage_penalty,
+        iterations,
+        control,
+        &mut StdRng::from_entropy(),
+    )
+}
+
+fn sample_damage_with_rng(
+    weapon: &sim::WeaponProfile,
+    strength_damage: i32,
+    damage_penalty: i32,
+    iterations: usize,
+    control: &JobControl,
+    rng: &mut impl rand::Rng,
+) -> Option<(Vec<usize>, i64)> {
+    let mut counts = Vec::<usize>::new();
+    let mut total = 0i64;
+    let expression = weapon.damage_expr_cache_for_attack();
+    let nonpenetrating = weapon.use_jab || weapon.force_nonpenetrating_damage;
+    let halves = weapon.halves_damage_for_attack();
+    for start in (0..iterations).step_by(256) {
+        if control.is_cancelled() {
+            return None;
+        }
+        let batch = (iterations - start).min(256);
+        for _ in 0..batch {
+            let mut raw = expression.roll(rng, nonpenetrating) + strength_damage;
+            if halves {
+                raw /= 2;
+            }
+            if weapon.halve_damage {
+                raw /= 2;
+            }
+            let raw = (raw + damage_penalty).max(0);
+            let index = raw as usize;
+            if index >= counts.len() {
+                counts.resize(index + 1, 0);
+            }
+            counts[index] += 1;
+            total += i64::from(raw);
+        }
+        if !control.advance(batch as u32) {
+            return None;
+        }
+    }
+    Some((counts, total))
 }
 
 pub fn roll_weapon_raw_damage(
@@ -275,6 +444,107 @@ mod tests {
             player.tactical_policy.enabled = true;
         }
         build_combatants(&players, &weapons, &armor, &shields, &npcs, &talents)
+    }
+
+    #[test]
+    fn parallel_dps_cancels_after_work_has_started() {
+        let control = JobControl::default();
+        let fighters = combatants();
+        std::thread::scope(|scope| {
+            let job_control = &control;
+            let worker = scope.spawn(move || {
+                run_dps_with_workers(
+                    SimConfig::new(5.0, 1.0),
+                    fighters,
+                    DpsConfig {
+                        attacker_idx: 0,
+                        iterations: u32::MAX,
+                        duration_seconds: 1,
+                        seed: 14,
+                    },
+                    job_control,
+                    3,
+                )
+            });
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while control.completed() == 0 && std::time::Instant::now() < deadline {
+                std::thread::yield_now();
+            }
+            control.cancel();
+            assert!(worker.join().unwrap().is_none());
+            assert!(control.completed() > 0);
+            assert!(control.completed() < control.total());
+        });
+    }
+
+    #[test]
+    fn parallel_dps_preserves_every_seeded_stat_and_progress() {
+        let fighters = combatants();
+        let request = DpsConfig {
+            attacker_idx: 0,
+            iterations: 13,
+            duration_seconds: 120,
+            seed: u64::MAX - 5,
+        };
+        let config = SimConfig::new(5.0, 1.0);
+        let serial =
+            run_dps_with_workers(config, fighters.clone(), request, &JobControl::default(), 1)
+                .unwrap();
+        let control = JobControl::default();
+        let parallel = run_dps_with_workers(config, fighters, request, &control, 3).unwrap();
+        assert_eq!(format!("{serial:?}"), format!("{parallel:?}"));
+        assert_eq!(control.completed(), 13);
+        assert_eq!(control.total(), 13);
+    }
+
+    #[test]
+    fn damage_batches_match_individual_rolls_and_count_partial_batch() {
+        let fighters = combatants();
+        for jab in [false, true] {
+            for halve in [false, true] {
+                let mut weapon = (*fighters[0].sheet.offense.weapon).clone();
+                weapon.use_jab = jab;
+                weapon.halve_damage = halve;
+                let mut reference_rng = StdRng::seed_from_u64(812);
+                let mut expected_counts = Vec::new();
+                let mut expected_total = 0;
+                for _ in 0..513 {
+                    let damage = roll_weapon_raw_damage(&weapon, 3, -2, &mut reference_rng);
+                    expected_counts.resize(expected_counts.len().max(damage as usize + 1), 0usize);
+                    expected_counts[damage as usize] += 1;
+                    expected_total += i64::from(damage);
+                }
+                let control = JobControl::default();
+                let result = sample_damage_with_rng(
+                    &weapon,
+                    3,
+                    -2,
+                    513,
+                    &control,
+                    &mut StdRng::seed_from_u64(812),
+                )
+                .unwrap();
+                assert_eq!(result, (expected_counts, expected_total));
+                assert_eq!(control.completed(), 513);
+            }
+        }
+    }
+
+    #[test]
+    fn plot_merging_preserves_probability_and_average() {
+        let fighters = combatants();
+        let control = JobControl::default();
+        let plot = build_damage_roll_plot(&fighters[0], 200_003, &control).unwrap();
+        for line in &plot.lines {
+            assert!((line.values.iter().sum::<f64>() - 1.0).abs() < 1e-12);
+            let average = line
+                .points
+                .iter()
+                .map(|[damage, probability]| damage * probability)
+                .sum::<f64>();
+            assert!((average - line.average).abs() < 1e-10);
+        }
+        assert_eq!(control.completed(), control.total());
     }
 
     #[test]

@@ -30,21 +30,22 @@ Utility spells with no supported combat effect are omitted from the picker.
 
 ## AI choices, per spell
 
-- **Cast as often as possible:** cast whenever legal and the spell's buff is no
+- **Use as much as possible:** cast whenever legal and the spell's buff is no
   longer active. Do not refresh an active buff. Discharged echoes continue
   independently and do not prevent another Echo Strike cast.
-- **Cast at fight start:** queue one opening cast at the first legal opportunity.
+- **Use once:** queue one opening cast at the first legal opportunity.
   Opening spells wait for other casts and fatigue; they cannot all cast at once.
   This does not refresh a spell later, including after failure or cancellation.
-- **Use spell's recommended timing:** Echo Strike waits for an enemy in melee
-  reach and checks that weapon recovery can finish before the buff expires, then
-  casts once. Chronoblur and Streamline use their opening cast.
-- **Manual only:** use the cast button in the live combat panel.
+- **Manual:** use the cast button in the live combat panel.
+
+All spells default to **Use once**. Saved `when_useful` values deserialize as
+`at_fight_start` (Use once) when the simulator loads it; opening the editor
+is not required for migration.
 
 All AI uses the character's selected empowerments. Temporary restrictions are
 reconsidered without repeated rejection messages. Unused spells get priority
 before repeats so one repeating spell cannot prevent another spell's opening.
-The shared runtime owns these decisions; both combat hosts call it.
+The simulator runtime owns these decisions.
 
 ## Casting and talents
 
@@ -89,7 +90,17 @@ that can affect a living target, subject to existing host timeouts.
 
 ## Extending and testing
 
-`core::magic::SPELL_CATALOG` supplies spell metadata and AI policy.
+`data/sim/spells.json` owns spell names, descriptions, casting-mode help,
+casting metadata, empowerment editor fields, and summary templates. It is
+bundled at build time and parsed once by `core::magic::spell_catalog()`;
+rebuild after editing it. All hosts share this immutable catalog, without
+filesystem reads in the combat loop. Missing fields, duplicate spell IDs,
+unsupported kinds, and empowerment fields belonging to another spell are rejected.
+
+The GUI renders the catalog's fields and text. It does not choose descriptions
+by spell ID or calculate durations/radii. `game_logic::spell_editor_summary`
+uses the runtime spell request to fill the JSON summary template, and typed
+`SpellAction` values dispatch manual casts through `game_logic`.
 `MagicLoadout` stores known spells, per-spell AI, and empowerments.
 `SpellRequest::from_loadout` constructs typed effects and canonical casting
 metadata. Add new effects and targeting rules in the shared runtime, not in GUI
@@ -97,7 +108,7 @@ code. The generic runtime also supports instant casts, channelling and saves.
 The optional essence rules API remains available for rule tests and explicit
 programmatic callers; the spell editor does not enable it.
 
-Run `cargo test --lib --bins`, `cargo test --features bevy --lib`, and
-`cargo check --features bevy --bins`. Tests cover EP-free casting, empowerments,
+Run `cargo test --lib --bin sim_gui` and `cargo check --all-targets`.
+Tests cover EP-free casting, empowerments,
 AI scheduling/recasting, migration, preset persistence, components, fatigue,
-talents, deterministic echoes, and radius coverage in both combat hosts.
+talents, deterministic echoes, and radius coverage in the simulator.

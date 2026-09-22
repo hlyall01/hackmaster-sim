@@ -4,7 +4,8 @@ use super::TemporaryEffect;
 use super::types::{AttackRollBreakdown, Combatant, WeaponSlot};
 use crate::core::magic::{
     AutoCast, EchoStrikeOptions, EssencePool, MagicError, MagicLoadout, MagicSaveBonuses,
-    MagicTalents, SpellComponents, spell_failure_percent,
+    MagicTalents, SpellCatalogEntry, SpellComponents, SpellKind, spell_catalog,
+    spell_failure_percent,
 };
 use rand::Rng;
 
@@ -40,6 +41,20 @@ pub struct SpellDefinition {
     pub channelled: bool,
 }
 
+impl From<&SpellCatalogEntry> for SpellDefinition {
+    fn from(spell: &SpellCatalogEntry) -> Self {
+        Self {
+            id: spell.id.clone(),
+            name: spell.name.clone(),
+            level: spell.level,
+            base_cost: spell.base_cost,
+            casting_seconds: spell.casting_seconds,
+            components: spell.components,
+            channelled: false,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum SpellEffect {
     EchoStrike(EchoStrikeOptions),
@@ -56,52 +71,37 @@ pub struct SpellRequest {
 
 impl SpellRequest {
     pub fn from_loadout(id: &str, loadout: &MagicLoadout) -> Result<Self, MagicError> {
-        if id == "echo_strike" {
+        let spell = spell_catalog()
+            .iter()
+            .find(|spell| spell.id == id)
+            .ok_or(MagicError::UnknownSpell)?;
+        if spell.kind == SpellKind::EchoStrike {
             return Self::echo_strike(loadout.echo_strike, loadout.echo_essence);
         }
-        let (name, level, base_cost, casting_seconds, duration, extra_cost) = match id {
-            "spell_chronoblur" => (
-                "Chronoblur",
-                4,
-                90,
-                2,
+        let (duration, extra_cost) = match spell.kind {
+            SpellKind::Chronoblur => (
                 60_u64 + 30 * u64::from(loadout.chronoblur_duration_ranks),
                 30 * u64::from(loadout.chronoblur_duration_ranks),
             ),
-            "spell_streamline" => (
-                "Streamline",
-                8,
-                130,
-                5,
+            SpellKind::Streamline => (
                 300_u64 + 60 * u64::from(loadout.streamline_duration_ranks),
                 10 * u64::from(loadout.streamline_duration_ranks)
                     + 65 * u64::from(loadout.streamline_radius_ranks),
             ),
-            _ => return Err(MagicError::UnknownSpell),
+            SpellKind::EchoStrike => unreachable!("echo handled above"),
         };
         let duration = i32::try_from(duration).map_err(|_| MagicError::CostOverflow)?;
         let mut buff = TemporaryEffect::new(id, duration);
-        if id == "spell_streamline" {
+        if spell.kind == SpellKind::Streamline {
             buff.modifiers.add_f32(
                 super::StatIdF32::StreamlineRadius,
-                super::ModifierOpF32::Set(30.0 + 10.0 * loadout.streamline_radius_ranks as f32),
+                super::ModifierOpF32::Set(loadout.streamline_radius_feet() as f32),
             );
         }
         Ok(Self {
-            definition: SpellDefinition {
-                id: id.into(),
-                name: name.into(),
-                level,
-                base_cost,
-                casting_seconds,
-                components: SpellComponents {
-                    somatic: true,
-                    verbal: true,
-                },
-                channelled: false,
-            },
+            definition: spell.into(),
             effect: SpellEffect::TimedBuff(buff),
-            total_cost: u32::try_from(u64::from(base_cost) + extra_cost)
+            total_cost: u32::try_from(u64::from(spell.base_cost) + extra_cost)
                 .map_err(|_| MagicError::CostOverflow)?,
             essence_index: 0,
         })
@@ -112,15 +112,7 @@ impl SpellRequest {
         essence_index: usize,
     ) -> Result<Self, MagicError> {
         Ok(Self {
-            definition: SpellDefinition {
-                id: "echo_strike".into(),
-                name: "Echo Strike".into(),
-                level: EchoStrikeOptions::LEVEL,
-                base_cost: EchoStrikeOptions::BASE_COST,
-                casting_seconds: EchoStrikeOptions::CASTING_SECONDS,
-                components: ECHO_COMPONENTS,
-                channelled: false,
-            },
+            definition: SpellKind::EchoStrike.catalog_entry().into(),
             effect: SpellEffect::EchoStrike(options),
             total_cost: options.cost()?,
             essence_index,
@@ -247,11 +239,6 @@ impl MagicState {
     }
 }
 
-const ECHO_COMPONENTS: SpellComponents = SpellComponents {
-    somatic: true,
-    verbal: false,
-};
-
 impl Combatant {
     pub fn spell_fatigue_skill_penalty_percent(&self) -> u8 {
         if self.state.magic.fatigued() {
@@ -317,7 +304,7 @@ impl Combatant {
         let mut loadout = self.magic.loadout.clone();
         loadout.essences = state.essences.clone();
         let cost = loadout.validate_echo(self.magic.level)?;
-        ECHO_COMPONENTS.validate(
+        SpellKind::EchoStrike.catalog_entry().components.validate(
             self.magic.talents,
             !loadout.arms_restricted,
             !loadout.silenced,
@@ -398,13 +385,14 @@ impl Combatant {
             return Err(MagicError::InvalidSpell);
         }
         if let SpellEffect::EchoStrike(options) = &effect {
+            let spell = SpellKind::EchoStrike.catalog_entry();
             if definition.id != "echo_strike"
                 || definition.channelled
                 || options.cost()? != cost
-                || definition.base_cost != EchoStrikeOptions::BASE_COST
-                || definition.level != EchoStrikeOptions::LEVEL
-                || definition.casting_seconds != EchoStrikeOptions::CASTING_SECONDS
-                || definition.components != ECHO_COMPONENTS
+                || definition.base_cost != spell.base_cost
+                || definition.level != spell.level
+                || definition.casting_seconds != spell.casting_seconds
+                || definition.components != spell.components
             {
                 return Err(MagicError::InvalidSpell);
             }
@@ -813,8 +801,8 @@ impl Combatant {
         }
     }
 
-    fn try_spell_policies(&mut self, now: u32, enemy_in_reach: bool) {
-        use crate::core::magic::{SPELL_CATALOG, SpellAiPolicy, SpellCastAi};
+    fn try_spell_policies(&mut self, now: u32) {
+        use crate::core::magic::SpellCastAi;
         if self.magic.loadout.known_spells.is_empty() && !self.magic.loadout.knows_echo_strike {
             return;
         }
@@ -828,78 +816,64 @@ impl Combatant {
         {
             return;
         }
-        let mut spells: Vec<_> = SPELL_CATALOG.iter().collect();
-        // Give every learned spell its opening before considering repeat casts.
-        spells.sort_by_key(|spell| {
-            self.state
-                .magic
-                .started_spells
-                .iter()
-                .any(|id| id == spell.id)
-        });
-        for spell in spells {
-            let ai = self.magic.loadout.ai_for(spell.id);
-            if !self.magic.loadout.knows_spell(spell.id) || ai == SpellCastAi::Manual {
-                continue;
-            }
-            let started = self
+        let eligible = |id: &str| match self.magic.loadout.ai_for(id) {
+            SpellCastAi::Manual => false,
+            SpellCastAi::AtFightStart => !self
                 .state
                 .magic
                 .started_spells
                 .iter()
-                .any(|id| id == spell.id);
-            if started && matches!(ai, SpellCastAi::AtFightStart | SpellCastAi::WhenUseful) {
-                continue;
-            }
-            match spell.ai {
-                SpellAiPolicy::EchoBeforeMelee => {
-                    if (ai == SpellCastAi::WhenUseful && !enemy_in_reach)
-                        || self.state.magic.armed_echo.is_some()
-                        || (ai == SpellCastAi::WhenUseful && !self.state.magic.echoes.is_empty())
-                        || self.validate_echo_cast().is_err()
-                    {
-                        continue;
-                    }
-                    let fatigue = self
-                        .magic
-                        .talents
-                        .fatigue_seconds(EchoStrikeOptions::CASTING_SECONDS);
-                    let recovery = if self
-                        .magic
-                        .talents
-                        .fatigue_penalties()
-                        .reset_weapon_at_completion
-                        || fatigue == 0
-                    {
-                        0
-                    } else {
-                        fatigue.saturating_add(1)
-                    };
-                    let speed = self
-                        .apply_f32(
-                            super::StatIdF32::WeaponSpeed,
-                            self.sheet.offense.weapon.speed,
-                        )
-                        .max(1.0);
-                    let duration = self
-                        .magic
-                        .loadout
-                        .echo_strike
-                        .duration_seconds()
-                        .unwrap_or(0);
-                    if ai == SpellCastAi::WhenUseful && recovery as f32 + speed >= duration as f32 {
-                        continue;
-                    }
-                    if self.cast_echo_strike(now).is_ok() {
-                        break;
-                    }
+                .any(|started| started == id),
+            SpellCastAi::AsOftenAsPossible => true,
+        };
+        if !self
+            .magic
+            .loadout
+            .known_spells
+            .iter()
+            .any(|id| eligible(id))
+            && !(self.magic.loadout.knows_echo_strike && eligible("echo_strike"))
+        {
+            return;
+        }
+        // Preserve catalog order within each priority without allocating and
+        // sorting a spell list on every simulated second.
+        for already_started in [false, true] {
+            for spell in spell_catalog().iter() {
+                let started = self
+                    .state
+                    .magic
+                    .started_spells
+                    .iter()
+                    .any(|id| id == &spell.id);
+                if started != already_started {
+                    continue;
                 }
-                SpellAiPolicy::MaintainBuff => {
-                    if self.state.has_active_effect(spell.id) {
-                        continue;
+                let ai = self.magic.loadout.ai_for(&spell.id);
+                if !self.magic.loadout.knows_spell(&spell.id) || ai == SpellCastAi::Manual {
+                    continue;
+                }
+                if started && ai == SpellCastAi::AtFightStart {
+                    continue;
+                }
+                match spell.kind {
+                    SpellKind::EchoStrike => {
+                        if self.state.magic.armed_echo.is_some()
+                            || self.validate_echo_cast().is_err()
+                        {
+                            continue;
+                        }
+                        if self.cast_echo_strike(now).is_ok() {
+                            return;
+                        }
                     }
-                    if self.cast_known_spell(spell.id, now).is_ok() {
-                        break;
+                    SpellKind::Chronoblur | SpellKind::Streamline => {
+                        if self.state.has_active_effect(&spell.id) {
+                            continue;
+                        }
+                        if self.cast_known_spell(&spell.id, now).is_ok() {
+                            return;
+                        }
                     }
                 }
             }
@@ -909,7 +883,7 @@ impl Combatant {
     pub fn try_auto_cast(&mut self, now: u32, enemy_in_reach: bool) {
         self.state.magic.now = now;
         if self.magic.loadout.auto_cast == AutoCast::SpellPolicies {
-            self.try_spell_policies(now, enemy_in_reach);
+            self.try_spell_policies(now);
             return;
         }
         if self.state.magic.auto_attempted || self.state.hp <= 0 {
@@ -992,15 +966,14 @@ pub(crate) fn take_due_echoes(
 ) -> Vec<(usize, ScheduledEcho)> {
     let mut due = Vec::new();
     for (caster, combatant) in combatants.iter_mut().enumerate() {
-        let mut pending = Vec::new();
-        for echo in combatant.state.magic.echoes.drain(..) {
-            if echo.due_at <= now {
-                due.push((caster, echo));
-            } else {
-                pending.push(echo);
-            }
+        for echo in combatant
+            .state
+            .magic
+            .echoes
+            .extract_if(.., |echo| echo.due_at <= now)
+        {
+            due.push((caster, echo));
         }
-        combatant.state.magic.echoes = pending;
     }
     due.sort_by_key(|(caster, echo)| (echo.due_at, *caster, echo.cast_id, echo.ordinal));
     due

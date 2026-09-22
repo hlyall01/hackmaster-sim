@@ -1,5 +1,6 @@
 use super::magic::{on_attack_resolved, take_due_echoes};
 use super::*;
+use crate::core::sim::test_support::resolve_basic_attack;
 use crate::core::magic::*;
 use crate::core::rng::SimRng;
 use std::sync::Arc;
@@ -571,7 +572,6 @@ fn combat_casting_restores_normal_defense_die_in_actual_attack_resolution() {
                 0.0,
                 &mut SimRng::from_seed(seed),
             )
-            .event
             .roll
         };
         let normal_roll = run(&mut ordinary.clone());
@@ -593,8 +593,8 @@ fn fatigue_penalty_applies_to_ranged_shield_defense() {
     plain[1].sheet.defense.ranged_defense_mod = 0;
     let mut fatigued = plain.clone();
     fatigued[1].state.magic.fatigue = Some((0, 6));
-    let base = resolve_basic_attack(&mut plain, 0, 1, 0, true, 10.0, 0.0, &mut rng()).event;
-    let penalty = resolve_basic_attack(&mut fatigued, 0, 1, 0, true, 10.0, 0.0, &mut rng()).event;
+    let base = resolve_basic_attack(&mut plain, 0, 1, 0, true, 10.0, 0.0, &mut rng());
+    let penalty = resolve_basic_attack(&mut fatigued, 0, 1, 0, true, 10.0, 0.0, &mut rng());
     assert_eq!(penalty.roll.defense_total, base.roll.defense_total - 6);
 }
 
@@ -844,53 +844,6 @@ fn combat_waits_for_pending_echo_after_caster_death() {
     assert_eq!(sim.combatants[1].state.hp, 990);
 }
 
-#[test]
-fn squad_and_duel_apply_the_same_cast_and_fatigue_timeline() {
-    use crate::squad_battler::combat::{BattleUnit, SquadCombat};
-    let mut sim = duel(caster());
-    let mut enemy = target();
-    enemy.sheet.maneuvers.passive = true;
-    let mut squad = SquadCombat::new_with_seed(
-        vec![BattleUnit::from_combatant("caster", 0, caster())],
-        vec![BattleUnit::from_combatant("enemy", 1, enemy)],
-        123,
-    );
-    sim.cast_echo_strike(0).unwrap();
-    squad.cast_echo_strike(0).unwrap();
-    sim.tick(); // Duel processes t=0; squad begins processing at t=1.
-    for _ in 0..10 {
-        sim.tick();
-        squad.tick();
-        let left = &sim.combatants[0].state.magic;
-        let right = &squad.units[0].combatant.as_ref().unwrap().state.magic;
-        assert_eq!(left.essences, right.essences);
-        assert_eq!(left.fatigue, right.fatigue);
-        assert_eq!(left.primary_recovery_until, right.primary_recovery_until);
-    }
-}
-
-#[test]
-fn squad_echoes_damage_the_original_target_and_do_not_retarget_or_reset_initiative() {
-    use crate::squad_battler::combat::{BattleUnit, SquadCombat};
-    let mut actors = vec![caster(), target()];
-    arm(&mut actors[0]);
-    strike(&mut actors, 2, true, 19);
-    actors[0].sheet.maneuvers.passive = true;
-    actors[1].sheet.maneuvers.passive = true;
-    let mut squad = SquadCombat::new_with_seed(
-        vec![BattleUnit::from_combatant("caster", 0, actors.remove(0))],
-        vec![BattleUnit::from_combatant("enemy", 1, actors.remove(0))],
-        123,
-    );
-    squad.units[0].initiative_ready_at = 50.0;
-    for _ in 0..12 {
-        squad.tick();
-    }
-    assert_eq!(squad.units[1].hp, 991);
-    assert_eq!(squad.units[0].initiative_ready_at, 50.0);
-    assert!(squad.log.iter().any(|line| line.contains("Echo Strike vs")));
-}
-
 fn free_caster(spells: &[&str]) -> Combatant {
     let mut actor = caster();
     let mut loadout = MagicLoadout::default();
@@ -1092,16 +1045,33 @@ fn spell_ai_reconsiders_temporary_restrictions_without_logging_failures() {
 }
 
 #[test]
-fn recommended_echo_timing_requires_reach_and_time_to_use_the_buff() {
+fn default_echo_casts_once_without_reach_or_weapon_speed_gating() {
     let mut actor = free_caster(&["echo_strike"]);
-    actor.try_auto_cast(0, false);
-    assert!(actor.state.magic.casting.is_none());
     Arc::make_mut(&mut actor.sheet.offense.weapon).speed = 10.0;
-    actor.try_auto_cast(1, true);
-    assert!(actor.state.magic.casting.is_none());
-    actor.magic.loadout.echo_strike.extra_duration_seconds = 10;
-    actor.try_auto_cast(2, true);
+    actor.try_auto_cast(0, false);
     assert!(actor.state.magic.casting.is_some());
+    actor.advance_magic(1, &mut rng());
+    actor.advance_magic(20, &mut rng());
+    assert!(actor.state.magic.armed_echo.is_none());
+    actor.try_auto_cast(20, true);
+    assert!(actor.state.magic.casting.is_none());
+}
+
+#[test]
+fn legacy_recommended_timing_runs_as_use_once_without_opening_an_editor() {
+    let mut actor = free_caster(&[]);
+    actor.magic.loadout = serde_json::from_str(r#"{
+        "known_spells": ["echo_strike"],
+        "spell_ai": {"echo_strike": "when_useful"}
+    }"#).unwrap();
+    actor.try_auto_cast(0, false);
+    assert_eq!(actor.state.magic.casting.as_ref().unwrap().definition.id, "echo_strike");
+    actor.advance_magic(1, &mut rng());
+    actor.advance_magic(20, &mut rng());
+    actor.try_auto_cast(20, false);
+    assert!(actor.state.magic.casting.is_none());
+    let saved = serde_json::to_value(&actor.magic.loadout).unwrap();
+    assert_eq!(saved["spell_ai"]["echo_strike"], "at_fight_start");
 }
 
 #[test]
@@ -1138,9 +1108,8 @@ fn resetting_fight_resets_per_spell_ai_usage() {
 }
 
 #[test]
-fn empowered_streamline_radius_covers_targets_in_both_combat_hosts() {
+fn empowered_streamline_radius_covers_targets() {
     use super::types::GridPos;
-    use crate::squad_battler::combat::{BattleUnit, SquadCombat};
     for (ranks, covered) in [(0, false), (1, true)] {
         let mut actor = free_caster(&["spell_streamline"]);
         actor.magic.loadout.streamline_radius_ranks = ranks;
@@ -1148,32 +1117,11 @@ fn empowered_streamline_radius_covers_targets_in_both_combat_hosts() {
         let mut sim = duel(actor.clone());
         sim.actors[0].position = GridPos::new(0, 0);
         sim.actors[1].position = GridPos::new(35, 0);
-        let mut enemy = target();
-        enemy.sheet.maneuvers.passive = true;
-        let mut squad = SquadCombat::new_with_seed(
-            vec![BattleUnit::from_combatant("caster", 0, actor)],
-            vec![BattleUnit::from_combatant("target", 1, enemy)],
-            123,
-        );
-        for unit in &mut squad.units {
-            unit.move_tiles = 0;
-        }
-        squad.units[0].pos = crate::squad_battler::combat::GridPos::new(0, 0);
-        squad.units[1].pos = crate::squad_battler::combat::GridPos::new(7, 0);
         for _ in 0..7 {
             sim.tick();
-            squad.tick();
         }
         assert!(
             sim.combatants[0]
-                .state
-                .has_active_effect(STREAMLINE_EFFECT_ID)
-        );
-        assert!(
-            squad.units[0]
-                .combatant
-                .as_ref()
-                .unwrap()
                 .state
                 .has_active_effect(STREAMLINE_EFFECT_ID)
         );
@@ -1181,21 +1129,11 @@ fn empowered_streamline_radius_covers_targets_in_both_combat_hosts() {
             sim.combatants[1].state.streamline_averages_incoming_damage,
             covered
         );
-        assert_eq!(
-            squad.units[1]
-                .combatant
-                .as_ref()
-                .unwrap()
-                .state
-                .streamline_averages_incoming_damage,
-            covered
-        );
     }
 }
 
 #[test]
-fn casting_limits_actual_movement_to_five_feet_in_both_hosts_even_with_casting_talents() {
-    use crate::squad_battler::combat::{BattleUnit, SquadCombat};
+fn casting_limits_actual_movement_to_five_feet_even_with_casting_talents() {
     for combat_casting in [false, true] {
         let mut actor = free_caster(&["spell_streamline"]);
         actor.sheet.mobility.move_speed = 20.0;
@@ -1208,42 +1146,16 @@ fn casting_limits_actual_movement_to_five_feet_in_both_hosts_even_with_casting_t
         enemy.sheet.maneuvers.passive = true;
         let mut sim = SimState::with_rng(SimConfig::new(200.0, 1.0), rng());
         sim.reset_with_combatants(vec![actor.clone(), enemy.clone()]);
-        let mut squad = SquadCombat::new_with_seed(
-            vec![BattleUnit::from_combatant("caster", 0, actor)],
-            vec![BattleUnit::from_combatant("enemy", 1, enemy)],
-            123,
-        );
-        squad.units[0].pos = crate::squad_battler::combat::GridPos::new(0, 0);
-        squad.units[1].pos =
-            crate::squad_battler::combat::GridPos::new(squad.grid.width - 1, squad.grid.height - 1);
-        squad.units[1].move_tiles = 0;
         let mut duel_movement = 0.0;
-        let mut squad_movement = 0.0;
         for _ in 0..3 {
             let duel_before = sim.actors[0].position;
-            let squad_before = squad.units[0].pos;
             sim.tick();
-            squad.tick();
             assert!(sim.combatants[0].state.magic.casting.is_some());
-            assert!(
-                squad.units[0]
-                    .combatant
-                    .as_ref()
-                    .unwrap()
-                    .state
-                    .magic
-                    .casting
-                    .is_some()
-            );
             let duel_feet = duel_before.manhattan_distance(sim.actors[0].position) as f32
                 * sim.config.tile_size_ft;
-            let squad_feet = squad.grid.distance_ft(squad_before, squad.units[0].pos);
             assert!(duel_feet <= 5.0, "duel caster moved {duel_feet} feet");
-            assert!(squad_feet <= 5.0, "squad caster moved {squad_feet} feet");
             duel_movement += duel_feet;
-            squad_movement += squad_feet;
         }
         assert!(duel_movement > 0.0);
-        assert!(squad_movement > 0.0);
     }
 }

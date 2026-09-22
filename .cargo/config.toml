@@ -1,3 +1,2 @@
 [alias]
-autobattler = "run --bin autobattler --features bevy"
-build-autobattler-win = "run --bin build_autobattler_win"
+sim = "run --bin sim_gui"

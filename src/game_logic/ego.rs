@@ -5,7 +5,7 @@
 
 pub const MAX_EGO_GENERATION_DAYS: u32 = 10_000;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EgoGenerationInput {
     pub maximum: f64,
     pub current: f64,

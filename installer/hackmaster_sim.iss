@@ -37,10 +37,7 @@ Name: "{app}\data"; Permissions: users-modify
 
 [Files]
 Source: "{#SourcePath}\..\{#BinDir}\sim_gui.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#SourcePath}\..\{#BinDir}\autobattler.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#SourcePath}\..\{#BinDir}\sim_cli.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#SourcePath}\..\{#BinDir}\hackmaster_sim.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#SourcePath}\..\data\*"; DestDir: "{app}\data"; Flags: recursesubdirs createallsubdirs
+Source: "{#SourcePath}\..\data\sim\*"; DestDir: "{app}\data\sim"; Flags: recursesubdirs createallsubdirs
 #ifdef IncludeCert
 Source: "{#MyCertFile}"; DestDir: "{tmp}"; Flags: deleteafterinstall
 #endif

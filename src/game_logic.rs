@@ -1,7 +1,9 @@
 pub mod simulation_jobs;
+mod spells;
+pub use spells::{SpellAction, apply_spell_action, echo_status_lines, spell_editor_summary};
 use crate::character::{
     AbilityDerived, AbilityScore, AbilitySet, Armor, ArmorType, Character, DerivedStats, Equipment,
-    Progression, Shield, Weapon, WeaponGroup, WeaponMastery,
+    Progression, Shield, Weapon, WeaponGroup,
 };
 use crate::core::catalog::Catalog;
 pub use crate::core::ids::{
@@ -28,6 +30,8 @@ mod masteries;
 pub use masteries::*;
 mod ego;
 pub use ego::*;
+mod npc;
+pub use npc::{NpcLoadout, apply_npc_preset};
 #[cfg(test)]
 mod mastery_tests;
 mod weapon_styles;
@@ -158,6 +162,8 @@ fn effective_two_hand_grip(weapon: &WeaponPreset, two_hand_grip: bool) -> bool {
 }
 
 fn two_hand_damage_bonus(weapon: &WeaponPreset, two_hand_grip: bool) -> i32 {
+    // Dedicated two-handed weapons already include their bonus in the catalog
+    // damage expression (for example, greatsword: d10p+d12p+3).
     if effective_two_hand_grip(weapon, two_hand_grip) && weapon_allows_two_handed_mode(weapon) {
         TWO_HANDED_DAMAGE_BONUS
     } else {
@@ -225,6 +231,14 @@ pub struct NpcPreset {
     pub defense_mod: i32,
     pub armor_dr: i32,
     pub top: i32,
+    /// Total adjustment to catalog weapon speed, including equipment/style bonuses.
+    #[serde(default)]
+    pub speed_mod: Option<i32>,
+    #[serde(default)]
+    pub shield_dr: Option<i32>,
+    /// Equipped stat blocks use final combat totals; older monster presets retain their behavior.
+    #[serde(default)]
+    pub loadout: Option<NpcLoadout>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -328,6 +342,8 @@ fn is_false(value: &bool) -> bool {
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct FighterPreset {
+    #[serde(default, skip_serializing_if = "TacticalPolicy::is_default")]
+    pub tactical_policy: TacticalPolicy,
     #[serde(
         default,
         skip_serializing_if = "crate::core::magic::MagicLoadout::is_default"
@@ -1324,12 +1340,11 @@ fn normalized_proficiencies(context: &TalentContext<'_>) -> Vec<String> {
 }
 
 fn has_words(token: &str, words: &[&str]) -> bool {
-    let token_words: Vec<&str> = token.split_whitespace().collect();
     words.iter().all(|word| {
         let singular = word.trim_end_matches('s');
-        token_words
-            .iter()
-            .any(|entry| *entry == *word || *entry == singular || *entry == format!("{singular}s"))
+        token.split_whitespace().any(|entry| {
+            entry == *word || entry == singular || entry.strip_suffix('s') == Some(singular)
+        })
     })
 }
 
@@ -2105,6 +2120,15 @@ pub fn effective_default_weapon_style_ids(
         armor_catalog,
         shield_catalog,
     );
+    default_weapon_styles_from_compatible(player, talent_catalog, weapon_catalog, &compatible)
+}
+
+fn default_weapon_styles_from_compatible(
+    player: &PlayerConfig,
+    talent_catalog: &TalentCatalog,
+    weapon_catalog: &WeaponCatalog,
+    compatible: &[String],
+) -> Vec<String> {
     let requested = player
         .active_weapon_style_ids
         .as_ref()
@@ -2393,6 +2417,15 @@ fn resolve_talent_modifiers(
     talent_catalog: &TalentCatalog,
     weapon_catalog: &WeaponCatalog,
 ) -> TalentModifiers {
+    resolve_talent_modifiers_with_grants(player, talent_catalog, weapon_catalog, &[])
+}
+
+fn resolve_talent_modifiers_with_grants(
+    player: &PlayerConfig,
+    talent_catalog: &TalentCatalog,
+    weapon_catalog: &WeaponCatalog,
+    granted_talents: &[TalentSelection],
+) -> TalentModifiers {
     let mut modifiers = TalentModifiers::default();
     modifiers.chronoblur = player.magic.knows_spell("spell_chronoblur")
         || player.talents.iter().any(|talent| talent.id == "spell_chronoblur" && talent.rank > 0);
@@ -2429,7 +2462,11 @@ fn resolve_talent_modifiers(
         {
             continue;
         }
-        if !style_effects_active(selection, spec, &context, player) {
+        // Authored NPC traits are granted by the stat block, without inventing
+        // ability scores or prerequisite talents that were not supplied.
+        if !granted_talents.contains(selection)
+            && !style_effects_active(selection, spec, &context, player)
+        {
             continue;
         }
         let rank = talent_rank(selection);
@@ -4921,23 +4958,13 @@ fn build_character_with_modifiers(
         weapon: Some(weapon),
         shield,
         armor,
-        weapon_material: None,
-        armor_material: None,
-        shield_material: None,
     };
 
-    let mut builder = Character::builder(&player.name)
+    let builder = Character::builder(&player.name)
         .level(player.level, player.progression)
         .base_hp(player.base_hp)
         .abilities(abilities)
         .equipment(equipment);
-    for group in MASTERY_GROUPS {
-        builder = builder.weapon_mastery(WeaponMastery {
-            group,
-            points: player.mastery(group),
-            base_threshold: base_weapon_threshold(group),
-        });
-    }
     let mut character = builder.build();
     if modifiers.remarkability {
         apply_remarkability_modifier_adjustments(&mut character.ability_mods);
@@ -4982,7 +5009,14 @@ fn build_combatant_profile(
     npc_presets: &NpcPresetCatalog,
     talent_catalog: &TalentCatalog,
 ) -> ResolvedPlayerStats {
-    let modifiers = resolve_talent_modifiers(player, talent_catalog, weapon_catalog);
+    let npc_preset = player.npc_preset.and_then(|id| npc_presets.get(id));
+    let npc_loadout = npc_preset.and_then(|preset| preset.loadout.as_ref());
+    let modifiers = resolve_talent_modifiers_with_grants(
+        player,
+        talent_catalog,
+        weapon_catalog,
+        npc_loadout.map_or(&[], |loadout| loadout.talents.as_slice()),
+    );
     let weapon_preset = weapon_for_player_with_modifiers(player, weapon_catalog, &modifiers);
     let weapon_id = weapon_id_for_player_with_modifiers(player, weapon_catalog, &modifiers);
     let character = build_character_with_modifiers(
@@ -5019,6 +5053,9 @@ fn build_combatant_profile(
         .as_ref()
         .map(|weapon| weapon.speed)
         .unwrap_or(10.0);
+    if let Some(speed_mod) = npc_preset.and_then(|preset| preset.speed_mod) {
+        derived.speed_mod = speed_mod;
+    }
     let speed_mod = derived.speed_mod as f32;
     let reach_bonus = modifiers.reach_bonus_for_group(weapon_preset.group) as f32
         + modifiers.weapon_reach_flat_bonus_for_weapon(weapon_id);
@@ -5387,14 +5424,18 @@ fn build_combatant_profile(
         .trauma_die_override
         .map(|override_die| (override_die.sides, override_die.penetrating))
         .unwrap_or((20, false));
-    if let Some(preset) = player.npc_preset.and_then(|id| npc_presets.get(id)) {
+    if let Some(preset) = npc_preset {
         name = preset.name.clone();
         attack_breakdown.lines.clear();
         attack_breakdown.add_i32(preset.attack_bonus, "NPC attack bonus");
         attack_bonus_base = preset.attack_bonus;
         defense_mod = preset.defense_mod;
         armor_dr = preset.armor_dr;
-        natural_dr = 0;
+        natural_dr = if npc_loadout.is_some() {
+            natural_dr.min(armor_dr)
+        } else {
+            0
+        };
         damage_breakdown.lines.clear();
         damage_breakdown.add_i32(preset.damage_bonus, "NPC damage bonus");
         strength_damage_base = 0;
@@ -5404,25 +5445,45 @@ fn build_combatant_profile(
         crit_min_roll = 20;
         crit_min_roll_ranged = None;
         crit_severity_bonus = 0;
-        shield_name = None;
-        shield_defense_bonus = 0;
-        shield_dr = 0;
-        shield_cover_value = None;
-        shield_breakage = None;
+        if npc_loadout.is_some() {
+            // DEF is the complete ready melee roll bonus. Keep the shield's
+            // contribution separate so breaking it still removes its protection.
+            if has_shield {
+                defense_mod -= 4 + shield_defense_bonus;
+                if let Some(dr) = preset.shield_dr {
+                    shield_dr = dr;
+                }
+            } else if effective_two_hand || defensive_dualwielding || weapon_defense_always {
+                defense_mod -= 4;
+            }
+        } else {
+            shield_name = None;
+            shield_defense_bonus = 0;
+            shield_dr = 0;
+            shield_cover_value = None;
+            shield_breakage = None;
+            defensive_dualwielding = false;
+            offensive_dualwielding = false;
+            called_shot_target_defense_bonus_base = CALLED_SHOT_TARGET_DEFENSE_BONUS_MEDIUM;
+        }
         ranged_defense_mod = 0;
         dex_defense_bonus = 0;
         trauma_die_sides = 20;
         trauma_die_penetrating = false;
-        defensive_dualwielding = false;
-        offensive_dualwielding = false;
-        called_shot_target_defense_bonus_base = CALLED_SHOT_TARGET_DEFENSE_BONUS_MEDIUM;
     }
 
     attack_breakdown.add_i32(mounted_attack_bonus(player, weapon_preset), "Mounted combat / Riding mastery");
     let attack_bonus = attack_breakdown.additive_total() as i32;
     let strength_damage = damage_breakdown.additive_total() as i32;
 
-    let weapon_speed = if use_jab {
+    let weapon_speed = if let Some(speed_mod) = npc_preset.and_then(|preset| preset.speed_mod) {
+        let base = if use_jab {
+            weapon_preset.jab_speed.unwrap_or(base_weapon_speed)
+        } else {
+            base_weapon_speed
+        };
+        (base + speed_mod as f32).max(min_speed)
+    } else if use_jab {
         jab_speed
     } else {
         let speed = (base_weapon_speed + two_hand_speed_penalty + speed_mod - speed_mastery
@@ -5996,12 +6057,8 @@ pub fn resolve_player_stats(
         armor_catalog,
         shield_catalog,
     );
-    let initial_style_ids = effective_default_weapon_style_ids(
-        player,
-        talent_catalog,
-        weapon_catalog,
-        armor_catalog,
-        shield_catalog,
+    let initial_style_ids = default_weapon_styles_from_compatible(
+        player, talent_catalog, weapon_catalog, &compatible_style_ids,
     );
     if !player.tactical_policy.enabled || player.npc_preset.is_some() {
         let mut profile_player = player.clone();
@@ -6076,6 +6133,7 @@ pub fn resolve_player_stats(
     let mut initial_player = player.clone();
     initial_player.active_weapon_style_ids = Some(initial_style_ids.clone());
     initial_player.use_jab = false;
+    initial_player.called_shot = false;
     initial_player.fight_defensively = false;
     initial_player.fight_defensively_penalty = 2;
     initial_player.give_ground = false;
@@ -6272,14 +6330,6 @@ pub fn strength_damage_for_weapon(weapon: &WeaponPreset, base: i32) -> i32 {
         0
     } else {
         base
-    }
-}
-
-pub fn base_weapon_threshold(group: WeaponGroup) -> f32 {
-    match group {
-        WeaponGroup::Bows | WeaponGroup::Crossbows => 150.0,
-        WeaponGroup::Shields => 200.0,
-        _ => 100.0,
     }
 }
 
@@ -9571,7 +9621,7 @@ mod tests {
     #[test]
     fn derived_resolved_values_match_actual_attack_rolls_across_weapons_and_stances() {
         use crate::core::sim::combat::preview_defense;
-        use crate::core::sim::resolve_basic_attack;
+        use crate::core::sim::test_support::resolve_basic_attack;
         use crate::core::rng::SimRng;
         let (weapons, armor, shields) = sample_catalogs();
         let talents = sample_talents();
@@ -9605,7 +9655,7 @@ mod tests {
                 dummy.sheet.defense.defense_mod = -100;
                 let mut actors = vec![resolved.combatant.clone(), dummy.clone()];
                 let outcome = resolve_basic_attack(&mut actors, 0, 1, 0, resolved.summary.roll.is_ranged_weapon,
-                    5.0, 0.0, &mut SimRng::from_seed(7)).event;
+                    5.0, 0.0, &mut SimRng::from_seed(7));
                 assert_eq!(outcome.roll.attack_bonus, resolved.summary.roll.attack_bonus,
                     "{} mode {mode}", weapon.name);
                 if let Some(damage) = outcome.damage_breakdown {
@@ -9616,7 +9666,7 @@ mod tests {
                     let preview = preview_defense(&resolved.combatant);
                     let mut actors = vec![dummy.clone(), resolved.combatant.clone()];
                     let outcome = resolve_basic_attack(&mut actors, 0, 1, 0, ranged, 5.0,
-                        0.0, &mut SimRng::from_seed(9)).event;
+                        0.0, &mut SimRng::from_seed(9));
                     let actual = outcome.roll.defense_base + outcome.roll.shield_defense_bonus;
                     assert_eq!(actual, if ranged { preview.ranged_bonus } else { preview.melee_bonus },
                         "{} mode {mode}, ranged {ranged}", weapon.name);

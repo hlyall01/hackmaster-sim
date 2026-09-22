@@ -1,0 +1,75 @@
+{
+  "spells": [
+    {
+      "id": "echo_strike",
+      "kind": "echo_strike",
+      "name": "Echo Strike",
+      "level": 10,
+      "base_cost": 150,
+      "casting_seconds": 1,
+      "components": { "somatic": true, "verbal": false },
+      "description": "Your next successful attack echoes after a delay, dealing half its wound damage, rounded down.",
+      "casting_description": "1-second cast · Personal",
+      "casting_help": {
+        "use_once": "Cast Echo Strike once at the first available opening; opening spells queue behind each other.",
+        "manual": "Only cast Echo Strike when you press its button during combat.",
+        "as_often_as_possible": "Recast when casting is allowed and no echo is armed. Pending echoes continue independently."
+      },
+      "empowerments": [
+        { "type": "number", "field": "echo_duration_seconds", "label": "Extra duration", "min": 0, "max": 3600, "suffix": " s" },
+        { "type": "number", "field": "echo_delay_seconds", "label": "Echo delay", "min": 1, "max": 10, "suffix": " s" },
+        { "type": "number", "field": "echo_additional_echoes", "label": "Additional echoes", "min": 0, "max": 100, "suffix": "" },
+        { "type": "toggle", "field": "echo_full_damage", "label": "Full damage" }
+      ],
+      "summary": "Armed for {duration}s · {echoes} echo(s) · {damage} damage",
+      "half_damage_text": "half, rounded down",
+      "full_damage_text": "full",
+      "echo_status": {
+        "armed": "Echo armed: {seconds}s",
+        "pending": "Echo {ordinal} in {seconds}s: {damage} damage",
+        "dismiss": "Dismiss Echo Strike"
+      }
+    },
+    {
+      "id": "spell_chronoblur",
+      "kind": "chronoblur",
+      "name": "Chronoblur",
+      "level": 4,
+      "base_cost": 90,
+      "casting_seconds": 2,
+      "components": { "somatic": true, "verbal": true },
+      "description": "For 60 seconds, movement in the previous second grants +4 melee defense and makes missile attacks treat you as 20 feet farther away.",
+      "casting_description": "2-second cast · Touch (casts on self)",
+      "casting_help": {
+        "use_once": "Cast Chronoblur once at the first available opening; opening spells queue behind each other.",
+        "manual": "Only cast Chronoblur when you press its button during combat.",
+        "as_often_as_possible": "Recast Chronoblur when casting is allowed and its movement-based defense buff has expired."
+      },
+      "empowerments": [
+        { "type": "number", "field": "chronoblur_duration_ranks", "label": "Extra duration (30-second increments)", "min": 0, "max": 120, "suffix": "" }
+      ],
+      "summary": "Duration: {duration}s"
+    },
+    {
+      "id": "spell_streamline",
+      "kind": "streamline",
+      "name": "Streamline",
+      "level": 8,
+      "base_cost": 130,
+      "casting_seconds": 5,
+      "components": { "somatic": true, "verbal": true },
+      "description": "For 5 minutes, damage dice against targets within 30 feet use their mathematical average, rounded down, before modifiers and damage reduction.",
+      "casting_description": "5-second cast · Field centered on caster",
+      "casting_help": {
+        "use_once": "Cast Streamline once at the first available opening; opening spells queue behind each other.",
+        "manual": "Only cast Streamline when you press its button during combat.",
+        "as_often_as_possible": "Recast Streamline when casting is allowed and its damage-averaging field has expired."
+      },
+      "empowerments": [
+        { "type": "number", "field": "streamline_duration_ranks", "label": "Extra duration (minutes)", "min": 0, "max": 120, "suffix": "" },
+        { "type": "number", "field": "streamline_radius_ranks", "label": "Extra radius (10-foot increments)", "min": 0, "max": 100, "suffix": "" }
+      ],
+      "summary": "Duration: {duration}s · Radius: {radius} ft"
+    }
+  ]
+}

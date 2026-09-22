@@ -852,21 +852,34 @@ impl Combatant {
     }
 
     pub fn activate_tactical_profile(&mut self, use_jab: bool) -> bool {
-        let key = TacticalProfileKey {
-            style_ids: self.active_style_ids.clone(),
-            use_jab,
-            fight_defensively_penalty: self.active_fight_defensively_penalty,
-        };
         let Some(profile) = self.tactical_profiles.iter().find(|profile| {
-            profile.key == key && (!use_jab || profile.sheet.offense.weapon.use_jab)
+            profile.key.style_ids == self.active_style_ids
+                && profile.key.use_jab == use_jab
+                && profile.key.fight_defensively_penalty == self.active_fight_defensively_penalty
+                && (!use_jab || profile.sheet.offense.weapon.use_jab)
         }) else {
             return false;
         };
+        let called_shot = self.sheet.maneuvers.called_shot;
+        let primary_changed = !Arc::ptr_eq(&self.sheet.offense.weapon, &profile.sheet.offense.weapon);
+        let secondary_changed = match (&self.sheet.offense.offhand, &profile.sheet.offense.offhand) {
+            (Some(current), Some(next)) => !Arc::ptr_eq(&current.weapon, &next.weapon),
+            (None, None) => false,
+            _ => true,
+        };
         self.sheet = profile.sheet.clone();
-        self.weapon_group = profile.weapon_group.clone();
-        self.armor_type = profile.armor_type.clone();
-        self.state.invalidate_weapon_cache(WeaponSlot::Primary);
-        self.state.invalidate_weapon_cache(WeaponSlot::Secondary);
+        if self.tactical_policy.enabled {
+            // A selected called shot persists through temporary Jab/style/stance profiles.
+            self.sheet.maneuvers.called_shot = called_shot;
+        }
+        self.weapon_group.clone_from(&profile.weapon_group);
+        self.armor_type.clone_from(&profile.armor_type);
+        if primary_changed {
+            self.state.invalidate_weapon_cache(WeaponSlot::Primary);
+        }
+        if secondary_changed {
+            self.state.invalidate_weapon_cache(WeaponSlot::Secondary);
+        }
         true
     }
 

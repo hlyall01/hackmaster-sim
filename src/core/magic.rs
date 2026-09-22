@@ -6,6 +6,9 @@
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
+mod catalog;
+pub use catalog::*;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EssenceProficiency {
     I,
@@ -139,65 +142,22 @@ pub enum AutoCast {
     InWeaponReach,
 }
 
-/// Each catalog entry owns its targeting/timing policy; combat hosts share it.
-#[derive(Clone, Copy, Debug)]
-pub enum SpellAiPolicy {
-    EchoBeforeMelee,
-    MaintainBuff,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct SpellCatalogEntry {
-    pub id: &'static str,
-    pub name: &'static str,
-    pub level: u8,
-    pub description: &'static str,
-    pub ai_description: &'static str,
-    pub ai: SpellAiPolicy,
-}
-
-pub const SPELL_CATALOG: &[SpellCatalogEntry] = &[
-    SpellCatalogEntry {
-        id: "echo_strike",
-        name: "Echo Strike",
-        level: 10,
-        description: "Your next successful attack echoes after a delay, dealing half its wound damage, rounded down.",
-        ai_description: "Cast once per fight when an enemy is in melee reach, provided weapon recovery finishes before the buff expires. Never replace an armed echo.",
-        ai: SpellAiPolicy::EchoBeforeMelee,
-    },
-    SpellCatalogEntry {
-        id: "spell_chronoblur",
-        name: "Chronoblur",
-        level: 4,
-        description: "For 60 seconds, movement in the previous second grants +4 melee defense and makes missile attacks treat you as 20 feet farther away.",
-        ai_description: "Cast on self at the first available opening. Refresh only after expiry when repeat casting is selected.",
-        ai: SpellAiPolicy::MaintainBuff,
-    },
-    SpellCatalogEntry {
-        id: "spell_streamline",
-        name: "Streamline",
-        level: 8,
-        description: "For 5 minutes, damage dice against targets within 30 feet use their mathematical average, rounded down, before modifiers and damage reduction.",
-        ai_description: "Cast on self at the first available opening. Refresh only after expiry when repeat casting is selected.",
-        ai: SpellAiPolicy::MaintainBuff,
-    },
-];
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SpellCastAi {
-    WhenUseful,
     AsOftenAsPossible,
+    #[serde(alias = "when_useful")]
     AtFightStart,
     Manual,
 }
 impl SpellCastAi {
+    pub const ALL: [Self; 3] = [Self::AtFightStart, Self::Manual, Self::AsOftenAsPossible];
+
     pub fn label(self) -> &'static str {
         match self {
-            Self::WhenUseful => "Use spell's recommended timing",
-            Self::AsOftenAsPossible => "Cast as often as possible",
-            Self::AtFightStart => "Cast at fight start",
-            Self::Manual => "Manual only",
+            Self::AtFightStart => "Use once",
+            Self::AsOftenAsPossible => "Use as much as possible",
+            Self::Manual => "Manual",
         }
     }
 }
@@ -229,15 +189,15 @@ pub struct MagicLoadout {
 }
 
 impl MagicLoadout {
+    pub fn streamline_radius_feet(&self) -> u64 {
+        30 + 10 * u64::from(self.streamline_radius_ranks)
+    }
+
     pub fn ai_for(&self, id: &str) -> SpellCastAi {
         self.spell_ai
             .get(id)
             .copied()
-            .unwrap_or(if id == "echo_strike" {
-                SpellCastAi::WhenUseful
-            } else {
-                SpellCastAi::AtFightStart
-            })
+            .unwrap_or(SpellCastAi::AtFightStart)
     }
 
     pub fn knows_spell(&self, id: &str) -> bool {
@@ -359,15 +319,11 @@ impl Default for EchoStrikeOptions {
 }
 
 impl EchoStrikeOptions {
-    pub const LEVEL: u8 = 10;
-    pub const BASE_COST: u32 = 150;
-    pub const CASTING_SECONDS: u32 = 1;
-
     pub fn cost(self) -> Result<u32, MagicError> {
         if !(1..=10).contains(&self.delay_seconds) {
             return Err(MagicError::InvalidEchoDelay);
         }
-        let total = 150_u64
+        let total = u64::from(SpellKind::EchoStrike.catalog_entry().base_cost)
             + 5 * u64::from(self.extra_duration_seconds)
             + 20 * u64::from(10 - self.delay_seconds)
             + 150 * u64::from(self.additional_echoes)
@@ -380,10 +336,11 @@ impl EchoStrikeOptions {
         level: u8,
         proficiency: EssenceProficiency,
     ) -> Result<Amplification, MagicError> {
-        if proficiency.maximum_spell_level(level) < Self::LEVEL {
+        let spell = SpellKind::EchoStrike.catalog_entry();
+        if proficiency.maximum_spell_level(level) < spell.level {
             return Err(MagicError::SpellLevelTooHigh);
         }
-        proficiency.validate_cost(Self::BASE_COST, self.cost()?)
+        proficiency.validate_cost(spell.base_cost, self.cost()?)
     }
 
     pub fn duration_seconds(self) -> Result<u32, MagicError> {

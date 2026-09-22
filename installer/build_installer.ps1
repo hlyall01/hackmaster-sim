@@ -7,7 +7,7 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 
 function Test-IsWslPath {
     param([string]$Path)
-    return $Path -match '^\\\\wsl\.localhost\\' -or $Path -match '^\\\\wsl\\'
+    return $Path -match '^\\\\wsl\.localhost\\' -or $Path -match '^\\\\wsl\$\\'
 }
 
 function Get-WslDistroFromPath {
@@ -15,7 +15,7 @@ function Get-WslDistroFromPath {
     if ($Path -match '^\\\\wsl\.localhost\\([^\\]+)\\') {
         return $Matches[1]
     }
-    if ($Path -match '^\\\\wsl\\([^\\]+)\\') {
+    if ($Path -match '^\\\\wsl\$\\([^\\]+)\\') {
         return $Matches[1]
     }
     return $null
@@ -30,7 +30,7 @@ function Get-WslPath {
     if ($WindowsPath -match '^\\\\wsl\.localhost\\[^\\]+\\(.+)$') {
         return ("/" + ($Matches[1] -replace '\\', '/'))
     }
-    if ($WindowsPath -match '^\\\\wsl\\[^\\]+\\(.+)$') {
+    if ($WindowsPath -match '^\\\\wsl\$\\[^\\]+\\(.+)$') {
         return ("/" + ($Matches[1] -replace '\\', '/'))
     }
 
@@ -58,7 +58,7 @@ function Invoke-WslCargoBuild {
         throw "Failed to resolve WSL path for repo root: $RepoRootPath"
     }
 
-    $cmd = "cd '$wslRepoRoot' && cargo build --release --target $WinTarget"
+    $cmd = "cd '$wslRepoRoot' && cargo build --release --bin sim_gui --target $WinTarget"
     $args = @()
     if ($Distro) {
         $args += @("-d", $Distro)
@@ -112,11 +112,14 @@ try {
         $distro = Get-WslDistroFromPath -Path $RepoRoot
         Invoke-WslCargoBuild -RepoRootPath $RepoRoot -WinTarget $winTarget -Distro $distro
     } else {
-        $cargoArgs = @("build", "--release", "--bins")
+        $cargoArgs = @("build", "--release", "--bin", "sim_gui")
         if ($winTarget) {
             $cargoArgs += @("--target", $winTarget)
         }
         & cargo @cargoArgs
+        if ($LASTEXITCODE -ne 0) {
+            throw "Cargo build failed."
+        }
     }
 
     if (-not (Test-Path $InnoPath)) {
@@ -128,6 +131,9 @@ try {
         & $InnoPath "/DBuildTarget=$winTarget" $issPath
     } else {
         & $InnoPath $issPath
+    }
+    if ($LASTEXITCODE -ne 0) {
+        throw "Inno Setup compilation failed."
     }
 
     $thumbprint = $env:HACKMASTER_SIGN_THUMBPRINT
@@ -149,9 +155,6 @@ try {
         }
         $files = @(
             (Join-Path -Path $binDir -ChildPath "sim_gui.exe"),
-            (Join-Path -Path $binDir -ChildPath "autobattler.exe"),
-            (Join-Path -Path $binDir -ChildPath "sim_cli.exe"),
-            (Join-Path -Path $binDir -ChildPath "hackmaster_sim.exe"),
             (Join-Path -Path $RepoRoot -ChildPath "installer\dist\HackmasterSimSetup.exe")
         )
         foreach ($file in $files) {

@@ -9,24 +9,10 @@ struct BinIcon {
     ico: &'static str,
 }
 
-const ICONS: [BinIcon; 4] = [
-    BinIcon {
-        bin: "sim_gui",
-        ico: "assets/icon_sim_gui.ico",
-    },
-    BinIcon {
-        bin: "hackmaster_sim",
-        ico: "assets/icon_weapon_plot.ico",
-    },
-    BinIcon {
-        bin: "sim_cli",
-        ico: "assets/icon_sim_cli.ico",
-    },
-    BinIcon {
-        bin: "autobattler",
-        ico: "assets/icon_autobattler.ico",
-    },
-];
+const ICONS: [BinIcon; 1] = [BinIcon {
+    bin: "sim_gui",
+    ico: "assets/icon_sim_gui.ico",
+}];
 
 fn main() {
     println!("cargo:rerun-if-changed=data");

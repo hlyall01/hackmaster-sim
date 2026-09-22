@@ -44,6 +44,175 @@
       "defense_mod": 1,
       "armor_dr": 8,
       "top": 8
+    },
+    {
+      "name": "Mace Guard",
+      "hp": 25,
+      "attack_bonus": 3,
+      "damage_bonus": 1,
+      "defense_mod": 0,
+      "armor_dr": 3,
+      "top": 10,
+      "speed_mod": -1,
+      "loadout": {
+        "weapon": "Mace",
+        "weapon_material_tier": 0,
+        "armor": "Gambeson",
+        "armor_material_tier": 1
+      }
+    },
+    {
+      "name": "Scimitar Raider",
+      "hp": 30,
+      "attack_bonus": 5,
+      "damage_bonus": 1,
+      "defense_mod": 1,
+      "armor_dr": 3,
+      "top": 12,
+      "speed_mod": -1,
+      "loadout": {
+        "weapon": "Scimitar",
+        "weapon_material_tier": 1,
+        "armor": "Boiled",
+        "armor_material_tier": 1
+      }
+    },
+    {
+      "name": "Hide Swordsman",
+      "hp": 35,
+      "attack_bonus": 6,
+      "damage_bonus": 4,
+      "defense_mod": 4,
+      "armor_dr": 4,
+      "top": 14,
+      "speed_mod": -3,
+      "loadout": {
+        "weapon": "Broadsword",
+        "weapon_material_tier": 1,
+        "armor": "Rawhide",
+        "armor_material_tier": 2
+      }
+    },
+    {
+      "name": "Axe Sentinel",
+      "hp": 40,
+      "attack_bonus": 8,
+      "damage_bonus": 4,
+      "defense_mod": 9,
+      "armor_dr": 7,
+      "top": 16,
+      "speed_mod": -4,
+      "shield_dr": 7,
+      "loadout": {
+        "weapon": "Battle axe",
+        "weapon_material_tier": 1,
+        "armor": "Chainmail",
+        "armor_material_tier": 1,
+        "shield": "Medium metallic shield",
+        "shield_material_tier": 1,
+        "talents": [
+          {
+            "id": "armor_master"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Twin Sabres",
+      "hp": 45,
+      "attack_bonus": 9,
+      "damage_bonus": 7,
+      "defense_mod": 10,
+      "armor_dr": 9,
+      "top": 18,
+      "speed_mod": -5,
+      "loadout": {
+        "weapon": "Sabre",
+        "weapon_material_tier": 2,
+        "armor": "Brigandine",
+        "armor_material_tier": 2,
+        "offhand_weapon": "Sabre",
+        "offhand_weapon_material_tier": 2,
+        "defensive_dualwielding": true,
+        "talents": [
+          {
+            "id": "armor_master"
+          },
+          {
+            "id": "heavy_armor_optimization"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Glaive Striker",
+      "hp": 50,
+      "attack_bonus": 19,
+      "damage_bonus": 5,
+      "defense_mod": 14,
+      "armor_dr": 0,
+      "top": 20,
+      "speed_mod": -8,
+      "loadout": {
+        "weapon": "Glaive",
+        "weapon_material_tier": 2,
+        "armor": "None",
+        "armor_material_tier": 0
+      }
+    },
+    {
+      "name": "Plate Warden",
+      "hp": 55,
+      "attack_bonus": 12,
+      "damage_bonus": 6,
+      "defense_mod": 15,
+      "armor_dr": 11,
+      "top": 22,
+      "speed_mod": -7,
+      "shield_dr": 8,
+      "loadout": {
+        "weapon": "Bastard sword",
+        "weapon_material_tier": 2,
+        "armor": "Platemail",
+        "armor_material_tier": 2,
+        "shield": "Large metallic shield",
+        "shield_material_tier": 2,
+        "talents": [
+          {
+            "id": "armor_master"
+          },
+          {
+            "id": "heavy_armor_optimization"
+          },
+          {
+            "id": "shield_focus"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Greatsword Knight",
+      "hp": 60,
+      "attack_bonus": 14,
+      "damage_bonus": 5,
+      "defense_mod": 8,
+      "armor_dr": 11,
+      "top": 24,
+      "speed_mod": -6,
+      "loadout": {
+        "weapon": "Greatsword",
+        "weapon_material_tier": 2,
+        "armor": "Halfplate",
+        "armor_material_tier": 2,
+        "talents": [
+          {
+            "id": "armor_master"
+          },
+          {
+            "id": "tough_hide"
+          }
+        ]
+      }
     }
   ]
 }

@@ -11,23 +11,13 @@ if [[ -z "${WIN_TARGET}" ]]; then
   exit 1
 fi
 
-echo "Building Windows release binaries (target: $WIN_TARGET)..."
-(cd "$REPO_ROOT" && cargo build --release --target "$WIN_TARGET")
+echo "Building Windows simulator (target: $WIN_TARGET)..."
+(cd "$REPO_ROOT" && cargo build --release --bin sim_gui --target "$WIN_TARGET")
 
-EXES=("$REPO_ROOT"/target/"$WIN_TARGET"/release/*.exe)
-if [[ ! -e "${EXES[0]}" ]]; then
-  for candidate in "$REPO_ROOT"/target/*/release/*.exe; do
-    if [[ -e "$candidate" ]]; then
-      candidate_dir="$(dirname "$candidate")"
-      EXES=("$candidate_dir"/*.exe)
-      break
-    fi
-  done
-fi
-
-if [[ ! -e "${EXES[0]}" ]]; then
-  echo "No Windows .exe files found under target/**/release." >&2
-  echo "Set a Windows target (e.g. x86_64-pc-windows-gnu) or copy outputs into target/release." >&2
+# Name the current output explicitly: old app executables may remain in target/.
+EXES=("$REPO_ROOT/target/$WIN_TARGET/release/sim_gui.exe")
+if [[ ! -f "${EXES[0]}" ]]; then
+  echo "Simulator executable not found: ${EXES[0]}" >&2
   exit 1
 fi
 

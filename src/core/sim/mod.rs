@@ -38,117 +38,12 @@ pub use types::{
     TacticalProfileKey, Vitals, WeaponCache, WeaponProfile, WeaponSlot,
 };
 
-#[derive(Clone, Debug)]
-pub(crate) struct BasicAttackResult {
-    pub event: AttackEvent,
-    pub counters: Vec<BasicCounterAttack>,
-    pub precognition_triggered: bool,
-}
-
-pub(crate) fn resolve_basic_attack(
-    combatants: &mut [Combatant],
-    attacker_idx: usize,
-    defender_idx: usize,
-    range_mod: i32,
-    is_ranged: bool,
-    distance_ft: f32,
-    now: f32,
-    rng: &mut impl rand::Rng,
-) -> BasicAttackResult {
-    let outcome = combat::resolve_attack(
-        combatants,
-        attacker_idx,
-        defender_idx,
-        range_mod,
-        is_ranged,
-        distance_ft,
-        combat::AttackMode::Normal,
-        WeaponSlot::Primary,
-        now,
-        None,
-        rng,
-    );
-    let precognition_triggered = outcome.precognition_triggered;
-    let event = AttackEvent {
-        source: crate::core::sim::AttackSource::Weapon,
-        hit: outcome.hit,
-        shield_block: outcome.shield_block,
-        damage: outcome.damage,
-        shield_damage: outcome.shield_damage,
-        knockback_ft: outcome.knockback_ft,
-        hold_at_bay: outcome.hold_at_bay,
-        is_charge: false,
-        weapon_slot: outcome.weapon_slot,
-        use_jab: outcome.use_jab,
-        is_ranged: outcome.is_ranged,
-        trauma_applied: outcome.trauma_applied,
-        trauma_seconds: outcome.trauma_seconds,
-        roll: outcome.roll,
-        damage_breakdown: outcome.damage_breakdown,
-        shield_damage_breakdown: outcome.shield_damage_breakdown,
-        defender_hp_after: outcome.defender_hp_after,
-        critical: outcome.critical,
-    };
-    let counters = outcome
-        .counter_attack
-        .into_iter()
-        .chain(outcome.additional_counters)
-        .map(|counter| BasicCounterAttack {
-            attacker_idx: counter.attacker_idx,
-            defender_idx: counter.defender_idx,
-            precognition_triggered: counter.precognition_triggered,
-            event: counter_event(counter),
-        })
-        .collect();
-    BasicAttackResult {
-        event,
-        counters,
-        precognition_triggered,
-    }
-}
-
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod weapon_style_tests;
 #[cfg(test)]
 mod magic_tests;
-
-#[derive(Clone, Debug)]
-pub(crate) struct BasicCounterAttack {
-    pub attacker_idx: usize,
-    pub defender_idx: usize,
-    pub precognition_triggered: bool,
-    pub event: AttackEvent,
-}
-
-pub(crate) fn resolve_basic_style_strikes(
-    combatants: &mut [Combatant],
-    attacker_idx: usize,
-    defender_idx: usize,
-    slot: WeaponSlot,
-    distance_ft: f32,
-    now: f32,
-    rng: &mut impl rand::Rng,
-) -> Vec<BasicCounterAttack> {
-    combat::resolve_style_strike_chain(
-        combatants,
-        attacker_idx,
-        defender_idx,
-        slot,
-        distance_ft,
-        now,
-        rng,
-    )
-    .into_iter()
-    .map(|counter| BasicCounterAttack {
-        attacker_idx: counter.attacker_idx,
-        defender_idx: counter.defender_idx,
-        precognition_triggered: counter.precognition_triggered,
-        event: counter_event(counter),
-    })
-    .collect()
-}
 
 pub(crate) fn counter_event(counter: combat::CounterAttackOutcome) -> AttackEvent {
     AttackEvent {
@@ -172,3 +67,6 @@ pub(crate) fn counter_event(counter: combat::CounterAttackOutcome) -> AttackEven
         critical: counter.critical,
     }
 }
+
+#[cfg(test)]
+pub(crate) mod test_support;

@@ -55,12 +55,24 @@ struct ShieldJson {
     weight_lbs: f32,
 }
 
-pub fn load_weapon_catalog(path: &str) -> Result<WeaponCatalog, String> {
+fn load_weapons_file(path: &str) -> Result<WeaponsFile, String> {
     let data = fs::read_to_string(resolve_data_path(path))
         .unwrap_or_else(|_| EMBEDDED_WEAPONS_JSON.to_string());
-    let parsed: WeaponsFile = serde_json::from_str(&data).map_err(|err| err.to_string())?;
+    serde_json::from_str(&data).map_err(|err| err.to_string())
+}
+
+pub(super) fn load_weapon_and_shield_catalogs(path: &str) -> Result<(WeaponCatalog, ShieldCatalog), String> {
+    let parsed = load_weapons_file(path)?;
+    Ok((weapon_catalog_from_entries(parsed.weapons)?, shield_catalog_from_entries(parsed.shields)?))
+}
+
+pub fn load_weapon_catalog(path: &str) -> Result<WeaponCatalog, String> {
+    weapon_catalog_from_entries(load_weapons_file(path)?.weapons)
+}
+
+fn weapon_catalog_from_entries(entries: Vec<WeaponJson>) -> Result<WeaponCatalog, String> {
     let mut catalog = Vec::new();
-    for entry in parsed.weapons {
+    for entry in entries {
         for expression in [
             entry.damage.as_deref(),
             entry.shield_damage.as_deref(),
@@ -139,15 +151,16 @@ pub fn load_weapon_catalog(path: &str) -> Result<WeaponCatalog, String> {
 }
 
 pub fn load_shield_catalog(path: &str) -> Result<ShieldCatalog, String> {
-    let data = fs::read_to_string(resolve_data_path(path))
-        .unwrap_or_else(|_| EMBEDDED_WEAPONS_JSON.to_string());
-    let parsed: WeaponsFile = serde_json::from_str(&data).map_err(|err| err.to_string())?;
+    shield_catalog_from_entries(load_weapons_file(path)?.shields)
+}
+
+fn shield_catalog_from_entries(entries: Vec<ShieldJson>) -> Result<ShieldCatalog, String> {
     let mut catalog = Vec::new();
     catalog.push(ShieldEntry {
         label: "None".to_string(),
         shield: None,
     });
-    for entry in parsed.shields {
+    for entry in entries {
         let defense_bonus = parse_shield_defense_bonus(&entry.defense);
         let dr = parse_leading_number(&entry.damage_reduction) as i32;
         let cover_value = parse_cover_value(&entry.cover_value);
@@ -292,6 +305,23 @@ fn parse_range_bands_feet(values: &[f32]) -> Option<[f32; 4]> {
 mod tests {
     use super::*;
     #[test]
+    fn combined_catalog_loading_matches_individual_loads() {
+        let (weapons, shields) = load_weapon_and_shield_catalogs("data/sim/weapons.json").unwrap();
+        let separate_weapons = load_weapon_catalog("data/sim/weapons.json").unwrap();
+        let separate_shields = load_shield_catalog("data/sim/weapons.json").unwrap();
+        assert_eq!(weapons.len(), separate_weapons.len());
+        assert_eq!(shields.len(), separate_shields.len());
+        for (a, b) in weapons.entries().iter().zip(separate_weapons.entries()) {
+            assert_eq!((&a.name, &a.damage_expr, &a.shield_damage_expr, &a.jab_special_expr, a.speed, a.reach_ft),
+                (&b.name, &b.damage_expr, &b.shield_damage_expr, &b.jab_special_expr, b.speed, b.reach_ft));
+        }
+        for (a, b) in shields.entries().iter().zip(separate_shields.entries()) {
+            assert_eq!(a.label, b.label);
+            assert_eq!(a.shield.as_ref().map(|s| (&s.name, s.dr, s.defense_bonus, s.cover_value, s.breakage_thresholds)),
+                b.shield.as_ref().map(|s| (&s.name, s.dr, s.defense_bonus, s.cover_value, s.breakage_thresholds)));
+        }
+    }
+    #[test]
     fn malformed_damage_in_editable_catalog_is_reported() {
         let path = std::env::temp_dir().join(format!(
             "hackmaster-invalid-weapon-{}.json",
@@ -303,7 +333,10 @@ mod tests {
         let error = load_weapon_catalog(path.to_str().unwrap())
             .err()
             .expect("invalid catalog must fail");
+        let combined_error = load_weapon_and_shield_catalogs(path.to_str().unwrap())
+            .err().expect("combined loader must also reject invalid catalogs");
         std::fs::remove_file(path).unwrap();
+        assert_eq!(combined_error, error);
         assert!(error.contains("Invalid damage"));
         assert!(error.contains("d6)"));
     }

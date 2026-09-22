@@ -20,7 +20,7 @@ All four styles are trained selections with no BP cost. They use the existing le
 - Select **Give ground** or **Scamper back** in Combat Maneuvers, or choose them in Tactical Directives when tactics are enabled. Pursuit is enabled by default; **Do not pursue retreating opponents** disables it.
 - Evonia enables the offhand sword selector for its otherwise two-handed loadout. Both new mode/pursuit choices are saved in fighter presets and default safely when loading older presets.
 
-The shared combat resolver supplies the damage and counter rules to duels and squad battles. Squad pursuit also updates grid positions and its event log. Duels use exact weapon reach; squad combat uses its existing minimum melee range of one grid cell, so a short sword can strike an adjacent unit but cannot reach a second cell.
+The simulator's combat resolver supplies the damage and counter rules and uses exact weapon reach. The separate squad application has been retired.
 
 ## Verification
 

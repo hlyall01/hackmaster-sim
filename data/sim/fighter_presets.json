@@ -750,25 +750,31 @@
         "health": "IV"
       },
       "weapon_masteries": {
+        "polearms": {
+          "attack": 1,
+          "damage": 1,
+          "speed": 1,
+          "defense": 1
+        },
         "spears": {
           "attack": 2,
           "damage": 2,
-          "speed": 2,
+          "speed": 3,
           "defense": 2
         },
         "shields": {
           "attack": 0,
           "damage": 0,
-          "speed": 1,
+          "speed": 3,
           "defense": 2
         }
       },
       "base_hp": 10,
       "move_speed": 20.0,
       "strength_base": 16,
-      "strength_pct": 31,
+      "strength_pct": 59,
       "dex_base": 10,
-      "dex_pct": 20,
+      "dex_pct": 28,
       "intelligence": 14,
       "wisdom": 10,
       "constitution": 14,
@@ -850,7 +856,7 @@
           "weapon": null
         },
         {
-          "id": "improved_awareness",
+          "id": "unbreakable_wall",
           "rank": 1,
           "weapon": null
         },
@@ -872,6 +878,19 @@
       ]
     },
     {
+      "tactical_policy": {
+        "enabled": true,
+        "rules": [
+          {
+            "conditions": [{ "kind": "enemy_dr", "comparison": "greater", "value": 7.0 }],
+            "action": { "kind": "called_shot" }
+          },
+          {
+            "conditions": [{ "kind": "always" }],
+            "action": { "kind": "fight_defensively", "penalty": 8 }
+          }
+        ]
+      },
       "name": "Volfango Drakos",
       "level": 9,
       "progression": {
@@ -1035,6 +1054,19 @@
       }
     },
     {
+      "tactical_policy": {
+        "enabled": true,
+        "rules": [
+          {
+            "conditions": [{ "kind": "enemy_dr", "comparison": "greater", "value": 7.0 }],
+            "action": { "kind": "called_shot" }
+          },
+          {
+            "conditions": [{ "kind": "always" }],
+            "action": { "kind": "fight_defensively", "penalty": 8 }
+          }
+        ]
+      },
       "name": "Volfango Drakos (Perfect Two-Weapon)",
       "level": 9,
       "progression": {

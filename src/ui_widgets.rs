@@ -21,10 +21,12 @@ where
     let mut changed = false;
     let mut selected_in_frame = false;
     let mut keep_popup_open = false;
-    let options: Vec<(T, String, bool)> = options.into_iter().collect();
     egui::ComboBox::from_id_source(combo_id)
         .selected_text(selected_text)
         .show_ui(ui, |ui| {
+            // Most selectors are closed. Do not enumerate or clone their labels
+            // until egui actually opens the popup.
+            let options: Vec<(T, String, bool)> = options.into_iter().collect();
             let mut filter = ui
                 .data_mut(|data| data.get_persisted::<String>(filter_id))
                 .unwrap_or_default();
@@ -83,4 +85,33 @@ where
         });
     }
     changed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn closed_selectors_do_not_build_options_and_open_selectors_do() {
+        let ctx = egui::Context::default();
+        let enumerated = Cell::new(0);
+        for open in [false, true] {
+            let _ = ctx.run(Default::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let id = egui::Id::new("lazy_options_test");
+                    if open {
+                        let popup_id = ui.make_persistent_id(egui::Id::new(id)).with("popup");
+                        ui.memory_mut(|memory| memory.open_popup(popup_id));
+                    }
+                    let mut selected = 0;
+                    searchable_select(ui, "lazy_options_test", "Selected", &mut selected, (0..50).map(|i| {
+                        enumerated.set(enumerated.get() + 1);
+                        (i, i.to_string(), true)
+                    }));
+                });
+            });
+            assert_eq!(enumerated.get(), if open { 50 } else { 0 });
+        }
+    }
 }
