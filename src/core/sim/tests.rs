@@ -16,6 +16,142 @@ use crate::{data, game_logic};
 use rand::SeedableRng;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+#[path = "aggressive_tests.rs"]
+mod aggressive_tests;
+
+#[test]
+fn opening_engagement_damage_options_match_simulator_extra_dice_count() {
+    for extra in [1, 2] {
+        let mut attacker = Combatant::default();
+        attacker.sheet.offense.attack_bonus = 20;
+        attacker.sheet.offense.strength_damage = 3;
+        let weapon = Arc::make_mut(&mut attacker.sheet.offense.weapon);
+        weapon.damage_expr = "2d10p+3".into();
+        weapon.damage_expr_cache = DamageExprCache::new(&weapon.damage_expr);
+        weapon.crit_min_roll = 99;
+        attacker.sheet.modifiers.add_i32(StatIdI32::FlagArmerociPoleStyle, ModifierOpI32::Set(1));
+        attacker.sheet.modifiers.add_i32(StatIdI32::OpeningEngagementExtraDamageDice, ModifierOpI32::Set(extra));
+        attacker.reset_state();
+        let mut defender = Combatant::default();
+        defender.sheet.vitals.max_hp = 1000;
+        defender.sheet.vitals.threshold_of_pain = 1000;
+        defender.reset_state();
+        let options = combat::weapon_roll20_damage_options(&attacker, &defender, WeaponSlot::Primary, false).unwrap();
+        let opening = options.iter().find(|o| o.mode == combat::WeaponDamageMode::OpeningEngagement).unwrap();
+        assert_eq!(opening.expression, format!("{}d10!p+3+3", 2 + extra));
+        let mut pair = vec![attacker, defender];
+        for expected_extra in [extra, 0] {
+            let outcome = resolve_attack(&mut pair, 0, 1, 0, false, 3.0,
+                AttackMode::Normal, WeaponSlot::Primary, 0.0, None, &mut FixedRng(0));
+            assert!(outcome.hit);
+            assert_eq!(outcome.damage_breakdown.unwrap().raw_damage, 2 + 3 + 3 + expected_extra);
+        }
+    }
+}
+
+#[test]
+fn rohavalan_normal_and_jab_close_hits_match_simulation_and_macros() {
+    use crate::game_logic::roll_macros::{MacroSession, Modifier, RollKind};
+
+    let (weapons, armor, shields) = data::load_catalogs().unwrap();
+    let talents = data::load_talents(data::TALENTS_PATH).unwrap();
+    let npcs = game_logic::NpcPresetCatalog::new(vec![]);
+    for name in ["Halberd", "Staff"] {
+        let id = weapons.entries().iter().position(|w| w.name == name)
+            .and_then(|i| weapons.id_from_index(i)).unwrap();
+        for (power, jab) in [(false, false), (true, false), (false, true), (true, true)] {
+            if jab && name == "Staff" { continue; } // Staff has no Jab attack.
+            let mut player = game_logic::PlayerConfig::new("Rohavalan test", id);
+            player.strength_base = 18;
+            player.weapon_material_tier = 5;
+            player.two_hand_grip = true;
+            player.proficiencies = vec![name.into()];
+            player.mastery_mut(weapons.get(id).unwrap().group).damage = 4;
+            player.default_weapon_style_ids = Some(vec!["rohavalan_bridge".into()]);
+            for talent in ["rohavalan_bridge", "power_attack"] {
+                player.talents.push(TalentSelection {id:talent.into(), rank:1, weapon:None});
+            }
+            let mut session = MacroSession::default();
+            session.set_jab(jab);
+            if power { session.adjust(Modifier::PowerAttack, true); }
+            let mut attacker = game_logic::build_combatant(&session.state.profile_config(&player),
+                &weapons, &armor, &shields, &npcs, &talents);
+            let flat = attacker.sheet.offense.strength_damage_base * if power {2} else {1} + 5 + 4;
+            // The dedicated two-handed +3 is in the weapon pool, never this bonus.
+            assert_eq!(attacker.sheet.offense.strength_damage, flat);
+            assert!(attacker.sheet.offense.weapon.damage_expr.contains("+3"));
+            assert_eq!(attacker.sheet.offense.weapon.use_close_hit_damage_expr.as_deref(), Some("2d4p"));
+            assert_eq!(attacker.sheet.offense.weapon.use_jab, jab);
+
+            let mut defender = Combatant::default();
+            defender.sheet.vitals.max_hp = 1000;
+            defender.sheet.vitals.threshold_of_pain = 1000;
+            defender.sheet.defense.armor_dr = 0;
+            defender.reset_state();
+            let normal_expression = if jab { format!("1d10+3+{flat}") } else {
+                format!("{}+{flat}", attacker.sheet.offense.weapon.damage_expr_cache.roll20_expression(false).unwrap())
+            };
+            let normal_macro = session.state.preview(&attacker, &defender).unwrap().damage;
+            assert!(normal_macro.starts_with(&format!("[[{normal_expression}]]")),
+                "{name}, power={power}, jab={jab}: {normal_macro}; expected {normal_expression}");
+            session.copy(RollKind::Attack, &attacker, &defender).unwrap();
+            session.state.damage_mode = crate::game_logic::roll_macros::DamageMode::CloseHit;
+            let close_macro = session.copy(RollKind::Damage, &attacker, &defender).unwrap();
+            let close_pool = if jab { "1d4" } else { "2d4!p" };
+            assert!(close_macro.starts_with(&format!("[[{close_pool}+{flat}]]")), "{close_macro}");
+            assert_eq!(close_macro.contains("Jab"), jab);
+
+            attacker.sheet.offense.attack_bonus = 20;
+            Arc::make_mut(&mut attacker.sheet.offense.weapon).crit_min_roll = 99;
+            Arc::make_mut(&mut attacker.sheet.offense.weapon).armor_penetration = 0;
+            for margin in [9, 10] {
+                let mut pair = vec![attacker.clone(), defender.clone()];
+                pair[1].sheet.defense.defense_mod = 20 - margin;
+                let outcome = resolve_attack(&mut pair, 0, 1, 0, false, 3.0,
+                    AttackMode::Normal, WeaponSlot::Primary, 0.0, None, &mut FixedRng(0));
+                assert!(outcome.hit);
+                assert_eq!(outcome.roll.attack_total - outcome.roll.defense_total, margin);
+                let damage = outcome.damage_breakdown.unwrap();
+                // FixedRng rolls ones: close hits use 2d4p or Jab's 1d4.
+                // At margin 10 the ordinary weapon pool (including +3) applies.
+                let rolled = if margin < 10 { if jab {1} else {2} } else if jab {4} else {5};
+                let raw = rolled + flat;
+                assert_eq!(damage.rolled_damage, rolled, "{name}, power={power}, jab={jab}, margin={margin}");
+                assert_eq!(damage.raw_damage, raw);
+                assert_eq!(outcome.damage, raw);
+            }
+            if jab {
+                // Exercise every face through actual combat, including a maximum
+                // roll: Jab's close-hit d4 must never produce penetration damage.
+                let mut faces = std::collections::BTreeSet::new();
+                for seed in 0..256 {
+                    let mut pair = vec![attacker.clone(), defender.clone()];
+                    pair[1].sheet.defense.defense_mod = 15;
+                    pair[1].sheet.defense.armor_dr = 3;
+                    let outcome = resolve_attack(&mut pair, 0, 1, 0, false, 3.0,
+                        AttackMode::Normal, WeaponSlot::Primary, 0.0, None, &mut SimRng::from_seed(seed));
+                    if outcome.hit && outcome.roll.attack_total - outcome.roll.defense_total < 10 {
+                        let damage = outcome.damage_breakdown.unwrap();
+                        assert!((1..=4).contains(&damage.rolled_damage), "{name}, power={power}, seed={seed}");
+                        faces.insert(damage.rolled_damage);
+                        assert_eq!(damage.raw_damage, damage.rolled_damage + flat);
+                        assert_eq!(outcome.damage, damage.rolled_damage + flat - 3);
+                    }
+                }
+                assert_eq!(faces, [1, 2, 3, 4].into_iter().collect());
+
+                let mut pair = vec![attacker.clone(), defender.clone()];
+                pair[1].sheet.defense.defense_mod = 11;
+                pair[1].state.streamline_averages_incoming_damage = true;
+                let outcome = resolve_attack(&mut pair, 0, 1, 0, false, 3.0,
+                    AttackMode::Normal, WeaponSlot::Primary, 0.0, None, &mut FixedRng(0));
+                assert!(outcome.hit);
+                assert_eq!(outcome.damage_breakdown.unwrap().rolled_damage, 2);
+                assert_eq!(outcome.damage, 2 + flat);
+            }
+        }
+    }
+}
 
 fn combatant_basic(
     name: String,
@@ -85,6 +221,7 @@ fn combatant_basic(
                 ignore_all_dr: false,
                 internal_hemorrhage_damage: 0,
                 use_close_hit_damage_expr: None,
+                use_close_hit_jab_damage_expr_cache: None,
                 use_close_hit_damage_expr_cache: None,
                 use_close_hit_margin_less_than: 0,
                 crit_min_roll: 20,
@@ -1249,6 +1386,7 @@ fn advanced_sighting_scale_keeps_throwing_axe_at_minus_six_at_sixty_feet() {
         ignore_all_dr: false,
         internal_hemorrhage_damage: 0,
         use_close_hit_damage_expr: None,
+        use_close_hit_jab_damage_expr_cache: None,
         use_close_hit_damage_expr_cache: None,
         use_close_hit_margin_less_than: 0,
         crit_min_roll: 20,
@@ -1721,6 +1859,7 @@ fn ranged_weapons_cannot_hold_at_bay() {
         ignore_all_dr: false,
         internal_hemorrhage_damage: 0,
         use_close_hit_damage_expr: None,
+        use_close_hit_jab_damage_expr_cache: None,
         use_close_hit_damage_expr_cache: None,
         use_close_hit_margin_less_than: 0,
         crit_min_roll: 20,
@@ -1754,6 +1893,7 @@ fn ranged_weapons_cannot_hold_at_bay() {
         ignore_all_dr: false,
         internal_hemorrhage_damage: 0,
         use_close_hit_damage_expr: None,
+        use_close_hit_jab_damage_expr_cache: None,
         use_close_hit_damage_expr_cache: None,
         use_close_hit_margin_less_than: 0,
         crit_min_roll: 20,
@@ -1965,6 +2105,7 @@ fn equal_reach_trauma_does_not_block_simultaneous_attacks() {
                 ignore_all_dr: false,
                 internal_hemorrhage_damage: 0,
                 use_close_hit_damage_expr: None,
+                use_close_hit_jab_damage_expr_cache: None,
                 use_close_hit_damage_expr_cache: None,
                 use_close_hit_margin_less_than: 0,
                 crit_min_roll: 20,
@@ -2907,6 +3048,7 @@ fn equal_reach_knockback_does_not_block_simultaneous_attacks() {
                 ignore_all_dr: false,
                 internal_hemorrhage_damage: 0,
                 use_close_hit_damage_expr: None,
+                use_close_hit_jab_damage_expr_cache: None,
                 use_close_hit_damage_expr_cache: None,
                 use_close_hit_margin_less_than: 0,
                 crit_min_roll: 20,
@@ -7008,6 +7150,7 @@ fn throwing_axe_switches_to_melee_at_close_range() {
         ignore_all_dr: false,
         internal_hemorrhage_damage: 0,
         use_close_hit_damage_expr: None,
+        use_close_hit_jab_damage_expr_cache: None,
         use_close_hit_damage_expr_cache: None,
         use_close_hit_margin_less_than: 0,
         crit_min_roll: 20,
@@ -7041,6 +7184,7 @@ fn throwing_axe_switches_to_melee_at_close_range() {
         ignore_all_dr: false,
         internal_hemorrhage_damage: 0,
         use_close_hit_damage_expr: None,
+        use_close_hit_jab_damage_expr_cache: None,
         use_close_hit_damage_expr_cache: None,
         use_close_hit_margin_less_than: 0,
         crit_min_roll: 20,
@@ -7207,6 +7351,7 @@ fn throwing_axe_cooldown_resets_on_melee_engagement() {
         ignore_all_dr: false,
         internal_hemorrhage_damage: 0,
         use_close_hit_damage_expr: None,
+        use_close_hit_jab_damage_expr_cache: None,
         use_close_hit_damage_expr_cache: None,
         use_close_hit_margin_less_than: 0,
         crit_min_roll: 20,
@@ -7240,6 +7385,7 @@ fn throwing_axe_cooldown_resets_on_melee_engagement() {
         ignore_all_dr: false,
         internal_hemorrhage_damage: 0,
         use_close_hit_damage_expr: None,
+        use_close_hit_jab_damage_expr_cache: None,
         use_close_hit_damage_expr_cache: None,
         use_close_hit_margin_less_than: 0,
         crit_min_roll: 20,

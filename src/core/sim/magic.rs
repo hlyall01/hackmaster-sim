@@ -15,6 +15,14 @@ pub struct MagicProfile {
     pub loadout: MagicLoadout,
     pub talents: MagicTalents,
     pub saves: MagicSaveBonuses,
+    pub strength: crate::character::AbilityScore,
+    pub strength_damage: i32,
+    pub primary_ignores_strength: bool,
+    pub secondary_ignores_strength: bool,
+    pub fist_attack: i32,
+    pub fist_defense: i32,
+    pub fist_damage: i32,
+    pub fist_speed: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -59,6 +67,7 @@ impl From<&SpellCatalogEntry> for SpellDefinition {
 pub enum SpellEffect {
     EchoStrike(EchoStrikeOptions),
     TimedBuff(TemporaryEffect),
+    Configured(super::ConfiguredEffect),
 }
 
 #[derive(Clone, Debug)]
@@ -75,36 +84,29 @@ impl SpellRequest {
             .iter()
             .find(|spell| spell.id == id)
             .ok_or(MagicError::UnknownSpell)?;
+        Self::from_catalog(spell, loadout)
+    }
+
+    /// Compile a validated catalog entry; useful for custom catalogs and tests.
+    pub fn from_catalog(
+        spell: &SpellCatalogEntry,
+        loadout: &MagicLoadout,
+    ) -> Result<Self, MagicError> {
+        if spell.mechanics.is_some() {
+            let (effect, total_cost) = super::ConfiguredEffect::from_catalog(spell, loadout)?;
+            let mut definition: SpellDefinition = spell.into();
+            definition.channelled = effect.channelled();
+            return Ok(Self {
+                definition,
+                effect: SpellEffect::Configured(effect),
+                total_cost,
+                essence_index: 0,
+            });
+        }
         if spell.kind == SpellKind::EchoStrike {
             return Self::echo_strike(loadout.echo_strike, loadout.echo_essence);
         }
-        let (duration, extra_cost) = match spell.kind {
-            SpellKind::Chronoblur => (
-                60_u64 + 30 * u64::from(loadout.chronoblur_duration_ranks),
-                30 * u64::from(loadout.chronoblur_duration_ranks),
-            ),
-            SpellKind::Streamline => (
-                300_u64 + 60 * u64::from(loadout.streamline_duration_ranks),
-                10 * u64::from(loadout.streamline_duration_ranks)
-                    + 65 * u64::from(loadout.streamline_radius_ranks),
-            ),
-            SpellKind::EchoStrike => unreachable!("echo handled above"),
-        };
-        let duration = i32::try_from(duration).map_err(|_| MagicError::CostOverflow)?;
-        let mut buff = TemporaryEffect::new(id, duration);
-        if spell.kind == SpellKind::Streamline {
-            buff.modifiers.add_f32(
-                super::StatIdF32::StreamlineRadius,
-                super::ModifierOpF32::Set(loadout.streamline_radius_feet() as f32),
-            );
-        }
-        Ok(Self {
-            definition: spell.into(),
-            effect: SpellEffect::TimedBuff(buff),
-            total_cost: u32::try_from(u64::from(spell.base_cost) + extra_cost)
-                .map_err(|_| MagicError::CostOverflow)?,
-            essence_index: 0,
-        })
+        Err(MagicError::InvalidSpell)
     }
 
     pub fn echo_strike(
@@ -182,6 +184,13 @@ pub struct MagicState {
     pub primary_recovery_until: f32,
     pub secondary_recovery_until: f32,
     pub events: Vec<SpellEvent>,
+    /// Target candidates prepared by the arena's range/prediction policy.
+    pub range_targets: std::collections::BTreeMap<String, usize>,
+    pub resolved_effects: Vec<super::ConfiguredEffect>,
+    pub sweeping_fields: Vec<super::spell_effects::SweepingField>,
+    pub fists: Option<super::spell_effects::SummonedLimbs>,
+    pub oppressive_fields: Vec<super::spell_effects::OppressiveField>,
+    pub charged_objects: Vec<super::spell_effects::ChargedObject>,
     next_cast_id: u64,
 }
 
@@ -273,6 +282,7 @@ impl Combatant {
         tags: crate::core::magic::SpellTags,
     ) -> i32 {
         self.magic.saves.for_kind(kind) + self.magic.talents.resistance_bonus(tags)
+            + self.intimidation_penalty()
     }
 
     pub fn caster_magic_save_bonus(&self, associated_ability: u8) -> i32 {
@@ -317,7 +327,11 @@ impl Combatant {
         if id == "echo_strike" {
             return self.cast_echo_strike(now);
         }
-        self.start_spell(SpellRequest::from_loadout(id, &self.magic.loadout)?, now)
+        let mut request = SpellRequest::from_loadout(id, &self.magic.loadout)?;
+        if let SpellEffect::Configured(effect) = &mut request.effect {
+            effect.target = self.state.magic.range_targets.get(id).copied();
+        }
+        self.start_spell(request, now)
     }
 
     pub fn cast_echo_strike(&mut self, now: u32) -> Result<(), MagicError> {
@@ -335,17 +349,17 @@ impl Combatant {
         Ok(())
     }
 
-    /// Generic cast entry point used by catalog spells. Instant casts discharge
-    /// here and therefore cannot remain queued/cancellable until another tick.
+    /// Casting includes the starting second. Zero- and one-second spells
+    /// resolve here; longer casts complete after duration minus one ticks.
     pub fn cast_spell(
         &mut self,
         request: SpellRequest,
         now: u32,
         rng: &mut impl Rng,
     ) -> Result<(), MagicError> {
-        let instant = request.definition.casting_seconds == 0;
+        let completes_now = request.definition.casting_seconds <= 1;
         self.start_spell(request, now)?;
-        if instant {
+        if completes_now {
             self.advance_magic(now, rng);
         }
         Ok(())
@@ -399,6 +413,24 @@ impl Combatant {
         } else if definition.id == "echo_strike" {
             return Err(MagicError::InvalidSpell);
         }
+        if let SpellEffect::Configured(configured) = &effect {
+            let catalog = configured.catalog.as_ref();
+            let (mut expected, expected_cost) =
+                super::ConfiguredEffect::from_catalog(catalog, &self.magic.loadout)?;
+            expected.target = configured.target;
+            if *configured != expected
+                || cost != expected_cost
+                || definition.id != catalog.id
+                || definition.base_cost != catalog.base_cost
+                || definition.level != catalog.level
+                || definition.casting_seconds != catalog.casting_seconds
+                || definition.components != catalog.components
+                || definition.channelled != configured.channelled()
+                || (configured.needs_target() && configured.target.is_none())
+            {
+                return Err(MagicError::InvalidSpell);
+            }
+        }
         if let SpellEffect::TimedBuff(buff) = &effect {
             if buff.remaining_seconds <= 0 || buff.id.trim().is_empty() {
                 return Err(MagicError::InvalidSpell);
@@ -449,7 +481,7 @@ impl Combatant {
         }
         self.state.magic.casting = Some(CastingSpell {
             started_at: now,
-            completes_at: now.saturating_add(definition.casting_seconds),
+            completes_at: now.saturating_add(definition.casting_seconds.saturating_sub(1)),
             cost,
             essence_index,
             definition,
@@ -509,7 +541,7 @@ impl Combatant {
             .casting
             .as_ref()
             .ok_or(MagicError::NoActiveCast)?;
-        if cast.completes_at == cast.started_at {
+        if cast.definition.casting_seconds == 0 {
             return Err(MagicError::InstantCastCannotCancel);
         }
         let time_advanced = now > cast.started_at;
@@ -548,7 +580,7 @@ impl Combatant {
             now,
             self.magic
                 .talents
-                .fatigue_seconds(cast.completes_at - cast.started_at),
+                .fatigue_seconds(cast.definition.casting_seconds),
         );
         self.state.magic.event(
             SpellEventKind::CastInterrupted,
@@ -571,6 +603,7 @@ impl Combatant {
                 .retain(|effect| effect.id != buff.id);
             self.state.magic.owned_buffs.retain(|id| id != &buff.id);
         }
+        self.state.magic.fists = None;
         self.begin_spell_fatigue(
             now,
             self.magic
@@ -765,20 +798,18 @@ impl Combatant {
                     cast_id: self.state.magic.next_cast_id,
                 });
             }
+            SpellEffect::Configured(effect) => {
+                if let Some(buff) = effect.timed_buff() {
+                    self.install_cast_buff(buff, cast.definition.channelled);
+                } else {
+                    self.state.magic.resolved_effects.push(effect.clone());
+                }
+            }
             SpellEffect::TimedBuff(buff) => {
-                let mut buff = buff.clone();
-                self.state
-                    .active_effects
-                    .retain(|effect| effect.id != buff.id);
-                if !self.state.magic.owned_buffs.contains(&buff.id) {
-                    self.state.magic.owned_buffs.push(buff.id.clone());
-                }
-                if cast.definition.channelled {
-                    buff.remaining_seconds = 2;
-                }
-                self.state.add_effect(buff);
+                self.install_cast_buff(buff.clone(), cast.definition.channelled)
             }
         }
+
         self.state.magic.event(
             SpellEventKind::CastCompleted,
             cast.cost,
@@ -799,6 +830,19 @@ impl Combatant {
                     .fatigue_seconds(cast.definition.casting_seconds),
             );
         }
+    }
+
+    fn install_cast_buff(&mut self, mut buff: TemporaryEffect, channelled: bool) {
+        self.state
+            .active_effects
+            .retain(|effect| effect.id != buff.id);
+        if !self.state.magic.owned_buffs.contains(&buff.id) {
+            self.state.magic.owned_buffs.push(buff.id.clone());
+        }
+        if channelled {
+            buff.remaining_seconds = 2;
+        }
+        self.state.add_effect(buff);
     }
 
     fn try_spell_policies(&mut self, now: u32) {
@@ -853,7 +897,18 @@ impl Combatant {
                 if !self.magic.loadout.knows_spell(&spell.id) || ai == SpellCastAi::Manual {
                     continue;
                 }
-                if started && ai == SpellCastAi::AtFightStart {
+                if started && matches!(ai, SpellCastAi::AtFightStart) {
+                    continue;
+                }
+                // Repeating Echo Strike shares Use once's opening cast. Only
+                // subsequent casts wait for an enemy near weapon reach.
+                let requires_range = (matches!(ai, SpellCastAi::AsOftenAsPossible)
+                    && (started || spell.kind != SpellKind::EchoStrike))
+                    || spell
+                        .mechanics
+                        .as_ref()
+                        .is_some_and(|m| m.target == crate::core::magic::EffectTarget::Enemy);
+                if requires_range && !self.state.magic.range_targets.contains_key(&spell.id) {
                     continue;
                 }
                 match spell.kind {
@@ -867,7 +922,7 @@ impl Combatant {
                             return;
                         }
                     }
-                    SpellKind::Chronoblur | SpellKind::Streamline => {
+                    _ => {
                         if self.state.has_active_effect(&spell.id) {
                             continue;
                         }
@@ -921,6 +976,10 @@ pub(crate) fn on_attack_resolved(
     roll: &AttackRollBreakdown,
 ) {
     let now = now as u32;
+    combatants[attacker]
+        .state
+        .active_effects
+        .retain(|effect| !effect.consume_on_attack);
     if hit {
         combatants[attacker].state.magic.now = now;
         if let Some(buff) = combatants[attacker].state.magic.armed_echo.take() {
@@ -934,7 +993,13 @@ pub(crate) fn on_attack_resolved(
                         damage: if buff.options.full_damage {
                             damage.max(0)
                         } else {
-                            damage.max(0) / 2
+                            damage.max(0)
+                                / SpellKind::EchoStrike
+                                    .catalog_entry()
+                                    .echo_rules
+                                    .as_ref()
+                                    .expect("validated echo rules")
+                                    .normal_damage_divisor
                         },
                         ordinal,
                         cast_id: buff.cast_id,

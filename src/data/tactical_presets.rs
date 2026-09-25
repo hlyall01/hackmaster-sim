@@ -1,9 +1,8 @@
 use crate::core::tactics::{
     TacticalPolicy, TacticalPreset, valid_style_selection_shape, validate_policy,
 };
-use crate::data::{ensure_parent_dir, resolve_data_path, resolve_writable_data_path};
+use crate::data::{read_presets, write_presets};
 use serde::{Deserialize, Serialize};
-use std::fs;
 
 pub const TACTICAL_PRESET_SCHEMA_VERSION: u32 = 1;
 
@@ -19,8 +18,7 @@ struct TacticalPresetsFile {
 }
 
 pub fn load_tactical_presets(path: &str) -> Result<Vec<TacticalPreset>, String> {
-    let data = fs::read_to_string(resolve_data_path(path))
-        .unwrap_or_else(|_| EMBEDDED_TACTICAL_PRESETS_JSON.to_string());
+    let data = read_presets(path, EMBEDDED_TACTICAL_PRESETS_JSON)?;
     let parsed: TacticalPresetsFile =
         serde_json::from_str(&data).map_err(|err| format!("Invalid tactical presets: {err}"))?;
     if parsed.schema_version != TACTICAL_PRESET_SCHEMA_VERSION {
@@ -91,9 +89,7 @@ pub fn save_tactical_presets(path: &str, presets: &[TacticalPreset]) -> Result<(
         presets: presets.to_vec(),
     })
     .map_err(|err| err.to_string())?;
-    let output_path = resolve_writable_data_path(path);
-    ensure_parent_dir(&output_path)?;
-    crate::data::atomic_write(&output_path, data.as_bytes()).map_err(|err| err.to_string())
+    write_presets(path, &data)
 }
 
 #[cfg(test)]

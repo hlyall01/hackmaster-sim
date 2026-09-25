@@ -39,15 +39,41 @@ pub fn spell_editor_summary(
     spell: &SpellCatalogEntry,
     loadout: &MagicLoadout,
 ) -> Result<String, MagicError> {
-    let request = SpellRequest::from_loadout(&spell.id, loadout)?;
+    let request = SpellRequest::from_catalog(spell, loadout)?;
     let duration = match request.effect {
         SpellEffect::EchoStrike(options) => options.duration_seconds()?.to_string(),
-        SpellEffect::TimedBuff(buff) => buff.remaining_seconds.to_string(),
+        SpellEffect::TimedBuff(ref buff) => buff.remaining_seconds.to_string(),
+        SpellEffect::Configured(ref effect) => effect.duration.to_string(),
     };
-    Ok(spell
-        .summary
+    let mut summary = spell.summary.clone();
+    if let SpellEffect::Configured(e) = &request.effect {
+        for (key, value) in [
+            ("dice", e.dice.to_string()),
+            ("projectiles", e.projectiles.to_string()),
+            ("force", e.force.to_string()),
+            ("width", e.width.to_string()),
+            ("speed", e.speed.to_string()),
+        ] {
+            summary = summary.replace(&format!("{{{key}}}"), &value);
+        }
+    }
+    Ok(summary
         .replace("{duration}", &duration)
-        .replace("{radius}", &loadout.streamline_radius_feet().to_string())
+        .replace(
+            "{range}",
+            &match &request.effect {
+                SpellEffect::Configured(effect) => effect.range.to_string(),
+                _ => "0".into(),
+            },
+        )
+        .replace(
+            "{radius}",
+            &match &request.effect {
+                SpellEffect::Configured(e) => e.radius.to_string(),
+                SpellEffect::TimedBuff(b) => b.average_damage_radius.unwrap_or(0.0).to_string(),
+                _ => "0".into(),
+            },
+        )
         .replace(
             "{echoes}",
             &(u64::from(loadout.echo_strike.additional_echoes) + 1).to_string(),

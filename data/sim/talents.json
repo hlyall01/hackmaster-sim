@@ -971,7 +971,7 @@
     {
       "id": "rohavalan_bridge",
       "name": "Rohavalan Bridge",
-      "description": "A ceaseless cascade, one blow flowing into another. Halve your modified weapon speed, minimum weapon speed and reach. However, you must use a 2d4p in place of your weapon's normal damage die if your attack exceeds your opponent's defense by less than 10.",
+      "description": "A ceaseless cascade, one blow flowing into another. Halve your modified weapon speed, minimum weapon speed and reach. However, you must use a 2d4p in place of your weapon's normal damage die if your attack exceeds your opponent's defense by less than 10. On a Jab, this close-hit pool is 1d4 without penetration. This replaces the weapon's entire base damage expression, including its two-handed +3; other damage modifiers still apply.",
       "cost_bp": 20,
       "category": "Weapon Styles",
       "max_rank": 1,
@@ -1000,6 +1000,7 @@
         {
           "type": "close_hit_damage_expr",
           "expr": "2d4p",
+          "jab_expr": "1d4",
           "margin_less_than": 10,
           "weapon_groups": [
             "Polearms"
@@ -2266,7 +2267,9 @@
         }
       ],
       "max_rank": 1,
-      "effects": []
+      "effects": [
+        { "type": "intimidate_adversary" }
+      ]
     },
     {
       "id": "mounted_champion",
@@ -3366,7 +3369,7 @@
         "katlakehan"
       ],
       "max_rank": 1,
-      "effects": []
+      "effects": [{ "type": "project_confidence" }]
     },
     {
       "id": "raconteur",

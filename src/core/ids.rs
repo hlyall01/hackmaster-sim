@@ -5,6 +5,8 @@
 use std::marker::PhantomData;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(bound = "")]
 pub struct Id<Tag> {
     index: usize,
     _tag: PhantomData<Tag>,

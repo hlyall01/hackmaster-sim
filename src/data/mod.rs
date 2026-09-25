@@ -27,6 +27,46 @@ pub use weapons::{load_shield_catalog, load_weapon_catalog};
 
 pub const TALENTS_PATH: &str = "data/sim/talents.json";
 
+#[cfg(not(target_arch = "wasm32"))]
+fn read_presets(path: &str, bundled: &str) -> Result<String, String> {
+    Ok(fs::read_to_string(resolve_data_path(path)).unwrap_or_else(|_| bundled.to_owned()))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn write_presets(path: &str, data: &str) -> Result<(), String> {
+    let output = resolve_writable_data_path(path);
+    ensure_parent_dir(&output)?;
+    atomic_write(&output, data.as_bytes()).map_err(|err| err.to_string())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn browser_storage() -> Result<web_sys::Storage, String> {
+    web_sys::window()
+        .ok_or("Preset storage requires a browser window")?
+        .local_storage()
+        .map_err(|err| format!("Browser storage unavailable: {err:?}"))?
+        .ok_or_else(|| "Browser storage is disabled".to_owned())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn read_presets(path: &str, bundled: &str) -> Result<String, String> {
+    // Bundled presets remain usable when browser privacy settings disable storage.
+    let Ok(storage) = browser_storage() else {
+        return Ok(bundled.to_owned());
+    };
+    storage
+        .get_item(&format!("HackmasterSim/{path}"))
+        .map(|data| data.unwrap_or_else(|| bundled.to_owned()))
+        .map_err(|err| format!("Cannot read saved presets: {err:?}"))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn write_presets(path: &str, data: &str) -> Result<(), String> {
+    browser_storage()?
+        .set_item(&format!("HackmasterSim/{path}"), data)
+        .map_err(|err| format!("Cannot save presets in this browser: {err:?}"))
+}
+
 fn mapped_data_subpath(path: &Path) -> PathBuf {
     let stripped = path.strip_prefix("data").unwrap_or(path);
     if stripped.starts_with("sim") {
@@ -208,5 +248,4 @@ mod tests {
         let mapped = mapped_data_subpath(Path::new("data/weapons.json"));
         assert_eq!(mapped, PathBuf::from("sim").join("weapons.json"));
     }
-
 }

@@ -13,6 +13,9 @@ pub fn format_combat_event(event: &CombatEvent, combatants: &[Combatant]) -> Str
     match &event.kind {
         CombatEventKind::Spell(spell) => format!("{attacker_name}: {}", spell.message),
         CombatEventKind::Attack(attack) => {
+            let attacker_name = if attack.is_aggressive {
+                format!("{attacker_name} (Aggressive Attack)")
+            } else { attacker_name.to_string() };
             if attack.source == AttackSource::EchoStrike {
                 return format!(
                     "{attacker_name} Echo Strike vs {defender_name}: {} (attack {}, defense {}, wound {})",

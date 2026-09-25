@@ -14,6 +14,28 @@ pub struct DamageExprCache {
 }
 
 impl DamageExprCache {
+    pub(crate) fn roll20_extra_dice(&self, nonpenetrating: bool, dice: &[(i32, bool)]) -> Result<String, DamageExprError> {
+        Expression::empty().with_added_dice(dice).roll20(nonpenetrating,
+            self.d6_penetration_triggers.as_deref(), self.penetrate_on_max_minus_one)
+    }
+    pub(crate) fn roll20_with_added_dice(&self, nonpenetrating: bool, dice: &[(i32, bool)]) -> Result<String, DamageExprError> {
+        if dice.is_empty() { return self.roll20_expression(nonpenetrating); }
+        let render = |expression: &Expression| expression.roll20(nonpenetrating,
+            self.d6_penetration_triggers.as_deref(), self.penetrate_on_max_minus_one);
+        if self.is_lower_of {
+            Ok(format!("{}+{}", self.roll20_expression(nonpenetrating)?,
+                render(&Expression::empty().with_added_dice(dice))?))
+        } else {
+            render(&self.expression.with_added_dice(dice))
+        }
+    }
+    pub fn roll20_expression(&self, nonpenetrating: bool) -> Result<String, DamageExprError> {
+        let expression = self.expression.roll20(nonpenetrating,
+            self.d6_penetration_triggers.as_deref(), self.penetrate_on_max_minus_one)?;
+        Ok(if self.is_lower_of {
+            format!("{{[[{expression}]],[[{expression}]]}}kl1")
+        } else { expression })
+    }
     /// Invalid expressions evaluate to zero; data loaders should use `try_new`
     /// to report invalid editable data before starting a simulation.
     pub fn new(expr: &str) -> Self {

@@ -1,4 +1,5 @@
 pub mod simulation_jobs;
+pub mod roll_macros;
 mod spells;
 pub use spells::{SpellAction, apply_spell_action, echo_status_lines, spell_editor_summary};
 use crate::character::{
@@ -403,6 +404,7 @@ pub struct FighterPreset {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct EnvironmentConfig {
     pub temperature_c: i32,
     pub natural_surroundings: bool,
@@ -420,6 +422,7 @@ impl Default for EnvironmentConfig {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct MiscRollModifiers {
     pub all_roll_bonus: i32,
     pub attack_bonus: i32,
@@ -433,6 +436,7 @@ pub struct MiscRollModifiers {
 }
 
 #[derive(Clone, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct PlayerConfig {
     pub magic: crate::core::magic::MagicLoadout,
     pub name: String,
@@ -576,6 +580,7 @@ struct TraumaDieOverride {
 #[derive(Clone, Debug)]
 struct CloseHitDamageRule {
     expr: String,
+    jab_expr: Option<String>,
     margin_less_than: i32,
 }
 
@@ -667,6 +672,8 @@ struct TalentModifiers {
     doomrazor_style: bool,
     falling_sun_style: bool,
     fymblwnger_style: bool,
+    project_confidence: bool,
+    intimidate_adversary: bool,
     hammerer_style: bool,
     hobbler_style: bool,
     ithican_prince_style: bool,
@@ -788,6 +795,8 @@ impl Default for TalentModifiers {
             doomrazor_style: false,
             falling_sun_style: false,
             fymblwnger_style: false,
+            project_confidence: false,
+            intimidate_adversary: false,
             hammerer_style: false,
             hobbler_style: false,
             ithican_prince_style: false,
@@ -1062,6 +1071,7 @@ const DATA_ONLY_TALENT_IDS: &[&str] = &[
 ];
 
 const SUPPORTED_TACTICAL_TOGGLES: &[&str] = &[
+    "aggressive_attack",
     "use_jab",
     "hold_at_bay",
     "called_shot",
@@ -1078,7 +1088,6 @@ const SUPPORTED_TACTICAL_TOGGLES: &[&str] = &[
 ];
 
 const KNOWN_UNSUPPORTED_TACTICAL_TOGGLES: &[&str] = &[
-    "aggressive_attack",
     "ready_against_charge",
     "tactical_move",
     "full_parry",
@@ -1164,6 +1173,7 @@ pub fn sim_capability_report(talent_catalog: &TalentCatalog) -> SimCapabilityRep
             .collect(),
         nyi_talent_ids,
         notes: vec![
+            "Intimidate Adversary applies -2 to attacks and saving throws of enemies within 10 feet; all combatants count as sentient. Fatigue and morale checks are not simulated.".to_string(),
             "Power Attack is modeled as an explicit tactical toggle requiring the talent, STR 13+, and an eligible non-small melee weapon.".to_string(),
             "Weapon Focus, Weapon Specialization, and Weapon Supremacy are data-only for fixed-mastery duel output and should feed mastery/progression planning instead.".to_string(),
             "Weapon style IDs are reported separately because styles are trained/acquired options rather than ordinary BP purchases.".to_string(),
@@ -2708,6 +2718,7 @@ fn resolve_talent_modifiers_with_grants(
                 }
                 TalentEffect::CloseHitDamageExpr {
                     expr,
+                    jab_expr,
                     margin_less_than,
                     weapon_groups,
                     weapon_names,
@@ -2726,6 +2737,7 @@ fn resolve_talent_modifiers_with_grants(
                             weapon_id,
                             CloseHitDamageRule {
                                 expr: expr.clone(),
+                                jab_expr: jab_expr.clone(),
                                 margin_less_than: *margin_less_than,
                             },
                         );
@@ -3157,6 +3169,12 @@ fn resolve_talent_modifiers_with_grants(
                 }
                 TalentEffect::FymblwngerStyle => {
                     modifiers.fymblwnger_style = true;
+                }
+                TalentEffect::ProjectConfidence => {
+                    modifiers.project_confidence = true;
+                }
+                TalentEffect::IntimidateAdversary => {
+                    modifiers.intimidate_adversary = true;
                 }
                 TalentEffect::HammererStyle => {
                     modifiers.hammerer_style = true;
@@ -3741,12 +3759,15 @@ pub struct DefenseDisplaySummary {
 }
 
 fn chronoblur_defense_notes(player: &PlayerConfig) -> [String; 2] {
-    let duration = 60_u64 + 30 * u64::from(player.magic.chronoblur_duration_ranks);
+    let entry = crate::core::magic::SpellKind::Chronoblur.catalog_entry();
+    let duration = entry.resolve_values(&player.magic).map(|(v, _)| v.duration).unwrap_or(0);
+    let crate::core::magic::EffectRule::TimedBuff { movement_defense: Some(rule), .. } =
+        &entry.mechanics.as_ref().expect("validated buff").effect else { unreachable!("validated buff") };
     [
         format!("Chronoblur: +{} melee Defense if you moved in the previous second ({} seconds after casting).",
-            sim::CHRONOBLUR_MELEE_DEFENSE_BONUS, duration),
+            rule.melee_bonus, duration),
         format!("Chronoblur: missile attacks treat you as {} feet farther away if you moved in the previous second ({} seconds after casting).",
-            sim::CHRONOBLUR_RANGED_DISTANCE_FEET, duration),
+            rule.ranged_distance, duration),
     ]
 }
 
@@ -5628,6 +5649,7 @@ fn build_combatant_profile(
                             ignore_all_dr: false,
                             internal_hemorrhage_damage: 0,
                             use_close_hit_damage_expr: None,
+                            use_close_hit_jab_damage_expr_cache: None,
                             use_close_hit_damage_expr_cache: None,
                             use_close_hit_margin_less_than: 0,
                             crit_min_roll: reaper_critical_min(
@@ -5707,6 +5729,11 @@ fn build_combatant_profile(
             sim::StatIdI32::FlagArmerociPoleStyle,
             sim::ModifierOpI32::Set(1),
         );
+        sheet_modifiers.add_i32(
+            sim::StatIdI32::OpeningEngagementExtraDamageDice,
+            sim::ModifierOpI32::Set(modifiers.opening_engagement_extra_damage_dice_by_weapon
+                .get(&weapon_id).copied().unwrap_or(1)),
+        );
     }
     if falling_sun_active {
         sheet_modifiers.add_i32(
@@ -5719,6 +5746,12 @@ fn build_combatant_profile(
             sim::StatIdI32::FlagFymblwngerStyle,
             sim::ModifierOpI32::Set(1),
         );
+    }
+    if modifiers.project_confidence {
+        sheet_modifiers.add_i32(sim::StatIdI32::FlagProjectConfidence, sim::ModifierOpI32::Set(1));
+    }
+    if modifiers.intimidate_adversary {
+        sheet_modifiers.add_i32(sim::StatIdI32::FlagIntimidateAdversary, sim::ModifierOpI32::Set(1));
     }
     if hammerer_active {
         sheet_modifiers.add_i32(
@@ -5900,6 +5933,10 @@ fn build_combatant_profile(
                 use_close_hit_damage_expr: modifiers
                     .close_hit_damage_for_weapon(weapon_id)
                     .map(|rule| rule.expr.clone()),
+                use_close_hit_jab_damage_expr_cache: modifiers
+                    .close_hit_damage_for_weapon(weapon_id)
+                    .and_then(|rule| rule.jab_expr.as_deref())
+                    .map(DamageExprCache::new),
                 use_close_hit_damage_expr_cache: modifiers
                     .close_hit_damage_for_weapon(weapon_id)
                     .map(|rule| DamageExprCache::new(&rule.expr)),
@@ -5991,6 +6028,14 @@ fn build_combatant_profile(
         level: player.level,
         loadout: player_spell_loadout(player),
         talents: modifiers.magic,
+        strength: character.abilities.strength,
+        strength_damage: character.ability_mods.strength.damage,
+        primary_ignores_strength: doomrazor_active || modifiers.no_strength_damage_by_weapon.contains(&weapon_id),
+        secondary_ignores_strength: player.offhand_weapon_id.is_some_and(|id| modifiers.no_strength_damage_by_weapon.contains(&id)),
+        fist_attack: derived.attack_bonus + player.mastery(WeaponGroup::Unarmed).attack,
+        fist_defense: character.ability_mods.wisdom.defense + character.ability_mods.dexterity.defense + player.mastery(WeaponGroup::Unarmed).defense,
+        fist_damage: player.mastery(WeaponGroup::Unarmed).damage,
+        fist_speed: (10.0 - player.mastery(WeaponGroup::Unarmed).speed as f32).max(1.0),
         saves: crate::core::magic::MagicSaveBonuses {
             physical: character.ability_mods.constitution.physical_save,
             mental: character.ability_mods.wisdom.mental_save,
@@ -10784,6 +10829,10 @@ mod tests {
             with_unbreakable.sheet.defense.armor_dr - without_unbreakable.sheet.defense.armor_dr,
             1
         );
+        assert_eq!(without_unbreakable.sheet.defense.natural_dr, 1);
+        assert_eq!(with_unbreakable.sheet.defense.natural_dr, 2);
+        assert_eq!(without_unbreakable.spell_damage_reduction(false), 1);
+        assert_eq!(with_unbreakable.spell_damage_reduction(false), 2);
     }
 
     #[test]
@@ -11188,6 +11237,27 @@ mod tests {
     }
 
     #[test]
+    fn intimidate_adversary_requires_inspire_others_and_knight_abilities() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let npcs = sample_npc_presets();
+        let mut player = base_player(weapons.id_from_index(0).unwrap());
+        add_talent(&mut player, "intimidate_adversary", None);
+        let enabled = |player: &PlayerConfig| {
+            build_combatant(player, &weapons, &armor, &shields, &npcs, &talents)
+                .apply_i32(sim::StatIdI32::FlagIntimidateAdversary, 0) > 0
+        };
+        assert!(!enabled(&player));
+        add_talent(&mut player, "inspire_others", None);
+        assert!(enabled(&player));
+        player.charisma = 11;
+        assert!(!enabled(&player));
+        let report = sim_capability_report(&talents);
+        assert!(report.supported_talent_ids_with_direct_combat_effects.contains(&"intimidate_adversary".to_string()));
+        assert!(!report.nyi_talent_ids.contains(&"intimidate_adversary".to_string()));
+    }
+
+    #[test]
     fn capability_report_separates_data_only_and_nyi_talents() {
         let talents = sample_talents();
         let report = sim_capability_report(&talents);
@@ -11205,7 +11275,7 @@ mod tests {
         assert!(report.nyi_talent_ids.contains(&"great_cleave".to_string()));
         assert!(
             report
-                .known_unsupported_tactical_toggles
+                .supported_tactical_toggles
                 .contains(&"aggressive_attack".to_string())
         );
     }

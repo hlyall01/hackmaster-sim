@@ -34,8 +34,11 @@ pub enum StatIdI32 {
     FlagIgnoreAncillaryCritEffects,
     FlagLargeSwordShieldStyle,
     FlagArmerociPoleStyle,
+    OpeningEngagementExtraDamageDice,
     FlagFallingSunStyle,
     FlagFymblwngerStyle,
+    FlagProjectConfidence,
+    FlagIntimidateAdversary,
     FlagHammererStyle,
     FlagHobblerStyle,
     FlagIthicanPrinceStyle,
@@ -193,6 +196,10 @@ impl ModifierStack {
 pub struct TemporaryEffect {
     pub id: String,
     pub remaining_seconds: i32,
+    pub consume_on_attack: bool,
+    pub strength_override: Option<(i32, i32)>,
+    pub movement_defense: Option<crate::core::magic::MovementDefenseRule>,
+    pub average_damage_radius: Option<f32>,
     pub modifiers: ModifierStack,
 }
 
@@ -218,9 +225,19 @@ pub fn modifiers_for_magic_item(tag: &str) -> ModifierStack {
 
 impl TemporaryEffect {
     pub fn new(id: impl Into<String>, duration_seconds: i32) -> Self {
+        let id = id.into();
+        let rule = crate::core::magic::spell_catalog().iter().find(|s| s.id == id).and_then(|s| s.mechanics.as_ref());
+        let (movement_defense, average_damage_radius) = match rule {
+            Some(crate::core::magic::EffectDefinition { values, effect: crate::core::magic::EffectRule::TimedBuff { movement_defense, average_incoming_damage }, .. }) => (movement_defense.clone(), average_incoming_damage.then_some(values.radius)),
+            _ => (None, None),
+        };
         Self {
-            id: id.into(),
+            id,
             remaining_seconds: duration_seconds.max(0),
+            consume_on_attack: false,
+            strength_override: None,
+            movement_defense,
+            average_damage_radius,
             modifiers: ModifierStack::default(),
         }
     }

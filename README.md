@@ -1,6 +1,7 @@
 # Hackmaster Simulator
 
-This project ships one application: `sim_gui`, the desktop combat simulator.
+This project ships one application: `sim_gui`, the combat simulator for desktop
+and WebAssembly browsers. Both builds use the same GUI and simulation engine.
 
 ## Run
 
@@ -14,6 +15,39 @@ The simulator includes live/step combat, bulk win-rate and detailed statistics,
 DPS and damage-distribution plots, fighter and NPC presets, character and gear
 editors, weapon styles and conditional tactics, spells, and wound-healing,
 essence-wound and Ego calculators. `--console` enables diagnostics on Windows.
+
+## Browser build
+
+For automatic hosting, see [GitHub Actions and Cloudflare Pages setup](docs/web-deployment.md).
+
+Install Rust's WASM target and the CLI version matching `Cargo.lock`:
+
+```bash
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.106 --locked
+python3 scripts/build_web.py
+python3 -m http.server 8080 --bind 127.0.0.1 --directory target/web
+```
+
+Open <http://localhost:8080>. Python 3.11+ is required for the build helper;
+on Windows use `python` if `python3` is unavailable. `--debug` selects a faster
+development build. `WASM_BINDGEN` can point to a matching prebuilt CLI.
+
+The generated `target/web/` directory is a self-contained static site, suitable
+for serving at a domain root or a subdirectory. Serve it over HTTP(S), with
+`.wasm` files using `application/wasm`; opening `index.html` via `file://` does
+not work. A modern browser with WebAssembly, WebGL and module workers is required.
+No server API, SharedArrayBuffer or cross-origin isolation headers are needed.
+
+Bulk simulations, DPS and damage distributions run in a dedicated Web Worker,
+with progress and immediate cancellation. Live combat and all editors, plots,
+spells, macros and calculators share the desktop implementation. Browser jobs
+use one CPU worker, while desktop calculations retain their native parallelism.
+
+Catalogs are bundled into WASM. Fighter and tactical presets save in localStorage
+for the current browser and site origin; they are separate from desktop files.
+Clearing site data removes browser saves. If storage is blocked or full, saving
+reports an error. Desktop data-directory overrides do not apply in browsers.
 
 ## Code and data
 
@@ -41,6 +75,7 @@ or packaged. Simulator plots, combat rules and NPC/fighter data remain.
 ```bash
 cargo test --lib --bin sim_gui
 cargo check --all-targets
+cargo check --target wasm32-unknown-unknown --bin sim_gui
 cargo run --example sim_capabilities
 ```
 

@@ -34,6 +34,7 @@ pub(crate) fn resolve_basic_attack(
         knockback_ft: outcome.knockback_ft,
         hold_at_bay: outcome.hold_at_bay,
         is_charge: false,
+        is_aggressive: outcome.is_aggressive,
         weapon_slot: outcome.weapon_slot,
         use_jab: outcome.use_jab,
         is_ranged: outcome.is_ranged,

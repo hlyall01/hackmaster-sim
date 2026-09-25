@@ -7,7 +7,9 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 
 mod catalog;
+mod effects;
 pub use catalog::*;
+pub use effects::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EssenceProficiency {
@@ -146,7 +148,7 @@ pub enum AutoCast {
 #[serde(rename_all = "snake_case")]
 pub enum SpellCastAi {
     AsOftenAsPossible,
-    #[serde(alias = "when_useful")]
+    #[serde(alias = "when_useful", alias = "when_in_range")]
     AtFightStart,
     Manual,
 }
@@ -174,11 +176,16 @@ pub struct MagicLoadout {
     pub knows_echo_strike: bool,
     pub echo_essence: usize,
     pub echo_strike: EchoStrikeOptions,
-    /// Each rank adds 30 seconds.
+    /// Legacy preset storage; increments are defined by the catalog.
     pub chronoblur_duration_ranks: u32,
-    /// Each rank adds one minute / ten feet, respectively.
+    /// Legacy preset storage; increments are defined by the catalog.
     pub streamline_duration_ranks: u32,
     pub streamline_radius_ranks: u32,
+    /// Empowerment ranks, keyed by spell-specific catalog field.
+    #[serde(alias = "exertion_ranks")]
+    pub spell_parameters: std::collections::BTreeMap<String, u32>,
+    /// Zero uses the arena default of 200 pounds.
+    pub body_weight_lbs: u32,
     /// Automatic casting attempts once per fight; failed casts do not loop.
     pub auto_cast: AutoCast,
     pub encumbrance: Encumbrance,
@@ -189,10 +196,6 @@ pub struct MagicLoadout {
 }
 
 impl MagicLoadout {
-    pub fn streamline_radius_feet(&self) -> u64 {
-        30 + 10 * u64::from(self.streamline_radius_ranks)
-    }
-
     pub fn ai_for(&self, id: &str) -> SpellCastAi {
         self.spell_ai
             .get(id)
@@ -311,7 +314,12 @@ impl Default for EchoStrikeOptions {
     fn default() -> Self {
         Self {
             extra_duration_seconds: 0,
-            delay_seconds: 10,
+            delay_seconds: SpellKind::EchoStrike
+                .catalog_entry()
+                .echo_rules
+                .as_ref()
+                .expect("validated echo rules")
+                .default_delay,
             additional_echoes: 0,
             full_damage: false,
         }
@@ -320,14 +328,21 @@ impl Default for EchoStrikeOptions {
 
 impl EchoStrikeOptions {
     pub fn cost(self) -> Result<u32, MagicError> {
-        if !(1..=10).contains(&self.delay_seconds) {
+        let spell = SpellKind::EchoStrike.catalog_entry();
+        let rule = spell.echo_rules.as_ref().expect("validated echo rules");
+        if !(rule.minimum_delay..=rule.default_delay).contains(&self.delay_seconds) {
             return Err(MagicError::InvalidEchoDelay);
         }
-        let total = u64::from(SpellKind::EchoStrike.catalog_entry().base_cost)
-            + 5 * u64::from(self.extra_duration_seconds)
-            + 20 * u64::from(10 - self.delay_seconds)
-            + 150 * u64::from(self.additional_echoes)
-            + if self.full_damage { 200 } else { 0 };
+        let total = u64::from(spell.base_cost)
+            + u64::from(rule.duration_cost_per_second) * u64::from(self.extra_duration_seconds)
+            + u64::from(rule.cost_per_second_faster)
+                * u64::from(rule.default_delay - self.delay_seconds)
+            + u64::from(rule.cost_per_extra_echo) * u64::from(self.additional_echoes)
+            + if self.full_damage {
+                u64::from(rule.full_damage_cost)
+            } else {
+                0
+            };
         u32::try_from(total).map_err(|_| MagicError::CostOverflow)
     }
 
@@ -344,7 +359,12 @@ impl EchoStrikeOptions {
     }
 
     pub fn duration_seconds(self) -> Result<u32, MagicError> {
-        15_u32
+        SpellKind::EchoStrike
+            .catalog_entry()
+            .echo_rules
+            .as_ref()
+            .expect("validated echo rules")
+            .base_duration
             .checked_add(self.extra_duration_seconds)
             .ok_or(MagicError::CostOverflow)
     }

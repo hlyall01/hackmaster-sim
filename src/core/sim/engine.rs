@@ -10,7 +10,7 @@ use rand::RngCore;
 use super::combat::{
     AttackMode, AttackOutcome, CounterAttackOutcome, resolve_attack, resolve_knock_aside,
 };
-use super::modifiers::{STREAMLINE_EFFECT_ID, STREAMLINE_RADIUS_FEET, StatIdF32, StatIdI32};
+use super::modifiers::{StatIdF32, StatIdI32};
 use super::movement::{max_range_for_weapon, range_modifier_for_weapon_with_scale};
 use super::types::{
     AttackEvent, CalledShotDelayProfile, CombatEvent, CombatEventKind, Combatant, DamageBreakdown,
@@ -18,6 +18,9 @@ use super::types::{
     WeaponSlot,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
+
+#[path = "spell_effect_engine.rs"]
+mod spell_effect_engine;
 
 const CHARGE_MIN_DISTANCE_FT: f32 = 20.0;
 const SHIELD_STRIKE_SPEEDUP_SECONDS: f32 = 2.0;
@@ -89,6 +92,7 @@ pub struct SimState {
     tick_accum: f32,
     hold_at_bay: HoldAtBayState,
     previous_positions: Vec<GridPos>,
+    predicting_movement: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -267,6 +271,7 @@ impl SimState {
             tick_accum: 0.0,
             hold_at_bay: HoldAtBayState::default(),
             previous_positions: Vec::new(),
+            predicting_movement: false,
         }
     }
 
@@ -283,6 +288,7 @@ impl SimState {
         for combatant in &mut self.combatants {
             combatant.reset_state();
         }
+        self.refresh_intimidation();
         self.tick_accum = 0.0;
         self.hold_at_bay = HoldAtBayState::default();
     }
@@ -539,7 +545,10 @@ impl SimState {
         if self.actors.len() != self.combatants.len() {
             self.actors = self.spawn_positions();
         }
-        self.advance_spellcasting();
+        self.refresh_intimidation();
+        if self.predicting_movement {
+            for actor in &mut self.combatants { actor.advance_magic(self.elapsed_seconds, &mut self.rng); }
+        } else { self.advance_spellcasting(); }
         for combatant in &mut self.combatants {
             combatant.state.knockback_applied_this_tick = false;
             if combatant.state.trauma_remaining_seconds > 0 {
@@ -631,11 +640,12 @@ impl SimState {
                     self.move_toward(a_idx, b_idx, steps_a, max_reach);
                     self.move_toward(b_idx, a_idx, steps_b, max_reach);
                 }
-                for combatant in &mut self.combatants {
-                    combatant.state.clear_attack_timers();
+                for idx in 0..self.combatants.len() {
+                    let fighting_fists = self.combatants.iter().any(|c| c.state.magic.fists.as_ref().is_some_and(|f| f.spell.target == Some(idx)));
+                    if !fighting_fists { self.combatants[idx].state.clear_attack_timers(); }
                 }
             } else {
-                self.resolve_combat_round(a_idx, b_idx);
+                if !self.predicting_movement { self.resolve_combat_round(a_idx, b_idx); }
                 let distance = self.distance_between(a_idx, b_idx).unwrap_or(0.0);
                 let step_a = self.move_tiles(a_idx);
                 let step_b = self.move_tiles(b_idx);
@@ -738,6 +748,7 @@ impl SimState {
             combatant.state.moved_last_tick = moved;
         }
         self.previous_positions = old_positions;
+        self.refresh_intimidation();
         for combatant in &mut self.combatants {
             combatant.state.tick_effects();
         }
@@ -751,21 +762,24 @@ impl SimState {
         }
         self.flush_spell_events();
         self.done =
-            !self.multiple_teams_remain() && !super::magic::has_pending_echoes(&self.combatants);
+            !self.multiple_teams_remain() && !super::magic::has_pending_echoes(&self.combatants)
+                && !self.combatants.iter().any(|c| !c.state.magic.charged_objects.is_empty() || !c.state.magic.sweeping_fields.is_empty());
     }
 
     pub fn cast_spell(
         &mut self,
         caster: usize,
-        request: super::SpellRequest,
+        mut request: super::SpellRequest,
     ) -> Result<(), crate::core::magic::MagicError> {
         if self.done {
             return Err(crate::core::magic::MagicError::Incapacitated);
         }
+        self.target_manual_spell(caster, &mut request)?;
         self.combatants
             .get_mut(caster)
             .ok_or(crate::core::magic::MagicError::Incapacitated)?
             .cast_spell(request, self.elapsed_seconds, &mut self.rng)?;
+        self.resolve_completed_spell_effects(caster);
         self.flush_spell_events();
         Ok(())
     }
@@ -790,6 +804,7 @@ impl SimState {
             .get_mut(caster)
             .ok_or(crate::core::magic::MagicError::Incapacitated)?
             .cast_echo_strike(self.elapsed_seconds)?;
+        self.combatants[caster].advance_magic(self.elapsed_seconds, &mut self.rng);
         self.flush_spell_events();
         Ok(())
     }
@@ -832,25 +847,34 @@ impl SimState {
         }
     }
 
+    fn resolve_completed_spell_effects(&mut self, caster: usize) {
+        for effect in std::mem::take(&mut self.combatants[caster].state.magic.resolved_effects) {
+            self.resolve_configured_effect(caster, effect);
+        }
+    }
+
     fn advance_spellcasting(&mut self) {
         let now = self.elapsed_seconds;
         for caster in 0..self.combatants.len() {
             self.combatants[caster].advance_magic(now, &mut self.rng);
+            self.resolve_completed_spell_effects(caster);
+            self.prepare_spell_targets(caster);
             let in_reach = self.combatants[caster].magic.loadout.auto_cast
                 == crate::core::magic::AutoCast::InWeaponReach
-                && self.combatants.iter().enumerate().any(|(target, enemy)| {
-                    enemy.team_id != self.combatants[caster].team_id
-                        && enemy.state.hp > 0
-                        && self
-                            .distance_between(caster, target)
-                            .is_some_and(|distance| {
-                                distance <= self.combatants[caster].sheet.offense.weapon.reach_ft
-                            })
-                });
+                && super::SpellRequest::from_loadout("echo_strike", &self.combatants[caster].magic.loadout)
+                    .ok()
+                    .and_then(|request| self.predict_spell_target(caster, &request,
+                        self.combatants[caster].sheet.offense.weapon.reach_ft))
+                    .is_some();
             self.combatants[caster].try_auto_cast(now, in_reach);
+            // One-second casts complete in this same arena second.
+            self.combatants[caster].advance_magic(now, &mut self.rng);
+            self.resolve_completed_spell_effects(caster);
         }
         self.flush_spell_events();
+        self.advance_effect_fields();
         for (caster, echo) in super::magic::take_due_echoes(&mut self.combatants, now) {
+            self.refresh_intimidation();
             let distance = self
                 .distance_between(caster, echo.target)
                 .unwrap_or(f32::INFINITY);
@@ -923,13 +947,12 @@ impl SimState {
         let tile_size_ft = self.config.tile_size_ft.max(0.01);
         for idx in 0..self.combatants.len() {
             let caster = &self.combatants[idx];
-            if !caster.state.has_active_effect(STREAMLINE_EFFECT_ID) {
-                continue;
-            }
+            let Some(base_radius) = caster.state.active_effects.iter().filter(|e| e.remaining_seconds > 0)
+                .filter_map(|e| e.average_damage_radius).max_by(f32::total_cmp) else { continue; };
             let Some(source) = self.actors.get(idx) else {
                 continue;
             };
-            let radius = caster.apply_f32(StatIdF32::StreamlineRadius, STREAMLINE_RADIUS_FEET);
+            let radius = caster.apply_f32(StatIdF32::StreamlineRadius, base_radius);
             for (target, combatant) in self.actors.iter().zip(&mut self.combatants) {
                 if source.position.manhattan_distance(target.position) as f32 * tile_size_ft
                     <= radius
@@ -1179,7 +1202,8 @@ impl SimState {
         defender_idx: usize,
         distance: f32,
     ) -> [f32; 2] {
-        if !self.combatants[attacker_idx].tactical_policy.enabled {
+        if !self.combatants[attacker_idx].tactical_policy.enabled
+            || self.combatants[attacker_idx].state.aggressive_maneuvers_locked {
             return [0.0; 2];
         }
         let actor = &self.combatants[attacker_idx];
@@ -1239,6 +1263,7 @@ impl SimState {
     }
 
     fn apply_next_attack_tactics(&mut self, attacker_idx: usize, defender_idx: usize) {
+        self.combatants[attacker_idx].state.aggressive_maneuvers_locked = false;
         if !self.combatants[attacker_idx].tactical_policy.enabled {
             return;
         }
@@ -1349,7 +1374,8 @@ impl SimState {
         {
             return false;
         }
-        if defender.state.hp <= 0
+        if defender.state.aggressive_maneuvers_locked
+            || defender.state.hp <= 0
             || defender.state.trauma_remaining_seconds > 0
             || defender.sheet.maneuvers.passive
         {
@@ -1416,6 +1442,7 @@ impl SimState {
         self.combatants[defender_idx]
             .state
             .tactical_give_ground_defense_bonus = 5;
+        self.combatants[defender_idx].state.tactical_retreat = Some(scamper);
         self.combatants[defender_idx]
             .state
             .tactical_next_attack_penalty += if scamper { 4 } else { 1 };
@@ -1462,6 +1489,7 @@ impl SimState {
             self.combatants[defender_idx]
                 .state
                 .precognition_space_available = defender_evasion.is_some();
+            self.refresh_intimidation();
             for counter in super::combat::resolve_style_strike_chain(
                 &mut self.combatants,
                 defender_idx,
@@ -1526,6 +1554,7 @@ impl SimState {
             self.combatants[defender]
                 .state
                 .tactical_give_ground_defense_bonus = 0;
+            self.combatants[defender].state.tactical_retreat = None;
             return true;
         }
         let weapon = match slot {
@@ -1555,6 +1584,7 @@ impl SimState {
             self.combatants[defender]
                 .state
                 .tactical_give_ground_defense_bonus = 0;
+            self.combatants[defender].state.tactical_retreat = None;
             return true;
         }
         false
@@ -2018,6 +2048,7 @@ impl SimState {
                         .unwrap_or(now)
                 };
                 if now + 0.0001 >= next_attack {
+                    self.refresh_intimidation();
                     let event = resolve_knock_aside(
                         &mut self.combatants,
                         attacker_idx,
@@ -2241,6 +2272,7 @@ impl SimState {
                 let attack_distance = self
                     .distance_between(attacker_idx, defender_idx)
                     .unwrap_or(distance);
+                self.refresh_intimidation();
                 let mut event = resolve_attack(
                     &mut self.combatants,
                     attacker_idx,
@@ -2257,6 +2289,7 @@ impl SimState {
                 self.combatants[defender_idx]
                     .state
                     .tactical_give_ground_defense_bonus = 0;
+                self.combatants[defender_idx].state.tactical_retreat = None;
                 let six_paths_followup = event.hit && !event.is_ranged;
                 if attack_mode == AttackMode::HoldAtBay && self.hold_at_bay.pending {
                     if event.hit {
@@ -2301,6 +2334,7 @@ impl SimState {
                             knockback_ft: event.knockback_ft,
                             hold_at_bay: event.hold_at_bay,
                             is_charge: attack_mode == AttackMode::Charge,
+                            is_aggressive: event.is_aggressive,
                             weapon_slot: event.weapon_slot,
                             use_jab: event.use_jab,
                             is_ranged: event.is_ranged,
@@ -2358,6 +2392,7 @@ impl SimState {
                                 knockback_ft: counter.knockback_ft,
                                 hold_at_bay: false,
                                 is_charge: false,
+                                is_aggressive: false,
                                 weapon_slot: counter.weapon_slot,
                                 use_jab: counter.use_jab,
                                 is_ranged: counter.is_ranged,
@@ -2519,6 +2554,7 @@ impl SimState {
                         .unwrap_or(now)
                 };
                 if now + 0.0001 >= next_attack {
+                    self.combatants[attacker_idx].state.aggressive_maneuvers_locked = false;
                     if self.apply_incoming_attack_tactics(
                         attacker_idx,
                         defender_idx,
@@ -2544,6 +2580,7 @@ impl SimState {
                     let attack_distance = self
                         .distance_between(attacker_idx, defender_idx)
                         .unwrap_or(distance);
+                    self.refresh_intimidation();
                     let mut event = resolve_attack(
                         &mut self.combatants,
                         attacker_idx,
@@ -2560,6 +2597,7 @@ impl SimState {
                     self.combatants[defender_idx]
                         .state
                         .tactical_give_ground_defense_bonus = 0;
+                    self.combatants[defender_idx].state.tactical_retreat = None;
                     let six_paths_followup = event.hit && !event.is_ranged;
                     if event.shield_block {
                         self.apply_shield_strike_speedup(event.defender_idx, now);
@@ -2600,6 +2638,7 @@ impl SimState {
                                 knockback_ft: event.knockback_ft,
                                 hold_at_bay: event.hold_at_bay,
                                 is_charge: false,
+                                is_aggressive: event.is_aggressive,
                                 weapon_slot: event.weapon_slot,
                                 use_jab: event.use_jab,
                                 is_ranged: event.is_ranged,
@@ -2657,6 +2696,7 @@ impl SimState {
                                     knockback_ft: counter.knockback_ft,
                                     hold_at_bay: false,
                                     is_charge: false,
+                                    is_aggressive: false,
                                     weapon_slot: counter.weapon_slot,
                                     use_jab: counter.use_jab,
                                     is_ranged: counter.is_ranged,
@@ -3468,6 +3508,7 @@ fn max_range_cached(
 }
 
 #[derive(Clone, Debug, Default)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct DetailedSimStats {
     pub duration_p10: u32,
     pub duration_p50: u32,
@@ -3477,6 +3518,7 @@ pub struct DetailedSimStats {
 }
 
 #[derive(Clone, Debug, Default)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct DetailedTeamStats {
     pub damage_by_source: Vec<DamageSourceStats>,
     pub team_id: u8,
@@ -3729,6 +3771,7 @@ impl DetailedTeamAccumulator {
 
 #[derive(Clone, Debug, Default)]
 #[allow(dead_code)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct BulkSimResult {
     pub wins: Vec<u32>,
     pub ties: u32,

@@ -19,7 +19,12 @@ impl JobControl {
     }
     fn advance(&self, amount: u32) -> bool {
         self.completed.fetch_add(amount, Ordering::Relaxed);
+        self.report_progress();
         !self.is_cancelled()
+    }
+    fn report_progress(&self) {
+        #[cfg(target_arch = "wasm32")]
+        crate::web_progress::report(self.completed(), self.total());
     }
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Relaxed);
@@ -35,11 +40,12 @@ impl JobControl {
     }
     pub fn keep_running(&self, completed: u32) -> bool {
         self.completed.store(completed, Ordering::Relaxed);
+        self.report_progress();
         !self.cancelled.load(Ordering::Relaxed)
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DpsTestResult {
     pub attacker_idx: usize,
     pub defender_idx: usize,
@@ -59,7 +65,7 @@ pub struct DpsTestResult {
     pub avg_attacks_per_run: f64,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct DpsConfig {
     pub attacker_idx: usize,
     pub iterations: u32,
@@ -68,6 +74,12 @@ pub struct DpsConfig {
 }
 // Limit parallel workers so calculations leave capacity for the UI and other
 // applications. Small requests stay on the calling worker to avoid thread overhead.
+#[cfg(target_arch = "wasm32")]
+fn worker_count(_work: usize, _minimum_chunk: usize) -> usize {
+    1
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn worker_count(work: usize, minimum_chunk: usize) -> usize {
     std::thread::available_parallelism()
         .map_or(1, |n| n.get())
@@ -230,7 +242,7 @@ fn run_dps_chunk(
 }
 
 use rand::{SeedableRng, rngs::StdRng};
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DamageRollLine {
     pub name: String,
     pub points: Vec<[f64; 2]>,
@@ -238,7 +250,7 @@ pub struct DamageRollLine {
     pub average: f64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DamageRollPlotData {
     pub lines: Vec<DamageRollLine>,
     pub iterations: usize,

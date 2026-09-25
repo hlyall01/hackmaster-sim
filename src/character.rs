@@ -1235,7 +1235,7 @@ const STRENGTH_TABLE: &[StrengthRow] = &[
     },
 ];
 
-fn lookup_strength(score: &AbilityScore) -> StrengthMods {
+pub(crate) fn lookup_strength(score: &AbilityScore) -> StrengthMods {
     STRENGTH_TABLE
         .iter()
         .find(|row| row.base == score.base && row.pct == score.percentile)

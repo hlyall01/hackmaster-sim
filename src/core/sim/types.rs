@@ -1,5 +1,5 @@
 use super::modifiers::{
-    CHRONOBLUR_DURATION_SECONDS, CHRONOBLUR_EFFECT_ID, ModifierStack, STREAMLINE_DURATION_SECONDS,
+    CHRONOBLUR_EFFECT_ID, ModifierStack,
     STREAMLINE_EFFECT_ID, StatIdF32, StatIdI32, TemporaryEffect,
 };
 use crate::core::rules::DamageExprCache;
@@ -68,6 +68,7 @@ pub struct SimActor {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub enum WeaponSlot {
     Primary,
     Secondary,
@@ -122,6 +123,7 @@ pub struct WeaponProfile {
     pub internal_hemorrhage_damage: i32,
     pub use_close_hit_damage_expr: Option<String>,
     pub use_close_hit_damage_expr_cache: Option<DamageExprCache>,
+    pub use_close_hit_jab_damage_expr_cache: Option<DamageExprCache>,
     pub use_close_hit_margin_less_than: i32,
     pub crit_min_roll: i32,
     pub crit_min_roll_ranged: Option<i32>,
@@ -130,6 +132,16 @@ pub struct WeaponProfile {
 }
 
 impl WeaponProfile {
+    /// Shared replacement-pool selection for simulation and macro generation.
+    pub fn close_hit_damage_cache_for_attack(&self) -> Option<&DamageExprCache> {
+        if self.use_close_hit_margin_less_than <= 0 { return None; }
+        if self.use_jab {
+            self.use_close_hit_jab_damage_expr_cache.as_ref()
+                .or(self.use_close_hit_damage_expr_cache.as_ref())
+        } else {
+            self.use_close_hit_damage_expr_cache.as_ref()
+        }
+    }
     pub fn damage_expr_for_attack(&self) -> &str {
         if self.use_jab {
             self.jab_special_expr
@@ -357,7 +369,13 @@ pub struct CombatantState {
     pub deceptive_defender_seen_attackers: Vec<usize>,
     pub tactical_give_ground_defense_bonus: i32,
     pub tactical_next_attack_penalty: i32,
+    /// The retreat actually taken against this attack (true = Scamper Back).
+    pub tactical_retreat: Option<bool>,
+    pub aggressive_defense_pending: bool,
+    pub aggressive_maneuvers_locked: bool,
     pub streamline_averages_incoming_damage: bool,
+    /// Refreshed from living enemy auras and current arena positions.
+    pub intimidated: bool,
     pub activated_style_ids: Vec<String>,
     pub active_effects: Vec<TemporaryEffect>,
     pub cache: CombatantCache,
@@ -488,6 +506,7 @@ pub struct AttackEvent {
     pub knockback_ft: f32,
     pub hold_at_bay: bool,
     pub is_charge: bool,
+    pub is_aggressive: bool,
     pub weapon_slot: WeaponSlot,
     pub use_jab: bool,
     pub is_ranged: bool,
@@ -547,6 +566,7 @@ impl Default for WeaponProfile {
             ignore_all_dr: false,
             internal_hemorrhage_damage: 0,
             use_close_hit_damage_expr: None,
+            use_close_hit_jab_damage_expr_cache: None,
             use_close_hit_damage_expr_cache: None,
             use_close_hit_margin_less_than: 0,
             crit_min_roll: 20,
@@ -631,6 +651,12 @@ impl Default for CombatantSheet {
 }
 
 impl CombatantState {
+    pub(crate) fn movement_spell_defense(&self) -> (i32, f32) {
+        if !self.moved_last_tick { return (0, 0.0); }
+        self.active_effects.iter().filter(|e| e.remaining_seconds > 0).filter_map(|e| e.movement_defense.as_ref())
+            .fold((0, 0.0), |(bonus, distance), m| (bonus + m.melee_bonus, distance + m.ranged_distance))
+    }
+
     pub(crate) fn new(sheet: &CombatantSheet) -> Self {
         let returner_style = sheet.modifiers.apply_i32(0, StatIdI32::FlagReturnerStyle) > 0;
         let armeroci_style = sheet
@@ -641,13 +667,13 @@ impl CombatantState {
         if sheet.modifiers.apply_i32(0, StatIdI32::FlagChronoblurSpell) > 0 {
             active_effects.push(TemporaryEffect::new(
                 CHRONOBLUR_EFFECT_ID,
-                CHRONOBLUR_DURATION_SECONDS,
+                crate::core::magic::SpellKind::Chronoblur.catalog_entry().mechanics.as_ref().expect("validated buff").values.duration as i32,
             ));
         }
         if sheet.modifiers.apply_i32(0, StatIdI32::FlagStreamlineSpell) > 0 {
             active_effects.push(TemporaryEffect::new(
                 STREAMLINE_EFFECT_ID,
-                STREAMLINE_DURATION_SECONDS,
+                crate::core::magic::SpellKind::Streamline.catalog_entry().mechanics.as_ref().expect("validated buff").values.duration as i32,
             ));
         }
         let mut state = Self {
@@ -699,7 +725,11 @@ impl CombatantState {
             deceptive_defender_seen_attackers: Vec::new(),
             tactical_give_ground_defense_bonus: 0,
             tactical_next_attack_penalty: 0,
+            tactical_retreat: None,
+            aggressive_defense_pending: false,
+            aggressive_maneuvers_locked: false,
             streamline_averages_incoming_damage: false,
+            intimidated: false,
             activated_style_ids: Vec::new(),
             active_effects,
             cache: CombatantCache::default(),
@@ -992,15 +1022,49 @@ impl Combatant {
         true
     }
 
+    /// ArmorDr is the combined total (including natural DR). Armor-bypassing
+    /// magic retains natural protection such as Tough Hide and Unbreakable.
+    pub(crate) fn spell_damage_reduction(&self, affected_by_armor: bool) -> i32 {
+        let (stat, base) = if affected_by_armor {
+            (StatIdI32::ArmorDr, self.sheet.defense.armor_dr)
+        } else {
+            (StatIdI32::NaturalDr, self.sheet.defense.natural_dr)
+        };
+        self.apply_i32(stat, base).max(0)
+    }
+
+    fn spell_strength_delta(&self) -> i32 {
+        self.state.active_effects.iter().filter_map(|e| e.strength_override)
+            .max_by_key(|(_, priority)| *priority)
+            .map_or(0, |(damage, _)| damage - self.magic.strength_damage)
+    }
+
+    pub(crate) fn strength_damage_for_slot(&self, slot: WeaponSlot, base: i32) -> i32 {
+        let ignores = match slot { WeaponSlot::Primary => self.magic.primary_ignores_strength, WeaponSlot::Secondary => self.magic.secondary_ignores_strength };
+        let delta = if ignores { 0 } else { self.spell_strength_delta() };
+        self.apply_i32(StatIdI32::StrengthDamage, base + delta * if self.sheet.maneuvers.power_attack { 2 } else { 1 })
+    }
+
+    pub(crate) fn intimidation_penalty(&self) -> i32 {
+        if self.state.intimidated { -2 } else { 0 }
+    }
+
     pub(crate) fn apply_i32(&self, stat: StatIdI32, base: i32) -> i32 {
+        let base = if stat == StatIdI32::StrengthDamageBase { base + self.spell_strength_delta() } else { base };
         let mut value = self.sheet.modifiers.apply_i32(base, stat);
         for effect in &self.state.active_effects {
             value = effect.modifiers.apply_i32(value, stat);
+        }
+        if matches!(stat, StatIdI32::AttackBonus | StatIdI32::AttackBonusBase) {
+            value += self.intimidation_penalty();
         }
         value
     }
 
     pub(crate) fn apply_f32(&self, stat: StatIdF32, base: f32) -> f32 {
+        let base = if stat == StatIdF32::StreamlineRadius {
+            self.state.active_effects.iter().filter_map(|e| e.average_damage_radius).max_by(f32::total_cmp).unwrap_or(base)
+        } else { base };
         let mut value = self.sheet.modifiers.apply_f32(base, stat);
         for effect in &self.state.active_effects {
             value = effect.modifiers.apply_f32(value, stat);

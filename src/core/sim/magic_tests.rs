@@ -154,9 +154,9 @@ fn verbal_component_is_enforced_at_completion_and_silent_casting_removes_it() {
         actor
             .cast_spell(test_spell(3, false), 0, &mut rng())
             .unwrap();
-        actor.advance_magic(2, &mut rng());
+        actor.advance_magic(1, &mut rng());
         assert!(actor.state.magic.casting.is_some());
-        actor.advance_magic(3, &mut rng());
+        actor.advance_magic(2, &mut rng());
         assert_eq!(actor.state.has_active_effect("test_spell_buff"), silent);
         assert_eq!(actor.state.magic.essences[0].current, 990);
     }
@@ -365,12 +365,12 @@ fn casting_reserves_essence_then_spends_once_and_arms_at_completion() {
     actor.cast_echo_strike(0).unwrap();
     assert_eq!(actor.state.magic.essences[0].current, 1000);
     actor.advance_magic(0, &mut rng());
-    assert!(actor.state.magic.armed_echo.is_none());
-    actor.advance_magic(1, &mut rng());
+    assert!(actor.state.magic.armed_echo.is_some());
+    assert_eq!(actor.state.magic.fatigue, Some((1, 7)));
     assert_eq!(actor.state.magic.essences[0].current, 850);
     assert_eq!(
         actor.state.magic.armed_echo.as_ref().unwrap().expires_at,
-        16
+        15
     );
     actor.advance_magic(1, &mut rng());
     assert_eq!(actor.state.magic.essences[0].current, 850);
@@ -669,13 +669,13 @@ fn additional_echoes_use_intervals_and_cumulative_defense_even_after_misses() {
 }
 
 #[test]
-fn echo_damage_is_fixed_and_bypasses_mundane_mitigation_without_retriggering() {
+fn echo_bypasses_armor_but_applies_natural_dr_without_retriggering() {
     let mut actors = vec![caster(), target()];
     arm(&mut actors[0]);
     strike(&mut actors, 4, true, 19);
     let echo = take_due_echoes(&mut actors, 14).remove(0).1;
     actors[1].sheet.defense.armor_dr = 100;
-    actors[1].sheet.defense.natural_dr = 100;
+    actors[1].sheet.defense.natural_dr = 2;
     actors[1].sheet.defense.shield_dr = 100;
     actors[1].sheet.defense.shield_name = Some("Shield".into());
     actors[1].state.shield_intact = true;
@@ -687,8 +687,11 @@ fn echo_damage_is_fixed_and_bypasses_mundane_mitigation_without_retriggering() {
         .unwrap()
         .0;
     assert!(result.hit);
-    assert_eq!(result.damage, 9);
-    assert_eq!(actors[1].state.hp, 991);
+    assert_eq!(result.damage, 7);
+    assert_eq!(actors[1].state.hp, 993);
+    let breakdown = result.damage_breakdown.as_ref().unwrap();
+    assert_eq!(breakdown.raw_damage, 9);
+    assert_eq!(breakdown.effective_armor_dr, 2);
     assert_eq!(result.knockback_ft, 0.0);
     assert!(result.critical.is_none());
     assert_eq!(result.shield_damage, 0);
@@ -921,9 +924,9 @@ fn chronoblur_uses_two_second_cast_empowered_duration_and_fatigue() {
     let mut actor = free_caster(&["spell_chronoblur"]);
     actor.magic.loadout.chronoblur_duration_ranks = 3;
     actor.cast_known_spell("spell_chronoblur", 10).unwrap();
-    actor.advance_magic(11, &mut rng());
+    actor.advance_magic(10, &mut rng());
     assert!(!actor.state.has_active_effect(CHRONOBLUR_EFFECT_ID));
-    actor.advance_magic(12, &mut rng());
+    actor.advance_magic(11, &mut rng());
     assert_eq!(
         actor
             .state
@@ -934,7 +937,7 @@ fn chronoblur_uses_two_second_cast_empowered_duration_and_fatigue() {
             .remaining_seconds,
         150
     );
-    assert_eq!(actor.state.magic.fatigue, Some((13, 20)));
+    assert_eq!(actor.state.magic.fatigue, Some((12, 19)));
 }
 
 #[test]
@@ -943,9 +946,9 @@ fn streamline_uses_five_second_cast_and_empowers_duration_and_radius() {
     actor.magic.loadout.streamline_duration_ranks = 2;
     actor.magic.loadout.streamline_radius_ranks = 3;
     actor.cast_known_spell("spell_streamline", 0).unwrap();
-    actor.advance_magic(4, &mut rng());
+    actor.advance_magic(3, &mut rng());
     assert!(!actor.state.has_active_effect(STREAMLINE_EFFECT_ID));
-    actor.advance_magic(5, &mut rng());
+    actor.advance_magic(4, &mut rng());
     assert_eq!(
         actor
             .state
@@ -957,12 +960,12 @@ fn streamline_uses_five_second_cast_and_empowers_duration_and_radius() {
         420
     );
     assert_eq!(actor.apply_f32(StatIdF32::StreamlineRadius, 30.0), 60.0);
-    assert_eq!(actor.state.magic.fatigue, Some((6, 16)));
+    assert_eq!(actor.state.magic.fatigue, Some((5, 15)));
 }
 
 #[test]
 fn new_buff_spells_check_verbal_components_at_completion() {
-    for (id, completes) in [("spell_chronoblur", 2), ("spell_streamline", 5)] {
+    for (id, completes) in [("spell_chronoblur", 1), ("spell_streamline", 4)] {
         let mut actor = free_caster(&[id]);
         actor.cast_known_spell(id, 0).unwrap();
         actor.magic.loadout.silenced = true;
@@ -1013,8 +1016,37 @@ fn spell_ai_manual_does_not_cast_and_fight_start_casts_without_reach() {
 }
 
 #[test]
+fn repeating_echo_opens_without_reach_but_later_casts_require_reach() {
+    let mut actor = free_caster(&["echo_strike"]);
+    actor.magic.talents.eliminate_spell_fatigue = true;
+    actor.magic.loadout.spell_ai.insert(
+        "echo_strike".into(),
+        SpellCastAi::AsOftenAsPossible,
+    );
+    actor.try_auto_cast(0, false);
+    assert!(actor.state.magic.casting.is_some());
+    actor.advance_magic(0, &mut rng());
+    assert!(actor.state.magic.armed_echo.is_some());
+
+    // Opening expiry during a long approach must not cause distant recasts.
+    actor.advance_magic(15, &mut rng());
+    assert!(actor.state.magic.armed_echo.is_none());
+    actor.try_auto_cast(15, false);
+    assert!(actor.state.magic.casting.is_none());
+
+    actor.state.magic.range_targets.insert("echo_strike".into(), 1);
+    actor.try_auto_cast(16, true);
+    assert!(actor.state.magic.casting.is_some());
+    actor.advance_magic(16, &mut rng());
+    actor.try_auto_cast(17, true);
+    assert!(actor.state.magic.casting.is_none());
+    assert!(actor.state.magic.armed_echo.is_some());
+}
+
+#[test]
 fn spell_ai_repeat_waits_for_buff_expiry_and_recasts_without_ep() {
     let mut actor = free_caster(&["echo_strike"]);
+    actor.state.magic.range_targets.insert("echo_strike".into(), 1);
     actor
         .magic
         .loadout

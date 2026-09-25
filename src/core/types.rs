@@ -209,6 +209,8 @@ pub enum TalentEffect {
     },
     CloseHitDamageExpr {
         expr: String,
+        #[serde(default)]
+        jab_expr: Option<String>,
         margin_less_than: i32,
         #[serde(default)]
         weapon_groups: Vec<String>,
@@ -420,6 +422,8 @@ pub enum TalentEffect {
     DoomrazorStyle,
     FallingSunStyle,
     FymblwngerStyle,
+    ProjectConfidence,
+    IntimidateAdversary,
     HammererStyle,
     HobblerStyle,
     IthicanPrinceStyle,

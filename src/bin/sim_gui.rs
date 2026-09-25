@@ -22,10 +22,16 @@ use hackmaster_sim::core::types::{RaceSpec, TalentSelection, TalentSpec};
 use hackmaster_sim::ui_widgets::searchable_select;
 use hackmaster_sim::{character, data, game_logic, sim};
 use sim::{BulkSimResult, SimConfig, SimState};
+#[cfg(not(target_arch = "wasm32"))]
 #[path = "sim_gui/jobs.rs"]
+mod jobs;
+#[cfg(target_arch = "wasm32")]
+#[path = "sim_gui/web.rs"]
 mod jobs;
 #[path = "sim_gui/combat_log.rs"]
 mod combat_log;
+#[path = "sim_gui/macros.rs"]
+mod macros;
 use jobs::{BackgroundJob, JobKind, JobOutput};
 use std::collections::BTreeMap;
 
@@ -84,6 +90,7 @@ impl ToolTab {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PlayerEditorTab {
+    Macros,
     Core,
     Gear,
     CombatManeuvers,
@@ -98,6 +105,7 @@ enum PlayerEditorTab {
 impl PlayerEditorTab {
     fn label(self) -> &'static str {
         match self {
+            PlayerEditorTab::Macros => "Macros",
             PlayerEditorTab::Core => "Core",
             PlayerEditorTab::Gear => "Gear",
             PlayerEditorTab::CombatManeuvers => "Combat Maneuvers",
@@ -111,10 +119,11 @@ impl PlayerEditorTab {
     }
 }
 
-const PLAYER_EDITOR_TABS: [PlayerEditorTab; 9] = [
+const PLAYER_EDITOR_TABS: [PlayerEditorTab; 10] = [
     PlayerEditorTab::Core,
     PlayerEditorTab::Gear,
     PlayerEditorTab::CombatManeuvers,
+    PlayerEditorTab::Macros,
     PlayerEditorTab::Tactics,
     PlayerEditorTab::Stats,
     PlayerEditorTab::Talents,
@@ -148,6 +157,7 @@ const WEAPON_GROUP_LABELS: [&str; 13] = [
 ];
 
 struct SimGuiApp {
+    macro_panels: [macros::MacroPanel; 2],
     background_job: Option<BackgroundJob>,
     combat_log: combat_log::CombatLogView,
     job_message: Option<String>,
@@ -303,6 +313,7 @@ impl SimGuiApp {
             combat_log: Default::default(),
             job_message: None,
             derived_cache: [None, None],
+            macro_panels: Default::default(),
             stop_distance_players: None,
             running: false,
             spell_error: None,
@@ -495,6 +506,11 @@ impl SimGuiApp {
         let Some(job) = self.background_job.as_ref() else {
             return;
         };
+        if !job.control.keep_running(job.control.completed()) {
+            self.background_job = None;
+            self.job_message = Some("Calculation cancelled.".into());
+            return;
+        }
         let message = match job.receiver.try_recv() {
             Ok(message) => message,
             Err(std::sync::mpsc::TryRecvError::Empty) => return,
@@ -1627,7 +1643,11 @@ impl SimGuiApp {
             egui::Window::new(title)
                 .id(egui::Id::new(format!("player_editor_{idx}")))
                 .open(&mut open)
-                .default_size(egui::vec2(560.0, 740.0))
+                .default_size(if self.player_editor_tabs[idx] == PlayerEditorTab::Macros {
+                    egui::vec2(960.0, 900.0)
+                } else {
+                    egui::vec2(560.0, 740.0)
+                })
                 .resizable(true)
                 .show(ctx, |ui| {
                     let id_prefix = if idx == 0 { "p1" } else { "p2" };
@@ -1668,6 +1688,7 @@ impl SimGuiApp {
                         damage_roll_plot,
                         &mut plot_request,
                         &mut self.derived_cache[idx],
+                        &mut self.macro_panels[idx],
                         &player_names,
                         &mut self.dps_attacker_idx,
                         &mut self.dps_defender_idx,
@@ -3613,6 +3634,7 @@ fn render_player_editor(
     damage_roll_plot: &mut Option<DamageRollPlotData>,
     plot_request: &mut Option<usize>,
     derived_cache: &mut Option<DerivedCache>,
+    macro_panel: &mut macros::MacroPanel,
     player_names: &[String; 2],
     dps_attacker_idx: &mut usize,
     dps_defender_idx: &mut usize,
@@ -3661,6 +3683,8 @@ fn render_player_editor(
         .auto_shrink([false, false])
         .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
         .show(ui, |ui| match *active_tab {
+        PlayerEditorTab::Macros => macro_panel.show(ui, player, opponent, weapon_catalog,
+            armor_catalog, shield_catalog, npc_presets, talent_catalog),
         PlayerEditorTab::Core => {
             if !fighter_presets.is_empty() {
                 ui.horizontal(|ui| {
@@ -4316,9 +4340,16 @@ fn render_player_editor(
                 }
             });
             ui.separator();
-            ui.add_enabled_ui(false, |ui| {
-                ui.checkbox(&mut player.aggressive_attack, "Aggressive attack (NYI)");
-            });
+            if ui.checkbox(&mut player.aggressive_attack, "Aggressive attack").changed() && player.aggressive_attack {
+                player.use_jab = false;
+                player.called_shot = false;
+                player.power_attack = false;
+                player.fight_defensively = false;
+                player.hold_at_bay = false;
+                player.charge = false;
+                player.give_ground = false;
+                player.scamper_back = false;
+            }
             ui.checkbox(&mut player.charge, "Charge");
             ui.add_enabled_ui(false, |ui| {
                 ui.checkbox(
@@ -5030,7 +5061,7 @@ fn render_magic_editor_with_catalog(
                     ui.small(&spell.casting_description);
                     for empowerment in &spell.empowerments {
                         match empowerment {
-                            SpellEmpowerment::Number { field, label, min, max, suffix } => {
+                            SpellEmpowerment::Number { field, label, min, max, suffix, .. } => {
                                 ui.horizontal(|ui| {
                                     ui.label(label);
                                     ui.add(egui::DragValue::new(field.value_mut(magic))
@@ -5050,6 +5081,10 @@ fn render_magic_editor_with_catalog(
             });
         }
         ui.collapsing("Casting conditions", |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Body weight for Repel (0 = 200 lb)");
+                ui.add(egui::DragValue::new(&mut magic.body_weight_lbs).clamp_range(0..=100000).suffix(" lb"));
+            });
             egui::ComboBox::from_id_source("encumbrance").selected_text(format!("Encumbrance: {:?}", magic.encumbrance)).show_ui(ui, |ui| {
                 for value in [Encumbrance::None, Encumbrance::Light, Encumbrance::Moderate, Encumbrance::Heavy] {
                     ui.selectable_value(&mut magic.encumbrance, value, format!("{value:?}"));
@@ -5987,11 +6022,18 @@ fn render_talent_entry(
     let requirement_failures = game_logic::evaluate_talent_requirements(spec, context);
     let locked = !requirement_failures.is_empty();
     let is_nyi = !game_logic::talent_is_implemented(spec);
+    // Keep prerequisite purchases available even when their own effect is NYI.
+    let is_runtime_prerequisite = is_nyi && talent_catalog.entries().iter().any(|talent| {
+        game_logic::talent_is_implemented(talent) && talent.requirements.iter().any(|requirement| {
+            matches!(requirement, hackmaster_sim::core::types::TalentRequirement::RequiresTalent { id, .. } if id == &spec.id)
+        })
+    });
     let requires_group = game_logic::talent_requires_weapon_group(spec);
     let muted_color = ui.visuals().weak_text_color();
-    let can_adjust = !locked && (!is_nyi || requires_group);
-    let allow_add = !locked && (!is_nyi || requires_group);
-    let allow_force_add = locked && (!is_nyi || requires_group);
+    let selectable = !is_nyi || requires_group || is_runtime_prerequisite;
+    let can_adjust = !locked && selectable;
+    let allow_add = !locked && selectable;
+    let allow_force_add = locked && selectable;
     ui.group(|ui| {
         ui.horizontal(|ui| {
             if is_nyi {
@@ -6063,10 +6105,13 @@ fn render_talent_entry(
         }
         if is_nyi {
             ui.colored_label(muted_color, "NYI");
+            if is_runtime_prerequisite {
+                ui.label("Available as a prerequisite; its own effect is not simulated.");
+            }
         } else {
             ui.label(spec.description.as_str());
         }
-        if locked && !is_nyi {
+        if locked && (!is_nyi || is_runtime_prerequisite) {
             ui.colored_label(Color32::from_rgb(180, 70, 70), "Requirements not met:");
             for failure in &requirement_failures {
                 ui.label(format!(
@@ -6215,6 +6260,10 @@ fn armor_display_name(entry: Option<&ArmorEntry>) -> String {
         .unwrap_or_else(|| "None".to_string())
 }
 
+#[cfg(target_arch = "wasm32")]
+fn main() {}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result<()> {
     hackmaster_sim::console::maybe_enable_console();
     let mut viewport = egui::ViewportBuilder::default()
@@ -6381,9 +6430,9 @@ mod tests {
         let mut app = manual_spell_app();
         app.handle_spell_action(0, game_logic::SpellAction::Cast("echo_strike".into()));
         assert!(app.spell_error.is_none());
-        assert!(app.sim.combatants[0].state.magic.casting.is_some());
+        assert!(app.sim.combatants[0].state.magic.armed_echo.is_some());
         app.prepare_to_advance();
-        assert!(app.sim.combatants[0].state.magic.casting.is_some());
+        assert!(app.sim.combatants[0].state.magic.armed_echo.is_some());
         app.running = true;
         app.update_sim(1.0);
         app.update_sim(1.0);
@@ -6428,7 +6477,7 @@ mod tests {
 
     #[test]
     fn cancelling_before_next_second_has_no_fatigue_or_recovery_penalty() {
-        for id in ["echo_strike", "spell_chronoblur", "spell_streamline"] {
+        for id in ["spell_chronoblur", "spell_streamline"] {
             let mut app = manual_spell_app();
             let recovery = app.sim.combatants[0].state.magic.primary_recovery_until;
             app.handle_spell_action(0, game_logic::SpellAction::Cast(id.into()));
@@ -6639,7 +6688,7 @@ mod tests {
         app.reset_positions();
         assert_eq!(app.sim.combatants[0].magic.loadout, app.players[0].magic);
         app.sim.tick();
-        assert!(app.sim.combatants[0].state.magic.casting.is_some());
+        assert!(app.sim.combatants[0].state.magic.armed_echo.is_some());
     }
 
     #[test]
@@ -7019,3 +7068,7 @@ mod tests {
         assert_eq!(loaded.weapon_masteries, player.weapon_masteries);
     }
 }
+
+#[cfg(test)]
+#[path = "sim_gui/transport_tests.rs"]
+mod transport_tests;

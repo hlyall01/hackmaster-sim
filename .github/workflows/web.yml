@@ -1,0 +1,165 @@
+name: Build and deploy simulator
+
+on:
+  push:
+    branches: [main, codex/sim-gui-wasm]
+  pull_request:
+    branches: [main, codex/sim-gui-wasm]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTUP_TOOLCHAIN: 1.91.1
+
+jobs:
+  build:
+    name: Build browser release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Install Rust and WASM target
+        run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --target wasm32-unknown-unknown
+
+      - name: Cache Rust build
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/release
+            target/wasm32-unknown-unknown
+          key: web-${{ runner.os }}-${{ env.RUSTUP_TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
+          restore-keys: |
+            web-${{ runner.os }}-${{ env.RUSTUP_TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}-
+
+      - name: Install matching wasm-bindgen CLI
+        # This is the official release asset, verified against its published SHA-256.
+        # scripts/build_web.py also checks the CLI against Cargo.lock.
+        env:
+          VERSION: 0.2.106
+          SHA256: 3f3e7ae0c0a7448fcb00e9fc284477e0315ac0f1ff8328f32f6bf9ac7fe4b02c
+        run: |
+          archive="wasm-bindgen-${VERSION}-x86_64-unknown-linux-musl"
+          curl --fail --location --retry 3 \
+            "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/${VERSION}/${archive}.tar.gz" \
+            --output "$RUNNER_TEMP/bindgen.tar.gz"
+          printf '%s  %s\n' "$SHA256" "$RUNNER_TEMP/bindgen.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/bindgen.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/$archive" >> "$GITHUB_PATH"
+
+      - name: Build static site
+        run: python3 scripts/build_web.py
+
+      - name: Save downloadable site
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: simulator-web
+          path: target/web/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 9
+
+  deploy:
+    name: Deploy to Cloudflare Pages
+    needs: build
+    # Forks and pull requests only build. One selected branch publishes production.
+    if: >-
+      github.event_name != 'pull_request' &&
+      github.ref_type == 'branch' &&
+      github.ref_name == (vars.CLOUDFLARE_DEPLOY_BRANCH || 'main') &&
+      vars.CLOUDFLARE_ACCOUNT_ID != '' &&
+      vars.CLOUDFLARE_PAGES_PROJECT != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: cloudflare-pages
+      url: ${{ steps.deploy.outputs.deployment-url }}
+    concurrency:
+      group: cloudflare-pages-production
+      cancel-in-progress: false
+    steps:
+      - name: Download the exact build from this run
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: simulator-web
+          path: site
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+
+      - name: Check deployment credentials
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::Add the CLOUDFLARE_API_TOKEN repository secret (Account > Cloudflare Pages > Edit)."
+            exit 1
+          fi
+
+      - name: Create Pages project on first deployment
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_PAGES_PROJECT: ${{ vars.CLOUDFLARE_PAGES_PROJECT }}
+        shell: python
+        run: |
+          import json
+          import os
+          import re
+          import urllib.error
+          import urllib.request
+
+          account = os.environ['CLOUDFLARE_ACCOUNT_ID']
+          project = os.environ['CLOUDFLARE_PAGES_PROJECT']
+          if not re.fullmatch(r'[a-f0-9]{32}', account):
+              raise SystemExit('CLOUDFLARE_ACCOUNT_ID must be a 32-character account ID.')
+          if not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,56}[a-z0-9]', project):
+              raise SystemExit('Use a Pages project name with 2-58 lowercase letters, digits or hyphens.')
+          base = f'https://api.cloudflare.com/client/v4/accounts/{account}/pages/projects'
+          headers = {'Authorization': 'Bearer ' + os.environ['CLOUDFLARE_API_TOKEN'],
+                     'Content-Type': 'application/json'}
+          request = urllib.request.Request(f'{base}/{project}', headers=headers)
+          try:
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  existing = json.load(response)
+              if not existing.get('success'):
+                  raise SystemExit('Cloudflare could not read the Pages project.')
+              if existing['result']['production_branch'] != 'main':
+                  raise SystemExit('Existing Pages project must use main as its production branch.')
+              print('Using existing Pages project:', project)
+          except urllib.error.HTTPError as error:
+              if error.code != 404:
+                  raise SystemExit(f'Cloudflare project lookup failed: HTTP {error.code}. Check the account ID and Pages token.')
+              payload = json.dumps({'name': project, 'production_branch': 'main'}).encode()
+              request = urllib.request.Request(base, data=payload, headers=headers, method='POST')
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  created = json.load(response)
+              if not created.get('success'):
+                  raise SystemExit('Cloudflare could not create the Pages project.')
+              print('Created Pages project:', project)
+
+      - name: Publish site
+        id: deploy
+        uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: '4.140.0'
+          command: pages deploy site --project-name=${{ vars.CLOUDFLARE_PAGES_PROJECT }} --branch=main --commit-hash=${{ github.sha }}
+
+      - name: Report deployment
+        env:
+          DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment-url }}
+        run: printf 'Simulator deployed to %s\n' "$DEPLOYMENT_URL" >> "$GITHUB_STEP_SUMMARY"

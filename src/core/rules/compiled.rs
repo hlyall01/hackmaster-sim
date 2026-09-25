@@ -31,6 +31,46 @@ impl std::fmt::Display for DamageExprError {
 impl std::error::Error for DamageExprError {}
 
 impl Expression {
+    pub(super) fn with_added_dice(&self, dice: &[(i32, bool)]) -> Self {
+        let mut expression = self.clone();
+        for &(sides, penetrating) in dice {
+            if let Some(term) = expression.0.iter_mut().find(|t| t.sign == 1
+                && matches!(t.value, Value::Dice { sides: s, penetrating: p, .. }
+                    if s == sides && p == penetrating)) {
+                if let Value::Dice { count, .. } = &mut term.value { *count += 1; }
+            } else {
+                expression.0.push(Term { sign: 1, value: Value::Dice { count: 1, sides, penetrating } });
+            }
+        }
+        expression
+    }
+    pub(super) fn roll20(&self, nonpenetrating: bool, triggers: Option<&[i32]>, max_minus_one: bool) -> Result<String, DamageExprError> {
+        let mut result = String::new();
+        for term in &self.0 {
+            if term.sign < 0 { result.push('-'); } else if !result.is_empty() { result.push('+'); }
+            match term.value {
+                Value::Constant(value) => result.push_str(&value.to_string()),
+                Value::Dice { count, sides, penetrating } => {
+                    result.push_str(&format!("{count}d{sides}"));
+                    if penetrating && !nonpenetrating {
+                        result.push_str("!p");
+                        let threshold = if max_minus_one { Some((sides - 1).max(1)) }
+                        else if let Some(triggers) = triggers.filter(|_| sides == 6) {
+                            let first = *triggers.first().ok_or(DamageExprError("Empty penetration triggers"))?;
+                            if triggers.iter().copied().ne(first..=sides) {
+                                return Err(DamageExprError("Roll20 cannot express this penetration trigger set"));
+                            }
+                            Some(first)
+                        } else { None };
+                        if let Some(threshold) = threshold.filter(|t| *t != sides) {
+                            result.push_str(&format!(">{threshold}"));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(if result.is_empty() { "0".into() } else { result })
+    }
     pub(super) fn empty() -> Self {
         Self(Vec::new())
     }

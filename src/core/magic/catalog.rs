@@ -5,9 +5,11 @@ use super::{MagicLoadout, SpellCastAi, SpellComponents};
 use serde::Deserialize;
 use std::sync::LazyLock;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SpellKind {
+    #[default]
+    Configured,
     EchoStrike,
     Chronoblur,
     Streamline,
@@ -16,6 +18,7 @@ pub enum SpellKind {
 impl SpellKind {
     pub fn id(self) -> &'static str {
         match self {
+            Self::Configured => "",
             Self::EchoStrike => "echo_strike",
             Self::Chronoblur => "spell_chronoblur",
             Self::Streamline => "spell_streamline",
@@ -25,12 +28,12 @@ impl SpellKind {
     pub fn catalog_entry(self) -> &'static SpellCatalogEntry {
         spell_catalog()
             .iter()
-            .find(|spell| spell.kind == self)
+            .find(|spell| spell.id == self.id())
             .expect("validated spell catalog")
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SpellCastingHelp {
     pub use_once: String,
@@ -48,36 +51,42 @@ impl SpellCastingHelp {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SpellNumberField {
-    EchoDurationSeconds,
-    EchoDelaySeconds,
-    EchoAdditionalEchoes,
-    ChronoblurDurationRanks,
-    StreamlineDurationRanks,
-    StreamlineRadiusRanks,
-}
+/// Generic catalog key. Only the legacy fields need compatibility adapters.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(transparent)]
+pub struct SpellNumberField(pub String);
 
 impl SpellNumberField {
-    pub fn value_mut(self, loadout: &mut MagicLoadout) -> &mut u32 {
-        match self {
-            Self::EchoDurationSeconds => &mut loadout.echo_strike.extra_duration_seconds,
-            Self::EchoDelaySeconds => &mut loadout.echo_strike.delay_seconds,
-            Self::EchoAdditionalEchoes => &mut loadout.echo_strike.additional_echoes,
-            Self::ChronoblurDurationRanks => &mut loadout.chronoblur_duration_ranks,
-            Self::StreamlineDurationRanks => &mut loadout.streamline_duration_ranks,
-            Self::StreamlineRadiusRanks => &mut loadout.streamline_radius_ranks,
+    pub fn value_mut<'a>(&self, loadout: &'a mut MagicLoadout) -> &'a mut u32 {
+        match self.0.as_str() {
+            "echo_duration_seconds" => &mut loadout.echo_strike.extra_duration_seconds,
+            "echo_delay_seconds" => &mut loadout.echo_strike.delay_seconds,
+            "echo_additional_echoes" => &mut loadout.echo_strike.additional_echoes,
+            "chronoblur_duration_ranks" => &mut loadout.chronoblur_duration_ranks,
+            "streamline_duration_ranks" => &mut loadout.streamline_duration_ranks,
+            "streamline_radius_ranks" => &mut loadout.streamline_radius_ranks,
+            _ => loadout.spell_parameters.entry(self.0.clone()).or_default(),
         }
     }
-
-    fn kind(self) -> SpellKind {
-        match self {
-            Self::EchoDurationSeconds | Self::EchoDelaySeconds | Self::EchoAdditionalEchoes => {
-                SpellKind::EchoStrike
+    fn legacy_owner(&self) -> Option<&'static str> {
+        match self.0.as_str() {
+            "echo_duration_seconds" | "echo_delay_seconds" | "echo_additional_echoes" => {
+                Some("echo_strike")
             }
-            Self::ChronoblurDurationRanks => SpellKind::Chronoblur,
-            Self::StreamlineDurationRanks | Self::StreamlineRadiusRanks => SpellKind::Streamline,
+            "chronoblur_duration_ranks" => Some("spell_chronoblur"),
+            "streamline_duration_ranks" | "streamline_radius_ranks" => Some("spell_streamline"),
+            _ => None,
+        }
+    }
+    pub fn value(&self, loadout: &MagicLoadout) -> u32 {
+        match self.0.as_str() {
+            "echo_duration_seconds" => loadout.echo_strike.extra_duration_seconds,
+            "echo_delay_seconds" => loadout.echo_strike.delay_seconds,
+            "echo_additional_echoes" => loadout.echo_strike.additional_echoes,
+            "chronoblur_duration_ranks" => loadout.chronoblur_duration_ranks,
+            "streamline_duration_ranks" => loadout.streamline_duration_ranks,
+            "streamline_radius_ranks" => loadout.streamline_radius_ranks,
+            _ => loadout.spell_parameters.get(&self.0).copied().unwrap_or(0),
         }
     }
 }
@@ -96,7 +105,7 @@ impl SpellToggleField {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SpellEmpowerment {
     Number {
@@ -105,6 +114,10 @@ pub enum SpellEmpowerment {
         min: u32,
         max: u32,
         suffix: String,
+        #[serde(default)]
+        cost_per_rank: u32,
+        #[serde(default)]
+        changes: Vec<super::EffectScaling>,
     },
     Toggle {
         field: SpellToggleField,
@@ -112,7 +125,7 @@ pub enum SpellEmpowerment {
     },
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EchoStatusText {
     pub armed: String,
@@ -120,11 +133,14 @@ pub struct EchoStatusText {
     pub dismiss: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SpellCatalogEntry {
     pub id: String,
+    #[serde(default)]
     pub kind: SpellKind,
+    pub mechanics: Option<super::EffectDefinition>,
+    pub echo_rules: Option<super::EchoRules>,
     pub name: String,
     pub level: u8,
     pub base_cost: u32,
@@ -142,6 +158,51 @@ pub struct SpellCatalogEntry {
     pub echo_status: Option<EchoStatusText>,
 }
 
+impl SpellCatalogEntry {
+    /// Resolve catalog parameters once for both runtime and editor consumers.
+    pub fn resolve_values(
+        &self,
+        loadout: &MagicLoadout,
+    ) -> Result<(super::EffectValues, u32), super::MagicError> {
+        use super::MagicError;
+        let definition = self.mechanics.as_ref().ok_or(MagicError::InvalidSpell)?;
+        definition
+            .validate()
+            .map_err(|_| MagicError::InvalidSpell)?;
+        let mut values = definition.values.clone();
+        let mut cost = self.base_cost;
+        for empowerment in &self.empowerments {
+            if let SpellEmpowerment::Number {
+                field,
+                min,
+                max,
+                cost_per_rank,
+                changes,
+                ..
+            } = empowerment
+            {
+                let rank = field.value(loadout);
+                if rank < *min || rank > *max {
+                    return Err(MagicError::InvalidSpell);
+                }
+                cost = cost
+                    .checked_add(
+                        rank.checked_mul(*cost_per_rank)
+                            .ok_or(MagicError::CostOverflow)?,
+                    )
+                    .ok_or(MagicError::CostOverflow)?;
+                for scaling in changes {
+                    values.apply(scaling, rank)?;
+                }
+            }
+        }
+        definition
+            .validate_values(&values)
+            .map_err(|_| MagicError::InvalidSpell)?;
+        Ok((values, cost))
+    }
+}
+
 pub fn parse_spell_catalog(json: &str) -> Result<Vec<SpellCatalogEntry>, String> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -149,8 +210,10 @@ pub fn parse_spell_catalog(json: &str) -> Result<Vec<SpellCatalogEntry>, String>
         spells: Vec<SpellCatalogEntry>,
     }
     let file: CatalogFile = serde_json::from_str(json).map_err(|error| error.to_string())?;
+    let mut parameter_keys = std::collections::HashSet::new();
     for (index, spell) in file.spells.iter().enumerate() {
-        if spell.id != spell.kind.id()
+        if spell.id.trim().is_empty()
+            || (spell.kind != SpellKind::Configured && spell.id != spell.kind.id())
             || file.spells[..index]
                 .iter()
                 .any(|other| other.id == spell.id)
@@ -177,6 +240,21 @@ pub fn parse_spell_catalog(json: &str) -> Result<Vec<SpellCatalogEntry>, String>
         {
             return Err("Missing Echo Strike damage text".into());
         }
+        if spell.kind == SpellKind::EchoStrike {
+            let Some(rule) = &spell.echo_rules else {
+                return Err("Missing echo rules".into());
+            };
+            if rule.base_duration == 0
+                || rule.minimum_delay == 0
+                || rule.default_delay < rule.minimum_delay
+                || rule.normal_damage_divisor <= 0
+                || rule.defense_per_echo < 0
+            {
+                return Err("Invalid echo rules".into());
+            }
+        } else if spell.echo_rules.is_some() {
+            return Err("Echo rules require the legacy echo hook".into());
+        }
         if spell.level == 0 || spell.base_cost == 0 {
             return Err(format!("Invalid casting metadata: {}", spell.id));
         }
@@ -185,13 +263,21 @@ pub fn parse_spell_catalog(json: &str) -> Result<Vec<SpellCatalogEntry>, String>
                 if [&status.armed, &status.pending, &status.dismiss]
                     .iter()
                     .all(|text| !text.trim().is_empty()) => {}
-            (None, SpellKind::Chronoblur | SpellKind::Streamline) => {}
+            (None, kind) if kind != SpellKind::EchoStrike => {}
             _ => return Err(format!("Invalid echo status text: {}", spell.id)),
         }
         let allowed = match spell.kind {
             SpellKind::EchoStrike => &["{duration}", "{echoes}", "{damage}"][..],
-            SpellKind::Chronoblur => &["{duration}"][..],
-            SpellKind::Streamline => &["{duration}", "{radius}"][..],
+            _ => &[
+                "{duration}",
+                "{range}",
+                "{radius}",
+                "{dice}",
+                "{projectiles}",
+                "{force}",
+                "{width}",
+                "{speed}",
+            ][..],
         };
         let mut summary = spell.summary.clone();
         for token in allowed {
@@ -200,7 +286,47 @@ pub fn parse_spell_catalog(json: &str) -> Result<Vec<SpellCatalogEntry>, String>
         if summary.contains(['{', '}']) {
             return Err(format!("Unknown summary placeholder: {}", spell.id));
         }
+        if let Some(mechanics) = &spell.mechanics {
+            mechanics
+                .validate()
+                .map_err(|e| format!("{}: {e}", spell.id))?;
+            for bound in [false, true] {
+                let mut values = mechanics.values.clone();
+                let mut cost = spell.base_cost;
+                for empowerment in &spell.empowerments {
+                    if let SpellEmpowerment::Number {
+                        min,
+                        max,
+                        cost_per_rank,
+                        changes,
+                        ..
+                    } = empowerment
+                    {
+                        let rank = if bound { *max } else { *min };
+                        cost = cost
+                            .checked_add(
+                                rank.checked_mul(*cost_per_rank)
+                                    .ok_or("Empowerment cost overflow")?,
+                            )
+                            .ok_or("Empowerment cost overflow")?;
+                        for scaling in changes {
+                            values.apply(scaling, rank).map_err(|e| e.to_string())?;
+                        }
+                    }
+                }
+                mechanics.validate_values(&values)?;
+            }
+        } else if spell.kind != SpellKind::EchoStrike {
+            return Err(format!("Missing mechanics for {}", spell.id));
+        }
         for empowerment in &spell.empowerments {
+            if let SpellEmpowerment::Number { field, changes, .. } = empowerment {
+                if !parameter_keys.insert(&field.0)
+                    || (spell.mechanics.is_some() && changes.is_empty())
+                {
+                    return Err(format!("Duplicate or inert empowerment for {}", spell.id));
+                }
+            }
             let valid = match empowerment {
                 SpellEmpowerment::Number {
                     field,
@@ -208,7 +334,28 @@ pub fn parse_spell_catalog(json: &str) -> Result<Vec<SpellCatalogEntry>, String>
                     min,
                     max,
                     ..
-                } => field.kind() == spell.kind && !label.trim().is_empty() && min <= max,
+                } => {
+                    !field.0.trim().is_empty()
+                        && !label.trim().is_empty()
+                        && min <= max
+                        && field.legacy_owner().is_none_or(|id| id == spell.id)
+                        && (spell.mechanics.is_none() || *min == 0)
+                        && (spell.mechanics.is_some()
+                            || match spell.kind {
+                                SpellKind::EchoStrike => [
+                                    "echo_duration_seconds",
+                                    "echo_delay_seconds",
+                                    "echo_additional_echoes",
+                                ]
+                                .contains(&field.0.as_str()),
+                                SpellKind::Chronoblur => field.0 == "chronoblur_duration_ranks",
+                                SpellKind::Streamline => {
+                                    ["streamline_duration_ranks", "streamline_radius_ranks"]
+                                        .contains(&field.0.as_str())
+                                }
+                                _ => false,
+                            })
+                }
                 SpellEmpowerment::Toggle { label, .. } => {
                     spell.kind == SpellKind::EchoStrike && !label.trim().is_empty()
                 }
@@ -216,15 +363,6 @@ pub fn parse_spell_catalog(json: &str) -> Result<Vec<SpellCatalogEntry>, String>
             if !valid {
                 return Err(format!("Invalid empowerment for {}", spell.id));
             }
-        }
-    }
-    for kind in [
-        SpellKind::EchoStrike,
-        SpellKind::Chronoblur,
-        SpellKind::Streamline,
-    ] {
-        if !file.spells.iter().any(|spell| spell.kind == kind) {
-            return Err(format!("Missing spell: {}", kind.id()));
         }
     }
     Ok(file.spells)
@@ -297,6 +435,6 @@ mod tests {
         assert!(parse_spell_catalog(&invalid.to_string()).is_err());
         invalid = original;
         invalid["spells"].as_array_mut().unwrap().remove(0);
-        assert!(parse_spell_catalog(&invalid.to_string()).is_err());
+        assert!(parse_spell_catalog(&invalid.to_string()).is_ok());
     }
 }

@@ -2,6 +2,7 @@ use super::types::{WeaponProfile, WeaponSlot};
 
 /// Captured when damage resolves, so later equipment changes cannot relabel it.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub enum DamageSource {
     Weapon { name: String, slot: WeaponSlot },
     Unarmed { name: String },
@@ -42,6 +43,7 @@ impl std::fmt::Display for DamageSource {
 }
 
 #[derive(Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct DamageSourceStats {
     pub source: DamageSource,
     pub total_hp_damage: u64,

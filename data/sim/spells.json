@@ -7,69 +7,1127 @@
       "level": 10,
       "base_cost": 150,
       "casting_seconds": 1,
-      "components": { "somatic": true, "verbal": false },
+      "components": {
+        "somatic": true,
+        "verbal": false
+      },
       "description": "Your next successful attack echoes after a delay, dealing half its wound damage, rounded down.",
-      "casting_description": "1-second cast · Personal",
+      "casting_description": "1-second cast \u00b7 Personal",
       "casting_help": {
-        "use_once": "Cast Echo Strike once at the first available opening; opening spells queue behind each other.",
+        "use_once": "Cast once. Targeted spells start when predicted movement puts the enemy in range at completion; self buffs cast at the first available opening.",
         "manual": "Only cast Echo Strike when you press its button during combat.",
-        "as_often_as_possible": "Recast when casting is allowed and no echo is armed. Pending echoes continue independently."
+        "as_often_as_possible": "Cast first at the start of the fight, then recast when eligible and predicted movement puts an enemy within weapon reach at completion. An armed Echo Strike is not refreshed. Pending echoes continue independently."
       },
       "empowerments": [
-        { "type": "number", "field": "echo_duration_seconds", "label": "Extra duration", "min": 0, "max": 3600, "suffix": " s" },
-        { "type": "number", "field": "echo_delay_seconds", "label": "Echo delay", "min": 1, "max": 10, "suffix": " s" },
-        { "type": "number", "field": "echo_additional_echoes", "label": "Additional echoes", "min": 0, "max": 100, "suffix": "" },
-        { "type": "toggle", "field": "echo_full_damage", "label": "Full damage" }
+        {
+          "type": "number",
+          "field": "echo_duration_seconds",
+          "label": "Extra duration",
+          "min": 0,
+          "max": 3600,
+          "suffix": " s"
+        },
+        {
+          "type": "number",
+          "field": "echo_delay_seconds",
+          "label": "Echo delay",
+          "min": 1,
+          "max": 10,
+          "suffix": " s"
+        },
+        {
+          "type": "number",
+          "field": "echo_additional_echoes",
+          "label": "Additional echoes",
+          "min": 0,
+          "max": 100,
+          "suffix": ""
+        },
+        {
+          "type": "toggle",
+          "field": "echo_full_damage",
+          "label": "Full damage"
+        }
       ],
-      "summary": "Armed for {duration}s · {echoes} echo(s) · {damage} damage",
+      "summary": "Armed for {duration}s \u00b7 {echoes} echo(s) \u00b7 {damage} damage",
       "half_damage_text": "half, rounded down",
       "full_damage_text": "full",
       "echo_status": {
         "armed": "Echo armed: {seconds}s",
         "pending": "Echo {ordinal} in {seconds}s: {damage} damage",
         "dismiss": "Dismiss Echo Strike"
+      },
+      "echo_rules": {
+        "base_duration": 15,
+        "default_delay": 10,
+        "minimum_delay": 1,
+        "duration_cost_per_second": 5,
+        "cost_per_second_faster": 20,
+        "cost_per_extra_echo": 150,
+        "full_damage_cost": 200,
+        "normal_damage_divisor": 2,
+        "defense_per_echo": 2
       }
     },
     {
       "id": "spell_chronoblur",
-      "kind": "chronoblur",
       "name": "Chronoblur",
       "level": 4,
       "base_cost": 90,
       "casting_seconds": 2,
-      "components": { "somatic": true, "verbal": true },
+      "components": {
+        "somatic": true,
+        "verbal": true
+      },
       "description": "For 60 seconds, movement in the previous second grants +4 melee defense and makes missile attacks treat you as 20 feet farther away.",
-      "casting_description": "2-second cast · Touch (casts on self)",
+      "casting_description": "2-second cast \u00b7 Touch (casts on self)",
       "casting_help": {
-        "use_once": "Cast Chronoblur once at the first available opening; opening spells queue behind each other.",
+        "use_once": "Cast once. Targeted spells start when predicted movement puts the enemy in range at completion; self buffs cast at the first available opening.",
         "manual": "Only cast Chronoblur when you press its button during combat.",
-        "as_often_as_possible": "Recast Chronoblur when casting is allowed and its movement-based defense buff has expired."
+        "as_often_as_possible": "Recast when eligible and predicted movement puts an enemy in range at completion (weapon reach for self buffs). Active buffs, fields and channels are not refreshed."
       },
       "empowerments": [
-        { "type": "number", "field": "chronoblur_duration_ranks", "label": "Extra duration (30-second increments)", "min": 0, "max": 120, "suffix": "" }
+        {
+          "type": "number",
+          "field": "chronoblur_duration_ranks",
+          "label": "Extra duration (30-second increments)",
+          "min": 0,
+          "max": 120,
+          "suffix": "",
+          "cost_per_rank": 30,
+          "changes": [
+            {
+              "stat": "duration",
+              "per_rank": 30
+            }
+          ]
+        }
       ],
-      "summary": "Duration: {duration}s"
+      "summary": "Duration: {duration}s",
+      "mechanics": {
+        "target": "caster",
+        "ai_range": "weapon_reach",
+        "casting_ability": "constitution",
+        "values": {
+          "duration": 60,
+          "radius": 0
+        },
+        "effect": {
+          "type": "timed_buff",
+          "movement_defense": {
+            "melee_bonus": 4,
+            "ranged_distance": 20
+          },
+          "average_incoming_damage": false
+        }
+      }
     },
     {
       "id": "spell_streamline",
-      "kind": "streamline",
       "name": "Streamline",
       "level": 8,
       "base_cost": 130,
       "casting_seconds": 5,
-      "components": { "somatic": true, "verbal": true },
+      "components": {
+        "somatic": true,
+        "verbal": true
+      },
       "description": "For 5 minutes, damage dice against targets within 30 feet use their mathematical average, rounded down, before modifiers and damage reduction.",
-      "casting_description": "5-second cast · Field centered on caster",
+      "casting_description": "5-second cast \u00b7 Field centered on caster",
       "casting_help": {
-        "use_once": "Cast Streamline once at the first available opening; opening spells queue behind each other.",
+        "use_once": "Cast once. Targeted spells start when predicted movement puts the enemy in range at completion; self buffs cast at the first available opening.",
         "manual": "Only cast Streamline when you press its button during combat.",
-        "as_often_as_possible": "Recast Streamline when casting is allowed and its damage-averaging field has expired."
+        "as_often_as_possible": "Recast when eligible and predicted movement puts an enemy in range at completion (weapon reach for self buffs). Active buffs, fields and channels are not refreshed."
       },
       "empowerments": [
-        { "type": "number", "field": "streamline_duration_ranks", "label": "Extra duration (minutes)", "min": 0, "max": 120, "suffix": "" },
-        { "type": "number", "field": "streamline_radius_ranks", "label": "Extra radius (10-foot increments)", "min": 0, "max": 100, "suffix": "" }
+        {
+          "type": "number",
+          "field": "streamline_duration_ranks",
+          "label": "Extra duration (minutes)",
+          "min": 0,
+          "max": 120,
+          "suffix": "",
+          "cost_per_rank": 10,
+          "changes": [
+            {
+              "stat": "duration",
+              "per_rank": 60
+            }
+          ]
+        },
+        {
+          "type": "number",
+          "field": "streamline_radius_ranks",
+          "label": "Extra radius (10-foot increments)",
+          "min": 0,
+          "max": 100,
+          "suffix": "",
+          "cost_per_rank": 65,
+          "changes": [
+            {
+              "stat": "radius",
+              "per_rank": 10
+            }
+          ]
+        }
       ],
-      "summary": "Duration: {duration}s · Radius: {radius} ft"
+      "summary": "Duration: {duration}s \u00b7 Radius: {radius} ft",
+      "mechanics": {
+        "target": "caster",
+        "ai_range": "weapon_reach",
+        "casting_ability": "constitution",
+        "values": {
+          "duration": 300,
+          "radius": 30
+        },
+        "effect": {
+          "type": "timed_buff",
+          "movement_defense": null,
+          "average_incoming_damage": true
+        }
+      }
+    },
+    {
+      "id": "feat_of_strength",
+      "name": "Feat of Strength",
+      "level": 1,
+      "base_cost": 60,
+      "casting_seconds": 1,
+      "components": {
+        "somatic": true,
+        "verbal": true
+      },
+      "description": "Self buff: use 18/00 Strength for the next attack attempt, then expire.",
+      "casting_description": "1-second cast \u00b7 Self \u00b7 Constitution \u00b7 Exertion",
+      "casting_help": {
+        "use_once": "Cast once. Targeted spells start when predicted movement puts the enemy in range at completion; self buffs cast at the first available opening.",
+        "manual": "Cast Feat of Strength using its combat button.",
+        "as_often_as_possible": "Recast when eligible and predicted movement puts an enemy in range at completion (weapon reach for self buffs). Active buffs, fields and channels are not refreshed."
+      },
+      "empowerments": [
+        {
+          "type": "number",
+          "field": "feat_of_strength_duration",
+          "label": "Extra duration (5 seconds)",
+          "min": 0,
+          "max": 100,
+          "suffix": "",
+          "cost_per_rank": 5,
+          "changes": [
+            {
+              "stat": "duration",
+              "per_rank": 5
+            }
+          ]
+        },
+        {
+          "type": "number",
+          "field": "feat_of_strength_strength",
+          "label": "Extra Strength (50 fractional points)",
+          "min": 0,
+          "max": 100,
+          "suffix": "",
+          "cost_per_rank": 10,
+          "changes": [
+            {
+              "stat": "strength",
+              "per_rank": 50
+            }
+          ]
+        }
+      ],
+      "summary": "Self \u00b7 Duration: {duration}s",
+      "mechanics": {
+        "target": "caster",
+        "ai_range": "weapon_reach",
+        "casting_ability": "constitution",
+        "values": {
+          "duration": 60
+        },
+        "effect": {
+          "type": "strength",
+          "score": {
+            "type": "set",
+            "fractional_score": 1800
+          },
+          "maximum_base": 25,
+          "priority": 10,
+          "consume_on_attack": true
+        }
+      }
+    },
+    {
+      "id": "boost_strength",
+      "name": "Boost Strength",
+      "level": 6,
+      "base_cost": 110,
+      "casting_seconds": 10,
+      "components": {
+        "somatic": true,
+        "verbal": true
+      },
+      "description": "Self buff: roll d6 once and add it to Strength for the duration.",
+      "casting_description": "10-second cast \u00b7 Self \u00b7 Constitution \u00b7 Exertion",
+      "casting_help": {
+        "use_once": "Cast once. Targeted spells start when predicted movement puts the enemy in range at completion; self buffs cast at the first available opening.",
+        "manual": "Cast Boost Strength using its combat button.",
+        "as_often_as_possible": "Recast when eligible and predicted movement puts an enemy in range at completion (weapon reach for self buffs). Active buffs, fields and channels are not refreshed."
+      },
+      "empowerments": [
+        {
+          "type": "number",
+          "field": "boost_strength_duration",
+          "label": "Extra duration (30 minutes)",
+          "min": 0,
+          "max": 100,
+          "suffix": "",
+          "cost_per_rank": 10,
+          "changes": [
+            {
+              "stat": "duration",
+              "per_rank": 1800
+            }
+          ]
+        }
+      ],
+      "summary": "Self \u00b7 Duration: {duration}s",
+      "mechanics": {
+        "target": "caster",
+        "ai_range": "weapon_reach",
+        "casting_ability": "constitution",
+        "values": {
+          "duration": 10800
+        },
+        "effect": {
+          "type": "strength",
+          "score": {
+            "type": "add_roll",
+            "sides": 6,
+            "fractional_units_per_point": 100
+          },
+          "maximum_base": 25,
+          "priority": 0,
+          "consume_on_attack": false
+        }
+      }
+    },
+    {
+      "id": "aggravate_pain",
+      "name": "Aggravate Pain",
+      "level": 8,
+      "base_cost": 130,
+      "casting_seconds": 3,
+      "components": {
+        "somatic": true,
+        "verbal": true
+      },
+      "description": "Extend existing trauma for all creatures in a 10-foot radius unless they make a Mental save.",
+      "casting_description": "3-second cast \u00b7 30 feet \u00b7 Constitution \u00b7 Exertion",
+      "casting_help": {
+        "use_once": "Cast once. Targeted spells start when predicted movement puts the enemy in range at completion; self buffs cast at the first available opening.",
+        "manual": "Cast Aggravate Pain using its combat button.",
+        "as_often_as_possible": "Recast when eligible and predicted movement puts an enemy in range at completion (weapon reach for self buffs). Active buffs, fields and channels are not refreshed."
+      },
+      "empowerments": [
+        {
+          "type": "number",
+          "field": "aggravate_pain_duration",
+          "label": "Extra trauma (5 seconds)",
+          "min": 0,
+          "max": 100,
+          "suffix": "",
+          "cost_per_rank": 5,
+          "changes": [
+            {
+              "stat": "duration",
+              "per_rank": 5
+            }
+          ]
+        },
+        {
+          "type": "number",
+          "field": "aggravate_pain_range",
+          "label": "Extra range (5 feet)",
+          "min": 0,
+          "max": 100,
+          "suffix": "",
+          "cost_per_rank": 10,
+          "changes": [
+            {
+              "stat": "range",
+              "per_rank": 5
+            }
+          ]
+        },
+        {
+          "type": "number",
+          "field": "aggravate_pain_radius",
+          "label": "Extra radius (5 feet)",
+          "min": 0,
+          "max": 100,
+          "suffix": "",
+          "cost_per_rank": 40,
+          "changes": [
+            {
+              "stat": "radius",
+              "per_rank": 5
+            }
+          ]
+        }
+      ],
+      "summary": "Range: {range} ft \u00b7 Duration: {duration}s",
+      "mechanics": {
+        "target": "enemy",
+        "ai_range": "spell_range",
+        "casting_ability": "constitution",
+        "values": {
+          "range": 30,
+          "duration": 60,
+          "radius": 10
+        },
+        "effect": {
+          "type": "extend_trauma",
+          "save": {
+            "kind": "mental",
+            "outcome": "negate"
+          }
+        }
+      }
+    },
+    {
+      "id": "sweeping_agony",
+      "name": "Sweeping Agony",
+      "level": 9,
+      "base_cost": 140,
+      "casting_seconds": 1,
+      "components": {
+        "somatic": true,
+        "verbal": true
+      },
+      "description": "A 35-foot-wide field sweeps forward at 5 feet/second. Each creature crossed takes 3d10p phantom damage for trauma only; the caster and already-traumatized creatures are immune.",
+      "casting_description": "1-second cast \u00b7 Self \u00b7 Constitution \u00b7 Exertion",
+      "casting_help": {
+        "use_once": "Cast once. Targeted spells start when predicted movement puts the enemy in range at completion; self buffs cast at the first available opening.",
+        "manual": "Cast Sweeping Agony using its combat button.",
+        "as_often_as_possible": "Recast when eligible and predicted movement puts an enemy in range at completion (weapon reach for self buffs). Active buffs, fields and channels are not refreshed."
+      },
+      "empowerments": [
+        {
+          "type": "number",
+          "field": "sweeping_agony_damage",
+          "label": "Extra phantom damage (d10p)",
+          "min": 0,
+          "max": 100,
+          "suffix": "",
+          "cost_per_rank": 40,
+          "changes": [
+            {
+              "stat": "dice",
+              "per_rank": 1
+            }
+          ]
+        },
+        {
+          "type": "number",
+          "field": "sweeping_agony_duration",
+          "label": "Extra duration (8 seconds)",
+          "min": 0,
+          "max": 100,
+          "suffix": "",
+          "cost_per_rank": 140,
+          "changes": [
+            {
+              "stat": "duration",
+              "per_rank": 8
+            }
+          ]
+        },
+        {
+          "type": "number",
+          "field": "sweeping_agony_area",
+          "label": "Extra width (10 feet)",
+          "min": 0,
+          "max": 100,
+          "suffix": "",
+          "cost_per_rank": 20,
+          "changes": [
+            {
+              "stat": "width",
+              "per_rank": 10
+            }
+          ]
+        },
+        {
+          "type": "number",
+          "field": "sweeping_agony_speed",
+          "label": "Double speed (0 or 1)",
+          "min": 0,
+          "max": 1,
+          "suffix": "",
+          "cost_per_rank": 100,
+          "changes": [
+            {
+              "stat": "speed",
+              "per_rank": 5
+            }
+          ]
+        }
+      ],
+      "summary": "Self \u00b7 Duration: {duration}s",
+      "mechanics": {
+        "target": "enemy",
+        "ai_range": "sweep_distance",
+        "casting_ability": "constitution",
+        "values": {
+          "duration": 8,
+          "width": 35,
+          "dice": 3,
+          "speed": 5
+        },
+        "effect": {
+          "type": "damage",
+          "delivery": {
+            "type": "moving_line",
+            "caster_immune": true,
+            "ignore_traumatized": true
+          },
+          "damage": {
+            "sides": 10,
+            "penetrating": true,
+            "bonus_per_die": 0,
+            "flat_bonus": 0,
+            "armor_reduction": false,
+            "phantom": true,
+            "knockback": false
+          },
+          "attack": null,
+          "save": null
+        }
+      }
+    },
+    {
+      "id": "repel",
+      "name": "Repel",
+      "level": 1,
+      "base_cost": 60,
+      "casting_seconds": 1,
+      "components": {
+        "somatic": true,
+        "verbal": true
+      },
+      "description": "Physical save negates. Push an enemy directly away by 200 / target weight in pounds feet. The grid limits movement to whole tiles.",
+      "casting_description": "1-second cast \u00b7 30 feet \u00b7 Strength \u00b7 Exertion",
+      "casting_help": {
+        "use_once": "Cast once. Targeted spells start when predicted movement puts the enemy in range at completion; self buffs cast at the first available opening.",
+        "manual": "Cast Repel using its combat button.",
+        "as_often_as_possible": "Recast when eligible and predicted movement puts an enemy in range at completion (weapon reach for self buffs). Active buffs, fields and channels are not refreshed."
+      },
+      "empowerments": [
+        {
+          "type": "number",
+          "field": "repel_force",
+          "label": "Extra force (100 pounds)",
+          "min": 0,
+          "max": 100,
+          "suffix": "",
+          "cost_per_rank": 15,
+          "changes": [
+            {
+              "stat": "force",
+              "per_rank": 100
+            }
+          ]
+        },
+        {
+          "type": "number",
+          "field": "repel_range",
+          "label": "Extra range (5 feet)",
+          "min": 0,
+          "max": 100,
+          "suffix": "",
+          "cost_per_rank": 5,
+          "changes": [
+            {
+              "stat": "range",
+              "per_rank": 5
+            }
+          ]
+        }
+      ],
+      "summary": "Range: {range} ft \u00b7 Duration: {duration}s",
+      "mechanics": {
+        "target": "enemy",
+        "ai_range": "spell_range",
+        "casting_ability": "strength",
+        "values": {
+          "range": 30,
+          "force": 200
+        },
+        "effect": {
+          "type": "displace",
+          "subject": "enemy",
+          "distance": "force_over_weight",
+          "direction": "away_from_caster",
+          "stop_distance": 0,
+          "recovery": false,
+          "save": {
+            "kind": "physical",
+            "outcome": "negate"
+          }
+        }
+      }
+    },
+    {
+      "id": "missile",
+      "name": "Missile",
+      "level": 4,
+      "base_cost": 90,
+      "casting_seconds": 1,
+      "components": {
+        "somatic": true,
+        "verbal": true
+      },
+      "description": "Unerring d4p+1 projectile. Additional missiles volley the same enemy, each as an individual wound.",
+      "casting_description": "1-second cast \u00b7 180 feet \u00b7 Strength \u00b7 Exertion",
+      "casting_help": {
+        "use_once": "Cast once. Targeted spells start when predicted movement puts the enemy in range at completion; self buffs cast at the first available opening.",
+        "manual": "Cast Missile using its combat button.",
+        "as_often_as_possible": "Recast when eligible and predicted movement puts an enemy in range at completion (weapon reach for self buffs). Active buffs, fields and channels are not refreshed."
+      },
+      "empowerments": [
+        {
+          "type": "number",
+          "field": "missile_range",
+          "label": "Extra range (5 feet)",
+          "min": 0,
+          "max": 100,
+          "suffix": "",
+          "cost_per_rank": 5,
+          "changes": [
+            {
+              "stat": "range",
+              "per_rank": 5
+            }
+          ]
+        },
+        {
+          "type": "number",
+          "field": "missile_projectiles",
+          "label": "Additional missiles",
+          "min": 0,
+          "max": 100,
+          "suffix": "",
+          "cost_per_rank": 30,
+          "changes": [
+            {
+              "stat": "projectiles",
+              "per_rank": 1
+            }
+          ]
+        }
+      ],
+      "summary": "Range: {range} ft \u00b7 Duration: {duration}s",
+      "mechanics": {
+        "target": "enemy",
+        "ai_range": "spell_range",
+        "casting_ability": "strength",
+        "values": {
+          "range": 180,
+          "dice": 1,
+          "projectiles": 1
+        },
+        "effect": {
+          "type": "damage",
+          "delivery": {
+            "type": "volley"
+          },
+          "damage": {
+            "sides": 4,
+            "penetrating": true,
+            "bonus_per_die": 1,
+            "flat_bonus": 0,
+            "armor_reduction": false,
+            "phantom": false,
+            "knockback": false
+          },
+          "attack": null,
+          "save": null
+        }
+      }
+    },
+    {
+      "id": "bash_face",
+      "name": "Bash Face",
+      "level": 5,
+      "base_cost": 100,
+      "casting_seconds": 3,
+      "components": {
+        "somatic": true,
+        "verbal": false
+      },
+      "description": "Make an attack against d20p-4 defense; a hit deals 4d6p damage, bypassing worn armor but reduced by natural DR, and can cause knockback.",
+      "casting_description": "3-second cast \u00b7 15 feet \u00b7 Strength \u00b7 Exertion",
+      "casting_help": {
+        "use_once": "Cast once. Targeted spells start when predicted movement puts the enemy in range at completion; self buffs cast at the first available opening.",
+        "manual": "Cast Bash Face using its combat button.",
+        "as_often_as_possible": "Recast when eligible and predicted movement puts an enemy in range at completion (weapon reach for self buffs). Active buffs, fields and channels are not refreshed."
+      },
+      "empowerments": [
+        {
+          "type": "number",
+          "field": "bash_face_range",
+          "label": "Extra range (5 feet)",
+          "min": 0,
+          "max": 100,
+          "suffix": "",
+          "cost_per_rank": 20,
+          "changes": [
+            {
+              "stat": "range",
+              "per_rank": 5
+            }
+          ]
+        },
+        {
+          "type": "number",
+          "field": "bash_face_damage",
+          "label": "Extra damage (d6p)",
+          "min": 0,
+          "max": 100,
+          "suffix": "",
+          "cost_per_rank": 50,
+          "changes": [
+            {
+              "stat": "dice",
+              "per_rank": 1
+            }
+          ]
+        },
+        {
+          "type": "number",
+          "field": "bash_face_attack",
+          "label": "Attack bonus",
+          "min": 0,
+          "max": 100,
+          "suffix": "",
+          "cost_per_rank": 20,
+          "changes": [
+            {
+              "stat": "bonus",
+              "per_rank": 1
+            }
+          ]
+        }
+      ],
+      "summary": "Range: {range} ft \u00b7 Duration: {duration}s",
+      "mechanics": {
+        "target": "enemy",
+        "ai_range": "spell_range",
+        "casting_ability": "strength",
+        "values": {
+          "range": 15,
+          "dice": 4,
+          "projectiles": 1
+        },
+        "effect": {
+          "type": "damage",
+          "delivery": {
+            "type": "volley"
+          },
+          "damage": {
+            "sides": 6,
+            "penetrating": true,
+            "bonus_per_die": 0,
+            "flat_bonus": 0,
+            "armor_reduction": false,
+            "phantom": false,
+            "knockback": true
+          },
+          "attack": {
+            "attack_die": 20,
+            "defense_die": 20,
+            "defense_bonus": -4
+          },
+          "save": null
+        }
+      }
+    },
+    {
+      "id": "impaling_missile",
+      "name": "Impaling Missile",
+      "level": 7,
+      "base_cost": 120,
+      "casting_seconds": 2,
+      "components": {
+        "somatic": true,
+        "verbal": true
+      },
+      "description": "Unerring 2d4p+2 projectile. Continues to another creature within a 45-degree turn, losing d4p+1 damage per target and spending its remaining range.",
+      "casting_description": "2-second cast \u00b7 90 feet \u00b7 Strength \u00b7 Exertion",
+      "casting_help": {
+        "use_once": "Cast once. Targeted spells start when predicted movement puts the enemy in range at completion; self buffs cast at the first available opening.",
+        "manual": "Cast Impaling Missile using its combat button.",
+        "as_often_as_possible": "Recast when eligible and predicted movement puts an enemy in range at completion (weapon reach for self buffs). Active buffs, fields and channels are not refreshed."
+      },
+      "empowerments": [
+        {
+          "type": "number",
+          "field": "impaling_missile_damage",
+          "label": "Extra damage (d4p+1)",
+          "min": 0,
+          "max": 100,
+          "suffix": "",
+          "cost_per_rank": 40,
+          "changes": [
+            {
+              "stat": "dice",
+              "per_rank": 1
+            }
+          ]
+        },
+        {
+          "type": "number",
+          "field": "impaling_missile_range",
+          "label": "Extra range (10 feet)",
+          "min": 0,
+          "max": 100,
+          "suffix": "",
+          "cost_per_rank": 5,
+          "changes": [
+            {
+              "stat": "range",
+              "per_rank": 10
+            }
+          ]
+        }
+      ],
+      "summary": "Range: {range} ft \u00b7 Duration: {duration}s",
+      "mechanics": {
+        "target": "enemy",
+        "ai_range": "spell_range",
+        "casting_ability": "strength",
+        "values": {
+          "range": 90,
+          "dice": 2
+        },
+        "effect": {
+          "type": "damage",
+          "delivery": {
+            "type": "chain",
+            "turn_degrees": 45,
+            "dice_lost_per_target": 1
+          },
+          "damage": {
+            "sides": 4,
+            "penetrating": true,
+            "bonus_per_die": 1,
+            "flat_bonus": 0,
+            "armor_reduction": false,
+            "phantom": false,
+            "knockback": false
+          },
+          "attack": null,
+          "save": null
+        }
+      }
+    },
+    {
+      "id": "pugilism",
+      "name": "Pugilism",
+      "level": 9,
+      "base_cost": 140,
+      "casting_seconds": 2,
+      "components": {
+        "somatic": true,
+        "verbal": false
+      },
+      "description": "Channel remote fists using your fist attack skill. Two fists deal (d4p-2)+(d4p-2)+6 before DR. The caster must keep channeling.",
+      "casting_description": "2-second cast \u00b7 60 feet \u00b7 Strength \u00b7 Exertion",
+      "casting_help": {
+        "use_once": "Cast once. Targeted spells start when predicted movement puts the enemy in range at completion; self buffs cast at the first available opening.",
+        "manual": "Cast Pugilism using its combat button.",
+        "as_often_as_possible": "Recast when eligible and predicted movement puts an enemy in range at completion (weapon reach for self buffs). Active buffs, fields and channels are not refreshed."
+      },
+      "empowerments": [
+        {
+          "type": "number",
+          "field": "pugilism_duration",
+          "label": "Extra duration (5 seconds)",
+          "min": 0,
+          "max": 100,
+          "suffix": "",
+          "cost_per_rank": 5,
+          "changes": [
+            {
+              "stat": "duration",
+              "per_rank": 5
+            }
+          ]
+        },
+        {
+          "type": "number",
+          "field": "pugilism_range",
+          "label": "Extra range (5 feet)",
+          "min": 0,
+          "max": 100,
+          "suffix": "",
+          "cost_per_rank": 20,
+          "changes": [
+            {
+              "stat": "range",
+              "per_rank": 5
+            }
+          ]
+        },
+        {
+          "type": "number",
+          "field": "pugilism_strength",
+          "label": "Extra virtual Strength (1 point)",
+          "min": 0,
+          "max": 100,
+          "suffix": "",
+          "cost_per_rank": 40,
+          "changes": [
+            {
+              "stat": "strength",
+              "per_rank": 100
+            }
+          ]
+        }
+      ],
+      "summary": "Range: {range} ft \u00b7 Duration: {duration}s",
+      "mechanics": {
+        "target": "enemy",
+        "ai_range": "spell_range",
+        "casting_ability": "strength",
+        "values": {
+          "range": 60,
+          "duration": 120
+        },
+        "effect": {
+          "type": "summon_melee",
+          "count": 2,
+          "hp_percent": 10,
+          "defense_die": 20,
+          "defense_bonus": 12,
+          "virtual_strength": 1899,
+          "strength_damage": 6,
+          "maximum_strength_base": 25,
+          "damage": {
+            "sides": 4,
+            "penetrating": true,
+            "bonus_per_die": -2,
+            "flat_bonus": 0,
+            "armor_reduction": true,
+            "phantom": false,
+            "knockback": false
+          }
+        }
+      }
+    },
+    {
+      "id": "forceful_charge",
+      "name": "Forceful Charge",
+      "level": 11,
+      "base_cost": 160,
+      "casting_seconds": 1,
+      "components": {
+        "somatic": true,
+        "verbal": false
+      },
+      "description": "Move toward the nearest enemy with the knockback force of a 100-damage hit. This causes no HP damage.",
+      "casting_description": "1-second cast \u00b7 Self \u00b7 Strength \u00b7 Exertion",
+      "casting_help": {
+        "use_once": "Cast once. Targeted spells start when predicted movement puts the enemy in range at completion; self buffs cast at the first available opening.",
+        "manual": "Cast Forceful Charge using its combat button.",
+        "as_often_as_possible": "Recast when eligible and predicted movement puts an enemy in range at completion (weapon reach for self buffs). Active buffs, fields and channels are not refreshed."
+      },
+      "empowerments": [
+        {
+          "type": "number",
+          "field": "forceful_charge_force",
+          "label": "Extra force (25 damage points)",
+          "min": 0,
+          "max": 100,
+          "suffix": "",
+          "cost_per_rank": 40,
+          "changes": [
+            {
+              "stat": "force",
+              "per_rank": 25
+            }
+          ]
+        }
+      ],
+      "summary": "Self \u00b7 Instantaneous movement",
+      "mechanics": {
+        "target": "enemy",
+        "ai_range": "any_enemy",
+        "casting_ability": "strength",
+        "values": {
+          "force": 100
+        },
+        "effect": {
+          "type": "displace",
+          "subject": "caster",
+          "distance": "knockback_impact",
+          "direction": "toward_target",
+          "stop_distance": 1,
+          "recovery": true,
+          "save": null
+        }
+      }
+    },
+    {
+      "id": "stay_down",
+      "name": "Stay Down",
+      "level": 6,
+      "base_cost": 110,
+      "casting_seconds": 1,
+      "components": {
+        "somatic": true,
+        "verbal": true
+      },
+      "description": "Create a 10-foot-radius field: knockdown recovery takes one extra second and requires a Physical save. Crawling is not modeled.",
+      "casting_description": "1-second cast \u00b7 60 feet \u00b7 Strength \u00b7 Exertion",
+      "casting_help": {
+        "use_once": "Cast once. Targeted spells start when predicted movement puts the enemy in range at completion; self buffs cast at the first available opening.",
+        "manual": "Only cast using the combat button.",
+        "as_often_as_possible": "Recast when eligible and predicted movement puts an enemy in range at completion (weapon reach for self buffs). Active buffs, fields and channels are not refreshed."
+      },
+      "empowerments": [
+        {
+          "type": "number",
+          "field": "stay_down_duration",
+          "label": "Extra duration (seconds)",
+          "min": 0,
+          "max": 100,
+          "suffix": "",
+          "cost_per_rank": 10,
+          "changes": [
+            {
+              "stat": "duration",
+              "per_rank": 1
+            }
+          ]
+        },
+        {
+          "type": "number",
+          "field": "stay_down_radius",
+          "label": "Extra radius (5 feet)",
+          "min": 0,
+          "max": 100,
+          "suffix": "",
+          "cost_per_rank": 25,
+          "changes": [
+            {
+              "stat": "radius",
+              "per_rank": 5
+            }
+          ]
+        }
+      ],
+      "summary": "Range: {range} ft \u00b7 Duration: {duration}s",
+      "mechanics": {
+        "target": "enemy",
+        "ai_range": "spell_range",
+        "casting_ability": "strength",
+        "values": {
+          "range": 60,
+          "duration": 10,
+          "radius": 10
+        },
+        "effect": {
+          "type": "recovery_field",
+          "extra_seconds": 1,
+          "save": {
+            "kind": "physical",
+            "outcome": "negate"
+          }
+        }
+      }
+    },
+    {
+      "id": "kinetic_overload",
+      "name": "Kinetic Overload",
+      "level": 8,
+      "base_cost": 130,
+      "casting_seconds": 1,
+      "components": {
+        "somatic": true,
+        "verbal": true
+      },
+      "description": "Charge a carried object. It detonates after 30 seconds in a 10-foot radius for 4d6p damage; Dodge halves. Throwing objects is not modeled.",
+      "casting_description": "1-second cast \u00b7 Touch (carried object) \u00b7 Strength \u00b7 Exertion",
+      "casting_help": {
+        "use_once": "Cast once. Targeted spells start when predicted movement puts the enemy in range at completion; self buffs cast at the first available opening.",
+        "manual": "Only cast using the combat button.",
+        "as_often_as_possible": "Recast when eligible and predicted movement puts an enemy in range at completion (weapon reach for self buffs). Active buffs, fields and channels are not refreshed."
+      },
+      "empowerments": [
+        {
+          "type": "number",
+          "field": "kinetic_overload_duration",
+          "label": "Extra fuse time (5 seconds)",
+          "min": 0,
+          "max": 100,
+          "suffix": "",
+          "cost_per_rank": 5,
+          "changes": [
+            {
+              "stat": "duration",
+              "per_rank": 5
+            }
+          ]
+        },
+        {
+          "type": "number",
+          "field": "kinetic_overload_damage",
+          "label": "Extra damage (d6p)",
+          "min": 0,
+          "max": 100,
+          "suffix": "",
+          "cost_per_rank": 85,
+          "changes": [
+            {
+              "stat": "dice",
+              "per_rank": 1
+            }
+          ]
+        }
+      ],
+      "summary": "Carried object \u00b7 Fuse: {duration}s",
+      "mechanics": {
+        "target": "caster",
+        "ai_range": "weapon_reach",
+        "casting_ability": "strength",
+        "values": {
+          "duration": 30,
+          "dice": 4,
+          "radius": 10
+        },
+        "effect": {
+          "type": "damage",
+          "delivery": {
+            "type": "delayed_radius",
+            "caster_immune": false
+          },
+          "damage": {
+            "sides": 6,
+            "penetrating": true,
+            "bonus_per_die": 0,
+            "flat_bonus": 0,
+            "armor_reduction": false,
+            "phantom": false,
+            "knockback": false
+          },
+          "attack": null,
+          "save": {
+            "kind": "dodge",
+            "outcome": "half"
+          }
+        }
+      }
     }
   ]
 }

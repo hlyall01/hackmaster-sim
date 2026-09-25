@@ -2,6 +2,8 @@
 
 pub(crate) mod combat;
 pub(crate) mod magic;
+mod spell_effects;
+pub use spell_effects::ConfiguredEffect;
 pub use combat::weapon_damage_expression;
 pub use magic::{
     MagicProfile, MagicState, ScheduledEcho, SpellDefinition, SpellEffect, SpellEvent,
@@ -10,6 +12,7 @@ pub use magic::{
 mod damage_sources;
 pub use damage_sources::{DamageSource, DamageSourceStats};
 mod engine;
+mod intimidation;
 mod knockback;
 pub use knockback::{KnockbackRule, knockback_rule_for_attack};
 mod modifiers;
@@ -55,6 +58,7 @@ pub(crate) fn counter_event(counter: combat::CounterAttackOutcome) -> AttackEven
         knockback_ft: counter.knockback_ft,
         hold_at_bay: false,
         is_charge: false,
+        is_aggressive: false,
         weapon_slot: counter.weapon_slot,
         use_jab: counter.use_jab,
         is_ranged: counter.is_ranged,
