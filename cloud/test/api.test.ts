@@ -65,6 +65,15 @@ test('assignment, complete saves, conflicts, revision recovery and revoked acces
   const restored = await call('admin', `characters/${id}/restore`, 'POST', { ...saveBody(2), restore_version: 1 });
   assert.equal(restored.data.version, 3);
   assert.deepEqual(restored.data.document, document());
+  const exported = await call('admin', `characters/${id}/export`);
+  assert.equal(exported.status, 200);
+  assert.deepEqual(exported.data.character.document, document());
+  const imported = await call('admin', 'characters', 'POST', {
+    document: exported.data.character.document, mutation_id: crypto.randomUUID(),
+  });
+  assert.equal(imported.status, 201);
+  assert.notEqual(imported.data.id, id);
+  assert.deepEqual(imported.data.document, document());
   await call('admin', `characters/${id}/assignments`, 'DELETE', { user_id: 'player' });
   assert.equal((await call('player', `characters/${id}`, 'PUT', saveBody(3))).status, 404);
   assert.equal((await call('player', `characters/${id}`)).status, 404);

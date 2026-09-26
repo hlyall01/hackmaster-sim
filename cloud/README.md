@@ -90,6 +90,9 @@ All resources below are dedicated to this test:
 Worker bindings, issuer and audience are in `wrangler.jsonc`. Set the administrator
 email during deployment rather than putting personal configuration in Git:
 
+Use Node.js 24 or newer for the service tests (TypeScript execution and SQLite).
+Install the locked dependencies with `npm ci`.
+
 ```sh
 cd cloud
 npm ci

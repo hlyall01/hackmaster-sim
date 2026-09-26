@@ -86,3 +86,13 @@ test('initial publication never overwrites an existing creation draft', async ()
   assert.deepEqual(store.list(null), [saved]);
   f.w.close();
 });
+
+test('storage failure prevents a save and gives an export recovery instruction', async () => {
+  const f = await fixture(); await f.load();
+  f.w.Storage.prototype.setItem = () => { throw new Error('Quota exceeded'); };
+  f.bridge.publish(0, JSON.stringify({ schema_version: 1, player: { name: 'Cannot store' } }));
+  await f.click('Save online');
+  assert.equal(f.writes(), 0);
+  assert.match(f.w.document.querySelector('[role=status]').textContent, /Export your character/);
+  f.w.close();
+});
