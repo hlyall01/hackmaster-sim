@@ -68,13 +68,23 @@ form challenges become invalid when the token changes; users can reload.
    comments do not trigger paid coding runs.
 4. A separate trusted screening job uses one bounded, tool-free Responses call
    (`gpt-4.1-mini-2025-04-14`, at most 300 output tokens) to decide whether the
-   request is an actual sim-gui feature, improvement, or bug fix. This applies to
+   request is an actual sim-gui feature, improvement, or bug fix AND a small,
+   localized change with a clear completion condition. This applies to
    every follow-up too. Unrelated requests show **Request rejected** and a reason;
-   vague relevant requests ask for clarification. Corrected feedback can be sent
+   vague or oversized relevant requests ask for clarification or a smaller first
+   step. Whole-app redesigns, standalone tools, design/feedback platforms, major
+   systems and independent feature bundles do not start agents. Saying "MVP" or
+   "simple" does not bypass this check. An explicitly narrowed follow-up can pass.
+   The structured scope must be `small` even if the decision says `accept`.
+   Corrected feedback can be sent
    from the same ticket. API errors, refusals and invalid results fail closed.
    Screening uses the existing OpenAI key and billing cap; no coding, PR update,
    build or preview deployment starts without explicit acceptance. The classifier
-   is a relevance filter, not a replacement for the sandbox or publisher restrictions.
+   estimates relevance and scope; it cannot guarantee runtime or replace the
+   sandbox or publisher restrictions. The agent also checks scope after reading
+   the code, targets roughly 10 minutes of implementation with time for tests,
+   and must stop early with an empty patch and a smaller proposal if work grows
+   or repeatedly fails. Required validation is never skipped to meet that target.
    Every accepted request then starts a Codex job in a workspace sandbox with no
    repository write token or Cloudflare secret. It returns an untrusted patch.
 5. A fresh publishing job validates the patch, rejecting infrastructure changes,
@@ -160,7 +170,7 @@ It checks live GitHub OIDC verification and rejection of a mismatched run/revisi
 It does not start an agent or write a ticket. Unit tests cover signed comment
 updates, replay/stale-run rejection, event filtering, and partial session records.
 
-**Evaluate request screening** is a manual Actions workflow for nine representative
+**Evaluate request screening** is a manual Actions workflow for 17 representative
 valid/invalid requests. It uses the real screening API (and a small amount of API
 credit), but creates no issues, PRs or coding runs. Run it when changing the screening
 policy or model. Local tests mock API responses and verify that only acceptance

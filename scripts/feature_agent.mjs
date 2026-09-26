@@ -98,7 +98,7 @@ switch (process.argv[2]) {
     output('pr_number', pr?.number || '');
     output('accepted', 'true');
     await comment({ status: 'screening', pr: pr?.html_url, sha: pr?.head.sha,
-      message: 'Checking whether this is a feature or improvement for sim-gui before starting the coding agent.' });
+      message: 'Checking that this improves sim-gui and is small enough for one coding run.' });
     break;
   }
   case 'screen': {
@@ -108,10 +108,10 @@ switch (process.argv[2]) {
       const result = await screenFeature(request, env.OPENAI_API_KEY);
       if (result.decision !== 'accept') {
         await comment({ status: result.decision === 'reject' ? 'rejected' : 'needs-info',
-          message: `${result.decision === 'reject' ? 'Request rejected.' : 'More detail needed.'} ${result.reason} No coding run was started. You can submit corrected feedback below.` });
+          message: `${result.decision === 'reject' ? 'Request rejected.' : result.scope === 'large' ? 'Please choose a smaller first step.' : 'More detail needed.'} ${result.reason} No coding run was started. You can submit corrected feedback below.` });
         break;
       }
-      await comment({ status: 'coding', message: 'This request is relevant to sim-gui. The coding agent is starting; any existing preview stays available.' });
+      await comment({ status: 'coding', message: 'This request passed the relevance and small-scope checks. The coding agent is starting; any existing preview stays available.' });
       output('approved', 'true');
     } catch {
       // Never turn an API error, truncated response or invalid result into permission to build.
