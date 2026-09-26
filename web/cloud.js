@@ -177,10 +177,15 @@ function installCloudCharacters() {
     open.title = status;
     dialog.replaceChildren();
     adminOpen.hidden = !user?.admin;
-    element('h2', adminView && user?.admin ? 'Assign characters — TEST environment' : 'Character saves — TEST environment');
+    const header = element('div');
+    Object.assign(header.style, {display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:'16px'});
+    const title = element('h2', adminView && user?.admin ? 'Assign characters — TEST environment' : 'Character saves — TEST environment', header);
+    title.style.margin = '0';
+    const close = element('button', 'Close', header);
+    close.style.flexShrink = '0';
+    close.onclick = () => dialog.close();
     element('p', user ? `${user.email}${user.admin ? ' · Administrator' : ''}` : guest ? 'Guest · Simulation only' : 'Choose how to continue');
     const message = element('p', status); message.setAttribute('role', 'status');
-    button('Close', () => dialog.close());
     button('Refresh', async () => { await refresh(); status = 'Character list refreshed.'; });
     button(user ? 'Sign in again' : 'Sign in with Google', () => location.assign('/api/login'));
     if (!user) button('Continue without logging in', async () => {
