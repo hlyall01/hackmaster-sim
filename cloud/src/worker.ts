@@ -105,8 +105,8 @@ export async function characterApi(request: Request, env: RuntimeEnv, identity: 
   const adminOnly = () => { if (!admin) fail(403, 'Administrator access required.'); };
   const canEdit = async (id: string) => {
     const row = await db.prepare(`SELECT c.* FROM characters c WHERE c.id=? AND (?=1 OR NOT EXISTS(SELECT 1 FROM character_deletions d WHERE d.character_id=c.id)) AND
-      (?=1 OR EXISTS(SELECT 1 FROM character_owners o WHERE o.character_id=c.id AND o.user_id=?) OR EXISTS(SELECT 1 FROM assignments a WHERE a.character_id=c.id AND a.user_id=?))`)
-      .bind(id, Number(admin), Number(admin), identity.id, identity.id).first<CharacterRow>();
+      (?=1 OR EXISTS(SELECT 1 FROM character_owners o WHERE o.character_id=c.id AND o.user_id=?))`)
+      .bind(id, Number(admin), Number(admin), identity.id).first<CharacterRow>();
     if (!row) fail(404, 'Character not found or access was revoked.');
     return row!;
   };
@@ -122,27 +122,23 @@ export async function characterApi(request: Request, env: RuntimeEnv, identity: 
   if (path === '/api/roster' && request.method === 'GET') {
     const rows = (await db.prepare(`SELECT c.id,c.name,c.version,
       EXISTS(SELECT 1 FROM character_owners o WHERE o.character_id=c.id AND o.user_id=?) AS is_owner,
-      EXISTS(SELECT 1 FROM assignments a WHERE a.character_id=c.id AND a.user_id=?) AS is_assigned,
-      (?=1 OR EXISTS(SELECT 1 FROM character_owners o WHERE o.character_id=c.id AND o.user_id=?) OR
-      EXISTS(SELECT 1 FROM assignments a WHERE a.character_id=c.id AND a.user_id=?)) AS can_edit
-      FROM characters c WHERE NOT EXISTS(SELECT 1 FROM character_deletions d WHERE d.character_id=c.id) ORDER BY c.name,c.id`).bind(identity.id, identity.id, Number(admin), identity.id, identity.id).all()).results;
+      (?=1 OR EXISTS(SELECT 1 FROM character_owners o WHERE o.character_id=c.id AND o.user_id=?)) AS can_edit
+      FROM characters c WHERE NOT EXISTS(SELECT 1 FROM character_deletions d WHERE d.character_id=c.id) ORDER BY c.name,c.id`).bind(identity.id, Number(admin), identity.id).all()).results;
     return json(rows);
   }
   const rosterId = /^\/api\/roster\/([a-f0-9-]{36})$/.exec(path)?.[1];
   if (rosterId && request.method === 'GET') {
     const row = await db.prepare(`SELECT c.id,c.name,c.version,c.document,
       EXISTS(SELECT 1 FROM character_owners o WHERE o.character_id=c.id AND o.user_id=?) AS is_owner,
-      EXISTS(SELECT 1 FROM assignments a WHERE a.character_id=c.id AND a.user_id=?) AS is_assigned,
-      (?=1 OR EXISTS(SELECT 1 FROM character_owners o WHERE o.character_id=c.id AND o.user_id=?) OR
-      EXISTS(SELECT 1 FROM assignments a WHERE a.character_id=c.id AND a.user_id=?)) AS can_edit
-      FROM characters c WHERE c.id=? AND NOT EXISTS(SELECT 1 FROM character_deletions d WHERE d.character_id=c.id)`).bind(identity.id, identity.id, Number(admin), identity.id, identity.id, rosterId).first<CharacterRow>();
+      (?=1 OR EXISTS(SELECT 1 FROM character_owners o WHERE o.character_id=c.id AND o.user_id=?)) AS can_edit
+      FROM characters c WHERE c.id=? AND NOT EXISTS(SELECT 1 FROM character_deletions d WHERE d.character_id=c.id)`).bind(identity.id, Number(admin), identity.id, rosterId).first<CharacterRow>();
     if (!row) fail(404, 'Character not found.');
     return json(unpack(row!));
   }
   if (path === '/api/characters' && request.method === 'GET') {
     return json((await db.prepare(`SELECT c.id,c.name,c.version,c.updated_at,EXISTS(SELECT 1 FROM character_deletions d WHERE d.character_id=c.id) AS deleted FROM characters c WHERE
-      (?=1 OR NOT EXISTS(SELECT 1 FROM character_deletions d WHERE d.character_id=c.id)) AND (?=1 OR EXISTS(SELECT 1 FROM character_owners o WHERE o.character_id=c.id AND o.user_id=?) OR EXISTS(SELECT 1 FROM assignments a WHERE a.character_id=c.id AND a.user_id=?)) ORDER BY c.name,c.id`)
-      .bind(Number(admin), Number(admin), identity.id, identity.id).all()).results);
+      (?=1 OR NOT EXISTS(SELECT 1 FROM character_deletions d WHERE d.character_id=c.id)) AND (?=1 OR EXISTS(SELECT 1 FROM character_owners o WHERE o.character_id=c.id AND o.user_id=?)) ORDER BY c.name,c.id`)
+      .bind(Number(admin), Number(admin), identity.id).all()).results);
   }
   if (path === '/api/characters' && request.method === 'POST') {
     const input = await body(request);
@@ -151,6 +147,7 @@ export async function characterApi(request: Request, env: RuntimeEnv, identity: 
     const existing = await db.prepare('SELECT *,character_id AS id FROM revisions WHERE mutation_id=? AND updated_by=?').bind(mutationId, identity.id).first<CharacterRow>();
     if (existing) {
       if (await db.prepare('SELECT 1 FROM character_deletions WHERE character_id=?').bind(existing.id).first()) fail(410, 'This character was deleted. Create a new copy instead.');
+      await canEdit(existing.id);
       return json(unpack(existing));
     }
     const id = crypto.randomUUID();
@@ -158,12 +155,12 @@ export async function characterApi(request: Request, env: RuntimeEnv, identity: 
       .bind(id, doc.name, doc.text, identity.id, new Date().toISOString(), mutationId).run();
     return json(unpack(await canEdit(id)), 201);
   }
-  const match = /^\/api\/characters\/([a-f0-9-]{36})(?:\/(assignments|revisions|restore|export))?$/.exec(path);
+  const match = /^\/api\/characters\/([a-f0-9-]{36})(?:\/(owner|assignments|revisions|restore|export))?$/.exec(path);
   if (!match) fail(404, 'Unknown endpoint.');
   const [, id, action] = match!;
   if (!action && request.method === 'DELETE') {
     const expected = integer((await body(request)).version);
-    if (!await db.prepare('SELECT 1 FROM character_owners WHERE character_id=? AND user_id=? UNION ALL SELECT 1 FROM assignments WHERE character_id=? AND user_id=?').bind(id, identity.id, id, identity.id).first()) fail(403, 'This character is not yours or assigned to you.');
+    if (!await db.prepare('SELECT 1 FROM character_owners WHERE character_id=? AND user_id=?').bind(id, identity.id).first()) fail(403, 'Only the current owner can delete this character.');
     const prior = await db.prepare('SELECT deleted_version FROM character_deletions WHERE character_id=?').bind(id).first<{deleted_version:number}>();
     if (prior) {
       if (prior.deleted_version !== expected) fail(409, 'Character version changed. Reload before deleting.');
@@ -171,10 +168,9 @@ export async function characterApi(request: Request, env: RuntimeEnv, identity: 
     }
     const deleted = await db.prepare(`INSERT INTO character_deletions
       SELECT id,?,?,? FROM characters WHERE id=? AND version=? AND
-      (EXISTS(SELECT 1 FROM character_owners WHERE character_id=? AND user_id=?) OR
-      EXISTS(SELECT 1 FROM assignments WHERE character_id=? AND user_id=?))
+      EXISTS(SELECT 1 FROM character_owners WHERE character_id=? AND user_id=?)
       ON CONFLICT(character_id) DO NOTHING RETURNING character_id`)
-      .bind(identity.id, expected, new Date().toISOString(), id, expected, id, identity.id, id, identity.id).first();
+      .bind(identity.id, expected, new Date().toISOString(), id, expected, id, identity.id).first();
     if (!deleted) fail(409, 'Character changed. Reload before deleting; nothing was discarded.');
     return json({deleted:true, id});
   }
@@ -187,16 +183,19 @@ export async function characterApi(request: Request, env: RuntimeEnv, identity: 
     return json((await db.prepare('SELECT version,name,updated_by,updated_at FROM revisions WHERE character_id=? AND version<? ORDER BY version DESC LIMIT 200')
       .bind(id, before).all()).results);
   }
-  if (action === 'assignments') {
+  // The legacy URL remains compatible, but assignment now transfers the one owner.
+  if (action === 'owner' || action === 'assignments') {
     adminOnly();
-    if (request.method === 'GET') return json((await db.prepare('SELECT u.id,u.email,EXISTS(SELECT 1 FROM character_owners o WHERE o.character_id=? AND o.user_id=u.id) AS is_owner FROM users u WHERE EXISTS(SELECT 1 FROM assignments a WHERE a.character_id=? AND a.user_id=u.id) OR EXISTS(SELECT 1 FROM character_owners o WHERE o.character_id=? AND o.user_id=u.id) ORDER BY u.email').bind(id, id, id).all()).results);
+    if (request.method === 'GET') return json((await db.prepare('SELECT u.id,u.email,1 AS is_owner FROM users u JOIN character_owners o ON o.user_id=u.id WHERE o.character_id=?').bind(id).all()).results);
+    if (request.method !== 'PUT') fail(405, 'Transfer ownership to another player instead of revoking it.');
     const input = await body(request);
     if (typeof input.user_id !== 'string') fail(400, 'User ID required.');
     if (!await db.prepare('SELECT 1 FROM users WHERE id=?').bind(input.user_id).first()) fail(404, 'The player must sign in first.');
-    if (request.method === 'PUT') await db.prepare('INSERT OR IGNORE INTO assignments VALUES(?,?,?)').bind(id, input.user_id, identity.id).run();
-    else if (request.method === 'DELETE') await db.prepare('DELETE FROM assignments WHERE character_id=? AND user_id=?').bind(id, input.user_id).run();
-    else fail(405, 'Method not allowed.');
-    return json({ saved: true });
+    const owner = await db.prepare(`UPDATE character_owners SET user_id=? WHERE character_id=?
+      AND EXISTS(SELECT 1 FROM administrators WHERE user_id=?) RETURNING user_id`)
+      .bind(input.user_id, id, identity.id).first();
+    if (!owner) fail(403, 'Administrator access required.');
+    return json({saved:true, owner});
   }
   if ((!action && request.method === 'PUT') || (action === 'restore' && request.method === 'POST')) {
     if (action === 'restore') adminOnly();
@@ -213,12 +212,11 @@ export async function characterApi(request: Request, env: RuntimeEnv, identity: 
       if (!historical) fail(404, 'Revision not found.');
       doc = documentValue(JSON.parse(historical!.document));
     } else doc = documentValue(input.document);
-    // Check assignment again inside the write, so revocation cannot race the earlier read.
+    // Check ownership again inside the write, so a transfer cannot race the earlier read.
     const saved = await db.prepare(`UPDATE characters SET name=?,document=?,version=version+1,updated_by=?,updated_at=?,mutation_id=?
       WHERE id=? AND version=? AND (?=1 OR NOT EXISTS(SELECT 1 FROM character_deletions WHERE character_id=?)) AND (EXISTS(SELECT 1 FROM administrators WHERE user_id=?) OR
-      EXISTS(SELECT 1 FROM character_owners WHERE character_id=? AND user_id=?) OR
-      EXISTS(SELECT 1 FROM assignments WHERE character_id=? AND user_id=?)) RETURNING *`)
-      .bind(doc.name, doc.text, identity.id, new Date().toISOString(), mutationId, id, expected, Number(action === 'restore'), id, identity.id, id, identity.id, id, identity.id).first<CharacterRow>();
+      EXISTS(SELECT 1 FROM character_owners WHERE character_id=? AND user_id=?)) RETURNING *`)
+      .bind(doc.name, doc.text, identity.id, new Date().toISOString(), mutationId, id, expected, Number(action === 'restore'), id, identity.id, id, identity.id).first<CharacterRow>();
     if (!saved) {
       await canEdit(id);
       fail(409, 'This character has changed. Your draft is preserved; load the latest version before saving again.');

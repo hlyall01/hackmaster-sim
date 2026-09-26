@@ -12,6 +12,7 @@ function fixture() {
   sql.exec(readFileSync(new URL('../migrations/0001_characters.sql', import.meta.url), 'utf8'));
   sql.exec(readFileSync(new URL('../migrations/0002_character_owners.sql', import.meta.url), 'utf8'));
   sql.exec(readFileSync(new URL('../migrations/0003_character_deletion.sql', import.meta.url), 'utf8'));
+  sql.exec(readFileSync(new URL('../migrations/0004_single_owner.sql', import.meta.url), 'utf8'));
   const db = { prepare(query: string) {
     let args: (string | number | null)[] = [];
     return {
@@ -79,7 +80,7 @@ test('assignment, complete saves, conflicts, revision recovery and revoked acces
   assert.equal(imported.status, 201);
   assert.notEqual(imported.data.id, id);
   assert.deepEqual(imported.data.document, document());
-  await call('admin', `characters/${id}/assignments`, 'DELETE', { user_id: 'player' });
+  await call('admin', `characters/${id}/owner`, 'PUT', { user_id: 'admin' });
   assert.equal((await call('player', `characters/${id}`, 'PUT', saveBody(3))).status, 404);
   assert.equal((await call('player', `characters/${id}`)).status, 404);
 });
@@ -117,7 +118,7 @@ test('revocation between the permission read and write cannot save a character',
     const statement = prepare(query);
     const first = statement.first.bind(statement);
     if (query.startsWith('UPDATE characters')) statement.first = async () => {
-      sql.prepare('DELETE FROM assignments WHERE character_id=? AND user_id=?').run(id, 'player');
+      sql.prepare('UPDATE character_owners SET user_id=? WHERE character_id=?').run('admin', id);
       return first();
     };
     return statement;
@@ -182,12 +183,12 @@ test('roster separates creators from assignments and grants no editing rights to
   assert.equal((await call('stranger', `characters/${own.id}`, 'PUT', saveBody(1))).status, 404);
   await call('admin', `characters/${own.id}/assignments`, 'PUT', {user_id:'stranger'});
   assert.equal((await call('stranger', 'roster')).data[0].can_edit, 1);
-  assert.equal((await call('stranger', 'roster')).data[0].is_assigned, 1);
-  assert.equal((await call('stranger', `roster/${own.id}`)).data.is_assigned, 1);
-  assert.equal((await call('stranger', 'roster')).data[0].is_owner, 0);
+  assert.equal((await call('stranger', 'roster')).data[0].is_assigned, undefined);
+  assert.equal((await call('stranger', `roster/${own.id}`)).data.is_owner, 1);
+  assert.equal((await call('stranger', 'roster')).data[0].is_owner, 1);
   await call('stranger', `characters/${own.id}`, 'PUT', saveBody(1, document('Friend edit')));
-  assert.equal((await call('player', 'roster')).data[0].is_owner, 1);
-  await call('admin', `characters/${own.id}/assignments`, 'DELETE', {user_id:'stranger'});
+  assert.equal((await call('player', 'roster')).data[0].is_owner, 0);
+  await call('admin', `characters/${own.id}/owner`, 'PUT', {user_id:'player'});
   assert.equal((await call('stranger', `roster/${own.id}`)).status, 200);
   assert.equal((await call('stranger', `characters/${own.id}`, 'PUT', saveBody(2))).status, 404);
   assert.equal((await call('player', `characters/${own.id}`, 'PUT', saveBody(2))).status, 200);
@@ -244,6 +245,7 @@ test('unauthenticated guests see every character but cannot save, assign, restor
   assert.equal((await call('admin',`characters/${row.id}`,'DELETE',{version:1})).status,403);
   assert.equal((await worker.fetch(request(`characters/${row.id}`,'DELETE',{version:1}),env)).status,401);
   await call('stranger',`characters/${row.id}`,'PUT',saveBody(1));
+  await call('admin',`characters/${row.id}/owner`,'PUT',{user_id:'player'});
   assert.equal((await call('player',`characters/${row.id}`,'DELETE',{version:1})).status,409);
   assert.equal((await call('player',`characters/${row.id}`,'DELETE',{version:2})).status,200);
   assert.equal((await call('player',`characters/${row.id}`,'DELETE',{version:2})).status,200);
@@ -271,7 +273,37 @@ test('assigned players can delete characters while revoked players cannot', asyn
   await call('admin',`characters/${row.id}/assignments`,'PUT',{user_id:'stranger'});
   assert.equal((await call('stranger',`characters/${row.id}`,'DELETE',{version:1})).status,200);
   await call('admin',`characters/${row.id}/restore`,'POST',{...saveBody(1),restore_version:1});
-  await call('admin',`characters/${row.id}/assignments`,'DELETE',{user_id:'stranger'});
+  await call('admin',`characters/${row.id}/owner`,'PUT',{user_id:'player'});
   assert.equal((await call('stranger',`characters/${row.id}`,'DELETE',{version:2})).status,403);
   assert.equal((await call('player','roster')).data.length,1);
+});
+
+test('transfer replaces the owner, denies the creator, and cannot be granted by a player', async () => {
+  const {call,sql}=fixture();
+  const input=saveBody(1);
+  const row=(await call('player','characters','POST',input)).data;
+  await call('stranger','session');
+  assert.equal((await call('player',`characters/${row.id}/owner`,'PUT',{user_id:'stranger'})).status,403);
+  assert.equal((await call('admin',`characters/${row.id}/owner`,'PUT',{user_id:'stranger'})).status,200);
+  assert.equal(sql.prepare('SELECT user_id FROM character_owners WHERE character_id=?').get(row.id).user_id,'stranger');
+  assert.equal((await call('player',`characters/${row.id}`,'PUT',saveBody(1))).status,404);
+  assert.equal((await call('player',`characters/${row.id}`,'DELETE',{version:1})).status,403);
+  assert.equal((await call('player','characters','POST',input)).status,404);
+  assert.equal((await call('stranger',`characters/${row.id}`,'PUT',saveBody(1))).status,200);
+  assert.equal((await call('admin',`characters/${row.id}/assignments`,'DELETE',{user_id:'stranger'})).status,405);
+  assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM ownership_history').get().n,1);
+  assert.equal(sql.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name='assignments'").get().n,0);
+});
+test('legacy assignment migration changes ownership without changing character content or revisions', () => {
+  const sql=new DatabaseSync(':memory:');
+  for(const file of ['0001_characters.sql','0002_character_owners.sql','0003_character_deletion.sql']) sql.exec(readFileSync(new URL('../migrations/'+file,import.meta.url),'utf8'));
+  sql.exec("INSERT INTO users(id,email) VALUES('creator','creator@example.com'),('recipient','recipient@example.com')");
+  sql.prepare('INSERT INTO characters VALUES(?,?,?,1,?,?,?)').run('legacy','Original',JSON.stringify(document()),'creator','date','mutation');
+  sql.exec("INSERT INTO assignments VALUES('legacy','recipient','creator')");
+  sql.exec(readFileSync(new URL('../migrations/0004_single_owner.sql',import.meta.url),'utf8'));
+  assert.equal(sql.prepare('SELECT user_id FROM character_owners').get().user_id,'recipient');
+  assert.equal(sql.prepare('SELECT updated_by FROM revisions').get().updated_by,'creator');
+  assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM revisions').get().n,1);
+  assert.deepEqual(JSON.parse(sql.prepare('SELECT document FROM characters').get().document),document());
+  sql.close();
 });

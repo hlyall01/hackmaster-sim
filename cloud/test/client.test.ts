@@ -30,10 +30,10 @@ async function fixture(admin = true, owner = true, signedIn = true, initiallyDel
     if (!signedIn) return Response.json({error:'Sign in'}, {status:401});
     const path = String(url).replace('/api/', '');
     if (path === 'session') return Response.json({ user: { id: sessionId, email: 'test@example.com', admin } });
-    if (path === 'roster') return Response.json(deleted ? [] : [{...row,is_owner:Number(owner),is_assigned:Number(assigned),can_edit:Number(owner || assigned)}]);
-    if (path === 'roster/character') return Response.json({...row,is_owner:Number(owner),is_assigned:Number(assigned),can_edit:Number(owner || assigned)});
+    if (path === 'roster') return Response.json(deleted ? [] : [{...row,is_owner:Number(owner || assigned),can_edit:Number(owner || assigned)}]);
+    if (path === 'roster/character') return Response.json({...row,is_owner:Number(owner || assigned),can_edit:Number(owner || assigned)});
     if (path === 'users') return Response.json([{id:'friend',email:'friend@example.com'}]);
-    if (path.endsWith('/assignments')) { if (options.method !== 'GET') assignments.push({url,method:options.method,...JSON.parse(options.body)}); return Response.json([]); }
+    if (path.endsWith('/owner')) { if (options.method !== 'GET') assignments.push({url,method:options.method,...JSON.parse(options.body)}); return Response.json([]); }
     if (path.endsWith('/revisions')) return Response.json([]);
     if (path === 'characters' && options.method === 'GET') return Response.json(deleted ? (admin ? [{...row,deleted:1}] : []) : [row]);
     if (path === 'characters/character' && options.method === 'GET') return Response.json(row);
@@ -124,9 +124,9 @@ test('admin assignment is separate and names both the character and player', asy
   assert.ok(f.w.document.querySelector('[aria-label="Character to manage"]'));
   assert.ok(f.w.document.querySelector('[aria-label="Player to assign"]'));
   assert.ok(![...f.w.document.querySelectorAll('button')].some(b => b.textContent === 'Load selected'));
-  await f.click('Assign character');
-  assert.deepEqual(f.assignments, [{url:'/api/characters/character/assignments',method:'PUT',user_id:'friend'}]);
-  assert.match(f.w.document.querySelector('[role=status]').textContent, /Original assigned to friend@example.com/);
+  await f.click('Transfer ownership');
+  assert.deepEqual(f.assignments, [{url:'/api/characters/character/owner',method:'PUT',user_id:'friend'}]);
+  assert.match(f.w.document.querySelector('[role=status]').textContent, /Original now belongs to friend@example.com/);
   f.w.close();
 });
 
