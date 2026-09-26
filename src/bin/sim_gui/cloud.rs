@@ -72,7 +72,7 @@ impl SimGuiApp {
 struct OnlineCharacter { id: String, name: String, is_owner: bool, can_edit: bool }
 #[derive(serde::Deserialize)]
 struct OnlineSnapshot {
-    signed_in: bool, guest: bool, busy: bool, status: String, admin: bool,
+    signed_in: bool, guest: bool, busy: bool, status: String,
     characters: Vec<OnlineCharacter>, loaded_id: String, loaded_name: String,
     can_save: bool, dirty: bool,
 }
@@ -111,9 +111,7 @@ pub(super) fn show_core(ui: &mut egui::Ui, slot: usize) {
                 if ui.add_enabled(state.can_save, egui::Button::new("Save online")).clicked() { cloud_action(slot, "save", ""); }
                 if ui.button("Create my character").on_hover_text("Save the current fighter as a new character you own. Other signed-in players can load it for simulations.").clicked() { cloud_action(slot, "create", ""); }
                 } else if ui.button("Sign in with Google").clicked() { cloud_action(slot, "signin", ""); }
-                if ui.button("Refresh").clicked() { cloud_action(slot, "refresh", ""); }
-                if state.signed_in && ui.button("Drafts / export").clicked() { cloud_action(slot, "manage", ""); }
-                if state.admin && ui.button("Admin assignments").clicked() { cloud_action(slot, "admin", ""); }
+                if state.signed_in && ui.button("Recovery & backups").on_hover_text("Recover unsaved local changes or export a character as a JSON backup.").clicked() { cloud_action(slot, "manage", ""); }
             });
         });
         if !state.loaded_name.is_empty() {
