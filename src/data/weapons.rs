@@ -107,7 +107,14 @@ fn weapon_catalog_from_entries(entries: Vec<WeaponJson>) -> Result<WeaponCatalog
             .reach_or_range
             .clone()
             .unwrap_or_else(|| "-".to_string());
-        let reach_ft = parse_reach_ft(&reach_label);
+        // Projectile weapons label their range here, not their melee reach.
+        // Match the close-contact fallback used by stop_distance_for_players;
+        // ranged attacks still use the weapon's independent range bands.
+        let reach_ft = if crate::game_logic::uses_projectiles(&entry.name, entry.ammunition.is_some()) {
+            1.0
+        } else {
+            parse_reach_ft(&reach_label)
+        };
         let damage_expr = entry.damage.unwrap_or_else(|| "-".to_string());
         let range_bands_feet = entry
             .range_bands_feet
@@ -304,6 +311,21 @@ fn parse_range_bands_feet(values: &[f32]) -> Option<[f32; 4]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn projectile_ranges_are_not_loaded_as_melee_reach() {
+        let parsed: WeaponsFile = serde_json::from_str(EMBEDDED_WEAPONS_JSON).unwrap();
+        let weapons = weapon_catalog_from_entries(parsed.weapons).unwrap();
+        for weapon in weapons.entries() {
+            if crate::game_logic::weapon_uses_projectiles(weapon) {
+                assert_eq!(weapon.reach_ft, 1.0, "{}", weapon.name);
+            }
+        }
+        let longbow = weapons.entries().iter().find(|w| w.name == "Longbow").unwrap();
+        assert_eq!(longbow.reach_label, "210 feet");
+        let sword = weapons.entries().iter().find(|w| w.name == "Short sword").unwrap();
+        assert_eq!(sword.reach_ft, 2.0);
+    }
+
     #[test]
     fn combined_catalog_loading_matches_individual_loads() {
         let (weapons, shields) = load_weapon_and_shield_catalogs("data/sim/weapons.json").unwrap();

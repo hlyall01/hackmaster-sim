@@ -669,7 +669,9 @@ impl SimState {
                                 }
                             }
                         } else if !eyesmite_a && distance > reach_a {
-                            self.move_toward(a_idx, b_idx, step_a, max_reach);
+                            // A melee pursuer must reach its own weapon range,
+                            // even when the opponent has a longer reach.
+                            self.move_toward(a_idx, b_idx, step_a, reach_a);
                         }
                         let distance = self.distance_between(a_idx, b_idx).unwrap_or(0.0);
                         if !eyesmite_b && ranged_projectile_b {
@@ -681,7 +683,7 @@ impl SimState {
                                 }
                             }
                         } else if !eyesmite_b && distance > reach_b {
-                            self.move_toward(b_idx, a_idx, step_b, max_reach);
+                            self.move_toward(b_idx, a_idx, step_b, reach_b);
                         }
                     }
                 } else if distance > min_reach || (distance > 5.0 && (eyesmite_a || eyesmite_b)) {
