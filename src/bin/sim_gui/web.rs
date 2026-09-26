@@ -2,6 +2,11 @@ use super::*;
 use std::{sync::mpsc, time::Duration};
 use wasm_bindgen::{JsCast, prelude::*};
 
+#[wasm_bindgen(inline_js = "export function show_feature_requests(visible, top) { window.dispatchEvent(new CustomEvent('sim-feature-tab', {detail: {visible, top}})); }")]
+extern "C" {
+    pub(super) fn show_feature_requests(visible: bool, top: f32);
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 pub(super) enum JobKind {
     Bulk {
@@ -193,12 +198,18 @@ pub fn run_web_job(request: &str) -> String {
 }
 
 #[wasm_bindgen]
-pub async fn start_web() -> Result<(), JsValue> {
+pub async fn start_web(show_requests: bool) -> Result<(), JsValue> {
     eframe::WebRunner::new()
         .start(
             "sim_canvas",
             eframe::WebOptions::default(),
-            Box::new(|_cc| Box::new(SimGuiApp::new())),
+            Box::new(move |_cc| {
+                let mut app = SimGuiApp::new();
+                if show_requests {
+                    app.active_tab = super::MainTab::FeatureRequests;
+                }
+                Box::new(app)
+            }),
         )
         .await
 }

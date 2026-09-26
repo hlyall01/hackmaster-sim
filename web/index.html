@@ -6,6 +6,7 @@
   <meta name="theme-color" content="#202020">
   <title>HackMaster Simulator</title>
   <link rel="icon" href="./icon.png">
+  <link rel="stylesheet" href="./requests.css">
   <style>
     html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #202020; color: #eee; font-family: system-ui, sans-serif; }
     canvas { width: 100%; height: 100%; display: block; touch-action: none; }
@@ -17,6 +18,25 @@
 </head>
 <body>
   <canvas id="sim_canvas" aria-label="HackMaster combat simulator"></canvas>
+  <section id="feature-requests" hidden aria-labelledby="requests-title">
+    <div class="request-card">
+      <p class="eyebrow">Build the next version together</p>
+      <h1 id="requests-title">Feature requests</h1>
+      <p>Suggest an improvement to the simulator. An agent will work on your request and open a pull request for review. You can try its preview before it becomes part of the main site.</p>
+      <p class="muted">Requests are public on GitHub. Please leave out passwords, personal information, and anything you don’t want published.</p>
+      <form id="request-form">
+        <label for="request-title">What would you like to add?</label>
+        <input id="request-title" name="title" required minlength="10" maxlength="120" placeholder="For example: compare two saved fighters side by side">
+        <label for="request-description">How should it work?</label>
+        <textarea id="request-description" name="description" required minlength="30" maxlength="6000" rows="7" placeholder="Describe what you want to do, the expected result, and an example. For game rules, include the relevant rule or page reference."></textarea>
+        <div class="honeypot" aria-hidden="true"><label for="request-website">Website</label><input id="request-website" name="website" tabindex="-1" autocomplete="off"></div>
+        <button id="request-submit" type="submit" disabled>Submit feature request</button>
+        <p id="request-status" role="status" aria-live="polite">Loading request form…</p>
+      </form>
+      <p class="muted">One request every 10 minutes, up to five per day per connection. Larger or unclear requests may need clarification. Every pull request is reviewed before being merged.</p>
+      <a href="https://github.com/hlyall01/hackmaster-sim/issues?q=label%3Asite-request">Browse feature requests on GitHub</a>
+    </div>
+  </section>
   <div id="loading" role="status"><h1>HackMaster Simulator</h1><p id="status">Loading simulator…</p></div>
   <noscript>This simulator requires JavaScript and WebAssembly.</noscript>
   <script type="module" src="./main.js"></script>

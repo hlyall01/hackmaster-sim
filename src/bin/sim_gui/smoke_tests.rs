@@ -80,21 +80,21 @@ fn wren_power_attack_refreshes_damage_after_a_previous_attack() {
 fn all_gui_sections_render_and_tessellate() {
     let mut app = SimGuiApp::new();
     let ctx = egui::Context::default();
-    for view in 0..6 + PLAYER_EDITOR_TABS.len() {
+    for view in 0..7 + PLAYER_EDITOR_TABS.len() {
         app.show_player_editor = [false, false];
-        if view < 3 {
-            app.active_tab = [MainTab::Simulator, MainTab::DetailedStats, MainTab::Tools][view];
-        } else if view < 6 {
+        if view < 4 {
+            app.active_tab = [MainTab::Simulator, MainTab::DetailedStats, MainTab::Tools, MainTab::FeatureRequests][view];
+        } else if view < 7 {
             app.active_tab = MainTab::Tools;
             app.active_tool_tab = [
                 ToolTab::WoundHealing,
                 ToolTab::EssenceWounds,
                 ToolTab::EgoGeneration,
-            ][view - 3];
+            ][view - 4];
         } else {
             app.active_tab = MainTab::Simulator;
             app.show_player_editor = [true, false];
-            app.player_editor_tabs[0] = PLAYER_EDITOR_TABS[view - 6];
+            app.player_editor_tabs[0] = PLAYER_EDITOR_TABS[view - 7];
         }
         let mut output = None;
         for _ in 0..3 {

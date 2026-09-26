@@ -59,6 +59,7 @@ enum MainTab {
     Simulator,
     DetailedStats,
     Tools,
+    FeatureRequests,
 }
 
 impl MainTab {
@@ -67,6 +68,7 @@ impl MainTab {
             MainTab::Simulator => "Simulator",
             MainTab::DetailedStats => "Detailed Stats",
             MainTab::Tools => "Tools",
+            MainTab::FeatureRequests => "Feature requests",
         }
     }
 }
@@ -1188,6 +1190,7 @@ impl SimGuiApp {
                     MainTab::DetailedStats.label(),
                 );
                 ui.selectable_value(&mut self.active_tab, MainTab::Tools, MainTab::Tools.label());
+                ui.selectable_value(&mut self.active_tab, MainTab::FeatureRequests, MainTab::FeatureRequests.label());
                 if self.active_tab == MainTab::Simulator {
                     ui.separator();
                     if ui
@@ -1229,6 +1232,23 @@ impl SimGuiApp {
                 }
             });
         });
+
+        #[cfg(target_arch = "wasm32")]
+        jobs::show_feature_requests(self.active_tab == MainTab::FeatureRequests, ctx.available_rect().top());
+
+        if self.active_tab == MainTab::FeatureRequests {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    ui.heading("Feature requests");
+                    ui.label("Suggest an improvement and follow its pull request and preview on the website.");
+                    ui.hyperlink_to("Open feature requests", "https://sim-gui.com/?tab=requests");
+                }
+                #[cfg(target_arch = "wasm32")]
+                let _ = ui;
+            });
+            return;
+        }
 
         if self.active_tab == MainTab::Tools {
             egui::CentralPanel::default().show(ctx, |ui| {

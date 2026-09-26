@@ -1,0 +1,174 @@
+name: Implement site feature request
+on:
+  issues:
+    types: [opened]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Signed site issue number to retry
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: feature-request-${{ github.event.issue.number || inputs.issue }}
+  cancel-in-progress: false
+jobs:
+  prepare:
+    if: >-
+      vars.FEATURE_REQUESTS_ENABLED == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.issue.user.login == 'hlyall01' && contains(github.event.issue.labels.*.name, 'site-request')))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    outputs:
+      accepted: ${{ steps.prepare.outputs.accepted }}
+      base: ${{ steps.base.outputs.sha }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: main
+          persist-credentials: false
+      - id: base
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Authenticate site request
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUES_TOKEN: ${{ secrets.ISSUES_TOKEN }}
+          OPENAI_CONFIGURED: ${{ secrets.OPENAI_API_KEY != '' && 'true' || '' }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue }}
+        run: node scripts/feature_agent.mjs prepare
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: steps.prepare.outputs.accepted == 'true'
+        with:
+          name: request-context
+          path: target/request-input/
+          retention-days: 7
+  code:
+    needs: prepare
+    if: needs.prepare.outputs.accepted == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.prepare.outputs.base }}
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: request-context
+          path: target/request-input
+      - name: Prepare tools and prompt before entering sandbox
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue }}
+        run: |
+          rustup toolchain install 1.91.1 --profile minimal --target wasm32-unknown-unknown
+          cargo +1.91.1 fetch --locked
+          node scripts/feature_agent.mjs prompt
+      - name: Implement feature in sandbox
+        id: codex
+        uses: openai/codex-action@86365089eb2b84e0a8fb0717b304f8bdcb13b20e # v1
+        env:
+          RUSTUP_TOOLCHAIN: 1.91.1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: target/agent/prompt.md
+          output-file: target/agent/result.json
+          output-schema: >-
+            {"type":"object","properties":{"status":{"type":"string","enum":["implemented","needs-info"]},"summary":{"type":"string"}},"required":["status","summary"],"additionalProperties":false}
+          permission-profile: ':workspace'
+          safety-strategy: drop-sudo
+          model: ${{ vars.FEATURE_AGENT_MODEL }}
+          effort: medium
+      # Only untrusted data transport follows the agent; publishing uses a fresh runner.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: agent-candidate
+          path: |
+            target/agent/changes.patch
+            target/agent/result.json
+          if-no-files-found: error
+          retention-days: 7
+  publish:
+    needs: [prepare, code]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    outputs:
+      changed: ${{ steps.publish.outputs.changed }}
+      sha: ${{ steps.publish.outputs.sha }}
+      pr: ${{ steps.publish.outputs.pr }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.prepare.outputs.base }}
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: agent-candidate
+          path: target/candidate
+      - name: Validate patch and create draft PR
+        id: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue }}
+        run: |
+          printf '#!/bin/sh\ncase "$1" in *Username*) echo x-access-token;; *) printf "%%s\\n" "$GH_TOKEN";; esac\n' > "$RUNNER_TEMP/askpass"
+          chmod 700 "$RUNNER_TEMP/askpass"
+          export GIT_ASKPASS="$RUNNER_TEMP/askpass" GIT_TERMINAL_PROMPT=0
+          python3 scripts/publish_feature.py
+      - name: Report pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue }}
+          PR_URL: ${{ steps.publish.outputs.pr }}
+          CANDIDATE_SHA: ${{ steps.publish.outputs.sha }}
+          REQUEST_STATUS: ${{ steps.publish.outputs.changed == 'true' && 'building' || 'needs-info' }}
+        run: node scripts/feature_agent.mjs status
+  # GITHUB_TOKEN-created PRs do not trigger pull_request workflows; call builds explicitly.
+  build:
+    needs: publish
+    if: needs.publish.outputs.changed == 'true'
+    uses: ./.github/workflows/build-web.yml
+    with:
+      ref: ${{ needs.publish.outputs.sha }}
+      artifact: feature-preview
+  preview:
+    needs: [prepare, publish, build]
+    uses: ./.github/workflows/deploy-preview.yml
+    with:
+      artifact: feature-preview
+      branch: ticket-${{ github.event.issue.number || inputs.issue }}
+      sha: ${{ needs.publish.outputs.sha }}
+      trusted_ref: ${{ needs.prepare.outputs.base }}
+    secrets:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+  report:
+    needs: [prepare, code, publish, build, preview]
+    if: always() && needs.prepare.outputs.accepted == 'true' && needs.publish.outputs.changed != 'false'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.prepare.outputs.base }}
+          persist-credentials: false
+      - name: Publish final status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue }}
+          PR_URL: ${{ needs.publish.outputs.pr }}
+          CANDIDATE_SHA: ${{ needs.publish.outputs.sha }}
+          PREVIEW_URL: ${{ needs.preview.outputs.url }}
+          REQUEST_STATUS: ${{ needs.preview.result == 'success' && 'ready' || 'failed' }}
+        run: node scripts/feature_agent.mjs status

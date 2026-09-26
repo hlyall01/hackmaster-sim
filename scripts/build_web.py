@@ -28,6 +28,11 @@ def main():
         command.append('--release')
     subprocess.run(command, cwd=ROOT, check=True)
     output = target / 'web'
+    # Avoid shipping stale assets (especially an old production _worker.js) in a preview.
+    if output.is_symlink() or output.resolve().parent != target.resolve():
+        raise SystemExit('Refusing to clean an output directory outside target/')
+    if output.exists():
+        shutil.rmtree(output)
     output.mkdir(parents=True, exist_ok=True)
     subprocess.run([bindgen, str(target / 'wasm32-unknown-unknown' / ('debug' if args.debug else 'release') / 'sim_gui.wasm'),
                     '--target', 'web', '--out-dir', str(output / 'pkg'), '--out-name', 'sim_gui'], check=True)

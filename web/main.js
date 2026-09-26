@@ -1,7 +1,9 @@
+import './requests.js';
+
 try {
   const { default: init, start_web } = await import('./pkg/sim_gui.js');
   await init();
-  await start_web();
+  await start_web(new URLSearchParams(location.search).get('tab') === 'requests');
   document.getElementById('loading').hidden = true;
 } catch (error) {
   console.error('Simulator startup failed', error);

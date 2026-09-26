@@ -1,0 +1,64 @@
+name: Deploy isolated branch preview
+on:
+  workflow_call:
+    inputs:
+      artifact:
+        required: true
+        type: string
+      branch:
+        required: true
+        type: string
+      sha:
+        required: true
+        type: string
+      trusted_ref:
+        required: true
+        type: string
+    secrets:
+      CLOUDFLARE_API_TOKEN:
+        required: true
+    outputs:
+      url:
+        value: ${{ jobs.deploy.outputs.url }}
+permissions:
+  contents: read
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      url: ${{ steps.deploy.outputs.deployment-url }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.trusted_ref }}
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: ${{ inputs.artifact }}
+          path: site
+      - name: Validate static-only preview and deployment identifiers
+        env:
+          PREVIEW_BRANCH: ${{ inputs.branch }}
+          PREVIEW_SHA: ${{ inputs.sha }}
+        run: |
+          python3 -c 'import os,re; assert re.fullmatch(r"[a-z0-9-]{1,50}",os.environ["PREVIEW_BRANCH"]); assert re.fullmatch(r"[a-f0-9]{40}",os.environ["PREVIEW_SHA"])'
+          python3 scripts/validate_preview.py
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+      - name: Ensure isolated preview project exists
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_PAGES_PROJECT: hackmaster-sim-previews
+        run: python3 scripts/configure_pages.py
+      # No generated source is executed on this runner.
+      - name: Deploy preview
+        id: deploy
+        uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: '4.140.0'
+          command: pages deploy site --project-name=hackmaster-sim-previews --branch=${{ inputs.branch }} --commit-hash=${{ inputs.sha }}

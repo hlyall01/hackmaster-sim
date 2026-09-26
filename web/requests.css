@@ -1,0 +1,22 @@
+#feature-requests { position: absolute; inset: 36px 0 0; overflow: auto; background: #202020; padding: 28px 20px; box-sizing: border-box; }
+#feature-requests[hidden] { display: none; }
+.request-card { max-width: 760px; margin: 0 auto; line-height: 1.6; }
+.request-card h1 { margin: 0 0 16px; font-size: 1.9rem; }
+.eyebrow { color: #a9d1ff; font-size: .8rem; letter-spacing: .06em; text-transform: uppercase; }
+.muted { color: #aaa; font-size: .9rem; }
+.request-card label { display: block; margin: 20px 0 7px; font-weight: 600; }
+.request-card input, .request-card textarea { display: block; box-sizing: border-box; width: 100%; color: #eee; background: #171717; border: 1px solid #606060; border-radius: 6px; padding: 12px; font: inherit; }
+.request-card textarea { resize: vertical; }
+.request-card button, .ticket-link { display: inline-block; border: 0; border-radius: 6px; background: #a9d1ff; color: #102137; padding: 12px 18px; font: inherit; font-weight: 600; margin-top: 18px; cursor: pointer; }
+.request-card button:disabled { opacity: .45; cursor: default; }
+.request-card :focus-visible { outline: 3px solid #f4c56a; outline-offset: 3px; }
+.honeypot { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
+#request-status { min-height: 1.6em; }
+#request-status[data-error="true"] { color: #ffb3a9; }
+.ticket-page { margin: 0; background: #202020; color: #eee; font-family: system-ui, sans-serif; }
+.ticket-page a { color: #a9d1ff; }
+.ticket-page header { padding: 24px; max-width: 1000px; margin: auto; }
+.ticket-page h1 { font-size: 1.4rem; }
+.ticket-page nav { display: flex; flex-wrap: wrap; gap: 22px; }
+#ticket-preview { width: 100%; height: calc(100vh - 230px); min-height: 500px; border: 0; display: block; background: #171717; }
+#ticket-preview[hidden], [hidden] { display: none; }
