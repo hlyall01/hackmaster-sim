@@ -56,6 +56,9 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_PAGES_PROJECT: ${{ vars.CLOUDFLARE_PAGES_PROJECT }}
           ISSUES_TOKEN: ${{ secrets.ISSUES_TOKEN }}
+          ISSUES_APP_PRIVATE_KEY: ${{ secrets.ISSUES_APP_PRIVATE_KEY }}
+          ISSUES_APP_ID: ${{ vars.ISSUES_APP_ID }}
+          ISSUES_APP_INSTALLATION_ID: ${{ vars.ISSUES_APP_INSTALLATION_ID }}
           FEATURE_REQUESTS_ENABLED: ${{ vars.FEATURE_REQUESTS_ENABLED }}
         run: |
           python3 scripts/configure_pages.py

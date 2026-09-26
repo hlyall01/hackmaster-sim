@@ -25,12 +25,14 @@ GitHub repository secrets:
 | --- | --- |
 | `CLOUDFLARE_API_TOKEN` | Cloudflare Pages Edit in the hosting account |
 | `OPENAI_API_KEY` | OpenAI `sim-gui` project; List models Read, Responses Write |
-| `ISSUES_TOKEN` | Fine-grained GitHub token; only `hlyall01/hackmaster-sim`, Issues read/write |
+| `ISSUES_TOKEN` | Stable request-signing key retained from the original token; never sent to GitHub for API authentication |
+| `ISSUES_APP_PRIVATE_KEY` | GitHub App private key in PKCS#8 PEM format |
 
 GitHub reserves names beginning with `GITHUB_`. The deployment copies
-`ISSUES_TOKEN` into the production Pages binding `GITHUB_ISSUES_TOKEN` as an
+`ISSUES_TOKEN` into the production Pages binding `REQUEST_SIGNING_SECRET` as an
 **encrypted secret**. It is never bundled into static assets. OpenAI's key is
-used only by the coding job's protected API proxy.
+used only by the coding job's protected API proxy. The app private key is copied to
+`GITHUB_APP_PRIVATE_KEY`, also an encrypted production-only binding.
 
 Repository variables:
 
@@ -39,6 +41,8 @@ Repository variables:
 | `CLOUDFLARE_ACCOUNT_ID` | Hosting account ID |
 | `CLOUDFLARE_PAGES_PROJECT` | `hackmaster-sim` |
 | `FEATURE_REQUESTS_ENABLED` | `true` to accept and process requests |
+| `ISSUES_APP_ID` | `5085893` |
+| `ISSUES_APP_INSTALLATION_ID` | `165145679` |
 | `FEATURE_AGENT_MODEL` | Optional Codex model override; empty uses the action default |
 
 `CLOUDFLARE_DEPLOY_BRANCH` is obsolete: production is always `main`.
@@ -48,9 +52,21 @@ The `site-request` label must exist before accepting submissions.
 The OpenAI `sim-gui` project is configured with a **US$10 monthly hard limit**.
 Enforcement may slightly lag usage. Existing prepaid credit is shared across
 projects; auto-reload is off. Check billing before increasing request volume.
-The current issue token expires **26 October 2026**. Replace `ISSUES_TOKEN` before
-then and rerun production deployment to update the Cloudflare binding. Existing
-form challenges become invalid when the token changes; users can reload.
+The private GitHub App `sim-gui-requests` is installed only on `hackmaster-sim`,
+with Issues read/write and mandatory Metadata read access. New site issues,
+revisions and activity comments are authored by `sim-gui-requests[bot]`.
+The Worker signs an RS256 JWT and exchanges it for a repository-scoped installation
+token, shared within one request and renewed on the next request. Webhooks and
+user OAuth are disabled. Workflow status comments remain `github-actions[bot]`.
+
+Do not replace `ISSUES_TOKEN`: its bytes now serve only as a stable HMAC key.
+The original PAT expiry (26 October 2026) has no effect on signing or API access;
+revoking the PAT does not invalidate its use as an HMAC key. Keeping these bytes
+preserves existing tickets, revisions, activity history and abuse-control hashes.
+Both historical `hlyall01` and app authors still require valid signatures.
+Rotate the app private key independently: generate a replacement in GitHub App
+settings, convert it to PKCS#8 PEM, update `ISSUES_APP_PRIVATE_KEY`, deploy main,
+verify a ticket, and then remove the old app key. Never commit private keys.
 
 ## Feature request flow
 
@@ -123,7 +139,7 @@ The code job has `id-token: write`, but no repository write token. The Worker
 verifies GitHub's short-lived OIDC signature, audience, immutable repository IDs,
 main workflow identity, and the run/attempt recorded by trusted status comments.
 Only the matching active ticket revision accepts updates. The Worker edits one
-HMAC-signed issue comment per run, using its existing issue-only token; this needs
+HMAC-signed issue comment per run, using its issue-only app installation token; this needs
 no additional secrets or paid infrastructure. Activity is untrusted display data
 and cannot set ticket status, PRs, or preview URLs. Reporter outages do not fail
 the agent, and the GitHub run link remains available. This is a lightweight feed;

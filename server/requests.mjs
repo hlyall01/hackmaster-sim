@@ -2,6 +2,8 @@
 const REPO = 'hlyall01/hackmaster-sim';
 const ORIGIN = 'https://feature.sim-gui.com';
 const LABEL = 'site-request';
+// Keep signed tickets from the original author readable after the bot migration.
+const requestAuthors = new Set(['hlyall01', 'sim-gui-requests[bot]']);
 const encoder = new TextEncoder();
 const marker = /\n<!-- sim-request:v1:([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+) -->$/;
 class HttpError extends Error {
@@ -23,7 +25,7 @@ async function verify(secret, message, signature) {
 }
 export async function verifyIssue(issue, secret) {
   const match = issue.body?.match(marker);
-  if (!match || issue.user?.login !== 'hlyall01' || issue.pull_request) return null;
+  if (!match || !requestAuthors.has(issue.user?.login) || issue.pull_request) return null;
   const body = issue.body.slice(0, match.index);
   if (!await verify(secret, `issue:${issue.title}\n${body}\n${match[1]}`, match[2])) return null;
   try { return { metadata: unpack(match[1]), description: body, title: issue.title }; }
@@ -31,7 +33,7 @@ export async function verifyIssue(issue, secret) {
 }
 export async function verifyRevision(comment, number, secret) {
   const match = comment.body?.match(/\n<!-- sim-revision:v1:([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+) -->$/);
-  if (!match || comment.user?.login !== 'hlyall01' ||
+  if (!match || !requestAuthors.has(comment.user?.login) ||
       !comment.issue_url?.endsWith(`/repos/${REPO}/issues/${number}`)) return null;
   const description = comment.body.slice(0, match.index);
   if (!await verify(secret, `revision:${number}\n${description}\n${match[1]}`, match[2])) return null;
@@ -129,7 +131,7 @@ function activityEvents(events) {
 }
 export async function readActivity(comments, number, state, secret) {
   for (const comment of [...comments].reverse()) {
-    if (comment.user?.login !== 'hlyall01') continue;
+    if (!requestAuthors.has(comment.user?.login)) continue;
     const match = comment.body?.match(/\n<!-- sim-activity:v1:([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+) -->$/);
     if (!match || !await verify(secret, `activity:${number}:${match[1]}`, match[2])) continue;
     try {
@@ -149,23 +151,51 @@ async function reportActivity(request, env, number) {
   if (issue.state !== 'open' || issue.locked || !['coding', 'building'].includes(state.status) ||
       identity.run !== state.run || identity.attempt !== state.attempt || input.revision !== state.revision)
     throw new HttpError(409, 'This run is no longer accepting activity.');
-  const previous = await readActivity(comments, number, state, env.GITHUB_ISSUES_TOKEN);
+  const previous = await readActivity(comments, number, state, env.REQUEST_SIGNING_SECRET);
   if (previous?.events.at(-1)?.id >= events.at(-1).id) return json({ ok: true });
   if (previous && Date.now() - Date.parse(previous.updated) < 10000) throw new HttpError(429, 'Activity is updating too quickly.');
   const data = { ...identity, revision: state.revision, updated: new Date(Date.now()).toISOString(), events };
   const payload = pack(data);
-  const signature = await sign(env.GITHUB_ISSUES_TOKEN, `activity:${number}:${payload}`);
+  const signature = await sign(env.REQUEST_SIGNING_SECRET, `activity:${number}:${payload}`);
   const body = `Agent activity for this run is shown at ${ORIGIN}/${number}.\n<!-- sim-activity:v1:${payload}.${signature} -->`;
   await github(env, previous ? `/issues/comments/${previous.commentId}` : `/issues/${number}/comments`, {
     method: previous ? 'PATCH' : 'POST', body: JSON.stringify({ body }),
   });
   return json({ ok: true });
 }
+// Credentials are deployed as encrypted bindings. The private key is PKCS#8 PEM.
+export async function githubAppToken(env) {
+  if (!/^[1-9][0-9]*$/.test(env.GITHUB_APP_ID || '') ||
+      !/^[1-9][0-9]*$/.test(env.GITHUB_APP_INSTALLATION_ID || '') ||
+      !env.GITHUB_APP_PRIVATE_KEY?.startsWith('-----BEGIN PRIVATE KEY-----'))
+    throw new HttpError(503, 'GitHub App is not configured.');
+  const algorithm = { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' };
+  const pem = env.GITHUB_APP_PRIVATE_KEY.replace(/-----[A-Z ]+-----|\s/g, '');
+  const privateKey = await crypto.subtle.importKey('pkcs8', decode(pem), algorithm, false, ['sign']);
+  const now = Math.floor(Date.now() / 1000);
+  const message = `${pack({ alg: 'RS256', typ: 'JWT' })}.${pack({ iat: now - 60, exp: now + 540, iss: env.GITHUB_APP_ID })}`;
+  const jwt = `${message}.${encode(new Uint8Array(await crypto.subtle.sign(algorithm, privateKey, encoder.encode(message))))}`;
+  const response = await fetch(`https://api.github.com/app/installations/${env.GITHUB_APP_INSTALLATION_ID}/access_tokens`, {
+    method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(15000),
+    headers: { Authorization: `Bearer ${jwt}`, Accept: 'application/vnd.github+json',
+      'User-Agent': 'sim-gui-feature-requests', 'X-GitHub-Api-Version': '2022-11-28', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ repositories: ['hackmaster-sim'], permissions: { issues: 'write' } }),
+  });
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw new HttpError(503, 'GitHub App authentication is temporarily unavailable.');
+  }
+  const result = await boundedJson(response, 64000);
+  if (typeof result.token !== 'string' || !result.token || !Number.isFinite(Date.parse(result.expires_at)) ||
+      Date.parse(result.expires_at) <= Date.now() + 60000)
+    throw new HttpError(503, 'GitHub App returned an invalid access token.');
+  return result.token;
+}
 async function github(env, path, options = {}) {
   const response = await fetch(`https://api.github.com/repos/${REPO}${path}`, {
     ...options,
     headers: {
-      Authorization: `Bearer ${env.GITHUB_ISSUES_TOKEN}`, Accept: 'application/vnd.github+json',
+      Authorization: `Bearer ${await (env.appToken ??= githubAppToken(env))}`, Accept: 'application/vnd.github+json',
       'User-Agent': 'sim-gui-feature-requests', 'X-GitHub-Api-Version': '2022-11-28',
       'Content-Type': 'application/json',
     },
@@ -186,7 +216,7 @@ function json(value, status = 200) {
   } });
 }
 function requireEnabled(env) {
-  if (!env.GITHUB_ISSUES_TOKEN || env.FEATURE_REQUESTS_ENABLED !== 'true')
+  if (!env.REQUEST_SIGNING_SECRET || env.FEATURE_REQUESTS_ENABLED !== 'true')
     throw new HttpError(503, 'Feature requests are not available yet. Please check back soon.');
 }
 async function fingerprint(request, secret) {
@@ -207,11 +237,11 @@ async function submission(request, env, scope) {
   if (!request.headers.get('Content-Type')?.startsWith('application/json')) throw new HttpError(415, 'Send JSON.');
   const input = await boundedJson(request, 16000);
   if (!input || typeof input !== 'object' || input.website) throw new HttpError(400, 'Could not accept this request.');
-  const ipHash = await fingerprint(request, env.GITHUB_ISSUES_TOKEN);
+  const ipHash = await fingerprint(request, env.REQUEST_SIGNING_SECRET);
   let challenge;
   const parts = typeof input.challenge === 'string' ? input.challenge.split('.') : [];
   if (parts.length !== 2 || input.challenge.length > 1000 ||
-      !await verify(env.GITHUB_ISSUES_TOKEN, `challenge:${parts[0]}`, parts[1]))
+      !await verify(env.REQUEST_SIGNING_SECRET, `challenge:${parts[0]}`, parts[1]))
     throw new HttpError(400, 'The form expired. Reload it and try again.');
   try { challenge = unpack(parts[0]); } catch { throw new HttpError(400, 'Invalid form token.'); }
   const age = Date.now() - challenge.t;
@@ -228,11 +258,11 @@ async function recentSubmissions(env) {
   // Fail closed rather than miss submissions outside the bounded history.
   if (issues.length >= 100 || comments.length >= 100) throw new HttpError(429, 'The request queue is busy. Please try again tomorrow.');
   const entries = await Promise.all([
-    ...issues.map(async issue => ({ number: issue.number, created: issue.created_at, proof: await verifyIssue(issue, env.GITHUB_ISSUES_TOKEN) })),
+    ...issues.map(async issue => ({ number: issue.number, created: issue.created_at, proof: await verifyIssue(issue, env.REQUEST_SIGNING_SECRET) })),
     ...comments.map(async comment => {
       const number = comment.issue_url?.match(/\/issues\/([1-9][0-9]{0,8})$/)?.[1];
       return { number: Number(number), revision: comment.id, created: comment.created_at,
-        proof: number ? await verifyRevision(comment, number, env.GITHUB_ISSUES_TOKEN) : null };
+        proof: number ? await verifyRevision(comment, number, env.REQUEST_SIGNING_SECRET) : null };
     }),
   ]);
   return entries.filter(entry => entry.proof && Date.parse(entry.created) > Date.now() - 86400_000);
@@ -246,32 +276,32 @@ async function createRequest(request, env) {
   const { input, challenge, ipHash } = await submission(request, env, 'request');
   const title = '[Request] ' + clean(input.title, 10, 120, 'Title').replace(/[\r\n]/g, ' ');
   const description = clean(input.description, 30, 6000, 'Description');
-  const contentHash = await sign(env.GITHUB_ISSUES_TOKEN, `content:${title}\n${description}`);
+  const contentHash = await sign(env.REQUEST_SIGNING_SECRET, `content:${title}\n${description}`);
   const recent = await recentSubmissions(env);
   const duplicate = recent.find(entry => !entry.revision && (entry.proof.metadata.requestId === challenge.id || entry.proof.metadata.contentHash === contentHash));
   if (duplicate) return json({ number: duplicate.number, url: `/${duplicate.number}`, duplicate: true });
   cooldown(recent, ipHash);
   const metadata = pack({ requestId: challenge.id, ipHash, contentHash });
   const body = `Submitted through the public feature request form at ${ORIGIN}/.\n\n` + description;
-  const signature = await sign(env.GITHUB_ISSUES_TOKEN, `issue:${title}\n${body}\n${metadata}`);
+  const signature = await sign(env.REQUEST_SIGNING_SECRET, `issue:${title}\n${body}\n${metadata}`);
   const issue = await github(env, '/issues', { method: 'POST', body: JSON.stringify({
     title, body: `${body}\n<!-- sim-request:v1:${metadata}.${signature} -->`, labels: [LABEL],
   }) });
   return json({ number: issue.number, url: `/${issue.number}` }, 201);
 }
 async function loadTicket(env, number) {
-  if (!env.GITHUB_ISSUES_TOKEN) throw new HttpError(503, 'Ticket tracking is temporarily unavailable.');
+  if (!env.REQUEST_SIGNING_SECRET) throw new HttpError(503, 'Ticket tracking is temporarily unavailable.');
   const issue = await github(env, `/issues/${number}`);
-  if (!await verifyIssue(issue, env.GITHUB_ISSUES_TOKEN) || !issue.labels?.some(label => label.name === LABEL)) throw new HttpError(404, 'Ticket not found.');
+  if (!await verifyIssue(issue, env.REQUEST_SIGNING_SECRET) || !issue.labels?.some(label => label.name === LABEL)) throw new HttpError(404, 'Ticket not found.');
   const page = Math.max(1, Math.ceil(issue.comments / 100));
   const pages = page > 1 ? [page - 1, page] : [page];
   const comments = (await Promise.all(pages.map(p => github(env, `/issues/${number}/comments?per_page=100&page=${p}`)))).flat();
-  const state = await ticketState(comments, number, env.GITHUB_ISSUES_TOKEN);
+  const state = await ticketState(comments, number, env.REQUEST_SIGNING_SECRET);
   return { issue, state, comments };
 }
 async function ticket(env, number) {
   const { issue, state, comments } = await loadTicket(env, number);
-  const activity = await readActivity(comments, number, state, env.GITHUB_ISSUES_TOKEN);
+  const activity = await readActivity(comments, number, state, env.REQUEST_SIGNING_SECRET);
   const status = issue.state === 'closed' ? 'closed' : state.status;
   return json({ number: Number(number), title: issue.title, status, message: state.message,
     preview: state.preview || null, pr: state.pr || null, revision: state.revision,
@@ -284,7 +314,7 @@ async function revise(request, env, number) {
   const { input, challenge, ipHash } = await submission(request, env, `revision:${number}`);
   const description = clean(input.description, 10, 6000, 'Changes');
   const { issue, state } = await loadTicket(env, number);
-  const contentHash = await sign(env.GITHUB_ISSUES_TOKEN, `revision:${number}:${input.revision}\n${description}`);
+  const contentHash = await sign(env.REQUEST_SIGNING_SECRET, `revision:${number}:${input.revision}\n${description}`);
   const recent = await recentSubmissions(env);
   const duplicate = recent.find(entry => entry.number === Number(number) && entry.revision &&
     (entry.proof.metadata.requestId === challenge.id || entry.proof.metadata.contentHash === contentHash));
@@ -294,14 +324,16 @@ async function revise(request, env, number) {
   if (input.revision !== state.revision) throw new HttpError(409, 'This request has changed. Refresh the page before submitting.');
   cooldown(recent, ipHash);
   const metadata = pack({ requestId: challenge.id, ipHash, contentHash, sha: state.sha || null, previousRevision: state.revision });
-  const signature = await sign(env.GITHUB_ISSUES_TOKEN, `revision:${number}\n${description}\n${metadata}`);
+  const signature = await sign(env.REQUEST_SIGNING_SECRET, `revision:${number}\n${description}\n${metadata}`);
   const comment = await github(env, `/issues/${number}/comments`, { method: 'POST', body: JSON.stringify({
     body: `${description}\n<!-- sim-revision:v1:${metadata}.${signature} -->`,
   }) });
   return json({ number: Number(number), revision: comment.id }, 201);
 }
 export default {
-  async fetch(request, env) {
+  async fetch(request, bindings) {
+    // Share token acquisition only within this request, never across Worker contexts.
+    const env = { ...bindings, appToken: null };
     const url = new URL(request.url);
     try {
       const isTicket = /^\/[1-9][0-9]{0,8}\/?$/.test(url.pathname);
@@ -316,8 +348,8 @@ export default {
         requireEnabled(env);
         const scope = url.searchParams.get('scope') || 'request';
         if (scope !== 'request' && !/^revision:[1-9][0-9]{0,8}$/.test(scope)) throw new HttpError(400, 'Invalid form.');
-        const payload = pack({ t: Date.now(), id: crypto.randomUUID(), scope, ip: await fingerprint(request, env.GITHUB_ISSUES_TOKEN) });
-        return json({ challenge: `${payload}.${await sign(env.GITHUB_ISSUES_TOKEN, `challenge:${payload}`)}` });
+        const payload = pack({ t: Date.now(), id: crypto.randomUUID(), scope, ip: await fingerprint(request, env.REQUEST_SIGNING_SECRET) });
+        return json({ challenge: `${payload}.${await sign(env.REQUEST_SIGNING_SECRET, `challenge:${payload}`)}` });
       }
       if (url.pathname === '/api/feature-requests' && request.method === 'POST') return await createRequest(request, env);
       const match = url.pathname.match(/^\/api\/tickets\/([1-9][0-9]{0,8})$/);
@@ -334,8 +366,8 @@ export default {
       return env.ASSETS.fetch(request);
     } catch (error) {
       if (error instanceof HttpError) return json({ error: error.message }, error.status);
-      const diagnostic = String(error?.message || '').split(env.GITHUB_ISSUES_TOKEN || '\0').join('[redacted]').slice(0, 300);
-      console.error(JSON.stringify({ event: 'feature_request_error', type: error?.name || 'unknown', message: diagnostic }));
+      // Never log upstream bodies, private keys, tokens, or crypto exception details.
+      console.error(JSON.stringify({ event: 'feature_request_error', type: error?.name || 'unknown' }));
       return json({ error: 'Something went wrong. Please try again later.' }, 503);
     }
   },

@@ -35,9 +35,9 @@ async function comment(state) {
 switch (process.argv[2]) {
   case 'prepare': {
     output('accepted', 'false');
-    if (!env.ISSUES_TOKEN || !env.OPENAI_CONFIGURED) throw new Error('Configure ISSUES_TOKEN and OPENAI_API_KEY first');
+    if (!env.REQUEST_SIGNING_SECRET || !env.OPENAI_CONFIGURED) throw new Error('Configure REQUEST_SIGNING_SECRET and OPENAI_API_KEY first');
     const issue = await api(`/issues/${number}`);
-    const proof = await verifyIssue(issue, env.ISSUES_TOKEN);
+    const proof = await verifyIssue(issue, env.REQUEST_SIGNING_SECRET);
     if (!proof || issue.state !== 'open' || issue.locked || !issue.labels.some(label => label.name === 'site-request')) {
       console.log('Ignoring an unsigned, edited, closed, or non-site issue.');
       break;
@@ -51,7 +51,7 @@ switch (process.argv[2]) {
       comments.push(...await api(`/issues/${number}/comments?per_page=100&page=${page}`));
     const revisions = [];
     for (const item of comments) {
-      const signed = await verifyRevision(item, number, env.ISSUES_TOKEN);
+      const signed = await verifyRevision(item, number, env.REQUEST_SIGNING_SECRET);
       if (signed) revisions.push({ id: item.id, ...signed });
     }
     const revision = revisions.find(item => String(item.id) === revisionId);

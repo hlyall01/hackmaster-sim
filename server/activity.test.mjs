@@ -1,3 +1,4 @@
+import { appEnv, tokenResponse } from './github-app-fixture.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -6,7 +7,7 @@ import worker, { sign, activityIdentity, readActivity, ticketState } from './req
 import { projectEvent, SessionTail } from '../scripts/report_activity.mjs';
 
 const origin = 'https://feature.sim-gui.com';
-const env = { GITHUB_ISSUES_TOKEN: 'test-activity-secret', FEATURE_REQUESTS_ENABLED: 'true' };
+const env = { ...appEnv, REQUEST_SIGNING_SECRET: 'test-activity-secret', FEATURE_REQUESTS_ENABLED: 'true' };
 const encode = value => Buffer.from(JSON.stringify(value)).toString('base64url');
 const keys = await crypto.subtle.generateKey({ name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' }, true, ['sign', 'verify']);
 const jwk = { ...await crypto.subtle.exportKey('jwk', keys.publicKey), kid: 'test-key', use: 'sig' };
@@ -18,17 +19,18 @@ test.beforeEach(async () => {
   now = 1800950400000; Date.now = () => now; writes = [];
   comments = [bot(state())];
   const title = '[Request] Compare fighters', description = 'Compare two fighters together.', metadata = encode({});
-  issue = { title, body: `${description}\n<!-- sim-request:v1:${metadata}.${await sign(env.GITHUB_ISSUES_TOKEN, `issue:${title}\n${description}\n${metadata}`)} -->`,
-    state: 'open', number: 7, user: { login: 'hlyall01' }, labels: [{ name: 'site-request' }], comments: 1 };
+  issue = { title, body: `${description}\n<!-- sim-request:v1:${metadata}.${await sign(env.REQUEST_SIGNING_SECRET, `issue:${title}\n${description}\n${metadata}`)} -->`,
+    state: 'open', number: 7, user: { login: 'sim-gui-requests[bot]' }, labels: [{ name: 'site-request' }], comments: 1 };
   globalThis.fetch = async (url, options = {}) => {
     if (String(url).includes('token.actions.githubusercontent.com/')) return Response.json({ keys: [jwk] });
     assert.equal(new URL(url).hostname, 'api.github.com');
+    if (String(url).endsWith('/access_tokens')) return tokenResponse();
     assert.equal(options.redirect, 'manual');
     const pathname = new URL(url).pathname;
     if (['POST', 'PATCH'].includes(options.method)) {
       writes.push(options.method);
       let comment = options.method === 'PATCH' ? comments.find(c => c.id === Number(pathname.split('/').at(-1))) : null;
-      if (!comment) { comment = { id: comments.length + 100, user: { login: 'hlyall01' } }; comments.push(comment); }
+      if (!comment) { comment = { id: comments.length + 100, user: { login: 'sim-gui-requests[bot]' } }; comments.push(comment); }
       Object.assign(comment, JSON.parse(options.body)); issue.comments = comments.length;
       return Response.json(comment);
     }
@@ -85,10 +87,10 @@ test('wrong run, attempt, revision, closed issue, flooding and oversized data ca
 test('signed activity cannot be forged, copied across tickets or overwrite authoritative status', async () => {
   assert.equal((await post()).status, 200);
   const comment = comments.at(-1);
-  assert.equal(await readActivity([comment], 8, state(), env.GITHUB_ISSUES_TOKEN), null);
-  assert.equal(await readActivity([{ ...comment, body: comment.body.replace('sim-activity:v1:', 'sim-activity:v1:x') }], 7, state(), env.GITHUB_ISSUES_TOKEN), null);
-  assert.equal(await readActivity([comment], 7, { ...state(), revision: 100 }, env.GITHUB_ISSUES_TOKEN), null);
-  assert.equal((await ticketState(comments, 7, env.GITHUB_ISSUES_TOKEN)).status, 'coding');
+  assert.equal(await readActivity([comment], 8, state(), env.REQUEST_SIGNING_SECRET), null);
+  assert.equal(await readActivity([{ ...comment, body: comment.body.replace('sim-activity:v1:', 'sim-activity:v1:x') }], 7, state(), env.REQUEST_SIGNING_SECRET), null);
+  assert.equal(await readActivity([comment], 7, { ...state(), revision: 100 }, env.REQUEST_SIGNING_SECRET), null);
+  assert.equal((await ticketState(comments, 7, env.REQUEST_SIGNING_SECRET)).status, 'coding');
 });
 const record = payload => ({ timestamp: '2026-09-26T12:00:00Z', type: 'response_item', payload });
 test('only public assistant phases and generic tools are projected; secrets and internals are excluded', () => {

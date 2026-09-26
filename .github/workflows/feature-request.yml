@@ -22,7 +22,7 @@ permissions:
   contents: read
 concurrency:
   # Unrelated comments must not displace a pending, authenticated revision.
-  group: feature-request-${{ (github.event_name != 'issue_comment' || (github.event.comment.user.login == 'hlyall01' && contains(github.event.comment.body, '<!-- sim-revision:v1:'))) && (github.event.issue.number || inputs.issue) || github.run_id }}
+  group: feature-request-${{ (github.event_name != 'issue_comment' || ((github.event.comment.user.login == 'hlyall01' || github.event.comment.user.login == 'sim-gui-requests[bot]') && contains(github.event.comment.body, '<!-- sim-revision:v1:'))) && (github.event.issue.number || inputs.issue) || github.run_id }}
   cancel-in-progress: false
 jobs:
   activity-check:
@@ -45,9 +45,9 @@ jobs:
       vars.FEATURE_REQUESTS_ENABLED == 'true' &&
       inputs.activity_check != true &&
       (github.event_name == 'workflow_dispatch' ||
-       (!github.event.issue.pull_request && github.event.issue.user.login == 'hlyall01' &&
+       (!github.event.issue.pull_request && (github.event.issue.user.login == 'hlyall01' || github.event.issue.user.login == 'sim-gui-requests[bot]') &&
         contains(github.event.issue.labels.*.name, 'site-request') &&
-        (github.event_name == 'issues' || (github.event.comment.user.login == 'hlyall01' && contains(github.event.comment.body, '<!-- sim-revision:v1:')))))
+        (github.event_name == 'issues' || ((github.event.comment.user.login == 'hlyall01' || github.event.comment.user.login == 'sim-gui-requests[bot]') && contains(github.event.comment.body, '<!-- sim-revision:v1:')))))
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -71,7 +71,7 @@ jobs:
         id: prepare
         env:
           GH_TOKEN: ${{ github.token }}
-          ISSUES_TOKEN: ${{ secrets.ISSUES_TOKEN }}
+          REQUEST_SIGNING_SECRET: ${{ secrets.ISSUES_TOKEN }}
           OPENAI_CONFIGURED: ${{ secrets.OPENAI_API_KEY != '' && 'true' || '' }}
           ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue }}
           REVISION_ID: ${{ github.event.comment.id || inputs.revision }}

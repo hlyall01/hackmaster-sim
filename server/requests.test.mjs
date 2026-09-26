@@ -1,9 +1,10 @@
+import { appEnv, tokenResponse } from './github-app-fixture.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import worker, { verifyIssue, verifyRevision } from './requests.mjs';
 
 const origin = 'https://feature.sim-gui.com';
-const env = { GITHUB_ISSUES_TOKEN: 'test-only-secret', FEATURE_REQUESTS_ENABLED: 'true',
+const env = { ...appEnv, REQUEST_SIGNING_SECRET: 'test-only-secret', FEATURE_REQUESTS_ENABLED: 'true',
   ASSETS: { fetch: async request => new Response(new URL(request.url).pathname) } };
 const originalFetch = globalThis.fetch;
 const originalNow = Date.now;
@@ -14,17 +15,18 @@ test.beforeEach(() => {
   Date.now = () => now;
   globalThis.fetch = async (url, init = {}) => {
     assert.equal(new URL(url).hostname, 'api.github.com');
+    if (String(url).endsWith('/access_tokens')) return tokenResponse();
     assert.equal(init.redirect, 'manual');
     const path = new URL(url).pathname;
     if (init.method === 'POST') {
       writes++;
       if (path.endsWith('/comments')) {
-        const comment = { ...JSON.parse(init.body), id: 100 + comments.length, user: { login: 'hlyall01' },
+        const comment = { ...JSON.parse(init.body), id: 100 + comments.length, user: { login: 'sim-gui-requests[bot]' },
           created_at: new Date(now).toISOString(), issue_url: 'https://api.github.com/repos/hlyall01/hackmaster-sim/issues/7' };
         comments.push(comment); issues[0].comments = comments.length;
         return Response.json(comment, { status: 201 });
       }
-      const issue = { ...JSON.parse(init.body), number: 7, user: { login: 'hlyall01' },
+      const issue = { ...JSON.parse(init.body), number: 7, user: { login: 'sim-gui-requests[bot]' },
         created_at: new Date(now).toISOString(), state: 'open', comments: 0 };
       issue.labels = issue.labels.map(name => ({ name }));
       issues.push(issue);
@@ -56,11 +58,11 @@ test('accepted submissions create a signed ticket without storing the IP address
   assert.equal(response.status, 201);
   assert.deepEqual(await response.json(), { number: 7, url: '/7' });
   assert.equal(writes, 1);
-  assert.ok(await verifyIssue(issues[0], env.GITHUB_ISSUES_TOKEN));
+  assert.ok(await verifyIssue(issues[0], env.REQUEST_SIGNING_SECRET));
   assert.ok(!issues[0].body.includes('192.0.2.1'));
-  assert.equal(await verifyIssue({ ...issues[0], title: 'tampered' }, env.GITHUB_ISSUES_TOKEN), null);
-  assert.equal(await verifyIssue({ ...issues[0], body: issues[0].body.replace('statistics', 'credentials') }, env.GITHUB_ISSUES_TOKEN), null);
-  assert.equal(await verifyIssue({ ...issues[0], user: { login: 'attacker' } }, env.GITHUB_ISSUES_TOKEN), null);
+  assert.equal(await verifyIssue({ ...issues[0], title: 'tampered' }, env.REQUEST_SIGNING_SECRET), null);
+  assert.equal(await verifyIssue({ ...issues[0], body: issues[0].body.replace('statistics', 'credentials') }, env.REQUEST_SIGNING_SECRET), null);
+  assert.equal(await verifyIssue({ ...issues[0], user: { login: 'attacker' } }, env.REQUEST_SIGNING_SECRET), null);
 });
 test('invalid signatures, too-fast, expired and other-IP tokens cannot create issues', async () => {
   const challenge = await token();
@@ -166,11 +168,11 @@ test('signed follow-ups keep the old preview, deduplicate retries and refresh wh
   const challenge = await token(undefined, 'revision:7'); now += 4000;
   assert.equal((await revision(challenge)).status, 201);
   const comment = comments.at(-1);
-  const proof = await verifyRevision(comment, '7', env.GITHUB_ISSUES_TOKEN);
+  const proof = await verifyRevision(comment, '7', env.REQUEST_SIGNING_SECRET);
   assert.equal(proof.metadata.sha, 'a'.repeat(40));
-  assert.equal(await verifyRevision(comment, '8', env.GITHUB_ISSUES_TOKEN), null);
-  assert.equal(await verifyRevision({ ...comment, body: comment.body.replace('reset', 'delete') }, '7', env.GITHUB_ISSUES_TOKEN), null);
-  assert.equal(await verifyRevision({ ...comment, user: { login: 'attacker' } }, '7', env.GITHUB_ISSUES_TOKEN), null);
+  assert.equal(await verifyRevision(comment, '8', env.REQUEST_SIGNING_SECRET), null);
+  assert.equal(await verifyRevision({ ...comment, body: comment.body.replace('reset', 'delete') }, '7', env.REQUEST_SIGNING_SECRET), null);
+  assert.equal(await verifyRevision({ ...comment, user: { login: 'attacker' } }, '7', env.REQUEST_SIGNING_SECRET), null);
   assert.equal((await revision(challenge)).status, 200);
   assert.equal(writes, 2);
   let ticket = await status();

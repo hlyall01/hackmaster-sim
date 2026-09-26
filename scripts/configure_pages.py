@@ -33,13 +33,24 @@ if existing is None:
 if existing['production_branch'] != 'main':
     raise SystemExit('Pages production branch must be main')
 if project == 'hackmaster-sim':
-    token = os.environ.get('ISSUES_TOKEN')
-    if not token:
-        raise SystemExit('Missing ISSUES_TOKEN')
+    # Preserve the old token's bytes solely as an HMAC key for existing tickets.
+    # GitHub authentication now uses the app; token expiry does not affect HMAC.
+    signing_secret = os.environ.get('ISSUES_TOKEN')
+    private_key = os.environ.get('ISSUES_APP_PRIVATE_KEY', '')
+    app_id = os.environ.get('ISSUES_APP_ID', '')
+    installation_id = os.environ.get('ISSUES_APP_INSTALLATION_ID', '')
+    if not signing_secret or not private_key.startswith('-----BEGIN PRIVATE KEY-----'):
+        raise SystemExit('Missing request signing secret or PKCS#8 app private key')
+    if not re.fullmatch('[1-9][0-9]*', app_id) or not re.fullmatch('[1-9][0-9]*', installation_id):
+        raise SystemExit('Invalid GitHub App or installation ID')
     api('/' + project, 'PATCH', {'deployment_configs': {'production': {
         'compatibility_date': '2026-09-26',
         'env_vars': {
-            'GITHUB_ISSUES_TOKEN': {'type': 'secret_text', 'value': token},
+            'GITHUB_ISSUES_TOKEN': None,
+            'REQUEST_SIGNING_SECRET': {'type': 'secret_text', 'value': signing_secret},
+            'GITHUB_APP_PRIVATE_KEY': {'type': 'secret_text', 'value': private_key},
+            'GITHUB_APP_ID': {'type': 'plain_text', 'value': app_id},
+            'GITHUB_APP_INSTALLATION_ID': {'type': 'plain_text', 'value': installation_id},
             'FEATURE_REQUESTS_ENABLED': {'type': 'plain_text', 'value': os.environ.get('FEATURE_REQUESTS_ENABLED', 'false')},
         },
     }}})
