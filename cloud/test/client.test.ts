@@ -6,11 +6,14 @@ import { DraftStore } from '../../web/cloud-drafts.js';
 
 const source = readFileSync(new URL('../../web/cloud.js', import.meta.url), 'utf8').replace("import { DraftStore } from './cloud-drafts.js';", '');
 const tick = () => new Promise(resolve => setImmediate(resolve));
-async function fixture(admin = true, owner = true, signedIn = true, initiallyDeleted = false) {
+async function fixture(admin = true, owner = true, signedIn = true, initiallyDeleted = false, persisted = {}) {
   const dom = new JSDOM('<html><head><meta name="hackmaster-cloud" content="character-test"></head><body></body></html>', {
     url: 'https://characters-test.sim-gui.com', runScripts: 'outside-only',
   });
   const w = dom.window;
+  for (const [key,value] of Object.entries(persisted.local || {})) w.localStorage.setItem(key,value);
+  for (const [key,value] of Object.entries(persisted.session || {})) w.sessionStorage.setItem(key,value);
+  w.navigate = url => { w.lastNavigation = url; };
   Object.assign(w, { DraftStore, structuredClone, AbortSignal, Response });
   w.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
   w.HTMLDialogElement.prototype.close = function () { this.open = false; };
@@ -58,7 +61,7 @@ async function fixture(admin = true, owner = true, signedIn = true, initiallyDel
     }
     throw new Error(`Unexpected request ${options.method} ${url}`);
   };
-  w.eval(source);
+  w.eval(source.replaceAll('location.assign(', 'window.navigate('));
   await tick();
   const bridge = w.hackmasterCloud;
   bridge.publish(0, JSON.stringify(row.document));
@@ -169,8 +172,8 @@ test('continue without logging in loads the whole party roster with no saves or 
   f.bridge.loaded(0,''); f.bridge.publish(0,JSON.stringify(loads[0].document));
   assert.equal(JSON.parse(f.bridge.snapshot(0)).can_save,false);
   for (const action of ['save','create','admin']) { f.bridge.action(0,action,''); await tick(); }
-  assert.equal(f.writes(),0); assert.equal(f.w.localStorage.length,0);
-  assert.ok(f.w.location.search.includes('guest=1'));
+  assert.equal(f.writes(),0); assert.equal(f.w.localStorage.getItem('hackmaster.guest'),'1');
+  assert.equal(f.w.location.search,'');
   f.w.close();
 });
 
@@ -222,24 +225,46 @@ test('deleted characters have a separate recovery section and no assignment cont
   f.w.close();
 });
 
-test('expired creation exposes new-tab sign-in and retries the preserved draft after authentication', async () => {
-  const f = await fixture(false);
-  f.failure(401);
-  f.bridge.action(0,'create',''); await tick();
+test('same-tab sign-in preserves edits and creation retry identity across reload', async () => {
+  const f = await fixture(false); await f.load();
+  f.bridge.publish(0,JSON.stringify({schema_version:1,player:{name:'Unsaved character'}}));
+  f.failure(401); f.bridge.action(0,'create',''); await tick();
   assert.equal(f.writes(),0);
   assert.equal(JSON.parse(f.bridge.snapshot(0)).login_expired,true);
-  assert.equal(f.w.document.querySelector('dialog').open,true);
-  const link = f.w.document.querySelector('a[href="/api/login"]');
-  assert.equal(link.target,'_blank'); assert.equal(link.rel,'noopener');
-  const store = new DraftStore(f.w.localStorage,'user');
-  const draft = store.list(null)[0];
-  assert.equal(draft.document.player.name,'Original');
-  f.failure(0);
-  await f.click('Check sign-in');
-  assert.equal(JSON.parse(f.bridge.snapshot(0)).login_expired,false);
-  f.bridge.action(0,'create',''); await tick();
-  assert.equal(f.writes(),1); assert.equal(store.list(null).length,0);
-  assert.match(JSON.parse(f.bridge.snapshot(0)).status,/saved online/);
+  assert.equal(f.w.document.querySelector('a[target="_blank"]'),null);
+  const draft=new DraftStore(f.w.localStorage,'user').list(null)[0];
+  await f.click('Sign in with Google');
+  assert.equal(f.w.lastNavigation,'/api/login');
+  assert.equal(f.w.localStorage.getItem('hackmaster.guest'),null);
+  const raw=f.w.sessionStorage.getItem('hackmaster.signin-resume');
+  f.w.close();
+  const resumed=await fixture(false,true,true,false,{session:{'hackmaster.signin-resume':raw}});
+  const loads=JSON.parse(resumed.bridge.takeLoads());
+  assert.equal(loads[0].document.player.name,'Unsaved character');
+  resumed.bridge.loaded(0,''); resumed.bridge.publish(0,JSON.stringify(loads[0].document));
+  assert.equal(resumed.w.sessionStorage.getItem('hackmaster.signin-resume'),null);
+  assert.equal(JSON.parse(resumed.bridge.snapshot(0)).dirty,true);
+  resumed.bridge.action(0,'create',''); await tick();
+  assert.equal(resumed.writes(),1);
+  assert.match(JSON.parse(resumed.bridge.snapshot(0)).status,/saved online/);
+  assert.equal(JSON.parse(raw).slots[0].creationDraft.mutation_id,draft.mutation_id);
+  resumed.w.close();
+});
+test('guest preference persists without a query parameter and clears on same-tab sign-in', async () => {
+  const f=await fixture(false,false,false,false,{local:{'hackmaster.guest':'1'}});
+  assert.equal(JSON.parse(f.bridge.snapshot(0)).guest,true);
+  assert.equal(f.w.location.search,'');
+  f.bridge.action(0,'signin',''); await tick();
+  assert.equal(f.w.localStorage.getItem('hackmaster.guest'),null);
+  assert.equal(f.w.lastNavigation,'/api/login');
+  f.w.close();
+});
+test('failed workspace storage keeps the sign-in page and edits open', async () => {
+  const f=await fixture(false);
+  f.w.Storage.prototype.setItem=()=>{throw new Error('Storage unavailable');};
+  f.bridge.action(0,'signin',''); await tick();
+  assert.equal(f.w.lastNavigation,undefined);
+  assert.match(JSON.parse(f.bridge.snapshot(0)).status,/Storage unavailable/);
   f.w.close();
 });
 test('signing into a different account cannot submit the previous account draft', async () => {

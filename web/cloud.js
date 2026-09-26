@@ -6,7 +6,22 @@ if (enabled) installCloudCharacters();
 function installCloudCharacters() {
   let user = null;
   let loginExpired = false;
-  let guest = new URLSearchParams(location.search).get('guest') === '1';
+  const guestKey = 'hackmaster.guest';
+  const resumeKey = 'hackmaster.signin-resume';
+  let guest = false;
+  let leavingForLogin = false;
+  const resumeRemaining = new Set();
+  try { guest = localStorage.getItem(guestKey) === '1'; } catch { /* Session-only fallback. */ }
+  // Migrate old guest bookmarks to a browser preference and clean the URL.
+  const initialUrl = new URL(location.href);
+  if (initialUrl.searchParams.has('guest')) {
+    guest = initialUrl.searchParams.get('guest') === '1';
+    try { if (guest) localStorage.setItem(guestKey, '1'); else localStorage.removeItem(guestKey); } catch { /* Session-only fallback. */ }
+    initialUrl.searchParams.delete('guest'); history.replaceState(null, '', initialUrl);
+  }
+  function rememberGuest(value) {
+    if (value) localStorage.setItem(guestKey, '1'); else localStorage.removeItem(guestKey);
+  }
   let characters = [];
   let roster = [];
   let users = [];
@@ -62,7 +77,7 @@ function installCloudCharacters() {
     });
     if (response.type === 'opaqueredirect' || response.status === 401 || (response.status >= 300 && response.status < 400)) {
       loginExpired = true;
-      throw new Error('Your login expired. Sign in using the link above, return to this tab, then retry Create my character or Save online. Your open character and draft are kept.');
+      throw new Error('Your login expired. Sign in again, then retry Create my character or Save online. Your open character and draft are kept.');
     }
     if (!(response.headers.get('Content-Type') || '').includes('application/json')) throw new Error('The character service is unavailable. Your local draft is preserved.');
     const result = await response.json();
@@ -178,10 +193,44 @@ function installCloudCharacters() {
     el.style.margin = '4px'; el.disabled = busy || disabled;
     el.onclick = () => task(action); return el;
   }
+  function signIn() {
+    // Save the complete workspace before leaving. If storage fails, keep this page open.
+    const resume = {userId:user?.id || null, slots:current.map((doc,i) => doc ? {
+      document:doc, row:slots[i], draft:drafts[i], creationDraft:creationDrafts[i],
+    } : null)};
+    sessionStorage.setItem(resumeKey, encode(resume));
+    rememberGuest(false);
+    leavingForLogin = true;
+    location.assign('/api/login');
+  }
+  function restoreAfterSignIn() {
+    if (!user || guest) return;
+    const raw = sessionStorage.getItem(resumeKey);
+    if (!raw) return;
+    const resume = JSON.parse(raw);
+    if (resume.userId && resume.userId !== user.id) {
+      status = 'Sign back into the original account to restore your open character edits.';
+      return;
+    }
+    for (let i=0; i<2; i++) {
+      const saved = resume.slots[i];
+      if (!saved?.document) continue;
+      const latest = roster.find(c => c.id === saved.row?.id);
+      resumeRemaining.add(i);
+      queueLoad(i, {
+        ...(saved.row || {}), importOnly:!saved.row,
+        document:saved.document, can_edit:latest?.can_edit ? 1 : 0,
+        afterSignin:true, restoreBaseline:saved.row?.document || null,
+        recoveryDraft:saved.draft, creationDraft:saved.creationDraft,
+      });
+    }
+    if (!resumeRemaining.size) sessionStorage.removeItem(resumeKey);
+  }
   async function signOut() {
     const result = await fetch('/cdn-cgi/access/logout', {credentials:'same-origin', redirect:'manual', signal:AbortSignal.timeout(20000)});
     if (result.status >= 400) throw new Error('Sign out failed. Please try again.');
-    location.assign('/?guest=1');
+    rememberGuest(true);
+    location.assign('/');
   }
   function render() {
     const dirty = !guest && current.some((doc, i) => doc && encode(doc) !== encode(slots[i]?.document || baselines[i]));
@@ -199,19 +248,11 @@ function installCloudCharacters() {
     element('p', user ? `${user.email}${user.admin ? ' · Administrator' : ''}` : guest ? 'Guest · Simulation only' : 'Choose how to continue');
     const message = element('p', status); message.setAttribute('role', 'status');
     if (user?.admin) button('Refresh', async () => { await refresh(); status = 'Character list refreshed.'; });
-    if (user?.admin || loginExpired) {
-      const signIn = element('a', 'Sign in with Google (new tab)');
-      signIn.href = '/api/login'; signIn.target = '_blank'; signIn.rel = 'noopener';
-      Object.assign(signIn.style, {display:'inline-block',margin:'4px',color:'#9ecbff'});
-      if (loginExpired) {
-        element('p', 'Keep this tab open. Sign in with the same Google account in the new tab, then return here.');
-        button('Check sign-in', async () => { await refresh(); status = 'Signed in again. Retry Create my character or Save online; your edits are still here.'; dialog.close(); });
-      }
-    } else if (!user) button('Sign in with Google', () => location.assign('/api/login'));
+    if (user?.admin || loginExpired || !user) button('Sign in with Google', signIn);
+    if (loginExpired) element('p', 'Sign-in returns to this tab and restores your open edits.');
     if (!user) button('Continue without logging in', async () => {
       guest = true; loginExpired = false;
-      const url = new URL(location.href); url.searchParams.set('guest', '1');
-      history.replaceState(null, '', url);
+      try { rememberGuest(true); } catch { status = "Guest mode will last for this tab only because browser storage is unavailable."; }
       await refresh(); dialog.close();
     });
     if (user) button('Sign out', signOut);
@@ -394,7 +435,7 @@ function installCloudCharacters() {
     },
     action(slot, action, id) {
       if (action === 'reauth') { loginExpired = true; adminView = false; render(); dialog.showModal(); return; }
-      if (action === 'signin') { location.assign('/api/login'); return; }
+      if (action === 'signin') { void task(signIn); return; }
       if (action === 'manage') { adminView = false; render(); dialog.showModal(); return; }
       if (guest && !['load', 'refresh'].includes(action)) return;
       if (action === 'admin' && user?.admin) { adminView = true; render(); dialog.showModal(); void task(refresh); return; }
@@ -424,13 +465,18 @@ function installCloudCharacters() {
       const row = pendingLoads[slot]; pendingLoads[slot] = null;
       if (error) { status = error; render(); dialog.showModal(); return; }
       slots[slot] = row.importOnly ? null : row;
-      drafts[slot] = row.recoveryDraft ? { ...row.recoveryDraft, id: crypto.randomUUID() } : null;
+      drafts[slot] = row.recoveryDraft ? (row.afterSignin ? row.recoveryDraft : { ...row.recoveryDraft, id: crypto.randomUUID() }) : null;
       creationDrafts[slot] = row.creationDraft || null;
       if (row.recovered) {
         // Recovered text is an unsaved draft, not a server acknowledgement.
         slots[slot] = { ...row, document: null };
       }
-      status = guest ? 'Party character loaded for simulation. Guest changes cannot be saved.' : row.importOnly ? 'Imported. Review the character, then create an online copy from Core.' : row.can_edit === 0 ? 'Party character loaded for simulation. Create your own copy to save changes.' : 'Character loaded. Edit it, then Save online.';
+      if (row.afterSignin) {
+        if (slots[slot]) slots[slot].document = row.restoreBaseline;
+        resumeRemaining.delete(slot);
+        if (!resumeRemaining.size) sessionStorage.removeItem(resumeKey);
+      }
+      status = row.afterSignin ? 'Signed in. Your open character was restored; retry Create my character or Save online.' : guest ? 'Party character loaded for simulation. Guest changes cannot be saved.' : row.importOnly ? 'Imported. Review the character, then create an online copy from Core.' : row.can_edit === 0 ? 'Party character loaded for simulation. Create your own copy to save changes.' : 'Character loaded. Edit it, then Save online.';
       render();
     },
     error(message) { status = message; open.title = message; },
@@ -454,13 +500,13 @@ function installCloudCharacters() {
   document.addEventListener('visibilitychange', () => { void refreshRoster(); });
   setInterval(() => { void refreshRoster(); }, 30000);
   window.addEventListener('beforeunload', event => {
-    if (!guest && current.some((doc, i) => doc && encode(doc) !== encode(slots[i]?.document || baselines[i]))) {
+    if (!leavingForLogin && !guest && current.some((doc, i) => doc && encode(doc) !== encode(slots[i]?.document || baselines[i]))) {
       event.preventDefault(); event.returnValue = '';
     }
   });
   render();
   void task(async () => {
-    try { await refresh(); }
+    try { await refresh(); restoreAfterSignIn(); }
     catch (error) {
       if (guest) throw error;
       status = 'Sign in to create and save your characters, or continue as a guest to simulate with the full party roster.';
