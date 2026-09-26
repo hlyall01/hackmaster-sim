@@ -11,6 +11,7 @@ function fixture() {
   sql.exec('PRAGMA foreign_keys=ON');
   sql.exec(readFileSync(new URL('../migrations/0001_characters.sql', import.meta.url), 'utf8'));
   sql.exec(readFileSync(new URL('../migrations/0002_character_owners.sql', import.meta.url), 'utf8'));
+  sql.exec(readFileSync(new URL('../migrations/0003_character_deletion.sql', import.meta.url), 'utf8'));
   const db = { prepare(query: string) {
     let args: (string | number | null)[] = [];
     return {
@@ -230,4 +231,33 @@ test('unauthenticated guests see every character but cannot save, assign, restor
   assert.equal((await get('/guest/characters', 'GET', undefined, 'https://alternate.workers.dev')).status,403);
   assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM users').get().n, count);
   assert.equal((await call('player', `characters/${own.id}`)).data.version,1);
+});
+
+ test('owner deletion hides all public reads, denies other editors, detects conflicts and preserves admin recovery', async () => {
+  const {call,env,request,sql} = fixture();
+  const row = (await call('player','characters','POST',saveBody(1))).data;
+  await call('stranger','session');
+  await call('admin',`characters/${row.id}/assignments`,'PUT',{user_id:'stranger'});
+  assert.equal((await call('stranger',`characters/${row.id}`,'DELETE',{version:1})).status,403);
+  assert.equal((await call('admin',`characters/${row.id}`,'DELETE',{version:1})).status,403);
+  assert.equal((await worker.fetch(request(`characters/${row.id}`,'DELETE',{version:1}),env)).status,401);
+  await call('stranger',`characters/${row.id}`,'PUT',saveBody(1));
+  assert.equal((await call('player',`characters/${row.id}`,'DELETE',{version:1})).status,409);
+  assert.equal((await call('player',`characters/${row.id}`,'DELETE',{version:2})).status,200);
+  assert.equal((await call('player',`characters/${row.id}`,'DELETE',{version:2})).status,200);
+  for(const who of ['player','stranger']) {
+    assert.deepEqual((await call(who,'characters')).data,[]);
+    assert.deepEqual((await call(who,'roster')).data,[]);
+    assert.equal((await call(who,`roster/${row.id}`)).status,404);
+    assert.equal((await call(who,`characters/${row.id}`,'PUT',saveBody(2))).status,404);
+  }
+  assert.deepEqual(await (await worker.fetch(new Request(env.APP_ORIGIN+'/guest/characters'),env)).json(),[]);
+  assert.equal((await worker.fetch(new Request(env.APP_ORIGIN+'/guest/characters/'+row.id),env)).status,404);
+  assert.equal((await call('admin',`characters/${row.id}`,'PUT',saveBody(2))).status,410);
+  assert.equal((await call('admin','characters')).data[0].deleted,1);
+  assert.equal((await call('admin',`characters/${row.id}/revisions`)).data.length,2);
+  assert.equal((await call('admin',`characters/${row.id}/restore`,'POST',{...saveBody(2),restore_version:1})).status,200);
+  assert.equal((await call('player','roster')).data[0].is_owner,1);
+  assert.equal((await call('player',`characters/${row.id}`,'DELETE',{version:2})).status,409);
+  assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM revisions').get().n,3);
 });

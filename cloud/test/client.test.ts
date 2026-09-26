@@ -18,6 +18,9 @@ async function fixture(admin = true, owner = true, signedIn = true) {
   let failure = 0;
   let loseResponse = false;
   let writes = 0;
+  let deleted = false;
+  let deletes = 0;
+  w.confirm = () => true;
   const mutations = new Map();
   const assignments = [];
   w.fetch = async (url, options) => {
@@ -25,13 +28,19 @@ async function fixture(admin = true, owner = true, signedIn = true) {
     if (!signedIn) return Response.json({error:'Sign in'}, {status:401});
     const path = String(url).replace('/api/', '');
     if (path === 'session') return Response.json({ user: { id: 'user', email: 'test@example.com', admin } });
-    if (path === 'roster') return Response.json([{...row,is_owner:Number(owner),can_edit:Number(owner)}]);
+    if (path === 'roster') return Response.json(deleted ? [] : [{...row,is_owner:Number(owner),can_edit:Number(owner)}]);
     if (path === 'roster/character') return Response.json({...row,is_owner:Number(owner),can_edit:Number(owner)});
     if (path === 'users') return Response.json([{id:'friend',email:'friend@example.com'}]);
     if (path.endsWith('/assignments')) { if (options.method !== 'GET') assignments.push({url,method:options.method,...JSON.parse(options.body)}); return Response.json([]); }
     if (path.endsWith('/revisions')) return Response.json([]);
-    if (path === 'characters' && options.method === 'GET') return Response.json([row]);
+    if (path === 'characters' && options.method === 'GET') return Response.json(deleted ? [] : [row]);
     if (path === 'characters/character' && options.method === 'GET') return Response.json(row);
+    if (path === 'characters/character' && options.method === 'DELETE') {
+      if (failure === -1) throw new TypeError('Network unavailable');
+      if (failure) return Response.json({error:'Deletion failed'}, {status:failure});
+      assert.equal(JSON.parse(options.body).version,row.version);
+      deletes++; deleted = true; return Response.json({deleted:true,id:row.id});
+    }
     if (options.method === 'PUT' || options.method === 'POST') {
       if (failure === -1) throw new TypeError('Network unavailable');
       if (failure) return Response.json({ error: failure === 409 ? 'Conflict: draft preserved' : 'Session expired' }, { status: failure });
@@ -60,7 +69,7 @@ async function fixture(admin = true, owner = true, signedIn = true) {
     const loads = JSON.parse(bridge.takeLoads()); assert.equal(loads.length, 1);
     bridge.loaded(0, ''); bridge.publish(0, JSON.stringify(loads[0].document));
   };
-  return { w, bridge, click, load, drafts, assignments, failure: n => failure = n, lose: value => loseResponse = value, writes: () => writes };
+  return { w, bridge, click, load, drafts, assignments, deletes: () => deletes, failure: n => failure = n, lose: value => loseResponse = value, writes: () => writes };
 }
 test('client retains drafts on network/auth/conflict failure, then confirms committed save', async () => {
   const f = await fixture(); await f.load();
@@ -158,5 +167,38 @@ test('continue without logging in loads the whole party roster with no saves or 
   for (const action of ['save','create','admin']) { f.bridge.action(0,action,''); await tick(); }
   assert.equal(f.writes(),0); assert.equal(f.w.localStorage.length,0);
   assert.ok(f.w.location.search.includes('guest=1'));
+  f.w.close();
+});
+
+test('owner deletion confirms, retains drafts on failures, and detaches only after commit', async () => {
+  const f = await fixture(false); await f.load();
+  f.bridge.publish(0,JSON.stringify({schema_version:1,player:{name:'Unsaved edit'}}));
+  assert.equal(JSON.parse(f.bridge.snapshot(0)).can_delete,true);
+  f.w.confirm = () => false;
+  f.bridge.action(0,'delete',''); await tick();
+  assert.equal(f.deletes(),0);
+  f.w.confirm = () => true;
+  for (const failure of [-1,401,409]) {
+    f.failure(failure);
+    f.bridge.action(0,'delete',''); await tick();
+    assert.equal(f.deletes(),0);
+    assert.equal(JSON.parse(f.bridge.snapshot(0)).loaded_id,'character');
+    assert.equal(f.drafts()[0].document.player.name,'Unsaved edit');
+  }
+  f.failure(0);
+  f.bridge.action(0,'delete',''); await tick();
+  assert.equal(f.deletes(),1);
+  const state=JSON.parse(f.bridge.snapshot(0));
+  assert.equal(state.characters.length,0);
+  assert.equal(state.loaded_id,''); assert.equal(state.can_save,false); assert.equal(state.can_delete,false);
+  assert.equal(f.drafts()[0].document.player.name,'Unsaved edit');
+  f.w.close();
+});
+test('party members cannot be deleted through UI or bridge', async () => {
+  const f=await fixture(false,false); await f.load();
+  assert.equal(JSON.parse(f.bridge.snapshot(0)).can_delete,false);
+  assert.ok(![...f.w.document.querySelectorAll('button')].some(b=>b.textContent==='Delete my character'));
+  f.bridge.action(0,'delete',''); await tick();
+  assert.equal(f.deletes(),0);
   f.w.close();
 });

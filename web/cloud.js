@@ -141,6 +141,21 @@ function installCloudCharacters() {
     if (create) adminSelected = result.id;
     await refresh();
   }
+  async function deleteCharacter(id, version) {
+    const row = roster.find(c => c.id === id);
+    if (guest || !user || !row?.is_owner) throw new Error('Only the creator can delete this character.');
+    if (!window.confirm(`Delete "${row.name}" from My Characters and everyone's Party Members? An administrator can recover it from revision history. Your open simulation copy and local drafts will be kept.`)) return;
+    await api(`characters/${id}`, 'DELETE', {version});
+    // Do not discard simulation edits or drafts; detach all copies only after commit.
+    for (let slot = 0; slot < slots.length; slot++) {
+      if (slots[slot]?.id !== id) continue;
+      stash(slot, current[slot]);
+      slots[slot] = null; drafts[slot] = null;
+    }
+    roster = roster.filter(c => c.id !== id);
+    status = `${row.name}: deleted online. Your open simulation copy is kept.`;
+    await refresh();
+  }
   function element(tag, text, parent = dialog) {
     const el = document.createElement(tag);
     if (text !== undefined) el.textContent = text;
@@ -185,6 +200,8 @@ function installCloudCharacters() {
       const option = element('option', row.name + (row.can_edit ? '' : ' · simulation copy'), select); option.value = row.id; option.selected = row.id === selected;
     }
     select.onchange = () => task(async () => { selected = select.value; await details(); });
+    const chosen = roster.find(c => c.id === selected);
+    if (chosen?.is_owner) button('Delete my character', () => deleteCharacter(chosen.id, chosen.version));
     for (let slot = 0; slot < 2; slot++) {
       const section = element('div'); section.style.marginTop = '12px';
       element('strong', `Simulator character ${slot + 1}: ${slots[slot]?.name || 'local character'}`, section);
@@ -237,7 +254,7 @@ function installCloudCharacters() {
     Object.assign(select.style, {display:'block',width:'100%',padding:'8px',marginTop:'6px'});
     select.setAttribute('aria-label', 'Character to manage'); select.disabled = busy;
     for (const row of characters) {
-      const option = element('option', row.name, select); option.value = row.id; option.selected = row.id === adminSelected;
+      const option = element('option', row.name + (row.deleted ? ' · Deleted' : ''), select); option.value = row.id; option.selected = row.id === adminSelected;
     }
     select.onchange = () => task(async () => { adminSelected = select.value; await details(); });
     if (!characters.length) element('p', 'No cloud characters yet. Add one below to assign it.');
@@ -322,6 +339,7 @@ function installCloudCharacters() {
       return encode({ signed_in: !!user, guest, busy, status, admin: !!user?.admin,
         characters: roster.map(c => ({id:c.id, name:c.name, is_owner:!!c.is_owner, can_edit:!!c.can_edit})),
         loaded_id: row?.id || '', loaded_name: row?.name || '',
+        can_delete: !!user && !guest && !!row && !!roster.find(c => c.id === row.id)?.is_owner,
         can_save: !!user && !guest && !!row && row.can_edit !== 0,
         dirty: !guest && !!current[slot] && encode(current[slot]) !== encode(row?.document || baselines[slot]),
       });
@@ -338,6 +356,10 @@ function installCloudCharacters() {
           queueLoad(slot, row);
         } else if (action === 'save') await save(slot);
         else if (action === 'create') await save(slot, true);
+        else if (action === 'delete') {
+          const row = slots[slot];
+          if (row) await deleteCharacter(row.id, row.version);
+        }
       });
     },
     takeLoads: () => encode(loads.splice(0)),

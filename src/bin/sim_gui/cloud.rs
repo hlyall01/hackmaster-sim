@@ -74,7 +74,7 @@ struct OnlineCharacter { id: String, name: String, is_owner: bool, can_edit: boo
 struct OnlineSnapshot {
     signed_in: bool, guest: bool, busy: bool, status: String,
     characters: Vec<OnlineCharacter>, loaded_id: String, loaded_name: String,
-    can_save: bool, dirty: bool,
+    can_save: bool, can_delete: bool, dirty: bool,
 }
 
 pub(super) fn show_core(ui: &mut egui::Ui, slot: usize) {
@@ -110,6 +110,7 @@ pub(super) fn show_core(ui: &mut egui::Ui, slot: usize) {
                 if state.signed_in {
                 if ui.add_enabled(state.can_save, egui::Button::new("Save online")).clicked() { cloud_action(slot, "save", ""); }
                 if ui.button("Create my character").on_hover_text("Save the current fighter as a new character you own. Other signed-in players can load it for simulations.").clicked() { cloud_action(slot, "create", ""); }
+                if state.can_delete && ui.button("Delete my character").clicked() { cloud_action(slot, "delete", ""); }
                 } else if ui.button("Sign in with Google").clicked() { cloud_action(slot, "signin", ""); }
                 if state.signed_in && ui.button("Recovery & backups").on_hover_text("Recover unsaved local changes or export a character as a JSON backup.").clicked() { cloud_action(slot, "manage", ""); }
             });
