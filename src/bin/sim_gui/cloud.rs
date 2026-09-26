@@ -112,7 +112,6 @@ pub(super) fn show_core(ui: &mut egui::Ui, slot: usize) {
                 if ui.button("Create my character").on_hover_text("Save the current fighter as a new character you own. Other signed-in players can load it for simulations.").clicked() { cloud_action(slot, "create", ""); }
                 if state.can_delete && ui.button("Delete my character").clicked() { cloud_action(slot, "delete", ""); }
                 } else if ui.button("Sign in with Google").clicked() { cloud_action(slot, "signin", ""); }
-                if state.signed_in && ui.button("Recovery & backups").on_hover_text("Recover unsaved local changes or export a character as a JSON backup.").clicked() { cloud_action(slot, "manage", ""); }
             });
         });
         if !state.loaded_name.is_empty() {
