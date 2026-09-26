@@ -6,8 +6,12 @@ if (enabled) installCloudCharacters();
 function installCloudCharacters() {
   let user = null;
   let characters = [];
+  let roster = [];
   let users = [];
   let selected = '';
+  let adminSelected = '';
+  let adminPlayer = '';
+  let adminView = false;
   let assignments = [];
   let revisions = [];
   let busy = false;
@@ -25,6 +29,10 @@ function installCloudCharacters() {
   const open = document.createElement('button');
   open.textContent = 'TEST · Cloud characters';
   bar.append(open);
+  const adminOpen = document.createElement('button');
+  adminOpen.textContent = 'Admin · Assign characters';
+  adminOpen.hidden = true;
+  bar.append(adminOpen);
   const dialog = document.createElement('dialog');
   Object.assign(dialog.style, { width: 'min(680px,90vw)', maxHeight: '85vh', overflow: 'auto', background: '#222', color: 'white' });
   document.body.append(bar, dialog);
@@ -68,17 +76,20 @@ function installCloudCharacters() {
     user = session.user;
     store ||= new DraftStore(localStorage, user.id);
     characters = await api('characters');
+    roster = await api('roster');
     if (user.admin) users = await api('users');
     else users = [];
-    if (!characters.some(c => c.id === selected)) selected = characters[0]?.id || '';
+    if (!roster.some(c => c.id === selected)) selected = roster[0]?.id || '';
+    if (!characters.some(c => c.id === adminSelected)) adminSelected = characters[0]?.id || '';
+    if (!users.some(p => p.id === adminPlayer)) adminPlayer = users.find(p => !p.admin)?.id || users[0]?.id || '';
     await details();
-    if (firstLogin) status = 'Signed in. Select a character to load, or create one from the simulator.';
+    if (firstLogin) status = 'Signed in. Open Core → Online Characters to load or save a character.';
   }
   async function details() {
     assignments = []; revisions = [];
-    if (user?.admin && selected) {
-      assignments = await api(`characters/${selected}/assignments`);
-      revisions = await api(`characters/${selected}/revisions`);
+    if (user?.admin && adminSelected) {
+      assignments = await api(`characters/${adminSelected}/assignments`);
+      revisions = await api(`characters/${adminSelected}/revisions`);
     }
   }
   function queueLoad(slot, row) {
@@ -92,7 +103,7 @@ function installCloudCharacters() {
     const doc = current[slot];
     if (!doc) throw new Error('The simulator is still loading.');
     const row = slots[slot];
-    if (!create && !row) throw new Error('Load an assigned character into this slot first.');
+    if (!create && (!row || row.can_edit === 0)) throw new Error('This party character is read-only. Create your own copy to save changes.');
     stash(slot, doc);
     // Creation has a separate operation identity even when copying a bound character.
     let savedDraft;
@@ -116,6 +127,7 @@ function installCloudCharacters() {
     if (encode(current[slot]) !== encode(sent)) stash(slot, current[slot]);
     status = `${result.name}: saved online (revision ${result.version}).`;
     selected = result.id;
+    if (create) adminSelected = result.id;
     await refresh();
   }
   function element(tag, text, parent = dialog) {
@@ -133,7 +145,8 @@ function installCloudCharacters() {
     open.textContent = `TEST · Cloud characters${dirty ? ' • unsaved' : ''}`;
     open.title = status;
     dialog.replaceChildren();
-    element('h2', 'Character saves — TEST environment');
+    adminOpen.hidden = !user?.admin;
+    element('h2', adminView && user?.admin ? 'Assign characters — TEST environment' : 'Character saves — TEST environment');
     element('p', user ? `${user.email}${user.admin ? ' · Administrator' : ''}` : 'Not signed in');
     const message = element('p', status); message.setAttribute('role', 'status');
     button('Close', () => dialog.close());
@@ -141,12 +154,13 @@ function installCloudCharacters() {
     button('Sign in again', () => location.assign('/'));
     if (user) button('Sign out', () => location.assign('/cdn-cgi/access/logout'));
     if (!user) return;
-    element('h3', 'Characters you can edit');
-    if (!characters.length) element('p', 'No characters assigned yet. Ask the administrator to assign one after your first login.');
+    if (adminView && user.admin) { renderAdmin(); return; }
+    element('h3', 'Online characters and local drafts');
+    if (!roster.length) element('p', 'No online characters yet. Create your first character from Core.');
     const select = element('select');
     select.setAttribute('aria-label', 'Assigned character'); select.disabled = busy;
-    for (const row of characters) {
-      const option = element('option', row.name, select); option.value = row.id; option.selected = row.id === selected;
+    for (const row of roster) {
+      const option = element('option', row.name + (row.can_edit ? '' : ' · simulation copy'), select); option.value = row.id; option.selected = row.id === selected;
     }
     select.onchange = () => task(async () => { selected = select.value; await details(); });
     for (let slot = 0; slot < 2; slot++) {
@@ -154,7 +168,7 @@ function installCloudCharacters() {
       element('strong', `Simulator character ${slot + 1}: ${slots[slot]?.name || 'local character'}`, section);
       button('Load selected', async () => {
         stash(slot, current[slot]);
-        const row = await api(`characters/${selected}`);
+        const row = await api(`roster/${selected}`);
         queueLoad(slot, row);
       }, section, !selected);
       const savedDrafts = element('select', undefined, section);
@@ -166,16 +180,19 @@ function installCloudCharacters() {
         option.value = saved.id;
       }
       button('Recover local draft', async () => {
-        const latest = await api(`characters/${selected}`); // Recheck current access before recovery.
+        const latest = await api(`roster/${selected}`); // Recheck current edit rights; party copies remain read-only.
         const saved = available.find(d => d.id === savedDrafts.value);
         if (!saved) throw new Error('No local draft for this character on this browser.');
         queueLoad(slot, { ...latest, version: saved.version, document: saved.document, recovered: true, recoveryDraft: saved });
         status = 'Recovered local draft. If the server changed, saving will report a conflict; export the draft before reconciling.';
       }, section, !selected || !available.length);
-      button('Save online', () => save(slot), section, !slots[slot]);
+      button('Save online', () => save(slot), section, !slots[slot] || slots[slot].can_edit === 0);
       button('Export current', () => download(current[slot], `character-${slot + 1}.json`), section, !current[slot]);
-      if (user.admin) {
-        button('Create from current / imported preset', () => save(slot, true), section, !current[slot]);
+      button('Create my character', () => save(slot, true), section, !current[slot]);
+      renderCreationDrafts(slot, section);
+    }
+  }
+  function renderCreationDrafts(slot, section) {
         let creations = [];
         try { creations = store.list(null); } catch { /* Storage error is reported by stash/save. */ }
         const creationSelect = element('select', undefined, section);
@@ -189,10 +206,63 @@ function installCloudCharacters() {
           if (!saved) throw new Error('No local creation draft in this slot.');
           queueLoad(slot, { importOnly: true, document: saved.document, creationDraft: saved });
         }, section, !creations.length);
+  }
+  function renderAdmin() {
+    const selectLabel = element('label', 'Character to manage');
+    selectLabel.style.display = 'block';
+    selectLabel.style.margin = '16px 0';
+    const select = element('select', undefined, selectLabel);
+    Object.assign(select.style, {display:'block',width:'100%',padding:'8px',marginTop:'6px'});
+    select.setAttribute('aria-label', 'Character to manage'); select.disabled = busy;
+    for (const row of characters) {
+      const option = element('option', row.name, select); option.value = row.id; option.selected = row.id === adminSelected;
+    }
+    select.onchange = () => task(async () => { adminSelected = select.value; await details(); });
+    if (!characters.length) element('p', 'No cloud characters yet. Add one below to assign it.');
+    if (adminSelected) {
+      const name = characters.find(c => c.id === adminSelected)?.name || 'Character';
+      element('h3', `Assign ${name}`);
+      const playerLabel = element('label', 'Player');
+      const player = element('select', undefined, playerLabel);
+      Object.assign(player.style, {display:'block',width:'100%',padding:'8px',margin:'6px 0'});
+      player.setAttribute('aria-label', 'Player to assign'); player.disabled = busy;
+      for (const person of users) {
+        const option = element('option', person.email, player); option.value = person.id; option.selected = person.id === adminPlayer;
+      }
+      player.onchange = () => { adminPlayer = player.value; render(); };
+      const person = users.find(p => p.id === adminPlayer);
+      const assigned = assignments.some(a => a.id === adminPlayer);
+      button(assigned ? 'Already assigned' : 'Assign character', async () => {
+        const id = adminSelected;
+        await api(`characters/${id}/assignments`, 'PUT', { user_id: person.id });
+        await details(); status = `${name} assigned to ${person.email}.`;
+      }, dialog, !person || assigned);
+      element('p', 'Players appear here after their first sign-in. Administrators can edit every character.');
+      element('h3', `Who can edit ${name}`);
+      if (!assignments.length) element('p', 'No players assigned.');
+      for (const person of assignments) {
+        const line = element('div');
+        element('span', person.email + (person.is_owner ? ' · Creator (always has access)' : ''), line);
+        if (person.is_owner) continue;
+        button('Revoke', async () => {
+          await api(`characters/${adminSelected}/assignments`, 'DELETE', { user_id: person.id });
+          await details(); status = `${name}: editing access revoked for ${person.email}.`;
+        }, line);
       }
     }
-    if (!user.admin) return;
-    element('p', 'To import an existing fighter preset, select it in the simulator editor, then create a cloud character from that slot. All current editable fields are included.');
+    const manage = element('details');
+    element('summary', 'Add a cloud character', manage);
+    const panel = element('div', undefined, manage);
+    panel.style.padding = '8px 0';
+    for (let slot = 0; slot < 2; slot++) {
+      const section = element('div', undefined, panel);
+      element('p', `Simulator character ${slot + 1}: ${current[slot]?.player?.name || 'Loading…'}`, section);
+      {
+        button('Create from current / imported preset', () => save(slot, true), section, !current[slot]);
+        renderCreationDrafts(slot, section);
+      }
+    }
+    element('p', 'To import an existing fighter preset, select it in the simulator editor, then create a cloud character from that slot. All current editable fields are included.', panel);
     button('Import character JSON', () => {
       const input = document.createElement('input'); input.type = 'file'; input.accept = '.json,application/json';
       input.onchange = () => task(async () => {
@@ -204,18 +274,8 @@ function installCloudCharacters() {
         queueLoad(0, { importOnly: true, document: doc });
       });
       input.click();
-    });
-    if (!selected) return;
-    element('h3', 'Editing access');
-    for (const person of users) {
-      const line = element('div');
-      element('span', person.email, line);
-      const assigned = assignments.some(a => a.id === person.id);
-      button(assigned ? 'Revoke' : 'Assign', async () => {
-        await api(`characters/${selected}/assignments`, assigned ? 'DELETE' : 'PUT', { user_id: person.id });
-        await details(); status = `Editing access ${assigned ? 'revoked' : 'assigned'} for ${person.email}.`;
-      }, line);
-    }
+    }, panel);
+    if (!adminSelected) return;
     element('h3', 'Revision history');
     element('p', 'Restoring creates a new revision and preserves the existing history.');
     const revision = element('select'); revision.setAttribute('aria-label', 'Revision to restore');
@@ -223,18 +283,39 @@ function installCloudCharacters() {
       const option = element('option', `Revision ${row.version} · ${row.updated_at}`, revision); option.value = row.version;
     }
     if (revisions.length && revisions.at(-1).version > 1) button('Load older revisions', async () => {
-      const older = await api(`characters/${selected}/revisions?before=${revisions.at(-1).version}`);
+      const older = await api(`characters/${adminSelected}/revisions?before=${revisions.at(-1).version}`);
       revisions.push(...older);
     });
     button('Restore revision', async () => {
-      const row = await api(`characters/${selected}`);
-      const result = await api(`characters/${selected}/restore`, 'POST', { version: row.version, restore_version: Number(revision.value), mutation_id: crypto.randomUUID() });
+      const row = await api(`characters/${adminSelected}`);
+      const result = await api(`characters/${adminSelected}/restore`, 'POST', { version: row.version, restore_version: Number(revision.value), mutation_id: crypto.randomUUID() });
       status = `Restored as revision ${result.version}. Load the character to use it in the simulator.`;
       await refresh();
     }, dialog, !revisions.length);
-    button('Export selected saved character', async () => download(await api(`characters/${selected}/export`), 'saved-character.json'));
+    button('Export selected saved character', async () => download(await api(`characters/${adminSelected}/export`), 'saved-character.json'));
   }
   window.hackmasterCloud = {
+    snapshot(slot) {
+      const row = slots[slot];
+      return encode({ signed_in: !!user, busy, status, admin: !!user?.admin,
+        characters: roster.map(c => ({id:c.id, name:c.name, is_owner:!!c.is_owner, can_edit:!!c.can_edit})),
+        loaded_id: row?.id || '', loaded_name: row?.name || '',
+        can_save: !!row && row.can_edit !== 0,
+        dirty: !!current[slot] && encode(current[slot]) !== encode(row?.document || baselines[slot]),
+      });
+    },
+    action(slot, action, id) {
+      if (action === 'manage') { adminView = false; render(); dialog.showModal(); return; }
+      if (action === 'admin' && user?.admin) { adminView = true; render(); dialog.showModal(); void task(refresh); return; }
+      void task(async () => {
+        if (action === 'refresh') { await refresh(); status = 'Online characters refreshed.'; }
+        else if (action === 'load') {
+          const row = await api(`roster/${id}`);
+          queueLoad(slot, row);
+        } else if (action === 'save') await save(slot);
+        else if (action === 'create') await save(slot, true);
+      });
+    },
     takeLoads: () => encode(loads.splice(0)),
     publish(slot, text) {
       current[slot] = JSON.parse(text);
@@ -254,12 +335,13 @@ function installCloudCharacters() {
         // Recovered text is an unsaved draft, not a server acknowledgement.
         slots[slot] = { ...row, document: null };
       }
-      status = row.importOnly ? 'Imported into simulator character 1. Review it, then create a cloud character.' : 'Character loaded. Edit it in the simulator, then Save online.';
+      status = row.importOnly ? 'Imported. Review the character, then create an online copy from Core.' : row.can_edit === 0 ? 'Party character loaded for simulation. Create your own copy to save changes.' : 'Character loaded. Edit it, then Save online.';
       render();
     },
     error(message) { status = message; open.title = message; },
   };
-  open.onclick = () => { render(); dialog.showModal(); if (!user) void task(refresh); };
+  adminOpen.onclick = () => { adminView = true; render(); dialog.showModal(); void task(refresh); };
+  open.onclick = () => { adminView = false; render(); dialog.showModal(); if (!user) void task(refresh); };
   window.addEventListener('beforeunload', event => {
     if (current.some((doc, i) => doc && encode(doc) !== encode(slots[i]?.document || baselines[i]))) {
       event.preventDefault(); event.returnValue = '';

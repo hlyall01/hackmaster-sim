@@ -1334,9 +1334,13 @@ impl SimGuiApp {
                             .speed(100.0),
                     );
                 });
-                if ui.button("Run bulk").clicked() {
+                if ui.add_enabled(self.background_job.is_none(), egui::Button::new("Run bulk")).clicked() {
                     self.running = false;
                     self.run_bulk_sim();
+                }
+                if let Some(job) = &self.background_job {
+                    ui.label(format!("{}: {} / {}", job.label, job.control.completed(), job.control.total()));
+                    if ui.button("Cancel calculation").clicked() { job.control.cancel(); }
                 }
                 egui::ScrollArea::vertical()
                     .max_height(300.0)
@@ -3713,6 +3717,8 @@ fn render_player_editor(
         PlayerEditorTab::Macros => macro_panel.show(ui, player, opponent, weapon_catalog,
             armor_catalog, shield_catalog, npc_presets, talent_catalog),
         PlayerEditorTab::Core => {
+            #[cfg(target_arch = "wasm32")]
+            cloud::show_core(ui, if id_prefix == "p1" { 0 } else { 1 });
             if !fighter_presets.is_empty() {
                 ui.horizontal(|ui| {
                     ui.label("Fighter preset");

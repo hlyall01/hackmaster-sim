@@ -6,7 +6,7 @@ import { DraftStore } from '../../web/cloud-drafts.js';
 
 const source = readFileSync(new URL('../../web/cloud.js', import.meta.url), 'utf8').replace("import { DraftStore } from './cloud-drafts.js';", '');
 const tick = () => new Promise(resolve => setImmediate(resolve));
-async function fixture() {
+async function fixture(admin = true, owner = true) {
   const dom = new JSDOM('<html><head><meta name="hackmaster-cloud" content="character-test"></head><body></body></html>', {
     url: 'https://characters-test.sim-gui.com', runScripts: 'outside-only',
   });
@@ -19,11 +19,15 @@ async function fixture() {
   let loseResponse = false;
   let writes = 0;
   const mutations = new Map();
+  const assignments = [];
   w.fetch = async (url, options) => {
     const path = String(url).replace('/api/', '');
-    if (path === 'session') return Response.json({ user: { id: 'user', email: 'test@example.com', admin: true } });
-    if (path === 'users') return Response.json([]);
-    if (path.endsWith('/assignments') || path.endsWith('/revisions')) return Response.json([]);
+    if (path === 'session') return Response.json({ user: { id: 'user', email: 'test@example.com', admin } });
+    if (path === 'roster') return Response.json([{...row,is_owner:Number(owner),can_edit:Number(owner)}]);
+    if (path === 'roster/character') return Response.json({...row,is_owner:Number(owner),can_edit:Number(owner)});
+    if (path === 'users') return Response.json([{id:'friend',email:'friend@example.com'}]);
+    if (path.endsWith('/assignments')) { if (options.method !== 'GET') assignments.push({url,method:options.method,...JSON.parse(options.body)}); return Response.json([]); }
+    if (path.endsWith('/revisions')) return Response.json([]);
     if (path === 'characters' && options.method === 'GET') return Response.json([row]);
     if (path === 'characters/character' && options.method === 'GET') return Response.json(row);
     if (options.method === 'PUT' || options.method === 'POST') {
@@ -54,7 +58,7 @@ async function fixture() {
     const loads = JSON.parse(bridge.takeLoads()); assert.equal(loads.length, 1);
     bridge.loaded(0, ''); bridge.publish(0, JSON.stringify(loads[0].document));
   };
-  return { w, bridge, click, load, drafts, failure: n => failure = n, lose: value => loseResponse = value, writes: () => writes };
+  return { w, bridge, click, load, drafts, assignments, failure: n => failure = n, lose: value => loseResponse = value, writes: () => writes };
 }
 test('client retains drafts on network/auth/conflict failure, then confirms committed save', async () => {
   const f = await fixture(); await f.load();
@@ -94,5 +98,45 @@ test('storage failure prevents a save and gives an export recovery instruction',
   await f.click('Save online');
   assert.equal(f.writes(), 0);
   assert.match(f.w.document.querySelector('[role=status]').textContent, /Export your character/);
+  f.w.close();
+});
+
+test('admin assignment is separate and names both the character and player', async () => {
+  const f = await fixture();
+  assert.equal(f.w.document.querySelector('[aria-label="Player to assign"]'), null);
+  await f.click('Admin · Assign characters');
+  assert.ok(f.w.document.querySelector('[aria-label="Character to manage"]'));
+  assert.ok(f.w.document.querySelector('[aria-label="Player to assign"]'));
+  assert.ok(![...f.w.document.querySelectorAll('button')].some(b => b.textContent === 'Load selected'));
+  await f.click('Assign character');
+  assert.deepEqual(f.assignments, [{url:'/api/characters/character/assignments',method:'PUT',user_id:'friend'}]);
+  assert.match(f.w.document.querySelector('[role=status]').textContent, /Original assigned to friend@example.com/);
+  f.w.close();
+});
+
+test('player creation is available with recoverable creation drafts and no admin controls', async () => {
+  const f = await fixture(false);
+  assert.equal(f.w.document.querySelector('button:nth-child(2)').hidden, true);
+  await f.click('TEST · Cloud characters');
+  await f.click('Create my character');
+  assert.equal(f.writes(), 1);
+  const snapshot = JSON.parse(f.bridge.snapshot(0));
+  assert.equal(snapshot.admin, false);
+  assert.equal(snapshot.characters[0].is_owner, true);
+  assert.equal(snapshot.can_save, true);
+  f.w.close();
+});
+
+test('Core party load is a read-only simulation copy until explicitly created as own', async () => {
+  const f = await fixture(false, false);
+  f.bridge.action(0, 'load', 'character'); await tick();
+  const loads = JSON.parse(f.bridge.takeLoads());
+  assert.equal(loads.length, 1);
+  f.bridge.loaded(0, ''); f.bridge.publish(0, JSON.stringify(loads[0].document));
+  assert.equal(JSON.parse(f.bridge.snapshot(0)).can_save, false);
+  f.bridge.action(0, 'save', ''); await tick();
+  assert.equal(f.writes(), 0);
+  f.bridge.action(0, 'create', ''); await tick();
+  assert.equal(f.writes(), 1);
   f.w.close();
 });

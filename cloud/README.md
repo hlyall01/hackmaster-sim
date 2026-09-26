@@ -8,18 +8,24 @@ existing local presets; the HTML cloud controls run only in the marked test buil
 
 ## Using it
 
-1. Sign in with Google. The test Access application allows anyone authenticated
-   through the configured Google identity provider. No email whitelist is needed;
-   the Worker independently enforces character assignments.
-2. The player signs in once so their verified identity appears in the user list.
-   New users have no character permissions.
-3. An administrator opens **TEST · Cloud characters**, selects a character, and
-   chooses **Assign** beside that user's email under **Editing access**.
-   **Revoke** removes editing access, including for already-open editors at save time.
-4. The player selects their character and **Load selected** for either simulator
-   slot, edits using the existing editor, and chooses **Save online**.
-   Only a server acknowledgment displays “saved online”. Loading is explicit after
-   a reload so a default/local character cannot overwrite a cloud character.
+1. Sign in with Google; no email whitelist is needed.
+2. Open either fighter's **Customize → Core → Online Characters**.
+   **My Characters** lists characters you created. **Party Members** lists characters
+   created by other signed-in users. Selecting a character loads it into that fighter.
+3. **Create my character** saves the current fighter as a new character you own.
+   All signed-in players can load it for simulation. **Save online** updates a loaded
+   character you own or have permission to edit, after the server commits the save.
+4. The separate **Admin · Assign characters** button opens assignment management.
+   Choose **Character to manage**, choose **Player**, then **Assign character**.
+   The panel names the selected character and lists its current editors with **Revoke**.
+   Assignments grant editing access; they do not change the creator or the dropdown
+   a character appears in. Owners and administrators retain editing access.
+
+Party characters are simulation copies unless editing access was assigned. Players
+can change a simulation copy locally and create their own copy, but cannot overwrite
+someone else's online character. The API enforces this even if client controls are
+modified. The shared roster omits email addresses, user IDs and revision metadata.
+Existing creators are recovered from revision one by migration 0002.
 
 Administrators can edit every character regardless of assignments. There is no
 client-facing administrator-grant endpoint. `BOOTSTRAP_ADMIN_EMAIL` is a trusted
@@ -31,7 +37,7 @@ the corresponding administrator row through trusted D1 administration.
 ## Import, recovery and export
 
 To import an existing preset, select it in the simulator's Fighter preset menu,
-then choose **Create from current / imported preset** for that slot. This takes a
+then choose **Create my character** in Core for that slot. This takes a
 complete snapshot of the loaded character. **Import character JSON** accepts this
 app's complete document/export format; it validates in Rust before replacing the
 workspace. It does not interpret a whole legacy `fighter_presets.json` file.
@@ -55,7 +61,7 @@ is not attempted if its draft cannot first be stored.
 A stale save returns a conflict and preserves the draft. Export the draft, load the
 latest online version, then reconcile the changes before saving. There is no
 automatic merge. Retries use mutation IDs so a lost response does not duplicate a
-successful save. **Revision history → Restore revision** creates another revision;
+successful save. **Admin assignments → Revision history → Restore revision** creates another revision;
 it never erases history. **Load older revisions** pages beyond the newest 200.
 **Export selected saved character** downloads the server snapshot.
 
@@ -158,7 +164,8 @@ script with simulated network/auth/server failures. Rust tests cover complete
 documents, catalog reordering, missing references and unknown-field protection.
 Live verification uses the Google administrator account; a separate real player
 account can sign in without an invitation for a second-person login test. It starts
-without character access until an administrator assigns a character.
+with shared roster access and can create its own characters. Editing another
+creator's character requires an administrator assignment.
 
 This uses Pages, Workers, Access and D1 with no paid-only feature requirement.
 Free-tier quotas still apply, including Access seats, Worker requests/CPU and D1

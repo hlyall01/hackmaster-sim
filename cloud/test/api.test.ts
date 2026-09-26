@@ -10,6 +10,7 @@ function fixture() {
   const sql = new DatabaseSync(':memory:');
   sql.exec('PRAGMA foreign_keys=ON');
   sql.exec(readFileSync(new URL('../migrations/0001_characters.sql', import.meta.url), 'utf8'));
+  sql.exec(readFileSync(new URL('../migrations/0002_character_owners.sql', import.meta.url), 'utf8'));
   const db = { prepare(query: string) {
     let args: (string | number | null)[] = [];
     return {
@@ -37,12 +38,15 @@ const document = (name = 'Arthur') => ({ schema_version: 1, player: {
 } });
 const saveBody = (version: number, doc = document()) => ({ version, document: doc, mutation_id: crypto.randomUUID() });
 
-test('new players have no characters, cannot create or assign or list other users', async () => {
+test('new players can create their own characters but cannot list other users', async () => {
   const { call } = fixture();
   assert.equal((await call('player', 'session')).data.user.admin, false);
   assert.deepEqual((await call('player', 'characters')).data, []);
   assert.equal((await call('player', 'users')).status, 403);
-  assert.equal((await call('player', 'characters', 'POST', saveBody(1))).status, 403);
+  const created = await call('player', 'characters', 'POST', saveBody(1));
+  assert.equal(created.status, 201);
+  assert.equal((await call('player', `characters/${created.data.id}`, 'PUT', saveBody(1))).status, 200);
+  assert.equal((await call('player', `characters/${created.data.id}/assignments`, 'PUT', {user_id: 'player'})).status, 403);
 });
 
 test('assignment, complete saves, conflicts, revision recovery and revoked access', async () => {
@@ -163,4 +167,37 @@ test('real signed Access tokens: reject forgery, expiry, wrong audience, issuer 
     const signed = await token();
     assert.equal((await send(signed.slice(0, -5) + 'AAAAA')).status, 401);
   } finally { globalThis.fetch = originalFetch; }
+});
+
+test('roster separates creators from assignments and grants no editing rights to browsers', async () => {
+  const {call} = fixture();
+  const own = (await call('player', 'characters', 'POST', saveBody(1))).data;
+  await call('stranger', 'session');
+  const roster = (await call('stranger', 'roster')).data;
+  assert.equal(roster[0].is_owner, 0); assert.equal(roster[0].can_edit, 0);
+  const publicRow = (await call('stranger', `roster/${own.id}`)).data;
+  assert.deepEqual(publicRow.document, document());
+  assert.equal(publicRow.updated_by, undefined); assert.equal(publicRow.email, undefined);
+  assert.equal((await call('stranger', `characters/${own.id}`, 'PUT', saveBody(1))).status, 404);
+  await call('admin', `characters/${own.id}/assignments`, 'PUT', {user_id:'stranger'});
+  assert.equal((await call('stranger', 'roster')).data[0].can_edit, 1);
+  assert.equal((await call('stranger', 'roster')).data[0].is_owner, 0);
+  await call('stranger', `characters/${own.id}`, 'PUT', saveBody(1, document('Friend edit')));
+  assert.equal((await call('player', 'roster')).data[0].is_owner, 1);
+  await call('admin', `characters/${own.id}/assignments`, 'DELETE', {user_id:'stranger'});
+  assert.equal((await call('stranger', `roster/${own.id}`)).status, 200);
+  assert.equal((await call('stranger', `characters/${own.id}`, 'PUT', saveBody(2))).status, 404);
+  assert.equal((await call('player', `characters/${own.id}`, 'PUT', saveBody(2))).status, 200);
+});
+
+test('ownership migration preserves original creator without altering revision history', () => {
+  const sql = new DatabaseSync(':memory:');
+  sql.exec(readFileSync(new URL('../migrations/0001_characters.sql', import.meta.url), 'utf8'));
+  sql.exec("INSERT INTO users(id,email) VALUES('creator','creator@example.com'),('editor','editor@example.com')");
+  sql.prepare('INSERT INTO characters VALUES(?,?,?,1,?,?,?)').run('legacy', 'Original', JSON.stringify(document()), 'creator', 'date', 'first');
+  sql.exec("UPDATE characters SET version=2,updated_by='editor',mutation_id='second' WHERE id='legacy'");
+  sql.exec(readFileSync(new URL('../migrations/0002_character_owners.sql', import.meta.url), 'utf8'));
+  assert.equal(sql.prepare('SELECT user_id FROM character_owners').get().user_id, 'creator');
+  assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM revisions').get().n, 2);
+  sql.close();
 });

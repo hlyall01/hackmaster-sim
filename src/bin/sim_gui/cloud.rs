@@ -3,6 +3,8 @@ use hackmaster_sim::character_document::CharacterDocument;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(inline_js = "
+export function cloud_snapshot(slot) { return window.hackmasterCloud.snapshot(slot); }
+export function cloud_action(slot, action, id) { window.hackmasterCloud.action(slot, action, id); }
 export function cloud_enabled() { return !!window.hackmasterCloud; }
 export function cloud_take_loads() { return window.hackmasterCloud.takeLoads(); }
 export function cloud_publish(slot, text) { window.hackmasterCloud.publish(slot, text); }
@@ -11,6 +13,8 @@ export function cloud_error(message) { window.hackmasterCloud.error(message); }
 ")]
 extern "C" {
     fn cloud_enabled() -> bool;
+    fn cloud_snapshot(slot: usize) -> String;
+    fn cloud_action(slot: usize, action: &str, id: &str);
     fn cloud_take_loads() -> String;
     fn cloud_publish(slot: usize, text: &str);
     fn cloud_loaded(slot: usize, error: &str);
@@ -62,4 +66,58 @@ impl SimGuiApp {
             }
         }
     }
+}
+
+#[derive(serde::Deserialize)]
+struct OnlineCharacter { id: String, name: String, is_owner: bool, can_edit: bool }
+#[derive(serde::Deserialize)]
+struct OnlineSnapshot {
+    signed_in: bool, busy: bool, status: String, admin: bool,
+    characters: Vec<OnlineCharacter>, loaded_id: String, loaded_name: String,
+    can_save: bool, dirty: bool,
+}
+
+pub(super) fn show_core(ui: &mut egui::Ui, slot: usize) {
+    if !cloud_enabled() { return; }
+    let Ok(state) = serde_json::from_str::<OnlineSnapshot>(&cloud_snapshot(slot)) else { return; };
+    ui.group(|ui| {
+        ui.strong("Online Characters");
+        if !state.signed_in {
+            ui.label("Sign in to load and save online characters.");
+            if ui.button("Sign in / retry").clicked() { cloud_action(slot, "manage", ""); }
+            return;
+        }
+        ui.add_enabled_ui(!state.busy, |ui| {
+            for (mine, label) in [(true, "My Characters"), (false, "Party Members")] {
+                ui.horizontal(|ui| {
+                    ui.label(label);
+                    let items: Vec<_> = state.characters.iter().filter(|c| c.is_owner == mine).collect();
+                    let selected = items.iter().find(|c| c.id == state.loaded_id)
+                        .map(|c| c.name.as_str()).unwrap_or("Choose character…");
+                    egui::ComboBox::from_id_source(("online", slot, mine)).selected_text(selected)
+                        .width(210.0).show_ui(ui, |ui| {
+                            if items.is_empty() { ui.label(if mine { "No characters created yet" } else { "No party characters yet" }); }
+                            for row in items {
+                                let text = if !mine && row.can_edit { format!("{} (editable)", row.name) } else { row.name.clone() };
+                                if ui.selectable_label(row.id == state.loaded_id, text).clicked() {
+                                    cloud_action(slot, "load", &row.id);
+                                }
+                            }
+                        });
+                });
+            }
+            ui.horizontal_wrapped(|ui| {
+                if ui.add_enabled(state.can_save, egui::Button::new("Save online")).clicked() { cloud_action(slot, "save", ""); }
+                if ui.button("Create my character").on_hover_text("Save the current fighter as a new character you own. Other signed-in players can load it for simulations.").clicked() { cloud_action(slot, "create", ""); }
+                if ui.button("Refresh").clicked() { cloud_action(slot, "refresh", ""); }
+                if ui.button("Drafts / export").clicked() { cloud_action(slot, "manage", ""); }
+                if state.admin && ui.button("Admin assignments").clicked() { cloud_action(slot, "admin", ""); }
+            });
+        });
+        if !state.loaded_name.is_empty() {
+            ui.small(format!("{} · {}{}", state.loaded_name, if state.can_save { "Editable" } else { "Simulation copy" }, if state.dirty { " · Unsaved changes" } else { "" }));
+        }
+        ui.small(&state.status);
+    });
+    ui.separator();
 }
