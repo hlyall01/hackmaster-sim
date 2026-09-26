@@ -21,23 +21,23 @@
   <section id="feature-requests" hidden aria-labelledby="requests-title">
     <div class="request-card">
       <p id="portal-navigation" hidden><a href="https://sim-gui.com/">← Back to simulator</a></p>
-      <p class="eyebrow">Build the next version together</p>
+      <p class="eyebrow">HackMaster Simulator</p>
       <h1 id="requests-title">Feature requests</h1>
-      <p>Suggest an improvement to the simulator. An agent will work on your request and open a pull request for review. You can try its preview before it becomes part of the main site.</p>
-      <p class="muted">Requests are public on GitHub. Please leave out passwords, personal information, and anything you don’t want published.</p>
-      <p id="request-location" hidden>Feature requests now have their own site. <a class="ticket-link" href="https://feature.sim-gui.com/">Open feature requests</a></p>
+      <p>What’s missing from the simulator? Describe what you’d like to add or change. An AI coding agent will try to build it, and you’ll get a preview to test. Changes are reviewed before they go live.</p>
+      <p class="muted">Your request will be public on GitHub, so leave out passwords and personal details.</p>
+      <p id="request-location" hidden><a class="ticket-link" href="https://feature.sim-gui.com/">Request a feature</a></p>
       <form id="request-form">
-        <label for="request-title">What would you like to add?</label>
-        <input id="request-title" name="title" required minlength="10" maxlength="120" placeholder="For example: compare two saved fighters side by side">
-        <label for="request-description">How should it work?</label>
-        <textarea id="request-description" name="description" required minlength="30" maxlength="6000" rows="7" placeholder="Describe what you want to do, the expected result, and an example. For game rules, include the relevant rule or page reference."></textarea>
+        <label for="request-title">What would you like to change?</label>
+        <input id="request-title" name="title" required minlength="10" maxlength="120" placeholder="e.g. Compare two saved fighters side by side">
+        <label for="request-description">Tell us a bit more</label>
+        <textarea id="request-description" name="description" required minlength="30" maxlength="6000" rows="7" placeholder="How would it work? An example helps. If it involves a game rule, include the rule or page number."></textarea>
         <div class="honeypot" aria-hidden="true"><label for="request-website">Website</label><input id="request-website" name="website" tabindex="-1" autocomplete="off"></div>
-        <button id="request-submit" type="submit" disabled>Submit feature request</button>
+        <button id="request-submit" type="submit" disabled>Send request</button>
         <p id="request-status" role="status" aria-live="polite">Loading request form…</p>
       </form>
-      <p class="muted">One request every 10 minutes, up to five per day per connection. Larger or unclear requests may need clarification. Every pull request is reviewed before being merged.</p>
-      <a href="https://github.com/hlyall01/hackmaster-sim/issues?q=label%3Asite-request">Browse feature requests on GitHub</a>
-      <p><a href="https://github.com/hlyall01/hackmaster-sim">View source on GitHub</a></p>
+      <p class="muted">Keep it to one idea per request. You can send one every 10 minutes, up to five a day per internet connection. We may ask for more detail.</p>
+      <a href="https://github.com/hlyall01/hackmaster-sim/issues?q=label%3Asite-request">See other requests on GitHub</a>
+      <p><a href="https://github.com/hlyall01/hackmaster-sim">Source code</a></p>
     </div>
   </section>
   <div id="loading" role="status"><h1>HackMaster Simulator</h1><p id="status">Loading simulator…</p></div>

@@ -19,10 +19,10 @@ async function initialize() {
     if (!response.ok) throw new Error(data.error);
     challenge = data.challenge;
     readyAt = Date.now() + 3200;
-    status.textContent = 'Describe one improvement per request.';
+    status.textContent = 'Ready when you are.';
     setTimeout(() => { if (!submitting) button.disabled = false; }, 3200);
   } catch (error) {
-    status.textContent = error.message || 'Unable to load the form. Please reload the page.';
+    status.textContent = error.message || 'Couldn’t load the form. Try reloading the page.';
     status.dataset.error = 'true';
   }
 }
@@ -42,7 +42,7 @@ form.addEventListener('submit', async event => {
   submitting = true;
   button.disabled = true;
   status.dataset.error = 'false';
-  status.textContent = 'Creating your ticket…';
+  status.textContent = 'Sending your request…';
   try {
     const response = await fetch('/api/feature-requests', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -51,17 +51,17 @@ form.addEventListener('submit', async event => {
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error);
-    if (!Number.isSafeInteger(data.number) || data.number < 1) throw new Error('Unexpected ticket response.');
-    status.textContent = `Ticket #${data.number} ${data.duplicate ? 'already exists' : 'created'}. `;
+    if (!Number.isSafeInteger(data.number) || data.number < 1) throw new Error('Couldn’t confirm your request. Please try again.');
+    status.textContent = `Request #${data.number} ${data.duplicate ? 'already exists' : 'sent'}. `;
     const link = document.createElement('a');
     link.href = `/${data.number}`;
-    link.textContent = 'Follow the agent and open your preview';
+    link.textContent = 'View progress and preview';
     status.append(link);
     button.textContent = 'Request submitted';
     form.elements.title.readOnly = true;
     form.elements.description.readOnly = true;
   } catch (error) {
-    status.textContent = error.message || 'Could not create the ticket. Please try again.';
+    status.textContent = error.message || 'Couldn’t send your request. Please try again.';
     status.dataset.error = 'true';
     submitting = false;
     button.disabled = false;
