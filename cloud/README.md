@@ -8,9 +8,9 @@ existing local presets; the HTML cloud controls run only in the marked test buil
 
 ## Using it
 
-1. Sign in with Google. The test Access application currently allows only the
-   designated administrator's email. To invite a player, add their email to this
-   application's Allow policy, retaining the Google login-method requirement.
+1. Sign in with Google. The test Access application allows anyone authenticated
+   through the configured Google identity provider. No email whitelist is needed;
+   the Worker independently enforces character assignments.
 2. The player signs in once so their verified identity appears in the user list.
    New users have no character permissions.
 3. An administrator opens **TEST · Cloud characters**, selects a character, and
@@ -127,7 +127,8 @@ In both test Pages deployment configurations, set:
 
 Attach the custom hostname to the test Pages project, then use a proxied CNAME
 to `hackmaster-character-test.pages.dev`. The Access application covers the entire
-custom hostname, uses Google only, and permits the explicit test email allowlist.
+custom hostname, uses Google only, and has an Allow policy with Include Everyone
+and Require the configured Google login method. This is not an authentication bypass.
 Google's client secret belongs only in Cloudflare's identity-provider configuration.
 
 The Pages Worker rejects `pages.dev`, branch and immutable deployment URLs. The
@@ -153,7 +154,8 @@ rollback, idempotent retries and recovery. DOM tests exercise the actual client
 script with simulated network/auth/server failures. Rust tests cover complete
 documents, catalog reordering, missing references and unknown-field protection.
 Live verification uses the Google administrator account; a separate real player
-account still needs an invitation for a second-person login test.
+account can sign in without an invitation for a second-person login test. It starts
+without character access until an administrator assigns a character.
 
 This uses Pages, Workers, Access and D1 with no paid-only feature requirement.
 Free-tier quotas still apply, including Access seats, Worker requests/CPU and D1
