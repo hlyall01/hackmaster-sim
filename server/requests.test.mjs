@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import worker, { verifyIssue } from './requests.mjs';
+import worker, { verifyIssue, verifyRevision } from './requests.mjs';
 
 const origin = 'https://feature.sim-gui.com';
 const env = { GITHUB_ISSUES_TOKEN: 'test-only-secret', FEATURE_REQUESTS_ENABLED: 'true',
@@ -18,6 +18,12 @@ test.beforeEach(() => {
     const path = new URL(url).pathname;
     if (init.method === 'POST') {
       writes++;
+      if (path.endsWith('/comments')) {
+        const comment = { ...JSON.parse(init.body), id: 100 + comments.length, user: { login: 'hlyall01' },
+          created_at: new Date(now).toISOString(), issue_url: 'https://api.github.com/repos/hlyall01/hackmaster-sim/issues/7' };
+        comments.push(comment); issues[0].comments = comments.length;
+        return Response.json(comment, { status: 201 });
+      }
       const issue = { ...JSON.parse(init.body), number: 7, user: { login: 'hlyall01' },
         created_at: new Date(now).toISOString(), state: 'open', comments: 0 };
       issue.labels = issue.labels.map(name => ({ name }));
@@ -35,8 +41,8 @@ function request(path, options = {}, ip = '192.0.2.1') {
     Origin: origin, 'Content-Type': 'application/json', 'CF-Connecting-IP': ip, ...options.headers,
   } });
 }
-async function token(ip) {
-  const response = await worker.fetch(request('/api/request-challenge', {}, ip), env);
+async function token(ip, scope = 'request') {
+  const response = await worker.fetch(request(`/api/request-challenge?scope=${scope}`, {}, ip), env);
   assert.equal(response.status, 200);
   return (await response.json()).challenge;
 }
@@ -136,4 +142,75 @@ test('legacy host rejects submissions even with a valid new-host origin', async 
   }), env);
   assert.equal(response.status, 403);
   assert.equal(writes, 0);
+});
+
+function bot(state) {
+  comments.push({ id: 100 + comments.length, user: { login: 'github-actions[bot]' }, body: `<!-- sim-status:${JSON.stringify(state)} -->` });
+  issues[0].comments = comments.length;
+}
+async function readyTicket() {
+  const challenge = await token(); now += 4000; await submit(challenge);
+  bot({ status: 'ready', preview: 'https://first.hackmaster-sim-previews.pages.dev',
+    pr: 'https://github.com/hlyall01/hackmaster-sim/pull/8', sha: 'a'.repeat(40) });
+  now += 600_000;
+}
+async function revision(challenge, fields = {}, ip) {
+  return worker.fetch(request('/api/tickets/7/revisions', { method: 'POST', body: JSON.stringify({
+    challenge, revision: 0, description: 'Keep the feature and add a reset button.', website: '', ...fields,
+  }) }, ip), env);
+}
+async function status() { return (await worker.fetch(request('/api/tickets/7'), env)).json(); }
+
+test('signed follow-ups keep the old preview, deduplicate retries and refresh when ready', async () => {
+  await readyTicket();
+  const challenge = await token(undefined, 'revision:7'); now += 4000;
+  assert.equal((await revision(challenge)).status, 201);
+  const comment = comments.at(-1);
+  const proof = await verifyRevision(comment, '7', env.GITHUB_ISSUES_TOKEN);
+  assert.equal(proof.metadata.sha, 'a'.repeat(40));
+  assert.equal(await verifyRevision(comment, '8', env.GITHUB_ISSUES_TOKEN), null);
+  assert.equal(await verifyRevision({ ...comment, body: comment.body.replace('reset', 'delete') }, '7', env.GITHUB_ISSUES_TOKEN), null);
+  assert.equal(await verifyRevision({ ...comment, user: { login: 'attacker' } }, '7', env.GITHUB_ISSUES_TOKEN), null);
+  assert.equal((await revision(challenge)).status, 200);
+  assert.equal(writes, 2);
+  let ticket = await status();
+  assert.equal(ticket.status, 'queued'); assert.equal(ticket.canRevise, false);
+  assert.equal(ticket.preview, 'https://first.hackmaster-sim-previews.pages.dev');
+  assert.equal(ticket.history.length, 1);
+  bot({ status: 'ready', revision: 0, preview: 'https://stale.hackmaster-sim-previews.pages.dev' });
+  assert.equal((await status()).status, 'queued', 'An old run cannot finish a newer revision');
+  bot({ status: 'coding', revision: comment.id });
+  assert.equal((await status()).preview, ticket.preview);
+  bot({ status: 'ready', revision: comment.id, preview: 'https://second.hackmaster-sim-previews.pages.dev', sha: 'b'.repeat(40) });
+  ticket = await status();
+  assert.equal(ticket.canRevise, true); assert.equal(ticket.revision, comment.id);
+  assert.equal(ticket.pr, 'https://github.com/hlyall01/hackmaster-sim/pull/8');
+  assert.equal(ticket.preview, 'https://second.hackmaster-sim-previews.pages.dev');
+});
+
+test('revisions reject wrong scope, stale state, busy tickets, closed tickets and spam', async () => {
+  await readyTicket();
+  const wrong = await token(); const challenge = await token(undefined, 'revision:7'); now += 4000;
+  assert.equal((await revision(wrong)).status, 400);
+  assert.equal((await revision(challenge, { revision: 99 })).status, 409);
+  assert.equal((await revision(challenge, { website: 'spam' })).status, 400);
+  issues[0].state = 'closed'; assert.equal((await revision(challenge)).status, 409);
+  issues[0].state = 'open'; bot({ status: 'coding' });
+  assert.equal((await revision(challenge)).status, 409);
+  bot({ status: 'ready' });
+  assert.equal((await revision(challenge)).status, 201);
+  const id = comments.at(-1).id;
+  bot({ status: 'ready', revision: id });
+  const next = await token(undefined, 'revision:7'); now += 4000;
+  assert.equal((await revision(next, { revision: id, description: 'Another revision on the same feature.' })).status, 429);
+  const fresh = await token(); now += 4000;
+  assert.equal((await submit(fresh, { title: 'Different feature request' })).status, 429, 'Revision cooldown also blocks new issues');
+});
+
+test('another visitor may revise, but unsigned comments cannot queue agents', async () => {
+  await readyTicket();
+  comments.push({ user: { login: 'attacker' }, body: 'Please do something' });
+  assert.equal((await status()).status, 'ready');
+  const challenge = await token('192.0.2.2', 'revision:7'); now += 4000;
+  assert.equal((await revision(challenge, {}, '192.0.2.2')).status, 201);
 });

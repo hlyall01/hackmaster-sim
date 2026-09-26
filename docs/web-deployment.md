@@ -57,13 +57,15 @@ form challenges become invalid when the token changes; users can reload.
 1. Open https://feature.sim-gui.com/ directly.
 2. The production Pages Worker validates a honeypot, payload limits, exact origin,
    and a signed, IP-bound challenge with a three-second minimum age and one-hour
-   lifetime. It checks recent signed GitHub issues for duplicates, a ten-minute
-   cooldown and a five-per-day limit per connection. At 100 recent matching
-   issues it stops accepting submissions rather than bypassing the bounded check.
+   lifetime. It checks recent signed GitHub issues and revision comments for
+   duplicates, a shared ten-minute cooldown and a five-per-day limit per connection.
+   If either bounded history reaches 100 entries, submissions stop rather than
+   bypassing the check.
 3. The Worker creates a public issue with a signed marker and `site-request` label.
    The GitHub Actions workflow independently verifies the signature. Editing the
    signed issue title/body invalidates automatic processing; put clarifications
-   in comments instead. Plain GitHub issues do not trigger paid coding runs.
+   through the ticket's change form instead. Plain GitHub issues and unsigned
+   comments do not trigger paid coding runs.
 4. Every accepted request starts a Codex job in a workspace sandbox with no
    repository write token or Cloudflare secret. It returns an untrusted patch.
 5. A fresh publishing job validates the patch, rejecting infrastructure changes,
@@ -77,6 +79,17 @@ form challenges become invalid when the token changes; users can reload.
 7. `https://feature.sim-gui.com/N` tracks the issue, links its PR, and embeds the preview
    in an iframe on the isolated Pages origin. The owner reviews and merges the
    PR to release it to production. Previews have separate browser saves.
+8. Once a run finishes, anyone with the ticket link can use **Request changes**
+   beneath the preview. This creates a signed comment on the same issue. The
+   agent receives the original request, recent follow-ups, and the latest revision,
+   starting from the existing PR's immutable head. The trusted publisher validates
+   that branch and adds a commit to the same PR using a normal fast-forward push.
+   If the PR changed during the run, publishing stops instead of overwriting it.
+9. The ticket keeps its last working preview visible while the revision runs,
+   then loads the new immutable deployment automatically. It shows recent feedback,
+   disables further submissions during a run, and retains drafts after errors.
+   Failed/needs-info runs accept clarifications too. Closed tickets require a new
+   request. Production changes only when the owner merges the PR.
 
 Basic spam protection is deliberately lightweight, not a distributed atomic
 rate limiter: simultaneous requests can race the GitHub history check, and
@@ -92,7 +105,7 @@ Fork PRs build without deployment secrets.
 
 ## Operation and recovery
 
-- Workflows: `web.yml` (main/PRs), `feature-request.yml` (signed issues),
+- Workflows: `web.yml` (main/PRs), `feature-request.yml` (signed issues and revisions),
   `build-web.yml` and `deploy-preview.yml` (shared jobs).
 - Agent jobs have a 25-minute timeout; jobs are serialized per issue, not globally,
   so submitting another request does not cancel someone else's pending run.
@@ -100,6 +113,8 @@ Fork PRs build without deployment secrets.
   branch/PR, rerun only the failed jobs; never force-push generated branches.
 - For an agent failure before publishing, use **Implement site feature request →
   Run workflow → issue number** to retry the original signed request.
+  For a failed revision, also supply its signed comment ID in **revision**.
+  Completed revisions are not replayed; submit fresh feedback on the ticket instead.
 - Set `FEATURE_REQUESTS_ENABLED=false` and deploy main to disable new submissions;
   the repository variable also stops new agent starts immediately.
 - Reaching the API cap/balance limit produces a failed run with an issue status;

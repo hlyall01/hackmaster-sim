@@ -20,3 +20,9 @@
 .ticket-page nav { display: flex; flex-wrap: wrap; gap: 22px; }
 #ticket-preview { width: 100%; height: calc(100vh - 230px); min-height: 500px; border: 0; display: block; background: #171717; }
 #ticket-preview[hidden], [hidden] { display: none; }
+.revision-card { padding: 28px 24px 48px; }
+.revision-card h2 { margin-top: 0; }
+#revision-status { min-height: 1.6em; }
+#revision-status[data-error="true"] { color: #ffb3a9; }
+#revision-list { padding-left: 24px; }
+#revision-list li { margin: 16px 0; white-space: pre-wrap; overflow-wrap: anywhere; }

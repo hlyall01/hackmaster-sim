@@ -13,6 +13,20 @@
     <nav><a id="ticket-issue" hidden>View request on GitHub</a><a id="ticket-pr" hidden>View proposed changes</a><a id="ticket-open" target="_blank" rel="noopener noreferrer" hidden>Open preview in a new tab</a></nav>
   </header>
   <iframe id="ticket-preview" title="Feature preview" sandbox="allow-scripts allow-same-origin allow-downloads" referrerpolicy="no-referrer" hidden></iframe>
+  <section class="request-card revision-card" aria-labelledby="revision-heading" hidden id="revision-section">
+    <h2 id="revision-heading">Request changes</h2>
+    <p>Try the preview, then describe what you’d like changed. Each revision updates the same preview and proposed changes.</p>
+    <p id="revision-availability" class="muted"></p>
+    <form id="revision-form">
+      <label for="revision-description">What should change?</label>
+      <textarea id="revision-description" name="description" rows="5" minlength="10" maxlength="6000" required placeholder="Tell us what to keep, what to change, and how it should work."></textarea>
+      <div class="honeypot" aria-hidden="true"><label for="revision-website">Website</label><input id="revision-website" name="website" tabindex="-1" autocomplete="off"></div>
+      <p class="muted">Anyone with this link can request changes. Your feedback is public on GitHub. Please leave out personal information and secrets.</p>
+      <button id="revision-submit" type="submit" disabled>Send changes</button>
+      <p id="revision-status" role="status" aria-live="polite"></p>
+    </form>
+    <details id="revision-history" hidden><summary>Recent change requests</summary><ol id="revision-list"></ol></details>
+  </section>
   <script type="module" src="/ticket.js"></script>
 </body>
 </html>
