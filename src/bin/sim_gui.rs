@@ -1760,23 +1760,49 @@ impl SimGuiApp {
 
 fn truncated_label(ui: &mut egui::Ui, text: impl Into<String>) -> egui::Response {
     let text = text.into();
-    ui.add(egui::Label::new(&text).truncate(true))
-        .on_hover_text(text)
+    let (response, elided) = truncated_label_response(ui, &text);
+    if elided {
+        response // egui already shows the full text when the label is elided.
+    } else {
+        response.on_hover_text(text)
+    }
+}
+
+fn truncated_label_response(ui: &mut egui::Ui, text: &str) -> (egui::Response, bool) {
+    let mut job = egui::WidgetText::from(text).into_layout_job(
+        ui.style(),
+        egui::FontSelection::Default,
+        ui.layout().vertical_align(),
+    );
+    job.wrap.max_width = ui.available_width();
+    job.wrap.max_rows = 1;
+    job.wrap.break_anywhere = true;
+    job.halign = ui.layout().horizontal_placement();
+    job.justify = ui.layout().horizontal_justify();
+    let galley = ui.fonts(|fonts| fonts.layout_job(job));
+    let elided = galley.elided;
+    (ui.add(egui::Label::new(galley)), elided)
 }
 
 fn truncated_label_with_suffix(ui: &mut egui::Ui, label: &str, suffix: String) -> egui::Response {
     let full_text = format!("{label} {suffix}");
-    ui.horizontal(|ui| {
+    let mut hovering_elided_label = false;
+    let response = ui.horizontal(|ui| {
         // Reserve the result's width before giving the name the remaining space.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add(egui::Label::new(suffix).wrap(false));
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                ui.add(egui::Label::new(label).truncate(true));
+                let (response, elided) = truncated_label_response(ui, label);
+                hovering_elided_label = response.hovered() && elided;
             });
         });
     })
-    .response
-    .on_hover_text(full_text)
+    .response;
+    if hovering_elided_label {
+        response
+    } else {
+        response.on_hover_text(full_text)
+    }
 }
 
 fn render_player_editor_tabs(ui: &mut egui::Ui, id_prefix: &str, active_tab: &mut PlayerEditorTab) {
