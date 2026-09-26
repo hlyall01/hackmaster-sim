@@ -100,6 +100,25 @@ form challenges become invalid when the token changes; users can reload.
    Failed/needs-info runs accept clarifications too. Closed tickets require a new
    request. Production changes only when the owner merges the PR.
 
+The ticket's **Agent activity** panel shows public commentary, generic tool activity,
+and the final summary. A trusted background reporter tails only the dedicated
+Codex session files and sends a bounded snapshot every 15 seconds when it changes.
+The page polls every 15 seconds while active (up to roughly 30 seconds end-to-end).
+It keeps the latest 40 events, preserves a reader's scroll position, and lets them
+collapse the panel. Reasoning, prompts, raw commands, tool outputs, and credentials
+are not included. Existing runs started before this reporter was deployed have no
+detailed history; future requests and revisions do.
+
+The code job has `id-token: write`, but no repository write token. The Worker
+verifies GitHub's short-lived OIDC signature, audience, immutable repository IDs,
+main workflow identity, and the run/attempt recorded by trusted status comments.
+Only the matching active ticket revision accepts updates. The Worker edits one
+HMAC-signed issue comment per run, using its existing issue-only token; this needs
+no additional secrets or paid infrastructure. Activity is untrusted display data
+and cannot set ticket status, PRs, or preview URLs. Reporter outages do not fail
+the agent, and the GitHub run link remains available. This is a lightweight feed;
+larger traffic would warrant dedicated storage to avoid GitHub API rate limits.
+
 Basic spam protection is deliberately lightweight, not a distributed atomic
 rate limiter: simultaneous requests can race the GitHub history check, and
 shared connections share limits. Add Turnstile plus durable rate limiting if
@@ -134,6 +153,12 @@ Fork PRs build without deployment secrets.
   deployments are removed. An immutable deployment URL is stored with the ticket.
 
 ## Local validation
+
+For a no-spend deployment smoke check, manually run **Implement site feature
+request** with an existing signed issue number and **activity_check** enabled.
+It checks live GitHub OIDC verification and rejection of a mismatched run/revision.
+It does not start an agent or write a ticket. Unit tests cover signed comment
+updates, replay/stale-run rejection, event filtering, and partial session records.
 
 **Evaluate request screening** is a manual Actions workflow for nine representative
 valid/invalid requests. It uses the real screening API (and a small amount of API

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex"><title>Feature request · HackMaster Simulator</title>
-  <link rel="icon" href="/icon.png"><link rel="stylesheet" href="/requests.css?v=revisions-1">
+  <link rel="icon" href="/icon.png"><link rel="stylesheet" href="/requests.css?v=activity-1">
 </head>
 <body class="ticket-page">
   <header>
@@ -12,6 +12,12 @@
     <p id="ticket-status" role="status" aria-live="polite">Checking progress…</p>
     <nav><a id="ticket-issue" hidden>View request on GitHub</a><a id="ticket-pr" hidden>View proposed changes</a><a id="ticket-open" target="_blank" rel="noopener noreferrer" hidden>Open preview in a new tab</a></nav>
   </header>
+  <details id="agent-activity" class="activity-card" open>
+    <summary>Agent activity <span id="activity-state" class="muted">Connecting…</span></summary>
+    <p id="activity-note" class="muted">Progress messages will appear here when the agent starts.</p>
+    <ol id="activity-list" aria-label="Agent progress"></ol>
+    <a id="activity-run" hidden target="_blank" rel="noopener noreferrer">View run on GitHub</a>
+  </details>
   <iframe id="ticket-preview" title="Feature preview" sandbox="allow-scripts allow-same-origin allow-downloads" referrerpolicy="no-referrer" hidden></iframe>
   <section class="request-card revision-card" aria-labelledby="revision-heading" hidden id="revision-section">
     <h2 id="revision-heading">Request changes</h2>
@@ -27,6 +33,6 @@
     </form>
     <details id="revision-history" hidden><summary>Recent change requests</summary><ol id="revision-list"></ol></details>
   </section>
-  <script type="module" src="/ticket.js?v=screening-1"></script>
+  <script type="module" src="/ticket.js?v=activity-1"></script>
 </body>
 </html>

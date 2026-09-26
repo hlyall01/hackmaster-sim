@@ -7,6 +7,34 @@ const submit = document.getElementById('revision-submit');
 const feedback = document.getElementById('revision-status');
 let current, challenge, challengeReady = 0, challengeExpires = 0, sending = false, timer;
 const labels = { queued: 'Waiting to start', screening: 'Checking request', rejected: 'Request rejected', coding: 'Work in progress', building: 'Building and testing', ready: 'Preview ready', failed: 'Needs attention', 'needs-info': 'More detail needed', closed: 'Closed' };
+let activityKey = '';
+function renderActivity(ticket) {
+  const active = ['queued', 'screening', 'coding', 'building'].includes(ticket.status);
+  const events = ticket.activity?.events || [];
+  const stale = active && ticket.activity && Date.now() - Date.parse(ticket.activity.updated) > 90000;
+  document.getElementById('activity-state').textContent = stale ? 'Waiting for an update' : labels[ticket.status] || '';
+  document.getElementById('activity-note').textContent = events.length
+    ? `${active ? 'Checks for updates every 15 seconds. ' : ''}Showing the latest activity from this run.${stale ? ' The agent may be busy with a longer task.' : ''}`
+    : active ? 'Waiting for agent messages. This panel updates automatically.' : 'No detailed activity was recorded for this run.';
+  link('activity-run', ticket.run);
+  const nextKey = JSON.stringify([ticket.revision, ticket.run, events]);
+  if (nextKey === activityKey) return;
+  activityKey = nextKey;
+  const list = document.getElementById('activity-list');
+  const follow = list.scrollHeight - list.scrollTop - list.clientHeight < 50;
+  list.replaceChildren(...events.map(event => {
+    const item = document.createElement('li');
+    item.className = `activity-${event.kind}`;
+    const time = document.createElement('time');
+    time.dateTime = event.at;
+    time.textContent = new Date(event.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const text = document.createElement('p');
+    text.textContent = event.text;
+    item.append(time, text);
+    return item;
+  }));
+  if (follow) list.scrollTop = list.scrollHeight;
+}
 function link(id, url) {
   const element = document.getElementById(id);
   element.hidden = !url;
@@ -29,6 +57,7 @@ async function update() {
     frame.hidden = !ticket.preview;
     if (ticket.preview && frame.getAttribute('src') !== ticket.preview) frame.src = ticket.preview;
     current = ticket;
+    renderActivity(ticket);
     document.getElementById('revision-section').hidden = false;
     document.getElementById('revision-availability').textContent = ticket.status === 'closed'
       ? 'This request is closed. Start a new feature request for further changes.'
@@ -45,8 +74,11 @@ async function update() {
     if (ticket.canRevise && (!challenge || Date.now() >= challengeExpires)) await prepareForm();
     enableSubmit();
     keepPolling = ticket.status !== 'closed';
-  } catch (error) { status.textContent = error.message || 'Couldn’t check progress. Trying again shortly…'; }
-  if (keepPolling) timer = setTimeout(update, 30000);
+  } catch (error) {
+    status.textContent = error.message || 'Couldn’t check progress. Trying again shortly…';
+    document.getElementById('activity-state').textContent = 'Reconnecting…';
+  }
+  if (keepPolling) timer = setTimeout(update, ['queued', 'screening', 'coding', 'building'].includes(current?.status) ? 15000 : 30000);
 }
 function enableSubmit() {
   submit.disabled = sending || !current?.canRevise || !challenge || Date.now() < challengeReady || Date.now() >= challengeExpires;

@@ -44,7 +44,7 @@ export async function ticketState(comments, number, secret) {
   for (const comment of comments) {
     const revision = await verifyRevision(comment, number, secret);
     if (revision) {
-      state = { ...state, status: 'queued', message: 'Your changes are waiting for the coding agent.', revision: comment.id };
+      state = { ...state, status: 'queued', message: 'Your changes are waiting for the coding agent.', revision: comment.id, run: null, attempt: null };
       history.push({ id: comment.id, description: revision.description, created: comment.created_at });
       continue;
     }
@@ -55,6 +55,9 @@ export async function ticketState(comments, number, secret) {
       const next = JSON.parse(match[1]);
       if ((next.revision || 0) !== state.revision || !['screening', 'rejected', 'coding', 'building', 'ready', 'failed', 'needs-info'].includes(next.status)) continue;
       state = { ...state, status: next.status, message: String(next.message || '').slice(0, 1000) };
+      if (/^[1-9][0-9]{0,15}$/.test(next.run || '') && /^[1-9][0-9]{0,5}$/.test(next.attempt || '')) {
+        state.run = next.run; state.attempt = next.attempt;
+      }
       if (/^https:\/\/[a-z0-9-]+\.hackmaster-sim-previews\.pages\.dev\/?$/.test(next.preview || '')) state.preview = next.preview;
       if (/^https:\/\/github\.com\/hlyall01\/hackmaster-sim\/pull\/\d+$/.test(next.pr || '')) state.pr = next.pr;
       if (/^[a-f0-9]{40}$/.test(next.sha || '')) state.sha = next.sha;
@@ -81,6 +84,82 @@ async function boundedJson(response, limit) {
   for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
   try { return JSON.parse(new TextDecoder().decode(bytes)); }
   catch { throw new HttpError(400, 'Invalid JSON.'); }
+}
+// Short-lived GitHub identity grants only the ability to report this run's activity.
+// The coding runner never receives the issue-writing token.
+export async function activityIdentity(token) {
+  try {
+    if (typeof token !== 'string' || token.length > 16000) throw new Error();
+    const parts = token.split('.');
+    if (parts.length !== 3) throw new Error();
+    const header = unpack(parts[0]), claims = unpack(parts[1]);
+    if (header.alg !== 'RS256' || header.typ !== 'JWT' || typeof header.kid !== 'string') throw new Error();
+    const now = Date.now() / 1000;
+    if (claims.iss !== 'https://token.actions.githubusercontent.com' || claims.aud !== `${ORIGIN}/activity` ||
+        !Number.isFinite(claims.exp) || claims.exp <= now || !Number.isFinite(claims.nbf) || claims.nbf > now + 30 ||
+        !Number.isFinite(claims.iat) || claims.iat > now + 30 || now - claims.iat > 600 ||
+        claims.repository !== REPO || claims.repository_id !== '1121535444' || claims.repository_owner_id !== '11281654' ||
+        claims.ref !== 'refs/heads/main' ||
+        claims.workflow_ref !== `${REPO}/.github/workflows/feature-request.yml@refs/heads/main` ||
+        !['issues', 'issue_comment', 'workflow_dispatch'].includes(claims.event_name) ||
+        !/^[1-9][0-9]{0,15}$/.test(claims.run_id || '') || !/^[1-9][0-9]{0,5}$/.test(claims.run_attempt || '')) throw new Error();
+    const response = await fetch('https://token.actions.githubusercontent.com/.well-known/jwks', {
+      redirect: 'manual', signal: AbortSignal.timeout(10000), cf: { cacheTtl: 3600, cacheEverything: true },
+    });
+    if (!response.ok) throw new Error();
+    const jwks = await boundedJson(response, 64000);
+    const jwk = jwks.keys?.find(item => item.kid === header.kid && item.kty === 'RSA' && item.use === 'sig');
+    if (!jwk) throw new Error();
+    const publicKey = await crypto.subtle.importKey('jwk', jwk, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']);
+    if (!await crypto.subtle.verify('RSASSA-PKCS1-v1_5', publicKey, decode(parts[2]), encoder.encode(`${parts[0]}.${parts[1]}`))) throw new Error();
+    return { run: claims.run_id, attempt: claims.run_attempt };
+  } catch { throw new HttpError(401, 'Invalid activity identity.'); }
+}
+function activityEvents(events) {
+  if (!Array.isArray(events) || events.length > 40) throw new HttpError(400, 'Invalid activity.');
+  let previous = 0;
+  return events.map(event => {
+    if (!event || !Number.isSafeInteger(event.id) || event.id <= previous || event.id > 100000 ||
+        !['message', 'tool', 'summary'].includes(event.kind) || !Number.isFinite(Date.parse(event.at)))
+      throw new HttpError(400, 'Invalid activity.');
+    previous = event.id;
+    return { id: event.id, kind: event.kind, at: new Date(event.at).toISOString(),
+      text: clean(event.text, 1, 1200, 'Activity').replace(/\b(?:sk-[\w-]{12,}|gh[pousr]_[\w]{12,}|github_pat_[\w]{12,}|eyJ[\w-]+\.[\w-]+\.[\w-]+)\b/g, '[redacted]') };
+  });
+}
+export async function readActivity(comments, number, state, secret) {
+  for (const comment of [...comments].reverse()) {
+    if (comment.user?.login !== 'hlyall01') continue;
+    const match = comment.body?.match(/\n<!-- sim-activity:v1:([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+) -->$/);
+    if (!match || !await verify(secret, `activity:${number}:${match[1]}`, match[2])) continue;
+    try {
+      const data = unpack(match[1]);
+      if (data.run !== state.run || data.attempt !== state.attempt || data.revision !== state.revision) continue;
+      return { ...data, events: activityEvents(data.events), commentId: comment.id };
+    } catch { /* Ignore invalid or superseded activity. */ }
+  }
+  return null;
+}
+async function reportActivity(request, env, number) {
+  const identity = await activityIdentity(request.headers.get('Authorization')?.replace(/^Bearer /, ''));
+  const input = await boundedJson(request, 32000);
+  const events = activityEvents(input?.events);
+  if (!events.length) throw new HttpError(400, 'Activity is empty.');
+  const { issue, state, comments } = await loadTicket(env, number);
+  if (issue.state !== 'open' || issue.locked || !['coding', 'building'].includes(state.status) ||
+      identity.run !== state.run || identity.attempt !== state.attempt || input.revision !== state.revision)
+    throw new HttpError(409, 'This run is no longer accepting activity.');
+  const previous = await readActivity(comments, number, state, env.GITHUB_ISSUES_TOKEN);
+  if (previous?.events.at(-1)?.id >= events.at(-1).id) return json({ ok: true });
+  if (previous && Date.now() - Date.parse(previous.updated) < 10000) throw new HttpError(429, 'Activity is updating too quickly.');
+  const data = { ...identity, revision: state.revision, updated: new Date(Date.now()).toISOString(), events };
+  const payload = pack(data);
+  const signature = await sign(env.GITHUB_ISSUES_TOKEN, `activity:${number}:${payload}`);
+  const body = `Agent activity for this run is shown at ${ORIGIN}/${number}.\n<!-- sim-activity:v1:${payload}.${signature} -->`;
+  await github(env, previous ? `/issues/comments/${previous.commentId}` : `/issues/${number}/comments`, {
+    method: previous ? 'PATCH' : 'POST', body: JSON.stringify({ body }),
+  });
+  return json({ ok: true });
 }
 async function github(env, path, options = {}) {
   const response = await fetch(`https://api.github.com/repos/${REPO}${path}`, {
@@ -188,14 +267,17 @@ async function loadTicket(env, number) {
   const pages = page > 1 ? [page - 1, page] : [page];
   const comments = (await Promise.all(pages.map(p => github(env, `/issues/${number}/comments?per_page=100&page=${p}`)))).flat();
   const state = await ticketState(comments, number, env.GITHUB_ISSUES_TOKEN);
-  return { issue, state };
+  return { issue, state, comments };
 }
 async function ticket(env, number) {
-  const { issue, state } = await loadTicket(env, number);
+  const { issue, state, comments } = await loadTicket(env, number);
+  const activity = await readActivity(comments, number, state, env.GITHUB_ISSUES_TOKEN);
   const status = issue.state === 'closed' ? 'closed' : state.status;
   return json({ number: Number(number), title: issue.title, status, message: state.message,
     preview: state.preview || null, pr: state.pr || null, revision: state.revision,
     canRevise: !issue.locked && env.FEATURE_REQUESTS_ENABLED === 'true' && ['ready', 'failed', 'needs-info', 'rejected'].includes(status),
+    activity: activity ? { events: activity.events, updated: activity.updated } : null,
+    run: state.run ? `https://github.com/${REPO}/actions/runs/${state.run}/attempts/${state.attempt}` : null,
     history: state.history, issue: `https://github.com/${REPO}/issues/${number}` });
 }
 async function revise(request, env, number) {
@@ -242,6 +324,8 @@ export default {
       if (match && request.method === 'GET') return await ticket(env, match[1]);
       const revision = url.pathname.match(/^\/api\/tickets\/([1-9][0-9]{0,8})\/revisions$/);
       if (revision && request.method === 'POST') return await revise(request, env, revision[1]);
+      const activity = url.pathname.match(/^\/api\/tickets\/([1-9][0-9]{0,8})\/activity$/);
+      if (activity && request.method === 'POST') return await reportActivity(request, env, activity[1]);
       if (url.pathname.startsWith('/api/')) return json({ error: 'Not found.' }, 404);
       if (isTicket && ['GET', 'HEAD'].includes(request.method)) {
         url.pathname = '/ticket';

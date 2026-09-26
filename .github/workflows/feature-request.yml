@@ -14,6 +14,10 @@ on:
         description: Signed follow-up comment ID to retry (leave blank for a new request)
         required: false
         type: string
+      activity_check:
+        description: Check live activity authentication only (no agent, issue changes or API spend)
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -21,9 +25,25 @@ concurrency:
   group: feature-request-${{ (github.event_name != 'issue_comment' || (github.event.comment.user.login == 'hlyall01' && contains(github.event.comment.body, '<!-- sim-revision:v1:'))) && (github.event.issue.number || inputs.issue) || github.run_id }}
   cancel-in-progress: false
 jobs:
+  activity-check:
+    if: github.event_name == 'workflow_dispatch' && inputs.activity_check == true && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Verify activity identity without modifying the ticket
+        env:
+          ISSUE_NUMBER: ${{ inputs.issue }}
+        run: node scripts/check_activity.mjs
   prepare:
     if: >-
       vars.FEATURE_REQUESTS_ENABLED == 'true' &&
+      inputs.activity_check != true &&
       (github.event_name == 'workflow_dispatch' ||
        (!github.event.issue.pull_request && github.event.issue.user.login == 'hlyall01' &&
         contains(github.event.issue.labels.*.name, 'site-request') &&
@@ -56,6 +76,9 @@ jobs:
           ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue }}
           REVISION_ID: ${{ github.event.comment.id || inputs.revision }}
         run: node scripts/feature_agent.mjs prepare
+      - name: Include trusted activity reporter
+        if: steps.prepare.outputs.accepted == 'true'
+        run: cp scripts/report_activity.mjs target/request-input/report_activity.mjs
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: steps.prepare.outputs.accepted == 'true'
         with:
@@ -94,6 +117,9 @@ jobs:
     if: needs.screen.outputs.approved == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -124,6 +150,15 @@ jobs:
           key: web-${{ runner.os }}-1.91.1-${{ hashFiles('Cargo.lock') }}-${{ needs.prepare.outputs.base }}
           restore-keys: |
             web-${{ runner.os }}-1.91.1-${{ hashFiles('Cargo.lock') }}-
+      - name: Start activity reporter
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue }}
+          REVISION_ID: ${{ github.event.comment.id || inputs.revision }}
+          CODEX_HOME: ${{ runner.temp }}/feature-codex
+          ACTIVITY_STOP_FILE: ${{ runner.temp }}/activity-stop
+        run: |
+          cp target/request-input/report_activity.mjs "$RUNNER_TEMP/report_activity.mjs"
+          node "$RUNNER_TEMP/report_activity.mjs" > "$RUNNER_TEMP/activity-reporter.log" 2>&1 &
       - name: Implement feature in sandbox
         id: codex
         uses: openai/codex-action@86365089eb2b84e0a8fb0717b304f8bdcb13b20e # v1
@@ -131,6 +166,9 @@ jobs:
           RUSTUP_TOOLCHAIN: 1.91.1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          codex-home: ${{ runner.temp }}/feature-codex
+          # Keep the persisted event format used by the activity reporter stable.
+          codex-version: '0.157.1'
           prompt-file: target/agent/prompt.md
           output-file: target/agent/result.json
           output-schema: >-
@@ -140,6 +178,15 @@ jobs:
           model: ${{ vars.FEATURE_AGENT_MODEL }}
           effort: medium
       # Only untrusted data transport follows the agent; publishing uses a fresh runner.
+      - name: Flush final activity
+        if: always()
+        run: |
+          touch "$RUNNER_TEMP/activity-stop"
+          for attempt in $(seq 1 20); do
+            test ! -f "$RUNNER_TEMP/report_activity.mjs" && break
+            test -f "$RUNNER_TEMP/activity-stop.done" && break
+            sleep 2
+          done
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: agent-candidate

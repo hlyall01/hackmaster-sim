@@ -26,3 +26,13 @@
 #revision-status[data-error="true"] { color: #ffb3a9; }
 #revision-list { padding-left: 24px; }
 #revision-list li { margin: 16px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.activity-card { box-sizing: border-box; max-width: 1000px; margin: 0 auto 24px; padding: 18px 24px; border: 1px solid #484848; border-radius: 8px; background: #191919; }
+.activity-card summary { cursor: pointer; font-weight: 600; }
+#activity-state { margin-left: 12px; font-weight: 400; }
+#activity-list { list-style: none; padding: 0; margin: 12px 0; max-height: 340px; overflow-y: auto; }
+#activity-list li { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 12px; padding: 12px 0; border-top: 1px solid #333; }
+#activity-list time { color: #aaa; font-size: .8rem; padding-top: 3px; }
+#activity-list p { margin: 0; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+#activity-list .activity-tool { color: #aaa; font-size: .9rem; }
+#activity-list .activity-summary { color: #b7dfb9; }
+@media (max-width: 600px) { .activity-card { margin: 0 12px 20px; padding: 16px; } #activity-list li { grid-template-columns: 58px minmax(0, 1fr); gap: 8px; } #activity-state { display: block; margin: 8px 0 0; } }

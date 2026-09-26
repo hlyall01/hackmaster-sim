@@ -23,6 +23,8 @@ function output(name, value) {
 }
 async function comment(state) {
   state.revision = Number(env.REVISION_ID || 0);
+  state.run = env.GITHUB_RUN_ID;
+  state.attempt = env.GITHUB_RUN_ATTEMPT;
   // This marker is consumed only when GitHub reports github-actions[bot] as the author.
   const body = `${state.message}\n\n${state.pr ? `Pull request: ${state.pr}\n\n` : ''}` +
     `Track progress and preview: https://feature.sim-gui.com/${number}\n\n` +
