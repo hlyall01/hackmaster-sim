@@ -1190,6 +1190,7 @@ impl SimGuiApp {
                     MainTab::DetailedStats.label(),
                 );
                 ui.selectable_value(&mut self.active_tab, MainTab::Tools, MainTab::Tools.label());
+                #[cfg(not(target_arch = "wasm32"))]
                 ui.selectable_value(&mut self.active_tab, MainTab::FeatureRequests, MainTab::FeatureRequests.label());
                 if self.active_tab == MainTab::Simulator {
                     ui.separator();

@@ -7,7 +7,8 @@ checks the Rust targets, builds WASM, and publishes the successful build to the
 Feature requests live at https://feature.sim-gui.com/. Both custom domains attach
 to the same production Pages project; `feature.sim-gui.com` has a proxied CNAME to
 `hackmaster-sim.pages.dev`. Its landing page opens the form without downloading
-WASM. The simulator keeps its Feature requests tab, linking to the new site.
+WASM. The web simulator has no Feature requests tab; open the feature site directly.
+The native desktop app retains its link to the feature site.
 Old `sim-gui.com/N` ticket links redirect permanently to `feature.sim-gui.com/N`;
 the old `sim-gui.com/?tab=requests` link redirects in the browser. The API accepts
 submissions only on the feature host and from that exact origin. Preview builds
@@ -53,7 +54,7 @@ form challenges become invalid when the token changes; users can reload.
 
 ## Feature request flow
 
-1. Open https://feature.sim-gui.com/ directly, or follow the link from the simulator's **Feature requests** tab.
+1. Open https://feature.sim-gui.com/ directly.
 2. The production Pages Worker validates a honeypot, payload limits, exact origin,
    and a signed, IP-bound challenge with a three-second minimum age and one-hour
    lifetime. It checks recent signed GitHub issues for duplicates, a ten-minute
