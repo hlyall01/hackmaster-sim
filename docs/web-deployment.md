@@ -12,6 +12,9 @@ Old `sim-gui.com/N` ticket links redirect permanently to `feature.sim-gui.com/N`
 the old `sim-gui.com/?tab=requests` link redirects in the browser. The API accepts
 submissions only on the feature host and from that exact origin. Preview builds
 remain on the isolated `hackmaster-sim-previews.pages.dev` origins.
+Production assets use `max-age=0, must-revalidate` because their filenames are
+stable across deployments. The feature-domain migration also versions the main
+and form script URLs to invalidate copies already cached under the old policy.
 
 ## Credentials and settings
 

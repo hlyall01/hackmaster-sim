@@ -61,6 +61,9 @@ jobs:
           python3 scripts/configure_pages.py
           python3 -c 'from pathlib import Path; Path("site/_worker.js").write_text(Path("server/requests.mjs").read_text().replace("export async function", "async function"))'
           printf '{"version":1,"include":["/api/*","/1*","/2*","/3*","/4*","/5*","/6*","/7*","/8*","/9*"],"exclude":[]}' > site/_routes.json
+          # Asset filenames are stable across builds: revalidate instead of serving
+          # a cached loader/form from a previous deployment for four hours.
+          printf '/*\n  Cache-Control: public, max-age=0, must-revalidate\n' > site/_headers
       - name: Publish main
         id: deploy
         uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4
