@@ -53,7 +53,7 @@ export async function ticketState(comments, number, secret) {
     if (!match) continue;
     try {
       const next = JSON.parse(match[1]);
-      if ((next.revision || 0) !== state.revision || !['coding', 'building', 'ready', 'failed', 'needs-info'].includes(next.status)) continue;
+      if ((next.revision || 0) !== state.revision || !['screening', 'rejected', 'coding', 'building', 'ready', 'failed', 'needs-info'].includes(next.status)) continue;
       state = { ...state, status: next.status, message: String(next.message || '').slice(0, 1000) };
       if (/^https:\/\/[a-z0-9-]+\.hackmaster-sim-previews\.pages\.dev\/?$/.test(next.preview || '')) state.preview = next.preview;
       if (/^https:\/\/github\.com\/hlyall01\/hackmaster-sim\/pull\/\d+$/.test(next.pr || '')) state.pr = next.pr;
@@ -195,7 +195,7 @@ async function ticket(env, number) {
   const status = issue.state === 'closed' ? 'closed' : state.status;
   return json({ number: Number(number), title: issue.title, status, message: state.message,
     preview: state.preview || null, pr: state.pr || null, revision: state.revision,
-    canRevise: !issue.locked && env.FEATURE_REQUESTS_ENABLED === 'true' && ['ready', 'failed', 'needs-info'].includes(status),
+    canRevise: !issue.locked && env.FEATURE_REQUESTS_ENABLED === 'true' && ['ready', 'failed', 'needs-info', 'rejected'].includes(status),
     history: state.history, issue: `https://github.com/${REPO}/issues/${number}` });
 }
 async function revise(request, env, number) {
@@ -208,7 +208,7 @@ async function revise(request, env, number) {
     (entry.proof.metadata.requestId === challenge.id || entry.proof.metadata.contentHash === contentHash));
   if (duplicate) return json({ number: Number(number), revision: duplicate.revision, duplicate: true });
   if (issue.state !== 'open' || issue.locked) throw new HttpError(409, 'This request is closed. Please start a new feature request.');
-  if (!['ready', 'failed', 'needs-info'].includes(state.status)) throw new HttpError(409, 'A revision is already in progress. Please wait for it to finish.');
+  if (!['ready', 'failed', 'needs-info', 'rejected'].includes(state.status)) throw new HttpError(409, 'A revision is already in progress. Please wait for it to finish.');
   if (input.revision !== state.revision) throw new HttpError(409, 'This request has changed. Refresh the page before submitting.');
   cooldown(recent, ipHash);
   const metadata = pack({ requestId: challenge.id, ipHash, contentHash, sha: state.sha || null, previousRevision: state.revision });

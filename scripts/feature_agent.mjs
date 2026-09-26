@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { verifyIssue, verifyRevision } from '../server/requests.mjs';
+import { screenFeature } from './screen_feature.mjs';
 
 const repo = 'hlyall01/hackmaster-sim';
 const env = process.env;
@@ -60,7 +61,7 @@ switch (process.argv[2]) {
       if (item.user?.login !== 'github-actions[bot]') return false;
       try {
         const status = JSON.parse(item.body.match(/<!-- sim-status:(\{[^\n]+\}) -->/)?.[1] || '{}');
-        return status.revision === revision.id && ['ready', 'needs-info'].includes(status.status);
+        return status.revision === revision.id && ['ready', 'needs-info', 'rejected'].includes(status.status);
       } catch { return false; }
     })) { console.log('Revision already completed.'); break; }
     const pulls = await api(`/pulls?state=all&head=hlyall01:codex/request-${number}&base=main&per_page=10`);
@@ -90,12 +91,31 @@ switch (process.argv[2]) {
       previousRevisions: revisions.filter(item => item.id !== revision?.id).slice(-10).map(item => item.description),
       revision: revision?.description || null };
     fs.writeFileSync('target/request-input/prompt.md', fs.readFileSync('.github/codex/feature-request.md', 'utf8') + '\n' + JSON.stringify(request));
+    fs.writeFileSync('target/request-input/request.json', JSON.stringify(request));
     output('source', source);
     output('pr_number', pr?.number || '');
     output('accepted', 'true');
-    await comment({ status: 'coding', pr: pr?.html_url, sha: pr?.head.sha,
-      message: revision ? 'The agent is working on your changes. The last available preview stays visible until the new one is ready.'
-        : 'The coding agent has started. It will propose changes in a pull request for review.' });
+    await comment({ status: 'screening', pr: pr?.html_url, sha: pr?.head.sha,
+      message: 'Checking whether this is a feature or improvement for sim-gui before starting the coding agent.' });
+    break;
+  }
+  case 'screen': {
+    output('approved', 'false');
+    try {
+      const request = JSON.parse(fs.readFileSync('target/request-input/request.json', 'utf8'));
+      const result = await screenFeature(request, env.OPENAI_API_KEY);
+      if (result.decision !== 'accept') {
+        await comment({ status: result.decision === 'reject' ? 'rejected' : 'needs-info',
+          message: `${result.decision === 'reject' ? 'Request rejected.' : 'More detail needed.'} ${result.reason} No coding run was started. You can submit corrected feedback below.` });
+        break;
+      }
+      await comment({ status: 'coding', message: 'This request is relevant to sim-gui. The coding agent is starting; any existing preview stays available.' });
+      output('approved', 'true');
+    } catch {
+      // Never turn an API error, truncated response or invalid result into permission to build.
+      await comment({ status: 'failed', message: 'Request screening is temporarily unavailable. No coding run was started. Please retry later.' });
+      process.exitCode = 1;
+    }
     break;
   }
   case 'status': {

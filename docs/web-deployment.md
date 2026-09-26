@@ -66,7 +66,16 @@ form challenges become invalid when the token changes; users can reload.
    signed issue title/body invalidates automatic processing; put clarifications
    through the ticket's change form instead. Plain GitHub issues and unsigned
    comments do not trigger paid coding runs.
-4. Every accepted request starts a Codex job in a workspace sandbox with no
+4. A separate trusted screening job uses one bounded, tool-free Responses call
+   (`gpt-4.1-mini-2025-04-14`, at most 300 output tokens) to decide whether the
+   request is an actual sim-gui feature, improvement, or bug fix. This applies to
+   every follow-up too. Unrelated requests show **Request rejected** and a reason;
+   vague relevant requests ask for clarification. Corrected feedback can be sent
+   from the same ticket. API errors, refusals and invalid results fail closed.
+   Screening uses the existing OpenAI key and billing cap; no coding, PR update,
+   build or preview deployment starts without explicit acceptance. The classifier
+   is a relevance filter, not a replacement for the sandbox or publisher restrictions.
+   Every accepted request then starts a Codex job in a workspace sandbox with no
    repository write token or Cloudflare secret. It returns an untrusted patch.
 5. A fresh publishing job validates the patch, rejecting infrastructure changes,
    path escapes, symlinks, executables, binaries, oversized output, and changes
@@ -126,10 +135,16 @@ Fork PRs build without deployment secrets.
 
 ## Local validation
 
+**Evaluate request screening** is a manual Actions workflow for nine representative
+valid/invalid requests. It uses the real screening API (and a small amount of API
+credit), but creates no issues, PRs or coding runs. Run it when changing the screening
+policy or model. Local tests mock API responses and verify that only acceptance
+can open the coding gate, including failure and rejection cases.
+
 ```sh
 cargo test --lib --bin sim_gui
 cargo check --all-targets
-node --test server/requests.test.mjs
+node --test server/*.test.mjs
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'test_feature*.py'
 python3 scripts/build_web.py
 ```

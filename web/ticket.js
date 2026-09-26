@@ -6,7 +6,7 @@ const form = document.getElementById('revision-form');
 const submit = document.getElementById('revision-submit');
 const feedback = document.getElementById('revision-status');
 let current, challenge, challengeReady = 0, challengeExpires = 0, sending = false, timer;
-const labels = { queued: 'Waiting to start', coding: 'Work in progress', building: 'Building and testing', ready: 'Preview ready', failed: 'Needs attention', 'needs-info': 'More detail needed', closed: 'Closed' };
+const labels = { queued: 'Waiting to start', screening: 'Checking request', rejected: 'Request rejected', coding: 'Work in progress', building: 'Building and testing', ready: 'Preview ready', failed: 'Needs attention', 'needs-info': 'More detail needed', closed: 'Closed' };
 function link(id, url) {
   const element = document.getElementById(id);
   element.hidden = !url;

@@ -214,3 +214,15 @@ test('another visitor may revise, but unsigned comments cannot queue agents', as
   const challenge = await token('192.0.2.2', 'revision:7'); now += 4000;
   assert.equal((await revision(challenge, {}, '192.0.2.2')).status, 201);
 });
+
+test('screening blocks follow-ups until decided; rejected feedback can be corrected without losing the preview', async () => {
+  await readyTicket();
+  bot({ status: 'screening', message: 'Checking relevance.' });
+  assert.equal((await status()).canRevise, false);
+  bot({ status: 'rejected', message: 'Not a feature for sim-gui.' });
+  const ticket = await status();
+  assert.equal(ticket.status, 'rejected'); assert.equal(ticket.canRevise, true);
+  assert.equal(ticket.preview, 'https://first.hackmaster-sim-previews.pages.dev');
+  const challenge = await token(undefined, 'revision:7'); now += 4000;
+  assert.equal((await revision(challenge, { description: 'Instead, let me compare my saved fighters.' })).status, 201);
+});
