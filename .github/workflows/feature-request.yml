@@ -175,6 +175,8 @@ jobs:
             {"type":"object","properties":{"status":{"type":"string","enum":["implemented","needs-info"]},"summary":{"type":"string"}},"required":["status","summary"],"additionalProperties":false}
           permission-profile: ':workspace'
           safety-strategy: drop-sudo
+          # This issue-only app reaches coding only after signature and scope checks.
+          allow-bot-users: 'sim-gui-requests[bot]'
           model: ${{ vars.FEATURE_AGENT_MODEL }}
           effort: medium
       # Only untrusted data transport follows the agent; publishing uses a fresh runner.
