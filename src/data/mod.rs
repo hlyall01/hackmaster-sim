@@ -16,11 +16,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub use armor::load_armor_catalog;
-pub use fighter_presets::{load_fighter_presets, save_fighter_presets};
+pub use fighter_presets::{
+    load_fighter_presets, load_fighter_presets_recovering, save_fighter_presets,
+};
 pub use npc_presets::load_npc_presets;
 pub use races::load_races;
 pub use tactical_presets::{
-    TACTICAL_PRESET_SCHEMA_VERSION, load_tactical_presets, save_tactical_presets,
+    TACTICAL_PRESET_SCHEMA_VERSION, load_tactical_presets, load_tactical_presets_recovering,
+    save_tactical_presets,
 };
 pub use talents::load_talents;
 pub use weapons::{load_shield_catalog, load_weapon_catalog};
@@ -28,8 +31,12 @@ pub use weapons::{load_shield_catalog, load_weapon_catalog};
 pub const TALENTS_PATH: &str = "data/sim/talents.json";
 
 #[cfg(not(target_arch = "wasm32"))]
-fn read_presets(path: &str, bundled: &str) -> Result<String, String> {
-    Ok(fs::read_to_string(resolve_data_path(path)).unwrap_or_else(|_| bundled.to_owned()))
+fn read_saved_presets(path: &str) -> Result<Option<String>, String> {
+    match fs::read_to_string(resolve_data_path(path)) {
+        Ok(data) => Ok(Some(data)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(format!("Cannot read saved presets: {err}")),
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -49,14 +56,9 @@ fn browser_storage() -> Result<web_sys::Storage, String> {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn read_presets(path: &str, bundled: &str) -> Result<String, String> {
-    // Bundled presets remain usable when browser privacy settings disable storage.
-    let Ok(storage) = browser_storage() else {
-        return Ok(bundled.to_owned());
-    };
-    storage
+fn read_saved_presets(path: &str) -> Result<Option<String>, String> {
+    browser_storage()?
         .get_item(&format!("HackmasterSim/{path}"))
-        .map(|data| data.unwrap_or_else(|| bundled.to_owned()))
         .map_err(|err| format!("Cannot read saved presets: {err:?}"))
 }
 
@@ -65,6 +67,54 @@ fn write_presets(path: &str, data: &str) -> Result<(), String> {
     browser_storage()?
         .set_item(&format!("HackmasterSim/{path}"), data)
         .map_err(|err| format!("Cannot save presets in this browser: {err:?}"))
+}
+
+fn read_presets(path: &str, bundled: &str) -> Result<String, String> {
+    Ok(read_saved_presets(path)?.unwrap_or_else(|| bundled.to_owned()))
+}
+
+/// Keep the simulator usable without discarding or replacing unreadable user data.
+fn recover_presets<T>(
+    path: &str,
+    bundled: &str,
+    parse: fn(&str) -> Result<T, String>,
+) -> (T, Option<String>) {
+    match read_presets(path, bundled).and_then(|data| parse(&data)) {
+        Ok(presets) => (presets, None),
+        Err(err) => (
+            parse(bundled).expect("Bundled presets must be valid"),
+            Some(format!(
+                "Could not load {path}: {err}. Using bundled presets; the original saved data is unchanged."
+            )),
+        ),
+    }
+}
+
+/// A recovery save must retain malformed/unsupported data before replacing it.
+/// Reuse an identical backup; never overwrite an earlier, different recovery copy.
+fn preserve_invalid_presets<T>(
+    path: &str,
+    parse: fn(&str) -> Result<T, String>,
+) -> Result<(), String> {
+    let Some(data) = read_saved_presets(path)? else {
+        return Ok(());
+    };
+    if parse(&data).is_ok() {
+        return Ok(());
+    }
+    for index in 0..32 {
+        let backup = format!("{path}.corrupt-{index}");
+        match read_saved_presets(&backup)? {
+            Some(existing) if existing == data => return Ok(()),
+            Some(_) => continue,
+            None => {
+                return write_presets(&backup, &data).map_err(|err| {
+                    format!("Cannot back up damaged presets; original save was not replaced: {err}")
+                });
+            }
+        }
+    }
+    Err("Cannot back up damaged presets: all recovery slots are occupied. Original save was not replaced.".into())
 }
 
 fn mapped_data_subpath(path: &Path) -> PathBuf {
@@ -181,6 +231,101 @@ pub fn load_catalogs() -> Result<(WeaponCatalog, ArmorCatalog, ShieldCatalog), S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn corrupt_fighter_recovery_preserves_original_and_allows_a_safe_save() {
+        let dir = env::temp_dir().join(format!("hackmaster-fighter-recovery-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fighters.json");
+        let path = path.to_str().unwrap();
+        fs::write(path, "{broken fighter data").unwrap();
+
+        let (presets, warning) = load_fighter_presets_recovering(path);
+        assert!(warning.unwrap().contains("Using bundled presets"));
+        assert!(presets.entries().iter().any(|p| p.name == "Arthur Du Randt"));
+        assert_eq!(fs::read_to_string(path).unwrap(), "{broken fighter data");
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+
+        save_fighter_presets(path, &presets).unwrap();
+        assert_eq!(fs::read_to_string(format!("{path}.corrupt-0")).unwrap(), "{broken fighter data");
+        assert!(load_fighter_presets_recovering(path).1.is_none());
+
+        // Retain older recovery copies when a different damaged document appears.
+        fs::write(path, "{different broken data").unwrap();
+        save_fighter_presets(path, &presets).unwrap();
+        assert_eq!(fs::read_to_string(format!("{path}.corrupt-0")).unwrap(), "{broken fighter data");
+        assert_eq!(fs::read_to_string(format!("{path}.corrupt-1")).unwrap(), "{different broken data");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn tactical_recovery_preserves_unsupported_schema_before_replacement() {
+        let dir = env::temp_dir().join(format!("hackmaster-tactical-recovery-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("tactics.json");
+        let path = path.to_str().unwrap();
+        let original = r#"{"schema_version":999,"presets":[]}"#;
+        fs::write(path, original).unwrap();
+        let (presets, warning) = load_tactical_presets_recovering(path);
+        assert!(warning.unwrap().contains("Unsupported tactical preset schema"));
+        assert!(!presets.is_empty());
+        assert_eq!(fs::read_to_string(path).unwrap(), original);
+        save_tactical_presets(path, &presets).unwrap();
+        assert_eq!(fs::read_to_string(format!("{path}.corrupt-0")).unwrap(), original);
+        assert_eq!(load_tactical_presets(path).unwrap(), presets);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn failed_recovery_backup_does_not_replace_damaged_presets() {
+        let dir = env::temp_dir().join(format!("hackmaster-recovery-failure-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fighters.json");
+        let path = path.to_str().unwrap();
+        fs::write(path, "{recoverable bytes").unwrap();
+        // An unreadable backup destination must fail closed, without replacing it.
+        fs::create_dir(format!("{path}.corrupt-0")).unwrap();
+        let (presets, warning) = load_fighter_presets_recovering(path);
+        assert!(warning.is_some());
+        assert!(save_fighter_presets(path, &presets).is_err());
+        assert_eq!(fs::read_to_string(path).unwrap(), "{recoverable bytes");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn unreadable_saved_presets_are_not_treated_as_missing() {
+        let dir = env::temp_dir().join(format!("hackmaster-unreadable-presets-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fighters.json");
+        let path = path.to_str().unwrap();
+        let original = [0xff, 0xfe];
+        fs::write(path, original).unwrap();
+        assert!(load_fighter_presets(path).is_err());
+        let (presets, warning) = load_fighter_presets_recovering(path);
+        assert!(warning.is_some());
+        assert!(!presets.is_empty());
+        assert!(save_fighter_presets(path, &presets).is_err());
+        assert_eq!(fs::read(path).unwrap(), original);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn empty_fighter_collection_can_be_saved_and_populated() {
+        let dir = env::temp_dir().join(format!("hackmaster-empty-presets-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fighters.json");
+        let path = path.to_str().unwrap();
+        fs::write(path, r#"{"presets":[]}"#).unwrap();
+        let (mut presets, warning) = load_fighter_presets_recovering(path);
+        assert!(warning.is_none());
+        assert!(presets.is_empty());
+        let fixture = crate::test_support::fighter_presets();
+        presets.push(fixture.entries()[0].clone());
+        save_fighter_presets(path, &presets).unwrap();
+        assert_eq!(load_fighter_presets(path).unwrap().entries().len(), 1);
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn saved_presets_override_bundled_data_across_cwd_and_rebuilds() {

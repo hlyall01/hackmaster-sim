@@ -1,7 +1,7 @@
 use crate::core::tactics::{
     TacticalPolicy, TacticalPreset, valid_style_selection_shape, validate_policy,
 };
-use crate::data::{read_presets, write_presets};
+use crate::data::{preserve_invalid_presets, read_presets, recover_presets, write_presets};
 use serde::{Deserialize, Serialize};
 
 pub const TACTICAL_PRESET_SCHEMA_VERSION: u32 = 1;
@@ -19,8 +19,16 @@ struct TacticalPresetsFile {
 
 pub fn load_tactical_presets(path: &str) -> Result<Vec<TacticalPreset>, String> {
     let data = read_presets(path, EMBEDDED_TACTICAL_PRESETS_JSON)?;
+    parse_tactical_presets(&data)
+}
+
+pub fn load_tactical_presets_recovering(path: &str) -> (Vec<TacticalPreset>, Option<String>) {
+    recover_presets(path, EMBEDDED_TACTICAL_PRESETS_JSON, parse_tactical_presets)
+}
+
+fn parse_tactical_presets(data: &str) -> Result<Vec<TacticalPreset>, String> {
     let parsed: TacticalPresetsFile =
-        serde_json::from_str(&data).map_err(|err| format!("Invalid tactical presets: {err}"))?;
+        serde_json::from_str(data).map_err(|err| format!("Invalid tactical presets: {err}"))?;
     if parsed.schema_version != TACTICAL_PRESET_SCHEMA_VERSION {
         return Err(format!(
             "Unsupported tactical preset schema version {}; expected {}.",
@@ -89,6 +97,7 @@ pub fn save_tactical_presets(path: &str, presets: &[TacticalPreset]) -> Result<(
         presets: presets.to_vec(),
     })
     .map_err(|err| err.to_string())?;
+    preserve_invalid_presets(path, parse_tactical_presets)?;
     write_presets(path, &data)
 }
 

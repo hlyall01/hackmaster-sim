@@ -7,7 +7,7 @@ use egui_plot::{
 };
 use game_logic::simulation_jobs::{self, DpsConfig, DpsTestResult, JobControl};
 use game_logic::{
-    ArmorCatalog, ArmorEntry, ArmorId, FighterMasteries, FighterPreset, FighterPresetCatalog,
+    ArmorCatalog, ArmorEntry, ArmorId, FighterMasteries, FighterPreset, FighterPresetCatalog, FighterPresetId,
     FighterProgression, NpcPresetCatalog, PlayerConfig, ShieldCatalog, ShieldId, TalentCatalog,
     WeaponCatalog, WeaponHandedness, WeaponId, WeaponSize,
 };
@@ -32,6 +32,9 @@ mod jobs;
 mod combat_log;
 #[path = "sim_gui/macros.rs"]
 mod macros;
+#[cfg(target_arch = "wasm32")]
+#[path = "sim_gui/cloud.rs"]
+mod cloud;
 use jobs::{BackgroundJob, JobKind, JobOutput};
 use std::collections::BTreeMap;
 
@@ -159,6 +162,8 @@ const WEAPON_GROUP_LABELS: [&str; 13] = [
 ];
 
 struct SimGuiApp {
+    #[cfg(target_arch = "wasm32")]
+    cloud: cloud::CloudState,
     macro_panels: [macros::MacroPanel; 2],
     background_job: Option<BackgroundJob>,
     combat_log: combat_log::CombatLogView,
@@ -253,27 +258,22 @@ impl SimGuiApp {
                 Catalog::new(Vec::new())
             }
         };
-        let fighter_presets = match data::load_fighter_presets(FIGHTER_PRESETS_PATH) {
-            Ok(presets) => presets,
-            Err(err) => {
-                eprintln!("Failed to load fighter presets: {err}");
-                Catalog::new(Vec::new())
-            }
-        };
+        let (fighter_presets, fighter_load_error) =
+            data::load_fighter_presets_recovering(FIGHTER_PRESETS_PATH);
         let (tactical_presets, tactical_load_error) =
-            match data::load_tactical_presets(TACTICAL_PRESETS_PATH) {
-                Ok(presets) => (presets, None),
-                Err(err) => {
-                    eprintln!("Failed to load tactical presets: {err}");
-                    (Vec::new(), Some(err))
-                }
-            };
-        Self::with_presets(
+            data::load_tactical_presets_recovering(TACTICAL_PRESETS_PATH);
+        let warnings = fighter_load_error.into_iter().chain(tactical_load_error.clone())
+            .collect::<Vec<_>>();
+        let mut app = Self::with_presets(
             npc_presets,
             fighter_presets,
             tactical_presets,
             tactical_load_error,
-        )
+        );
+        if !warnings.is_empty() {
+            app.job_message = Some(warnings.join(" "));
+        }
+        app
     }
 
     fn with_presets(
@@ -311,6 +311,8 @@ impl SimGuiApp {
             .or_else(|| weapon_catalog.first_id())
             .unwrap_or(WeaponId::new(0));
         let mut app = Self {
+            #[cfg(target_arch = "wasm32")]
+            cloud: Default::default(),
             background_job: None,
             combat_log: Default::default(),
             job_message: None,
@@ -1120,6 +1122,8 @@ fn draw_weapon_icon(painter: &egui::Painter, pos: Pos2, facing: f32, icon: Weapo
 impl eframe::App for SimGuiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.show(ctx);
+        #[cfg(target_arch = "wasm32")]
+        self.update_cloud(ctx);
     }
 }
 
@@ -1703,6 +1707,7 @@ impl SimGuiApp {
                         &self.npc_presets,
                         &mut self.fighter_presets,
                         fighter_preset_name,
+                        &mut self.job_message,
                         &mut self.player_editor_tabs[idx],
                         &mut self.talent_category_tabs[idx],
                         damage_plot_iterations,
@@ -3649,6 +3654,7 @@ fn render_player_editor(
     npc_presets: &NpcPresetCatalog,
     fighter_presets: &mut FighterPresetCatalog,
     fighter_preset_name: &mut String,
+    preset_message: &mut Option<String>,
     active_tab: &mut PlayerEditorTab,
     talent_category_tab: &mut String,
     damage_plot_iterations: &mut String,
@@ -3758,49 +3764,40 @@ fn render_player_editor(
                         }
                     }
                 });
-                let save_enabled =
-                    !fighter_preset_name.trim().is_empty() && player.npc_preset.is_none();
-                ui.horizontal(|ui| {
-                    ui.label("Save as");
-                    ui.text_edit_singleline(fighter_preset_name);
-                    if ui
-                        .add_enabled(save_enabled, egui::Button::new("Save preset"))
-                        .clicked()
-                    {
-                        let name = fighter_preset_name.trim();
-                        if !name.is_empty() {
-                            let preset = fighter_preset_from_player(
-                                player,
-                                weapon_catalog,
-                                armor_catalog,
-                                shield_catalog,
-                                name,
-                            );
-                            if let Some(existing) = fighter_presets
-                                .entries()
-                                .iter()
-                                .position(|entry| entry.name.eq_ignore_ascii_case(name))
-                            {
-                                if let Some(id) = fighter_presets.id_from_index(existing) {
-                                    fighter_presets.replace(id, preset);
-                                    player.fighter_preset = Some(id);
-                                }
-                            } else {
-                                let id = fighter_presets.push(preset);
-                                player.fighter_preset = Some(id);
-                            }
-                            if let Err(err) =
-                                data::save_fighter_presets(FIGHTER_PRESETS_PATH, fighter_presets)
-                            {
-                                eprintln!("Failed to save fighter presets: {err}");
-                            }
-                        }
-                    }
-                    if player.npc_preset.is_some() {
-                        ui.label("Disabled while NPC preset is active.");
-                    }
-                });
             }
+            let save_enabled =
+                !fighter_preset_name.trim().is_empty() && player.npc_preset.is_none();
+            ui.horizontal(|ui| {
+                ui.label("Save as");
+                ui.text_edit_singleline(fighter_preset_name);
+                if ui
+                    .add_enabled(save_enabled, egui::Button::new("Save preset"))
+                    .clicked()
+                {
+                    let name = fighter_preset_name.trim();
+                    if !name.is_empty() {
+                        let preset = fighter_preset_from_player(
+                            player,
+                            weapon_catalog,
+                            armor_catalog,
+                            shield_catalog,
+                            name,
+                        );
+                        *preset_message = Some(match save_fighter_preset_with(
+                            fighter_presets,
+                            &mut player.fighter_preset,
+                            preset,
+                            |presets| data::save_fighter_presets(FIGHTER_PRESETS_PATH, presets),
+                        ) {
+                            Ok(()) => format!("Saved fighter preset '{name}'."),
+                            Err(err) => format!("Could not save fighter preset '{name}': {err}"),
+                        });
+                    }
+                }
+                if player.npc_preset.is_some() {
+                    ui.label("Disabled while NPC preset is active.");
+                }
+            });
 
             if !npc_presets.is_empty() {
                 ui.horizontal(|ui| {
@@ -5417,6 +5414,29 @@ fn apply_fighter_preset(
     if let Some(weapon) = weapon_catalog.get(player.weapon_id) {
         game_logic::sanitize_projectile_tier(player, weapon);
     }
+}
+
+/// Commit the preset list and selection only after persistence succeeds.
+fn save_fighter_preset_with(
+    presets: &mut FighterPresetCatalog,
+    selected: &mut Option<FighterPresetId>,
+    preset: FighterPreset,
+    persist: impl FnOnce(&FighterPresetCatalog) -> Result<(), String>,
+) -> Result<(), String> {
+    let mut candidate = presets.clone();
+    let existing = candidate.entries().iter()
+        .position(|entry| entry.name.eq_ignore_ascii_case(&preset.name));
+    let id = if let Some(index) = existing {
+        let id = candidate.id_from_index(index).expect("Existing preset has an ID");
+        candidate.replace(id, preset);
+        id
+    } else {
+        candidate.push(preset)
+    };
+    persist(&candidate)?;
+    *presets = candidate;
+    *selected = Some(id);
+    Ok(())
 }
 
 fn fighter_preset_from_player(

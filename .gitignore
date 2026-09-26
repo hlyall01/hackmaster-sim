@@ -12,3 +12,11 @@
 /examples/analysis_*.rs
 /examples/arthur_double_stats.rs
 /scripts/arthur_bp_bumps.py
+
+# Character service tooling and local credentials/state.
+/cloud/node_modules/
+/cloud/.wrangler/
+/cloud/.dev.vars*
+/cloud/.env*
+/cloud/worker-configuration.d.ts
+/.wrangler/

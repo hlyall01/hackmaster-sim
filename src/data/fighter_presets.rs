@@ -1,4 +1,4 @@
-use crate::data::{read_presets, write_presets};
+use crate::data::{preserve_invalid_presets, read_presets, recover_presets, write_presets};
 use crate::game_logic::{FighterPreset, FighterPresetCatalog};
 use serde::{Deserialize, Serialize};
 
@@ -14,7 +14,15 @@ struct FighterPresetsFile {
 
 pub fn load_fighter_presets(path: &str) -> Result<FighterPresetCatalog, String> {
     let data = read_presets(path, EMBEDDED_FIGHTER_PRESETS_JSON)?;
-    let parsed: FighterPresetsFile = serde_json::from_str(&data).map_err(|err| err.to_string())?;
+    parse_fighter_presets(&data)
+}
+
+pub fn load_fighter_presets_recovering(path: &str) -> (FighterPresetCatalog, Option<String>) {
+    recover_presets(path, EMBEDDED_FIGHTER_PRESETS_JSON, parse_fighter_presets)
+}
+
+fn parse_fighter_presets(data: &str) -> Result<FighterPresetCatalog, String> {
+    let parsed: FighterPresetsFile = serde_json::from_str(data).map_err(|err| err.to_string())?;
     Ok(FighterPresetCatalog::new(parsed.presets))
 }
 
@@ -23,5 +31,6 @@ pub fn save_fighter_presets(path: &str, presets: &FighterPresetCatalog) -> Resul
         presets: presets.entries().to_vec(),
     })
     .map_err(|err| err.to_string())?;
+    preserve_invalid_presets(path, parse_fighter_presets)?;
     write_presets(path, &data)
 }

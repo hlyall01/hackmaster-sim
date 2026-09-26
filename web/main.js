@@ -1,4 +1,5 @@
 import { showFeatureRequests } from './requests.js?v=feature-domain-1';
+import './cloud.js';
 
 if (location.hostname === 'feature.sim-gui.com') {
   document.title = 'Feature requests · HackMaster Simulator';

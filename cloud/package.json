@@ -1,0 +1,21 @@
+{
+  "name": "hackmaster-character-test",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.ts",
+    "check": "wrangler types && tsc --noEmit",
+    "build": "esbuild src/worker.ts --bundle --format=esm --platform=browser --outfile=../target/character-worker.js"
+  },
+  "dependencies": {
+    "jose": "^6.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "latest",
+    "@types/node": "^24.0.0",
+    "esbuild": "latest",
+    "jsdom": "^30.1.1",
+    "typescript": "latest",
+    "wrangler": "latest"
+  }
+}

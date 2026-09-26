@@ -2,6 +2,7 @@
 
 pub mod assets;
 pub mod character;
+pub mod character_document;
 pub mod console;
 pub mod core;
 pub mod data;

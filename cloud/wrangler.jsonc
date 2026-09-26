@@ -1,0 +1,23 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "hackmaster-character-test",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-09-26",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
+  "vars": {
+    "ENVIRONMENT": "character-test",
+    "APP_ORIGIN": "https://characters-test.sim-gui.com",
+    "ACCESS_ISSUER": "https://weathered-sunset-80df.cloudflareaccess.com",
+    "ACCESS_AUD": "487c6df808b6398df98b2963e93da2eb010496b4f23f449ecdd7958cf7646833",
+    "BOOTSTRAP_ADMIN_EMAIL": ""
+  },
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "hackmaster-character-test",
+    "database_id": "a3c1abb7-d10c-40fd-adf0-203943196a70",
+    "migrations_dir": "migrations"
+  }]
+}

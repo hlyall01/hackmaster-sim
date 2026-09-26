@@ -2,6 +2,74 @@
 use super::*;
 
 #[test]
+fn failed_fighter_saves_keep_catalog_and_selection_for_insert_and_overwrite() {
+    let mut app = SimGuiApp::new();
+    let original = serde_json::to_value(app.fighter_presets.entries()).unwrap();
+    let selection = app.players[0].fighter_preset;
+    for new_name in [None, Some("New unsaved fighter")] {
+        let mut preset = app.fighter_presets.entries()[0].clone();
+        preset.level += 1;
+        if let Some(name) = new_name {
+            preset.name = name.into();
+        }
+        let error = save_fighter_preset_with(
+            &mut app.fighter_presets,
+            &mut app.players[0].fighter_preset,
+            preset,
+            |_| Err("Injected storage failure".into()),
+        ).unwrap_err();
+        assert_eq!(error, "Injected storage failure");
+        assert_eq!(serde_json::to_value(app.fighter_presets.entries()).unwrap(), original);
+        assert_eq!(app.players[0].fighter_preset, selection);
+    }
+}
+
+#[test]
+fn successful_fighter_save_commits_only_the_persisted_candidate() {
+    let app = SimGuiApp::new();
+    let mut presets = Catalog::new(Vec::new());
+    let mut selected = None;
+    let mut preset = app.fighter_presets.entries()[0].clone();
+    for level in [2, 3] {
+        preset.level = level;
+        save_fighter_preset_with(&mut presets, &mut selected, preset.clone(), |candidate| {
+            assert_eq!(candidate.entries().len(), 1);
+            assert_eq!(candidate.entries()[0].level, level);
+            Ok(())
+        }).unwrap();
+        assert_eq!(presets.entries().len(), 1);
+        assert_eq!(presets.get(selected.unwrap()).unwrap().level, level);
+    }
+}
+
+#[test]
+fn empty_fighter_catalog_keeps_the_save_controls_available() {
+    let mut app = SimGuiApp::new();
+    app.fighter_presets = Catalog::new(Vec::new());
+    app.players[0].fighter_preset = None;
+    app.show_player_editor = [true, false];
+    let ctx = egui::Context::default();
+    let mut output = None;
+    for _ in 0..3 {
+        output = Some(ctx.run(egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1280.0, 900.0))),
+            ..Default::default()
+        }, |ctx| app.show(ctx)));
+    }
+    fn has_text(shape: &egui::epaint::Shape, text: &str) -> bool {
+        match shape {
+            egui::epaint::Shape::Text(shape) => shape.galley.text() == text,
+            egui::epaint::Shape::Vec(shapes) => shapes.iter().any(|shape| has_text(shape, text)),
+            _ => false,
+        }
+    }
+    let output = output.unwrap();
+    for label in ["Save as", "Save preset"] {
+        assert!(output.shapes.iter().any(|shape| has_text(&shape.shape, label)), "Missing {label}");
+    }
+}
+
+#[test]
 fn wren_power_attack_refreshes_damage_after_a_previous_attack() {
     use game_logic::roll_macros::{MacroSession, Modifier, RollKind};
     let mut app = SimGuiApp::new();
