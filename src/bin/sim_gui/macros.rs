@@ -4,6 +4,8 @@ use game_logic::roll_macros::{DefenceMode, MacroSession, Modifier, RollKind};
 pub(super) struct MacroPanel {
     pub session: MacroSession,
     scale: f32,
+    #[cfg(target_arch = "wasm32")]
+    copy_status: Option<std::rc::Rc<std::cell::RefCell<String>>>,
 }
 
 impl Default for MacroPanel {
@@ -11,11 +13,51 @@ impl Default for MacroPanel {
         Self {
             session: MacroSession::default(),
             scale: 1.0,
+            #[cfg(target_arch = "wasm32")]
+            copy_status: None,
         }
     }
 }
 
 impl MacroPanel {
+    fn copy_text(&mut self, ctx: &egui::Context, text: String) {
+        #[cfg(not(target_arch = "wasm32"))]
+        ctx.output_mut(|output| output.copied_text = text);
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            use wasm_bindgen::JsCast;
+
+            // eframe 0.27 discards web copied_text unless web_sys_unstable_apis is
+            // enabled, but that code is incompatible with our newer web-sys.
+            // Use the stable API directly, starting the write in the click handler
+            // so browsers that require a user gesture can accept it.
+            let status = std::rc::Rc::new(std::cell::RefCell::new("Copying…".to_owned()));
+            self.copy_status = Some(status.clone());
+            let clipboard = web_sys::window().and_then(|window| {
+                js_sys::Reflect::get(&window.navigator(), &"clipboard".into())
+                    .ok()?
+                    .dyn_into::<web_sys::Clipboard>()
+                    .ok()
+            });
+            let Some(clipboard) = clipboard else {
+                *status.borrow_mut() =
+                    "Clipboard unavailable. Open this site over HTTPS in a browser with clipboard support."
+                        .into();
+                return;
+            };
+            let write = clipboard.write_text(&text);
+            let ctx = ctx.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                *status.borrow_mut() = match wasm_bindgen_futures::JsFuture::from(write).await {
+                    Ok(_) => "Copied to clipboard".into(),
+                    Err(_) => "Copy failed. Allow clipboard access and try Copy last again.".into(),
+                };
+                ctx.request_repaint();
+            });
+        }
+    }
+
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
@@ -157,7 +199,7 @@ impl MacroPanel {
                         .clicked()
                     {
                         if let Ok(text) = self.session.copy(kind, actor, target) {
-                            ui.output_mut(|o| o.copied_text = text);
+                            self.copy_text(ui.ctx(), text);
                         }
                     }
                 };
@@ -490,12 +532,20 @@ impl MacroPanel {
                 )
                 .clicked()
             {
-                ui.output_mut(|o| o.copied_text = self.session.state.last_macro.clone().unwrap());
+                self.copy_text(ui.ctx(), self.session.state.last_macro.clone().unwrap());
             }
             if ui.button("Reset combat").clicked() {
                 self.session.reset();
+                #[cfg(target_arch = "wasm32")]
+                {
+                    self.copy_status = None;
+                }
             }
         });
+        #[cfg(target_arch = "wasm32")]
+        if let Some(status) = &self.copy_status {
+            ui.label(status.borrow().as_str());
+        }
         if let Some(text) = &self.session.state.last_macro {
             ui.add(egui::Label::new(egui::RichText::new(text).monospace()).wrap(true));
         }
