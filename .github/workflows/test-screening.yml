@@ -1,6 +1,11 @@
 name: Evaluate request screening
 on:
   workflow_dispatch:
+    inputs:
+      issue:
+        description: Optional existing ticket to classify without starting an agent or modifying it
+        required: false
+        type: string
 permissions:
   contents: read
 jobs:
@@ -16,4 +21,5 @@ jobs:
       - name: Check representative requests without running a coding agent
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          SCREEN_ISSUE: ${{ inputs.issue }}
         run: node scripts/evaluate_feature_screen.mjs
