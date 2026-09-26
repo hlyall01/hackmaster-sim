@@ -172,6 +172,15 @@ starting on an older PR branch also receive them. When upgrading the action,
 review whether upstream resolves the issue and remove this workaround or update
 its checksum and tests deliberately. Do not bypass a checksum mismatch.
 
+Before privilege isolation, the job also makes `/etc/resolv.conf` a static copy
+of the runner's configured upstream resolver list. The action restricts system
+service sockets and can interrupt `systemd-resolved`
+([upstream issue](https://github.com/openai/codex-action/issues/160)); using the
+local DNS stub then breaks activity updates and artifact upload with `EAI_AGAIN`.
+The job rejects loopback-only resolver configuration and checks GitHub DNS again
+after coding. This does not change the agent's sandbox network permissions or
+introduce a third-party DNS provider. It applies only to the disposable coding VM.
+
 - Workflows: `web.yml` (main/PRs), `feature-request.yml` (signed issues and revisions),
   `build-web.yml` and `deploy-preview.yml` (shared jobs).
 - Agent jobs have a 25-minute timeout; jobs are serialized per issue, not globally,
