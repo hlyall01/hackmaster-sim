@@ -8,6 +8,7 @@ on:
         type: string
 permissions:
   contents: read
+  issues: read
 jobs:
   evaluate:
     if: github.ref == 'refs/heads/main'
@@ -22,4 +23,5 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           SCREEN_ISSUE: ${{ inputs.issue }}
+          GH_TOKEN: ${{ github.token }}
         run: node scripts/evaluate_feature_screen.mjs

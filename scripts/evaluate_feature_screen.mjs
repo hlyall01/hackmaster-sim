@@ -26,7 +26,9 @@ let cases = fixtures;
 if (selected) {
   if (!/^[1-9][0-9]{0,8}$/.test(selected)) throw new Error('Invalid ticket number');
   const response = await fetch(`https://api.github.com/repos/hlyall01/hackmaster-sim/issues/${selected}`, {
-    headers: { Accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(15000), redirect: 'error',
+    headers: { Accept: 'application/vnd.github+json',
+      ...(process.env.GH_TOKEN ? { Authorization: `Bearer ${process.env.GH_TOKEN}` } : {}) },
+    signal: AbortSignal.timeout(15000), redirect: 'error',
   });
   if (!response.ok) throw new Error(`Could not read ticket (${response.status})`);
   const issue = await response.json();
