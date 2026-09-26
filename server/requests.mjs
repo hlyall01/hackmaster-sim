@@ -57,7 +57,9 @@ async function github(env, path, options = {}) {
       'User-Agent': 'sim-gui-feature-requests', 'X-GitHub-Api-Version': '2022-11-28',
       'Content-Type': 'application/json',
     },
-    signal: AbortSignal.timeout(15000), redirect: 'error',
+    // Cloudflare's edge runtime supports manual/follow, not the browser's "error" mode.
+    // Treat redirects as failures below so Authorization can never cross hosts.
+    signal: AbortSignal.timeout(15000), redirect: 'manual',
   });
   if (!response.ok) {
     await response.body?.cancel();

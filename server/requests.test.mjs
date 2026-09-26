@@ -14,6 +14,7 @@ test.beforeEach(() => {
   Date.now = () => now;
   globalThis.fetch = async (url, init = {}) => {
     assert.equal(new URL(url).hostname, 'api.github.com');
+    assert.equal(init.redirect, 'manual');
     const path = new URL(url).pathname;
     if (init.method === 'POST') {
       writes++;
