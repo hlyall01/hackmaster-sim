@@ -261,9 +261,19 @@ test('non-admin toolbar only offers sign out and assigned characters move into M
   assert.equal(JSON.parse(f.bridge.snapshot(0)).characters[0].is_mine,true);
   await f.load();
   assert.equal(JSON.parse(f.bridge.snapshot(0)).can_save,true);
-  assert.equal(JSON.parse(f.bridge.snapshot(0)).can_delete,false);
+  assert.equal(JSON.parse(f.bridge.snapshot(0)).can_delete,true);
   f.assign(false); f.w.dispatchEvent(new f.w.Event('focus')); await tick();
   assert.equal(JSON.parse(f.bridge.snapshot(0)).characters[0].is_mine,false);
   assert.equal(JSON.parse(f.bridge.snapshot(0)).can_save,false);
+  f.w.close();
+});
+
+test('assigned characters have the same delete controls and behavior as created characters', async () => {
+  const f=await fixture(false,false);
+  f.assign(true); f.w.dispatchEvent(new f.w.Event('focus')); await tick(); await f.load();
+  assert.equal(JSON.parse(f.bridge.snapshot(0)).can_delete,true);
+  f.bridge.action(0,'delete',''); await tick();
+  assert.equal(f.deletes(),1);
+  assert.equal(JSON.parse(f.bridge.snapshot(0)).characters.length,0);
   f.w.close();
 });

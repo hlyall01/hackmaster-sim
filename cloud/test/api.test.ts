@@ -239,8 +239,8 @@ test('unauthenticated guests see every character but cannot save, assign, restor
   const {call,env,request,sql} = fixture();
   const row = (await call('player','characters','POST',saveBody(1))).data;
   await call('stranger','session');
-  await call('admin',`characters/${row.id}/assignments`,'PUT',{user_id:'stranger'});
   assert.equal((await call('stranger',`characters/${row.id}`,'DELETE',{version:1})).status,403);
+  await call('admin',`characters/${row.id}/assignments`,'PUT',{user_id:'stranger'});
   assert.equal((await call('admin',`characters/${row.id}`,'DELETE',{version:1})).status,403);
   assert.equal((await worker.fetch(request(`characters/${row.id}`,'DELETE',{version:1}),env)).status,401);
   await call('stranger',`characters/${row.id}`,'PUT',saveBody(1));
@@ -262,4 +262,16 @@ test('unauthenticated guests see every character but cannot save, assign, restor
   assert.equal((await call('player','roster')).data[0].is_owner,1);
   assert.equal((await call('player',`characters/${row.id}`,'DELETE',{version:2})).status,409);
   assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM revisions').get().n,3);
+});
+
+test('assigned players can delete characters while revoked players cannot', async () => {
+  const {call}=fixture();
+  const row=(await call('player','characters','POST',saveBody(1))).data;
+  await call('stranger','session');
+  await call('admin',`characters/${row.id}/assignments`,'PUT',{user_id:'stranger'});
+  assert.equal((await call('stranger',`characters/${row.id}`,'DELETE',{version:1})).status,200);
+  await call('admin',`characters/${row.id}/restore`,'POST',{...saveBody(1),restore_version:1});
+  await call('admin',`characters/${row.id}/assignments`,'DELETE',{user_id:'stranger'});
+  assert.equal((await call('stranger',`characters/${row.id}`,'DELETE',{version:2})).status,403);
+  assert.equal((await call('player','roster')).data.length,1);
 });

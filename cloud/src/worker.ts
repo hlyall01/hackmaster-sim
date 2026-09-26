@@ -163,7 +163,7 @@ export async function characterApi(request: Request, env: RuntimeEnv, identity: 
   const [, id, action] = match!;
   if (!action && request.method === 'DELETE') {
     const expected = integer((await body(request)).version);
-    if (!await db.prepare('SELECT 1 FROM character_owners WHERE character_id=? AND user_id=?').bind(id, identity.id).first()) fail(403, 'Only the creator can delete this character.');
+    if (!await db.prepare('SELECT 1 FROM character_owners WHERE character_id=? AND user_id=? UNION ALL SELECT 1 FROM assignments WHERE character_id=? AND user_id=?').bind(id, identity.id, id, identity.id).first()) fail(403, 'This character is not yours or assigned to you.');
     const prior = await db.prepare('SELECT deleted_version FROM character_deletions WHERE character_id=?').bind(id).first<{deleted_version:number}>();
     if (prior) {
       if (prior.deleted_version !== expected) fail(409, 'Character version changed. Reload before deleting.');
@@ -171,9 +171,10 @@ export async function characterApi(request: Request, env: RuntimeEnv, identity: 
     }
     const deleted = await db.prepare(`INSERT INTO character_deletions
       SELECT id,?,?,? FROM characters WHERE id=? AND version=? AND
-      EXISTS(SELECT 1 FROM character_owners WHERE character_id=? AND user_id=?)
+      (EXISTS(SELECT 1 FROM character_owners WHERE character_id=? AND user_id=?) OR
+      EXISTS(SELECT 1 FROM assignments WHERE character_id=? AND user_id=?))
       ON CONFLICT(character_id) DO NOTHING RETURNING character_id`)
-      .bind(identity.id, expected, new Date().toISOString(), id, expected, id, identity.id).first();
+      .bind(identity.id, expected, new Date().toISOString(), id, expected, id, identity.id, id, identity.id).first();
     if (!deleted) fail(409, 'Character changed. Reload before deleting; nothing was discarded.');
     return json({deleted:true, id});
   }

@@ -155,7 +155,7 @@ function installCloudCharacters() {
   }
   async function deleteCharacter(id, version) {
     const row = roster.find(c => c.id === id);
-    if (guest || !user || !row?.is_owner) throw new Error('Only the creator can delete this character.');
+    if (guest || !user || !(row?.is_owner || row?.is_assigned)) throw new Error('This character is not yours or assigned to you.');
     if (!window.confirm(`Delete "${row.name}" from My Characters and everyone's Party Members? An administrator can recover it from revision history. Your open simulation copy and local drafts will be kept.`)) return;
     await api(`characters/${id}`, 'DELETE', {version});
     // Do not discard simulation edits or drafts; detach all copies only after commit.
@@ -226,7 +226,7 @@ function installCloudCharacters() {
     }
     select.onchange = () => task(async () => { selected = select.value; await details(); });
     const chosen = roster.find(c => c.id === selected);
-    if (chosen?.is_owner) button('Delete my character', () => deleteCharacter(chosen.id, chosen.version));
+    if (chosen?.is_owner || chosen?.is_assigned) button('Delete my character', () => deleteCharacter(chosen.id, chosen.version));
     for (let slot = 0; slot < 2; slot++) {
       const section = element('div'); section.style.marginTop = '12px';
       element('strong', `Simulator character ${slot + 1}: ${slots[slot]?.name || 'local character'}`, section);
@@ -395,7 +395,7 @@ function installCloudCharacters() {
       return encode({ signed_in: !!user, login_expired: loginExpired, guest, busy, status, admin: !!user?.admin,
         characters: roster.map(c => ({id:c.id, name:c.name, is_owner:!!c.is_owner, is_mine:!!c.is_owner || !!c.is_assigned, can_edit:!!c.can_edit})),
         loaded_id: row?.id || '', loaded_name: row?.name || '',
-        can_delete: !!user && !guest && !!row && !!roster.find(c => c.id === row.id)?.is_owner,
+        can_delete: !!user && !guest && !!row && roster.some(c => c.id === row.id && (c.is_owner || c.is_assigned)),
         can_save: !!user && !guest && !!row && row.can_edit !== 0,
         dirty: !guest && !!current[slot] && encode(current[slot]) !== encode(row?.document || baselines[slot]),
       });
