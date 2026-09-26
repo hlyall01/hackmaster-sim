@@ -8,7 +8,11 @@ existing local presets; the HTML cloud controls run only in the marked test buil
 
 ## Using it
 
-1. Sign in with Google; no email whitelist is needed.
+1. Choose **Sign in with Google** or **Continue without logging in**.
+   Guests get every saved character under **Party Members**, with **My Characters**
+   disabled and no online creation/save controls. Guest edits are simulation-only
+   and are not stored as local cloud drafts. `?guest=1` opens this mode directly.
+   Signing in enables ownership and assigned editing; no email whitelist is needed.
 2. Open either fighter's **Customize → Core → Online Characters**.
    **My Characters** lists characters you created. **Party Members** lists characters
    created by other signed-in users. Selecting a character loads it into that fighter.
@@ -135,18 +139,23 @@ In both test Pages deployment configurations, set:
 - Compatibility date `2026-09-26`; `fail_open=false`.
 
 Attach the custom hostname to the test Pages project, then use a proxied CNAME
-to `hackmaster-character-test.pages.dev`. The Access application covers the entire
-custom hostname, uses Google only, and has an Allow policy with Include Everyone
-and Require the configured Google login method. This is not an authentication bypass.
+to `hackmaster-character-test.pages.dev`. The Access application covers
+`characters-test.sim-gui.com/api` (including its subpaths), uses Google only, and
+has an Allow policy with Include Everyone and Require the configured Google login
+method. `/api/login` returns to the simulator after authentication. The static
+simulator and `/guest/characters` read-only routes are public so visitors can choose
+whether to sign in. The guest roster exposes all character snapshots, without
+account emails, identity IDs, revision history, assignments or write operations.
 Google's client secret belongs only in Cloudflare's identity-provider configuration.
 
 The Pages Worker rejects `pages.dev`, branch and immutable deployment URLs. The
 API Worker has `workers_dev=false`, `preview_urls=false`, no public route and is
 called through the service binding. It additionally verifies Access JWT signature,
-issuer, audience, expiry and identity on every request, and checks exact request
-origin for writes. Assignment checks are repeated inside the conditional SQL
+issuer, audience, expiry and identity on every protected API request, and checks
+exact request origin for writes. Only the explicit GET guest roster/snapshot routes
+are unauthenticated; all other guest methods are rejected. Assignment checks are repeated inside the conditional SQL
 update. Revision triggers share the write transaction. Keep Pages fail-closed;
-do not add bypass policies or public Worker routes.
+do not bypass the protected `/api` paths or enable alternative Worker hostnames.
 
 ## Checks and limits
 

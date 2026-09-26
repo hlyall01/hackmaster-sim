@@ -72,7 +72,7 @@ impl SimGuiApp {
 struct OnlineCharacter { id: String, name: String, is_owner: bool, can_edit: bool }
 #[derive(serde::Deserialize)]
 struct OnlineSnapshot {
-    signed_in: bool, busy: bool, status: String, admin: bool,
+    signed_in: bool, guest: bool, busy: bool, status: String, admin: bool,
     characters: Vec<OnlineCharacter>, loaded_id: String, loaded_name: String,
     can_save: bool, dirty: bool,
 }
@@ -82,14 +82,14 @@ pub(super) fn show_core(ui: &mut egui::Ui, slot: usize) {
     let Ok(state) = serde_json::from_str::<OnlineSnapshot>(&cloud_snapshot(slot)) else { return; };
     ui.group(|ui| {
         ui.strong("Online Characters");
-        if !state.signed_in {
-            ui.label("Sign in to load and save online characters.");
-            if ui.button("Sign in / retry").clicked() { cloud_action(slot, "manage", ""); }
+        if !state.signed_in && !state.guest {
+            ui.label("Sign in or continue without logging in to use Party Members.");
+            if ui.button("Sign in / Continue as guest").clicked() { cloud_action(slot, "manage", ""); }
             return;
         }
         ui.add_enabled_ui(!state.busy, |ui| {
             for (mine, label) in [(true, "My Characters"), (false, "Party Members")] {
-                ui.horizontal(|ui| {
+                ui.add_enabled_ui(!mine || state.signed_in, |ui| { ui.horizontal(|ui| {
                     ui.label(label);
                     let items: Vec<_> = state.characters.iter().filter(|c| c.is_owner == mine).collect();
                     let selected = items.iter().find(|c| c.id == state.loaded_id)
@@ -104,13 +104,15 @@ pub(super) fn show_core(ui: &mut egui::Ui, slot: usize) {
                                 }
                             }
                         });
-                });
+                }); });
             }
             ui.horizontal_wrapped(|ui| {
+                if state.signed_in {
                 if ui.add_enabled(state.can_save, egui::Button::new("Save online")).clicked() { cloud_action(slot, "save", ""); }
                 if ui.button("Create my character").on_hover_text("Save the current fighter as a new character you own. Other signed-in players can load it for simulations.").clicked() { cloud_action(slot, "create", ""); }
+                } else if ui.button("Sign in with Google").clicked() { cloud_action(slot, "signin", ""); }
                 if ui.button("Refresh").clicked() { cloud_action(slot, "refresh", ""); }
-                if ui.button("Drafts / export").clicked() { cloud_action(slot, "manage", ""); }
+                if state.signed_in && ui.button("Drafts / export").clicked() { cloud_action(slot, "manage", ""); }
                 if state.admin && ui.button("Admin assignments").clicked() { cloud_action(slot, "admin", ""); }
             });
         });

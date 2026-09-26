@@ -5,6 +5,7 @@ if (enabled) installCloudCharacters();
 
 function installCloudCharacters() {
   let user = null;
+  let guest = new URLSearchParams(location.search).get('guest') === '1';
   let characters = [];
   let roster = [];
   let users = [];
@@ -49,7 +50,9 @@ function installCloudCharacters() {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
   async function api(path, method = 'GET', data) {
-    const response = await fetch(`/api/${path}`, {
+    const endpoint = guest && method === 'GET' && /^roster(?:\/[^/]+)?$/.test(path)
+      ? '/guest/characters' + path.slice('roster'.length) : `/api/${path}`;
+    const response = await fetch(endpoint, {
       method, credentials: 'same-origin', redirect: 'manual', cache: 'no-store',
       headers: { 'Content-Type': 'application/json' }, body: data === undefined ? undefined : encode(data),
       signal: AbortSignal.timeout(20000),
@@ -70,6 +73,13 @@ function installCloudCharacters() {
     finally { busy = false; render(); }
   }
   async function refresh() {
+    if (guest) {
+      roster = await api('roster');
+      characters = []; users = []; assignments = []; revisions = [];
+      selected = roster.some(c => c.id === selected) ? selected : roster[0]?.id || '';
+      status = 'Guest mode · All characters are available for simulation. Sign in to create or save.';
+      return;
+    }
     const firstLogin = !user;
     const session = await api('session');
     if (user && user.id !== session.user.id) throw new Error('Account changed. Export your open drafts, then reload before using the new account.');
@@ -100,6 +110,7 @@ function installCloudCharacters() {
     dialog.close();
   }
   async function save(slot, create = false) {
+    if (guest || !user) throw new Error('Sign in to create or save characters.');
     const doc = current[slot];
     if (!doc) throw new Error('The simulator is still loading.');
     const row = slots[slot];
@@ -141,18 +152,29 @@ function installCloudCharacters() {
     el.onclick = () => task(action); return el;
   }
   function render() {
-    const dirty = current.some((doc, i) => doc && encode(doc) !== encode(slots[i]?.document || baselines[i]));
+    const dirty = !guest && current.some((doc, i) => doc && encode(doc) !== encode(slots[i]?.document || baselines[i]));
     open.textContent = `TEST · Cloud characters${dirty ? ' • unsaved' : ''}`;
     open.title = status;
     dialog.replaceChildren();
     adminOpen.hidden = !user?.admin;
     element('h2', adminView && user?.admin ? 'Assign characters — TEST environment' : 'Character saves — TEST environment');
-    element('p', user ? `${user.email}${user.admin ? ' · Administrator' : ''}` : 'Not signed in');
+    element('p', user ? `${user.email}${user.admin ? ' · Administrator' : ''}` : guest ? 'Guest · Simulation only' : 'Choose how to continue');
     const message = element('p', status); message.setAttribute('role', 'status');
     button('Close', () => dialog.close());
     button('Refresh', async () => { await refresh(); status = 'Character list refreshed.'; });
-    button('Sign in again', () => location.assign('/'));
-    if (user) button('Sign out', () => location.assign('/cdn-cgi/access/logout'));
+    button(user ? 'Sign in again' : 'Sign in with Google', () => location.assign('/api/login'));
+    if (!user) button('Continue without logging in', async () => {
+      guest = true;
+      const url = new URL(location.href); url.searchParams.set('guest', '1');
+      history.replaceState(null, '', url);
+      await refresh(); dialog.close();
+    });
+    if (user) button('Sign out', async () => {
+      // Process Access's cookie clearing without navigating to its login-only page.
+      const result = await fetch('/cdn-cgi/access/logout', {credentials:'same-origin', redirect:'manual', signal:AbortSignal.timeout(20000)});
+      if (result.status >= 400) throw new Error('Sign out failed. Please try again.');
+      location.assign('/?guest=1');
+    });
     if (!user) return;
     if (adminView && user.admin) { renderAdmin(); return; }
     element('h3', 'Online characters and local drafts');
@@ -297,15 +319,17 @@ function installCloudCharacters() {
   window.hackmasterCloud = {
     snapshot(slot) {
       const row = slots[slot];
-      return encode({ signed_in: !!user, busy, status, admin: !!user?.admin,
+      return encode({ signed_in: !!user, guest, busy, status, admin: !!user?.admin,
         characters: roster.map(c => ({id:c.id, name:c.name, is_owner:!!c.is_owner, can_edit:!!c.can_edit})),
         loaded_id: row?.id || '', loaded_name: row?.name || '',
-        can_save: !!row && row.can_edit !== 0,
-        dirty: !!current[slot] && encode(current[slot]) !== encode(row?.document || baselines[slot]),
+        can_save: !!user && !guest && !!row && row.can_edit !== 0,
+        dirty: !guest && !!current[slot] && encode(current[slot]) !== encode(row?.document || baselines[slot]),
       });
     },
     action(slot, action, id) {
+      if (action === 'signin') { location.assign('/api/login'); return; }
       if (action === 'manage') { adminView = false; render(); dialog.showModal(); return; }
+      if (guest && !['load', 'refresh'].includes(action)) return;
       if (action === 'admin' && user?.admin) { adminView = true; render(); dialog.showModal(); void task(refresh); return; }
       void task(async () => {
         if (action === 'refresh') { await refresh(); status = 'Online characters refreshed.'; }
@@ -322,7 +346,7 @@ function installCloudCharacters() {
       if (!baselines[slot]) baselines[slot] = structuredClone(current[slot]);
       if (!pendingLoads[slot]) stash(slot, current[slot]);
       // Avoid replacing controls while the user is choosing a character/revision.
-      open.textContent = `TEST · Cloud characters${current.some((doc, i) => doc && encode(doc) !== encode(slots[i]?.document || baselines[i])) ? ' • unsaved' : ''}`;
+      open.textContent = `TEST · Cloud characters${!guest && current.some((doc, i) => doc && encode(doc) !== encode(slots[i]?.document || baselines[i])) ? ' • unsaved' : ''}`;
       open.title = status;
     },
     loaded(slot, error) {
@@ -335,7 +359,7 @@ function installCloudCharacters() {
         // Recovered text is an unsaved draft, not a server acknowledgement.
         slots[slot] = { ...row, document: null };
       }
-      status = row.importOnly ? 'Imported. Review the character, then create an online copy from Core.' : row.can_edit === 0 ? 'Party character loaded for simulation. Create your own copy to save changes.' : 'Character loaded. Edit it, then Save online.';
+      status = guest ? 'Party character loaded for simulation. Guest changes cannot be saved.' : row.importOnly ? 'Imported. Review the character, then create an online copy from Core.' : row.can_edit === 0 ? 'Party character loaded for simulation. Create your own copy to save changes.' : 'Character loaded. Edit it, then Save online.';
       render();
     },
     error(message) { status = message; open.title = message; },
@@ -343,10 +367,17 @@ function installCloudCharacters() {
   adminOpen.onclick = () => { adminView = true; render(); dialog.showModal(); void task(refresh); };
   open.onclick = () => { adminView = false; render(); dialog.showModal(); if (!user) void task(refresh); };
   window.addEventListener('beforeunload', event => {
-    if (current.some((doc, i) => doc && encode(doc) !== encode(slots[i]?.document || baselines[i]))) {
+    if (!guest && current.some((doc, i) => doc && encode(doc) !== encode(slots[i]?.document || baselines[i]))) {
       event.preventDefault(); event.returnValue = '';
     }
   });
   render();
-  void task(refresh);
+  void task(async () => {
+    try { await refresh(); }
+    catch (error) {
+      if (guest) throw error;
+      status = 'Sign in to create and save your characters, or continue as a guest to simulate with the full party roster.';
+      dialog.showModal();
+    }
+  });
 }

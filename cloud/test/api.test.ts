@@ -201,3 +201,33 @@ test('ownership migration preserves original creator without altering revision h
   assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM revisions').get().n, 2);
   sql.close();
 });
+
+test('unauthenticated guests see every character but cannot save, assign, restore or read identities', async () => {
+  const {call, env, request, sql} = fixture();
+  const own = (await call('player', 'characters', 'POST', saveBody(1))).data;
+  await call('admin', 'characters', 'POST', saveBody(1, document('Second')));
+  const get = (path, method='GET', input=undefined, origin=env.APP_ORIGIN) => worker.fetch(new Request(origin + path, {
+    method, headers:{'Content-Type':'application/json','Origin':env.APP_ORIGIN}, body:input === undefined ? undefined : JSON.stringify(input),
+  }), env);
+  const count = sql.prepare('SELECT COUNT(*) AS n FROM users').get().n;
+  const response = await get('/guest/characters');
+  assert.equal(response.status, 200);
+  const rows = await response.json(); assert.equal(rows.length, 2);
+  assert.ok(rows.every(row => row.is_owner === 0 && row.can_edit === 0 && !('updated_by' in row)));
+  const loaded = await (await get(`/guest/characters/${own.id}`)).json();
+  assert.deepEqual(loaded.document, document());
+  assert.equal(loaded.email, undefined); assert.equal(loaded.updated_by, undefined);
+  for (const method of ['POST','PUT','DELETE']) {
+    assert.equal((await get('/guest/characters', method, saveBody(1))).status, 405);
+    assert.equal((await get(`/guest/characters/${own.id}`, method, saveBody(1))).status, 405);
+  }
+  for (const path of ['session','users',`characters/${own.id}/revisions`,`characters/${own.id}/assignments`]) {
+    assert.equal((await worker.fetch(request(path), env)).status, 401);
+  }
+  for (const [path,method] of [['characters','POST'],[`characters/${own.id}`,'PUT'],[`characters/${own.id}/assignments`,'PUT'],[`characters/${own.id}/restore`,'POST']]) {
+    assert.equal((await worker.fetch(request(path,method,saveBody(1)),env)).status,401);
+  }
+  assert.equal((await get('/guest/characters', 'GET', undefined, 'https://alternate.workers.dev')).status,403);
+  assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM users').get().n, count);
+  assert.equal((await call('player', `characters/${own.id}`)).data.version,1);
+});

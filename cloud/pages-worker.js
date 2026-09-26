@@ -4,7 +4,7 @@ export default {
     const url = new URL(request.url);
     // Reject pages.dev, immutable deployments and branch aliases, even for static files.
     if (url.origin !== env.APP_ORIGIN) return new Response('Use the protected test hostname.', { status: 403 });
-    if (url.pathname.startsWith('/api/')) return env.CHARACTERS.fetch(request);
+    if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/guest/')) return env.CHARACTERS.fetch(request);
     return env.ASSETS.fetch(request);
   },
 };

@@ -111,6 +111,7 @@ export async function characterApi(request: Request, env: RuntimeEnv, identity: 
     return row!;
   };
   const path = url.pathname.replace(/\/$/, '');
+  if (path === '/api/login' && request.method === 'GET') return new Response(null, {status:302, headers:{Location:env.APP_ORIGIN + '/', 'Cache-Control':'no-store'}});
   if (path === '/api/session' && request.method === 'GET') return json({ user: { ...identity, admin }, environment: env.ENVIRONMENT });
   if (path === '/api/users' && request.method === 'GET') {
     adminOnly();
@@ -204,9 +205,29 @@ export async function characterApi(request: Request, env: RuntimeEnv, identity: 
   return fail(405, 'Method not allowed.');
 }
 
+// Deliberately public, read-only character snapshots for guest simulations.
+// Keep these routes separate from the authenticated editing/admin API.
+async function guestApi(request: Request, env: RuntimeEnv): Promise<Response> {
+  const url = new URL(request.url);
+  if (url.origin !== env.APP_ORIGIN) fail(403, 'This hostname is not enabled for character access.');
+  if (request.method !== 'GET') fail(405, 'Guests cannot save or change characters.');
+  if (url.pathname === '/guest/characters') {
+    const rows = (await env.DB.prepare('SELECT id,name,version FROM characters ORDER BY name,id').all()).results;
+    return json(rows.map(row => ({...row, is_owner: 0, can_edit: 0})));
+  }
+  const id = /^\/guest\/characters\/([a-f0-9-]{36})$/.exec(url.pathname)?.[1];
+  if (!id) fail(404, 'Unknown guest endpoint.');
+  const row = await env.DB.prepare('SELECT id,name,version,document FROM characters WHERE id=?').bind(id)
+    .first<{id:string; name:string; version:number; document:string}>();
+  if (!row) fail(404, 'Character not found.');
+  return json({...row!, document:JSON.parse(row!.document), is_owner:0, can_edit:0});
+}
+
 export default {
   async fetch(request: Request, env: RuntimeEnv): Promise<Response> {
     try {
+      const path = new URL(request.url).pathname;
+      if (path.startsWith('/guest/')) return await guestApi(request, env);
       const identity = await authenticate(request, env);
       return await characterApi(request, env, identity);
     } catch (error) {

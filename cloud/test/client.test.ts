@@ -6,7 +6,7 @@ import { DraftStore } from '../../web/cloud-drafts.js';
 
 const source = readFileSync(new URL('../../web/cloud.js', import.meta.url), 'utf8').replace("import { DraftStore } from './cloud-drafts.js';", '');
 const tick = () => new Promise(resolve => setImmediate(resolve));
-async function fixture(admin = true, owner = true) {
+async function fixture(admin = true, owner = true, signedIn = true) {
   const dom = new JSDOM('<html><head><meta name="hackmaster-cloud" content="character-test"></head><body></body></html>', {
     url: 'https://characters-test.sim-gui.com', runScripts: 'outside-only',
   });
@@ -21,6 +21,8 @@ async function fixture(admin = true, owner = true) {
   const mutations = new Map();
   const assignments = [];
   w.fetch = async (url, options) => {
+    if (String(url).startsWith('/guest/characters')) return Response.json(String(url) === '/guest/characters' ? [{...row,is_owner:0,can_edit:0}] : {...row,is_owner:0,can_edit:0});
+    if (!signedIn) return Response.json({error:'Sign in'}, {status:401});
     const path = String(url).replace('/api/', '');
     if (path === 'session') return Response.json({ user: { id: 'user', email: 'test@example.com', admin } });
     if (path === 'roster') return Response.json([{...row,is_owner:Number(owner),can_edit:Number(owner)}]);
@@ -138,5 +140,23 @@ test('Core party load is a read-only simulation copy until explicitly created as
   assert.equal(f.writes(), 0);
   f.bridge.action(0, 'create', ''); await tick();
   assert.equal(f.writes(), 1);
+  f.w.close();
+});
+
+test('continue without logging in loads the whole party roster with no saves or admin controls', async () => {
+  const f = await fixture(false,false,false);
+  assert.equal(f.w.document.querySelector('dialog').open,true);
+  await f.click('Continue without logging in');
+  assert.equal(f.w.document.querySelector('dialog').open,false);
+  const state = JSON.parse(f.bridge.snapshot(0));
+  assert.equal(state.guest,true); assert.equal(state.signed_in,false);
+  assert.equal(state.characters.length,1); assert.equal(state.characters[0].is_owner,false);
+  f.bridge.action(0,'load','character'); await tick();
+  const loads = JSON.parse(f.bridge.takeLoads()); assert.equal(loads.length,1);
+  f.bridge.loaded(0,''); f.bridge.publish(0,JSON.stringify(loads[0].document));
+  assert.equal(JSON.parse(f.bridge.snapshot(0)).can_save,false);
+  for (const action of ['save','create','admin']) { f.bridge.action(0,action,''); await tick(); }
+  assert.equal(f.writes(),0); assert.equal(f.w.localStorage.length,0);
+  assert.ok(f.w.location.search.includes('guest=1'));
   f.w.close();
 });
