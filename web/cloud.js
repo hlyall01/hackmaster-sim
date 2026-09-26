@@ -5,6 +5,7 @@ if (enabled) installCloudCharacters();
 
 function installCloudCharacters() {
   let user = null;
+  let loginExpired = false;
   let guest = new URLSearchParams(location.search).get('guest') === '1';
   let characters = [];
   let roster = [];
@@ -60,7 +61,8 @@ function installCloudCharacters() {
       signal: AbortSignal.timeout(20000),
     });
     if (response.type === 'opaqueredirect' || response.status === 401 || (response.status >= 300 && response.status < 400)) {
-      throw new Error('Your login expired. Your local draft is preserved. Sign in again, then recover the draft.');
+      loginExpired = true;
+      throw new Error('Your login expired. Sign in using the link above, return to this tab, then retry Create my character or Save online. Your open character and draft are kept.');
     }
     if (!(response.headers.get('Content-Type') || '').includes('application/json')) throw new Error('The character service is unavailable. Your local draft is preserved.');
     const result = await response.json();
@@ -72,7 +74,7 @@ function installCloudCharacters() {
     busy = true; render();
     try { await work(); }
     catch (error) { status = error.message || String(error); }
-    finally { busy = false; render(); }
+    finally { busy = false; render(); if (loginExpired && !dialog.open) dialog.showModal(); }
   }
   async function refresh() {
     if (guest) {
@@ -86,6 +88,7 @@ function installCloudCharacters() {
     const session = await api('session');
     if (user && user.id !== session.user.id) throw new Error('Account changed. Export your open drafts, then reload before using the new account.');
     user = session.user;
+    loginExpired = false;
     store ||= new DraftStore(localStorage, user.id);
     characters = await api('characters');
     roster = await api('roster');
@@ -131,6 +134,10 @@ function installCloudCharacters() {
     const mutation_id = savedDraft.mutation_id;
     // Capture the sent snapshot; edits made while the request is pending remain dirty.
     const sent = structuredClone(doc);
+    // Recheck identity after a new-tab sign-in before sending this account's draft.
+    const session = await api('session');
+    if (session.user.id !== user.id) throw new Error('A different account signed in. Sign back into the original account to save this draft.');
+    loginExpired = false;
     const result = await api(create ? 'characters' : `characters/${row.id}`, create ? 'POST' : 'PUT', {
       document: sent, version: row?.version, mutation_id,
     });
@@ -187,9 +194,17 @@ function installCloudCharacters() {
     element('p', user ? `${user.email}${user.admin ? ' · Administrator' : ''}` : guest ? 'Guest · Simulation only' : 'Choose how to continue');
     const message = element('p', status); message.setAttribute('role', 'status');
     button('Refresh', async () => { await refresh(); status = 'Character list refreshed.'; });
-    button(user ? 'Sign in again' : 'Sign in with Google', () => location.assign('/api/login'));
+    if (user || loginExpired) {
+      const signIn = element('a', 'Sign in with Google (new tab)');
+      signIn.href = '/api/login'; signIn.target = '_blank'; signIn.rel = 'noopener';
+      Object.assign(signIn.style, {display:'inline-block',margin:'4px',color:'#9ecbff'});
+      if (loginExpired) {
+        element('p', 'Keep this tab open. Sign in with the same Google account in the new tab, then return here.');
+        button('Check sign-in', async () => { await refresh(); status = 'Signed in again. Retry Create my character or Save online; your edits are still here.'; dialog.close(); });
+      }
+    } else button('Sign in with Google', () => location.assign('/api/login'));
     if (!user) button('Continue without logging in', async () => {
-      guest = true;
+      guest = true; loginExpired = false;
       const url = new URL(location.href); url.searchParams.set('guest', '1');
       history.replaceState(null, '', url);
       await refresh(); dialog.close();
@@ -377,7 +392,7 @@ function installCloudCharacters() {
   window.hackmasterCloud = {
     snapshot(slot) {
       const row = slots[slot];
-      return encode({ signed_in: !!user, guest, busy, status, admin: !!user?.admin,
+      return encode({ signed_in: !!user, login_expired: loginExpired, guest, busy, status, admin: !!user?.admin,
         characters: roster.map(c => ({id:c.id, name:c.name, is_owner:!!c.is_owner, can_edit:!!c.can_edit})),
         loaded_id: row?.id || '', loaded_name: row?.name || '',
         can_delete: !!user && !guest && !!row && !!roster.find(c => c.id === row.id)?.is_owner,
@@ -386,6 +401,7 @@ function installCloudCharacters() {
       });
     },
     action(slot, action, id) {
+      if (action === 'reauth') { loginExpired = true; adminView = false; render(); dialog.showModal(); return; }
       if (action === 'signin') { location.assign('/api/login'); return; }
       if (action === 'manage') { adminView = false; render(); dialog.showModal(); return; }
       if (guest && !['load', 'refresh'].includes(action)) return;

@@ -16,6 +16,7 @@ async function fixture(admin = true, owner = true, signedIn = true, initiallyDel
   w.HTMLDialogElement.prototype.close = function () { this.open = false; };
   let row = { id: 'character', name: 'Original', version: 1, document: { schema_version: 1, player: { name: 'Original' } } };
   let failure = 0;
+  let sessionId = 'user';
   let loseResponse = false;
   let writes = 0;
   let deleted = initiallyDeleted;
@@ -27,7 +28,7 @@ async function fixture(admin = true, owner = true, signedIn = true, initiallyDel
     if (String(url).startsWith('/guest/characters')) return Response.json(String(url) === '/guest/characters' ? [{...row,is_owner:0,can_edit:0}] : {...row,is_owner:0,can_edit:0});
     if (!signedIn) return Response.json({error:'Sign in'}, {status:401});
     const path = String(url).replace('/api/', '');
-    if (path === 'session') return Response.json({ user: { id: 'user', email: 'test@example.com', admin } });
+    if (path === 'session') return Response.json({ user: { id: sessionId, email: 'test@example.com', admin } });
     if (path === 'roster') return Response.json(deleted ? [] : [{...row,is_owner:Number(owner),can_edit:Number(owner)}]);
     if (path === 'roster/character') return Response.json({...row,is_owner:Number(owner),can_edit:Number(owner)});
     if (path === 'users') return Response.json([{id:'friend',email:'friend@example.com'}]);
@@ -72,7 +73,7 @@ async function fixture(admin = true, owner = true, signedIn = true, initiallyDel
     const loads = JSON.parse(bridge.takeLoads()); assert.equal(loads.length, 1);
     bridge.loaded(0, ''); bridge.publish(0, JSON.stringify(loads[0].document));
   };
-  return { w, bridge, click, load, drafts, assignments, deletes: () => deletes, failure: n => failure = n, lose: value => loseResponse = value, writes: () => writes };
+  return { w, bridge, click, load, drafts, assignments, account: id => sessionId = id, deletes: () => deletes, failure: n => failure = n, lose: value => loseResponse = value, writes: () => writes };
 }
 test('client retains drafts on network/auth/conflict failure, then confirms committed save', async () => {
   const f = await fixture(); await f.load();
@@ -218,5 +219,35 @@ test('deleted characters have a separate recovery section and no assignment cont
   assert.equal(f.w.document.querySelector('[aria-label="Character to manage"]').options[0].textContent,'Original');
   assert.ok(f.w.document.querySelector('[aria-label="Player to assign"]'));
   assert.match(f.w.document.querySelector('[role=status]').textContent,/restored/);
+  f.w.close();
+});
+
+test('expired creation exposes new-tab sign-in and retries the preserved draft after authentication', async () => {
+  const f = await fixture(false);
+  f.failure(401);
+  f.bridge.action(0,'create',''); await tick();
+  assert.equal(f.writes(),0);
+  assert.equal(JSON.parse(f.bridge.snapshot(0)).login_expired,true);
+  assert.equal(f.w.document.querySelector('dialog').open,true);
+  const link = f.w.document.querySelector('a[href="/api/login"]');
+  assert.equal(link.target,'_blank'); assert.equal(link.rel,'noopener');
+  const store = new DraftStore(f.w.localStorage,'user');
+  const draft = store.list(null)[0];
+  assert.equal(draft.document.player.name,'Original');
+  f.failure(0);
+  await f.click('Check sign-in');
+  assert.equal(JSON.parse(f.bridge.snapshot(0)).login_expired,false);
+  f.bridge.action(0,'create',''); await tick();
+  assert.equal(f.writes(),1); assert.equal(store.list(null).length,0);
+  assert.match(JSON.parse(f.bridge.snapshot(0)).status,/saved online/);
+  f.w.close();
+});
+test('signing into a different account cannot submit the previous account draft', async () => {
+  const f=await fixture(false);
+  f.account('different-user');
+  f.bridge.action(0,'create',''); await tick();
+  assert.equal(f.writes(),0);
+  assert.equal(new DraftStore(f.w.localStorage,'user').list(null).length,1);
+  assert.match(JSON.parse(f.bridge.snapshot(0)).status,/different account/);
   f.w.close();
 });
