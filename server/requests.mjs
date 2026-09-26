@@ -167,7 +167,8 @@ export default {
       return env.ASSETS.fetch(request);
     } catch (error) {
       if (error instanceof HttpError) return json({ error: error.message }, error.status);
-      console.error(JSON.stringify({ event: 'feature_request_error', type: error?.name || 'unknown' }));
+      const diagnostic = String(error?.message || '').split(env.GITHUB_ISSUES_TOKEN || '\0').join('[redacted]').slice(0, 300);
+      console.error(JSON.stringify({ event: 'feature_request_error', type: error?.name || 'unknown', message: diagnostic }));
       return json({ error: 'Something went wrong. Please try again later.' }, 503);
     }
   },
