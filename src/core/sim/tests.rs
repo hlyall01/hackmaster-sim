@@ -7567,6 +7567,102 @@ fn throwing_axe_should_allow_melee_to_close_in_gui_config() {
 }
 
 #[test]
+fn longbow_missile_caster_does_not_stop_melee_pursuit() {
+    use crate::core::magic::SpellCastAi;
+    use crate::core::types::TalentEffect;
+
+    let (weapons, armor, shields) = data::load_catalogs().unwrap();
+    let races = data::load_races("data/sim/races.json").unwrap();
+    let talents = data::load_talents(data::TALENTS_PATH).unwrap();
+    let npcs = game_logic::NpcPresetCatalog::new(Vec::new());
+    let mut arthur = player_config_from_preset(
+        &crate::test_support::fighter("Halberd fixture"),
+        &weapons, &armor, &shields, &races,
+    );
+    arthur.weapon_id = find_weapon_id_by_name(&weapons, "Longbow").unwrap();
+    arthur.talents.extend(talents.entries().iter().filter_map(|talent| {
+        talent.effects.iter().any(|effect| matches!(effect, TalentEffect::MagicTalent { .. }))
+            .then(|| TalentSelection { id: talent.id.clone(), rank: talent.max_rank, weapon: None })
+    }));
+    arthur.magic.learn_spell("missile");
+    let volfango = player_config_from_preset(
+        &crate::test_support::fighter("Dual wield fixture"),
+        &weapons, &armor, &shields, &races,
+    );
+
+    for repeat_missile in [false, true] {
+        arthur.magic.spell_ai.insert("missile".into(), if repeat_missile {
+            SpellCastAi::AsOftenAsPossible
+        } else {
+            SpellCastAi::Manual
+        });
+        for reversed in [false, true] {
+            let players = if reversed {
+                [volfango.clone(), arthur.clone()]
+            } else {
+                [arthur.clone(), volfango.clone()]
+            };
+            let arthur_idx = usize::from(reversed);
+            let volfango_idx = 1 - arthur_idx;
+            for distance in [100.0, 200.0, 250.0] {
+                let mut combatants = game_logic::build_combatants(
+                    &players, &weapons, &armor, &shields, &npcs, &talents,
+                );
+                let bow = &combatants[arthur_idx];
+                assert_eq!(bow.sheet.offense.weapon.reach_ft, 1.0);
+                assert_eq!(movement::max_range_for_weapon(&bow.sheet.offense.weapon), Some(210.0));
+                assert!(bow.magic.talents.eliminate_spell_fatigue);
+                // Keep both alive and free of trauma long enough to verify pursuit
+                // and attacks even while Missile repeats every second.
+                for combatant in &mut combatants {
+                    combatant.sheet.vitals.infinite_hp = true;
+                    combatant.sheet.vitals.threshold_of_pain = 10_000;
+                }
+                let mut sim = SimState::with_rng(SimConfig::new(distance, 2.0), SimRng::from_seed(27092026));
+                sim.reset_with_combatants(combatants);
+                let mut closest = distance;
+                for _ in 0..40 {
+                    sim.tick();
+                    closest = closest.min(sim.distance());
+                }
+                let context = format!("distance={distance}, reversed={reversed}, missile={repeat_missile}");
+                assert!(closest <= 2.0, "{context}: stopped at {closest}");
+                assert!(sim.combat_events.iter().any(|event| {
+                    event.attacker_idx == volfango_idx && matches!(&event.kind,
+                        CombatEventKind::Attack(attack) if attack.source == AttackSource::Weapon)
+                }), "{context}: melee fighter never attacked");
+                if repeat_missile {
+                    assert!(sim.combat_events.iter().filter(|event| {
+                        event.attacker_idx == arthur_idx && matches!(&event.kind,
+                            CombatEventKind::Spell(spell) if spell.kind == SpellEventKind::CastCompleted
+                                && spell.message == "Missile cast successfully")
+                    }).count() > 1, "{context}: Missile did not repeat");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn melee_pursuit_of_longer_reach_ranged_weapon_closes_to_own_reach() {
+    for reversed in [false, true] {
+        let mut ranged = Combatant::new_with_team(CombatantSheet::default(), 0);
+        let weapon = Arc::make_mut(&mut ranged.sheet.offense.weapon);
+        weapon.reach_ft = 8.0;
+        weapon.range_bands_feet = Some([30.0, 50.0, 70.0, 100.0]);
+        weapon.uses_projectiles = false;
+        let mut melee = Combatant::new_with_team(CombatantSheet::default(), 1);
+        Arc::make_mut(&mut melee.sheet.offense.weapon).reach_ft = 2.0;
+        ranged.sheet.offense.attack_bonus = -1000;
+        melee.sheet.offense.attack_bonus = -1000;
+        let mut sim = SimState::with_rng(SimConfig::new(6.0, 2.0), SimRng::from_seed(17));
+        sim.reset_with_combatants(if reversed { vec![melee, ranged] } else { vec![ranged, melee] });
+        sim.tick();
+        assert_eq!(sim.distance(), 2.0, "reversed={reversed}");
+    }
+}
+
+#[test]
 fn penetrating_roll_subtracts_one_on_extra_rolls() {
     let mut rolls = vec![6, 2].into_iter();
     let total = penetrating_roll_with(6, || rolls.next().unwrap_or(1));

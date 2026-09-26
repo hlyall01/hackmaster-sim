@@ -324,6 +324,14 @@ fn macro_tab_mouse_buttons_and_clipboard_work_without_editing_character() {
     assert_eq!(app.macro_panels[1].session.state.ground, 0);
     assert!(app.players == original);
 
+    let last_macro = output.platform_output.copied_text.clone();
+    output = draw(&mut app, vec![]);
+    let copy_again = find(&output, "Copy last again");
+    output = click(&mut app, copy_again, egui::PointerButton::Primary);
+    assert_eq!(output.platform_output.copied_text, last_macro);
+    assert_eq!(app.macro_panels[0].session.state.ground, 0);
+    assert!(app.players == original);
+
     // The new control follows the actual character and responds to both buttons.
     let power_text = "×2 STR damage / no +INT, +DEX ATK";
     app.players[0].talents.retain(|t| t.id != "power_attack");

@@ -202,7 +202,11 @@ pub async fn start_web(show_requests: bool) -> Result<(), JsValue> {
     eframe::WebRunner::new()
         .start(
             "sim_canvas",
-            eframe::WebOptions::default(),
+            eframe::WebOptions {
+                follow_system_theme: false,
+                default_theme: eframe::Theme::Dark,
+                ..Default::default()
+            },
             Box::new(move |_cc| {
                 let mut app = SimGuiApp::new();
                 if show_requests {

@@ -3751,9 +3751,9 @@ fn render_player_editor(
                         fighter_presets.id_from_index(selection)
                     };
                     if selection != player.fighter_preset {
-                        player.fighter_preset = selection;
                         if let Some(id) = selection {
                             if let Some(preset) = fighter_presets.get(id) {
+                                player.fighter_preset = Some(id);
                                 apply_fighter_preset(
                                     player,
                                     preset,
@@ -3767,6 +3767,15 @@ fn render_player_editor(
                                 fighter_preset_name.clear();
                                 fighter_preset_name.push_str(preset.name.as_str());
                             }
+                        } else {
+                            reset_player_to_blank_slate(
+                                player,
+                                weapon_catalog,
+                                armor_catalog,
+                                shield_catalog,
+                            );
+                            *tactical_draft = player.tactical_policy.clone();
+                            fighter_preset_name.clear();
                         }
                     }
                 });
@@ -5445,6 +5454,25 @@ fn save_fighter_preset_with(
     Ok(())
 }
 
+fn reset_player_to_blank_slate(
+    player: &mut PlayerConfig,
+    weapon_catalog: &WeaponCatalog,
+    armor_catalog: &ArmorCatalog,
+    shield_catalog: &ShieldCatalog,
+) {
+    let fist = find_weapon_id_by_name(weapon_catalog, "Fist")
+        .or_else(|| weapon_catalog.first_id())
+        .unwrap_or(WeaponId::new(0));
+    let mut blank = PlayerConfig::new("New Fighter", fist);
+    if let Some(id) = find_armor_id_by_name(armor_catalog, "None") {
+        blank.armor_id = id;
+    }
+    if let Some(id) = find_shield_id_by_name(shield_catalog, "None") {
+        blank.shield_id = id;
+    }
+    *player = blank;
+}
+
 fn fighter_preset_from_player(
     player: &PlayerConfig,
     weapon_catalog: &WeaponCatalog,
@@ -6336,6 +6364,74 @@ mod smoke_tests;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn blank_slate_reset_clears_character_data_and_uses_fists() {
+        let mut app = app_fixture();
+        let player = &mut app.players[0];
+        player.name = "Preset Fighter".into();
+        player.level = 8;
+        player.strength_base = 18;
+        player.dex_base = 17;
+        player.intelligence = 16;
+        player.magic.known_spells.push("echo_strike".into());
+        player.proficiencies.push("Old proficiency".into());
+        player.talents.push(TalentSelection {
+            id: "old_talent".into(),
+            rank: 1,
+            weapon: None,
+        });
+        player.race_id = Some("old_race".into());
+        player.fighter_preset = Some(game_logic::FighterPresetId::new(1));
+        player.npc_preset = Some(game_logic::NpcPresetId::new(1));
+
+        reset_player_to_blank_slate(
+            player,
+            &app.weapon_catalog,
+            &app.armor_catalog,
+            &app.shield_catalog,
+        );
+
+        let player = &app.players[0];
+        assert_eq!(player.name, "New Fighter");
+        assert_eq!(player.level, 1);
+        assert_eq!(
+            [
+                player.strength_base,
+                player.dex_base,
+                player.intelligence,
+                player.wisdom,
+                player.constitution,
+                player.looks,
+                player.charisma,
+            ],
+            [10; 7]
+        );
+        assert_eq!(
+            app.weapon_catalog.get(player.weapon_id).unwrap().name,
+            "Fist"
+        );
+        assert!(app
+            .armor_catalog
+            .get(player.armor_id)
+            .unwrap()
+            .armor
+            .is_none());
+        assert!(app
+            .shield_catalog
+            .get(player.shield_id)
+            .unwrap()
+            .shield
+            .is_none());
+        assert_eq!(player.offhand_weapon_id, None);
+        assert_eq!(player.fighter_preset, None);
+        assert_eq!(player.npc_preset, None);
+        assert_eq!(player.race_id, None);
+        assert!(player.magic.known_spells.is_empty());
+        assert!(player.proficiencies.is_empty());
+        assert!(player.talents.is_empty());
+        assert!(player.tactical_policy.is_default());
+    }
+
     #[test]
     fn ego_cache_reuses_unchanged_results_and_invalidates_each_input() {
         use std::sync::Arc;
