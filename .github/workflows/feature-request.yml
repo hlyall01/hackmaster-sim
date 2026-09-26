@@ -76,9 +76,9 @@ jobs:
           ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue }}
           REVISION_ID: ${{ github.event.comment.id || inputs.revision }}
         run: node scripts/feature_agent.mjs prepare
-      - name: Include trusted activity reporter
+      - name: Include trusted runner helpers
         if: steps.prepare.outputs.accepted == 'true'
-        run: cp scripts/report_activity.mjs target/request-input/report_activity.mjs
+        run: cp scripts/{report_activity,patch_codex_action,test_codex_action}.mjs target/request-input/
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: steps.prepare.outputs.accepted == 'true'
         with:
@@ -133,11 +133,22 @@ jobs:
         env:
           ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue }}
         run: |
-          rustup toolchain install 1.91.1 --profile minimal --target wasm32-unknown-unknown
+          rustup toolchain install 1.91.1 --profile minimal --component rustfmt --target wasm32-unknown-unknown
           cargo +1.91.1 fetch --locked
           mkdir -p target/agent
           cp target/request-input/prompt.md target/agent/prompt.md
           touch target/agent/changes.patch
+      - name: Check out pinned Codex action
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: openai/codex-action
+          ref: 86365089eb2b84e0a8fb0717b304f8bdcb13b20e
+          path: target/codex-action
+          persist-credentials: false
+      - name: Verify and fix Codex subprocess cleanup
+        run: |
+          node --test target/request-input/test_codex_action.mjs
+          node target/request-input/patch_codex_action.mjs target/codex-action
       - name: Restore trusted build cache
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
@@ -161,7 +172,7 @@ jobs:
           node "$RUNNER_TEMP/report_activity.mjs" > "$RUNNER_TEMP/activity-reporter.log" 2>&1 &
       - name: Implement feature in sandbox
         id: codex
-        uses: openai/codex-action@86365089eb2b84e0a8fb0717b304f8bdcb13b20e # v1
+        uses: ./target/codex-action
         env:
           RUSTUP_TOOLCHAIN: 1.91.1
         with:

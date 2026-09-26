@@ -159,6 +159,19 @@ Fork PRs build without deployment secrets.
 
 ## Operation and recovery
 
+The coding job checks out the pinned Codex action and applies a checksum-guarded
+subprocess logging fix from `scripts/patch_codex_action.mjs`. Upstream action
+v1.12 can hang after a completed result when a surviving child retains the runner's
+log streams ([upstream issue](https://github.com/openai/codex-action/issues/169)).
+The fix uses private pipes, waits for the direct child to exit, and bounds output
+draining to one second. A nonzero exit or missing result still fails; the sandbox,
+API proxy and privilege restrictions remain in place. Regression tests run against
+the exact upstream bundle before patching, with a fake CLI and no API calls.
+These helpers are carried from trusted main in `request-context`, so revisions
+starting on an older PR branch also receive them. When upgrading the action,
+review whether upstream resolves the issue and remove this workaround or update
+its checksum and tests deliberately. Do not bypass a checksum mismatch.
+
 - Workflows: `web.yml` (main/PRs), `feature-request.yml` (signed issues and revisions),
   `build-web.yml` and `deploy-preview.yml` (shared jobs).
 - Agent jobs have a 25-minute timeout; jobs are serialized per issue, not globally,
