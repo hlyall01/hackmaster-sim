@@ -4,6 +4,15 @@ Production is https://sim-gui.com/. Every push/merge into `main` runs native tes
 checks the Rust targets, builds WASM, and publishes the successful build to the
 `hackmaster-sim` Cloudflare Pages project. Pull requests do not publish production.
 
+Feature requests live at https://feature.sim-gui.com/. Both custom domains attach
+to the same production Pages project; `feature.sim-gui.com` has a proxied CNAME to
+`hackmaster-sim.pages.dev`. Its landing page opens the form without downloading
+WASM. The simulator keeps its Feature requests tab, linking to the new site.
+Old `sim-gui.com/N` ticket links redirect permanently to `feature.sim-gui.com/N`;
+the old `sim-gui.com/?tab=requests` link redirects in the browser. The API accepts
+submissions only on the feature host and from that exact origin. Preview builds
+remain on the isolated `hackmaster-sim-previews.pages.dev` origins.
+
 ## Credentials and settings
 
 GitHub repository secrets:
@@ -41,7 +50,7 @@ form challenges become invalid when the token changes; users can reload.
 
 ## Feature request flow
 
-1. Open the **Feature requests** tab, or `/?tab=requests`.
+1. Open https://feature.sim-gui.com/ directly, or follow the link from the simulator's **Feature requests** tab.
 2. The production Pages Worker validates a honeypot, payload limits, exact origin,
    and a signed, IP-bound challenge with a three-second minimum age and one-hour
    lifetime. It checks recent signed GitHub issues for duplicates, a ten-minute
@@ -61,7 +70,7 @@ form challenges become invalid when the token changes; users can reload.
    Successful static artifacts deploy to `hackmaster-sim-previews`, a separate
    Pages project with no production bindings. Failed builds keep their draft PR
    and report failure. Requests that produce no viable patch report needs-info.
-7. `https://sim-gui.com/N` tracks the issue, links its PR, and embeds the preview
+7. `https://feature.sim-gui.com/N` tracks the issue, links its PR, and embeds the preview
    in an iframe on the isolated Pages origin. The owner reviews and merges the
    PR to release it to production. Previews have separate browser saves.
 

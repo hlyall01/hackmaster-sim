@@ -20,10 +20,12 @@
   <canvas id="sim_canvas" aria-label="HackMaster combat simulator"></canvas>
   <section id="feature-requests" hidden aria-labelledby="requests-title">
     <div class="request-card">
+      <p id="portal-navigation" hidden><a href="https://sim-gui.com/">← Back to simulator</a></p>
       <p class="eyebrow">Build the next version together</p>
       <h1 id="requests-title">Feature requests</h1>
       <p>Suggest an improvement to the simulator. An agent will work on your request and open a pull request for review. You can try its preview before it becomes part of the main site.</p>
       <p class="muted">Requests are public on GitHub. Please leave out passwords, personal information, and anything you don’t want published.</p>
+      <p id="request-location" hidden>Feature requests now have their own site. <a class="ticket-link" href="https://feature.sim-gui.com/">Open feature requests</a></p>
       <form id="request-form">
         <label for="request-title">What would you like to add?</label>
         <input id="request-title" name="title" required minlength="10" maxlength="120" placeholder="For example: compare two saved fighters side by side">

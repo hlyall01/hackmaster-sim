@@ -1242,7 +1242,7 @@ impl SimGuiApp {
                 {
                     ui.heading("Feature requests");
                     ui.label("Suggest an improvement and follow its pull request and preview on the website.");
-                    ui.hyperlink_to("Open feature requests", "https://sim-gui.com/?tab=requests");
+                    ui.hyperlink_to("Open feature requests", "https://feature.sim-gui.com/");
                 }
                 #[cfg(target_arch = "wasm32")]
                 let _ = ui;

@@ -8,12 +8,9 @@ let submitting = false;
 let readyAt = 0;
 
 async function initialize() {
-  if (location.hostname !== 'sim-gui.com') {
-    status.textContent = 'Submit new requests on sim-gui.com.';
-    const link = document.createElement('a');
-    link.href = 'https://sim-gui.com/?tab=requests';
-    link.textContent = ' Open feature requests';
-    status.append(link);
+  if (location.hostname !== 'feature.sim-gui.com') {
+    form.hidden = true;
+    document.getElementById('request-location').hidden = false;
     return;
   }
   try {
@@ -30,12 +27,14 @@ async function initialize() {
   }
 }
 
-window.addEventListener('sim-feature-tab', ({ detail }) => {
-  const visible = Boolean(detail.visible);
+export function showFeatureRequests(visible, top = 0) {
   panel.hidden = !visible;
-  panel.style.top = `${Math.max(0, detail.top)}px`;
+  panel.style.top = `${Math.max(0, top)}px`;
   if (visible && !initialized) { initialized = true; void initialize(); }
-});
+}
+
+window.addEventListener('sim-feature-tab', ({ detail }) =>
+  showFeatureRequests(Boolean(detail.visible), detail.top));
 
 form.addEventListener('submit', async event => {
   event.preventDefault();

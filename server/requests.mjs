@@ -1,6 +1,6 @@
 // Production-only Pages Worker. Preview deployments never include this file or its secrets.
 const REPO = 'hlyall01/hackmaster-sim';
-const ORIGIN = 'https://sim-gui.com';
+const ORIGIN = 'https://feature.sim-gui.com';
 const LABEL = 'site-request';
 const encoder = new TextEncoder();
 const marker = /\n<!-- sim-request:v1:([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+) -->$/;
@@ -91,7 +91,7 @@ function clean(value, min, max, name) {
 }
 async function createRequest(request, env) {
   requireEnabled(env);
-  if (request.headers.get('Origin') !== ORIGIN) throw new HttpError(403, 'Please submit from sim-gui.com.');
+  if (request.headers.get('Origin') !== ORIGIN) throw new HttpError(403, 'Please submit from feature.sim-gui.com.');
   if (!request.headers.get('Content-Type')?.startsWith('application/json')) throw new HttpError(415, 'Send JSON.');
   const input = await boundedJson(request, 16000);
   if (!input || typeof input !== 'object' || input.website) throw new HttpError(400, 'Could not accept this request.');
@@ -120,7 +120,7 @@ async function createRequest(request, env) {
   // Fail closed if the bounded history cannot provide a reliable cooldown check.
   if (recent.length >= 100) throw new HttpError(429, 'The request queue is busy. Please try again tomorrow.');
   const metadata = pack({ requestId: challenge.id, ipHash, contentHash });
-  const body = 'Submitted through the public feature request form at https://sim-gui.com/.\n\n' + description;
+  const body = `Submitted through the public feature request form at ${ORIGIN}/.\n\n` + description;
   const signature = await sign(env.GITHUB_ISSUES_TOKEN, `issue:${title}\n${body}\n${metadata}`);
   const issue = await github(env, '/issues', { method: 'POST', body: JSON.stringify({
     title, body: `${body}\n<!-- sim-request:v1:${metadata}.${signature} -->`, labels: [LABEL],
@@ -153,6 +153,14 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     try {
+      const isTicket = /^\/[1-9][0-9]{0,8}\/?$/.test(url.pathname);
+      const isApi = url.pathname.startsWith('/api/');
+      if ((isTicket || isApi) && url.origin !== ORIGIN) {
+        if (['GET', 'HEAD'].includes(request.method)) {
+          return Response.redirect(`${ORIGIN}${url.pathname}${url.search}`, 308);
+        }
+        throw new HttpError(403, 'Please submit from feature.sim-gui.com.');
+      }
       if (url.pathname === '/api/request-challenge' && request.method === 'GET') {
         requireEnabled(env);
         const payload = pack({ t: Date.now(), id: crypto.randomUUID(), ip: await fingerprint(request, env.GITHUB_ISSUES_TOKEN) });
@@ -162,7 +170,7 @@ export default {
       const match = url.pathname.match(/^\/api\/tickets\/([1-9][0-9]{0,8})$/);
       if (match && request.method === 'GET') return await ticket(env, match[1]);
       if (url.pathname.startsWith('/api/')) return json({ error: 'Not found.' }, 404);
-      if (/^\/[1-9][0-9]{0,8}\/?$/.test(url.pathname) && ['GET', 'HEAD'].includes(request.method)) {
+      if (isTicket && ['GET', 'HEAD'].includes(request.method)) {
         url.pathname = '/ticket';
         return env.ASSETS.fetch(new Request(url, request));
       }

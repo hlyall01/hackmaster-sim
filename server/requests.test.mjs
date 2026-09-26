@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import worker, { verifyIssue } from './requests.mjs';
 
-const origin = 'https://sim-gui.com';
+const origin = 'https://feature.sim-gui.com';
 const env = { GITHUB_ISSUES_TOKEN: 'test-only-secret', FEATURE_REQUESTS_ENABLED: 'true',
   ASSETS: { fetch: async request => new Response(new URL(request.url).pathname) } };
 const originalFetch = globalThis.fetch;
@@ -69,6 +69,7 @@ test('invalid signatures, too-fast, expired and other-IP tokens cannot create is
 test('origin, honeypot, content type, size and field validation fail before writes', async () => {
   const challenge = await token(); now += 4000;
   assert.equal((await submit(challenge, {}, { headers: { Origin: 'https://evil.example' } })).status, 403);
+  assert.equal((await submit(challenge, {}, { headers: { Origin: 'https://sim-gui.com' } })).status, 403);
   assert.equal((await submit(challenge, { website: 'spam' })).status, 400);
   assert.equal((await submit(challenge, { title: 'tiny' })).status, 400);
   assert.equal((await submit(challenge, {}, { body: 'x'.repeat(17000) })).status, 413);
@@ -113,4 +114,26 @@ test('ticket paths serve the status page; static app requests retain asset fallb
   assert.equal(await (await worker.fetch(request('/7'), env)).text(), '/ticket');
   assert.equal(await (await worker.fetch(request('/pkg/sim_gui.js'), env)).text(), '/pkg/sim_gui.js');
   assert.equal((await worker.fetch(request('/api/unknown'), env)).status, 404);
+});
+
+test('old ticket and API links redirect to the feature host without touching GitHub', async () => {
+  globalThis.fetch = async () => { throw new Error('Redirects must not call GitHub'); };
+  for (const path of ['/6', '/6/?from=old-link', '/api/tickets/6', '/api/request-challenge']) {
+    for (const method of ['GET', 'HEAD']) {
+      const response = await worker.fetch(new Request('https://sim-gui.com' + path, { method }), env);
+      assert.equal(response.status, 308);
+      assert.equal(response.headers.get('Location'), origin + path);
+    }
+  }
+  assert.equal(await (await worker.fetch(new Request('https://sim-gui.com/'), env)).text(), '/');
+});
+
+test('legacy host rejects submissions even with a valid new-host origin', async () => {
+  const challenge = await token(); now += 4000;
+  const response = await worker.fetch(new Request('https://sim-gui.com/api/feature-requests', {
+    method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json', 'CF-Connecting-IP': '192.0.2.1' },
+    body: JSON.stringify({ title: 'Compare saved fighters', description: 'Show two saved fighter sheets together so I can compare their statistics.', website: '', challenge }),
+  }), env);
+  assert.equal(response.status, 403);
+  assert.equal(writes, 0);
 });

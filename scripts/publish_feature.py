@@ -84,7 +84,7 @@ def main():
     summary = str(result.get('summary', 'Implementation proposed by the coding agent.'))[:6000]
     pr = api('/pulls', 'POST', {'head': branch, 'base': 'main', 'draft': True,
         'title': issue['title'].removeprefix('[Request] ')[:200],
-        'body': f'Fixes #{number}\n\n{summary}\n\nPreview and build status: https://sim-gui.com/{number}\n\n'
+        'body': f'Fixes #{number}\n\n{summary}\n\nPreview and build status: https://feature.sim-gui.com/{number}\n\n'
                 'Generated from a public feature request. Review the code and passing checks before merging. '
                 'Preview builds run automatically; production updates only after a merge into main.'})
     output('changed', 'true')
