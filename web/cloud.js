@@ -11,6 +11,8 @@ function installCloudCharacters() {
   let users = [];
   let selected = '';
   let adminSelected = '';
+  let deletedSelected = '';
+  let deletedOpen = false;
   let adminPlayer = '';
   let adminView = false;
   let assignments = [];
@@ -90,7 +92,10 @@ function installCloudCharacters() {
     if (user.admin) users = await api('users');
     else users = [];
     if (!roster.some(c => c.id === selected)) selected = roster[0]?.id || '';
-    if (!characters.some(c => c.id === adminSelected)) adminSelected = characters[0]?.id || '';
+    const active = characters.filter(c => !c.deleted);
+    const deleted = characters.filter(c => c.deleted);
+    if (!active.some(c => c.id === adminSelected)) adminSelected = active[0]?.id || '';
+    if (!deleted.some(c => c.id === deletedSelected)) deletedSelected = deleted[0]?.id || '';
     if (!users.some(p => p.id === adminPlayer)) adminPlayer = users.find(p => !p.admin)?.id || users[0]?.id || '';
     await details();
     if (firstLogin) status = 'Signed in. Open Core → Online Characters to load or save a character.';
@@ -253,11 +258,11 @@ function installCloudCharacters() {
     const select = element('select', undefined, selectLabel);
     Object.assign(select.style, {display:'block',width:'100%',padding:'8px',marginTop:'6px'});
     select.setAttribute('aria-label', 'Character to manage'); select.disabled = busy;
-    for (const row of characters) {
-      const option = element('option', row.name + (row.deleted ? ' · Deleted' : ''), select); option.value = row.id; option.selected = row.id === adminSelected;
+    for (const row of characters.filter(c => !c.deleted)) {
+      const option = element('option', row.name, select); option.value = row.id; option.selected = row.id === adminSelected;
     }
     select.onchange = () => task(async () => { adminSelected = select.value; await details(); });
-    if (!characters.length) element('p', 'No cloud characters yet. Add one below to assign it.');
+    if (!characters.some(c => !c.deleted)) element('p', 'No active characters. Add one below or restore a deleted character.');
     if (adminSelected) {
       const name = characters.find(c => c.id === adminSelected)?.name || 'Character';
       element('h3', `Assign ${name}`);
@@ -314,6 +319,7 @@ function installCloudCharacters() {
       });
       input.click();
     }, panel);
+    renderDeletedCharacters();
     if (!adminSelected) return;
     element('h3', 'Revision history');
     element('p', 'Restoring creates a new revision and preserves the existing history.');
@@ -332,6 +338,36 @@ function installCloudCharacters() {
       await refresh();
     }, dialog, !revisions.length);
     button('Export selected saved character', async () => download(await api(`characters/${adminSelected}/export`), 'saved-character.json'));
+  }
+  function renderDeletedCharacters() {
+    const section = element('details');
+    section.open = deletedOpen;
+    section.ontoggle = () => { if (section.isConnected) deletedOpen = section.open; };
+    element('summary', 'Deleted characters / Restore', section);
+    const deleted = characters.filter(c => c.deleted);
+    if (!deleted.length) { element('p', 'No deleted characters.', section); return; }
+    element('p', 'Deleted characters cannot be assigned. Restore one to return it to the character lists.', section);
+    const select = element('select', undefined, section);
+    select.setAttribute('aria-label', 'Deleted character to restore');
+    select.disabled = busy;
+    for (const row of deleted) {
+      const option = element('option', row.name, select);
+      option.value = row.id; option.selected = row.id === deletedSelected;
+    }
+    select.onchange = () => { deletedSelected = select.value; };
+    button('Restore deleted character', async () => {
+      const id = deletedSelected;
+      const row = await api(`characters/${id}`);
+      await api(`characters/${id}/restore`, 'POST', {
+        version: row.version, restore_version: row.version, mutation_id: crypto.randomUUID(),
+      });
+      adminSelected = id;
+      await refresh();
+      status = `${row.name}: restored. It can now be assigned; earlier revisions remain available below.`;
+    }, section, !deletedSelected);
+    button('Export deleted character', async () => {
+      download(await api(`characters/${deletedSelected}/export`), 'deleted-character.json');
+    }, section, !deletedSelected);
   }
   window.hackmasterCloud = {
     snapshot(slot) {

@@ -6,7 +6,7 @@ import { DraftStore } from '../../web/cloud-drafts.js';
 
 const source = readFileSync(new URL('../../web/cloud.js', import.meta.url), 'utf8').replace("import { DraftStore } from './cloud-drafts.js';", '');
 const tick = () => new Promise(resolve => setImmediate(resolve));
-async function fixture(admin = true, owner = true, signedIn = true) {
+async function fixture(admin = true, owner = true, signedIn = true, initiallyDeleted = false) {
   const dom = new JSDOM('<html><head><meta name="hackmaster-cloud" content="character-test"></head><body></body></html>', {
     url: 'https://characters-test.sim-gui.com', runScripts: 'outside-only',
   });
@@ -18,7 +18,7 @@ async function fixture(admin = true, owner = true, signedIn = true) {
   let failure = 0;
   let loseResponse = false;
   let writes = 0;
-  let deleted = false;
+  let deleted = initiallyDeleted;
   let deletes = 0;
   w.confirm = () => true;
   const mutations = new Map();
@@ -33,13 +33,16 @@ async function fixture(admin = true, owner = true, signedIn = true) {
     if (path === 'users') return Response.json([{id:'friend',email:'friend@example.com'}]);
     if (path.endsWith('/assignments')) { if (options.method !== 'GET') assignments.push({url,method:options.method,...JSON.parse(options.body)}); return Response.json([]); }
     if (path.endsWith('/revisions')) return Response.json([]);
-    if (path === 'characters' && options.method === 'GET') return Response.json(deleted ? [] : [row]);
+    if (path === 'characters' && options.method === 'GET') return Response.json(deleted ? (admin ? [{...row,deleted:1}] : []) : [row]);
     if (path === 'characters/character' && options.method === 'GET') return Response.json(row);
     if (path === 'characters/character' && options.method === 'DELETE') {
       if (failure === -1) throw new TypeError('Network unavailable');
       if (failure) return Response.json({error:'Deletion failed'}, {status:failure});
       assert.equal(JSON.parse(options.body).version,row.version);
       deletes++; deleted = true; return Response.json({deleted:true,id:row.id});
+    }
+    if (path === 'characters/character/restore' && options.method === 'POST') {
+      deleted = false; row.version++; return Response.json(row);
     }
     if (options.method === 'PUT' || options.method === 'POST') {
       if (failure === -1) throw new TypeError('Network unavailable');
@@ -200,5 +203,20 @@ test('party members cannot be deleted through UI or bridge', async () => {
   assert.ok(![...f.w.document.querySelectorAll('button')].some(b=>b.textContent==='Delete my character'));
   f.bridge.action(0,'delete',''); await tick();
   assert.equal(f.deletes(),0);
+  f.w.close();
+});
+
+test('deleted characters have a separate recovery section and no assignment controls until restored', async () => {
+  const f = await fixture(true,true,true,true);
+  await f.click('Admin · Assign characters');
+  assert.equal(f.w.document.querySelector('[aria-label="Character to manage"]').options.length,0);
+  assert.equal(f.w.document.querySelector('[aria-label="Player to assign"]'),null);
+  assert.equal(f.w.document.querySelector('[aria-label="Deleted character to restore"]').options[0].textContent,'Original');
+  assert.ok(![...f.w.document.querySelectorAll('button')].some(b=>b.textContent==='Assign character'));
+  await f.click('Restore deleted character');
+  assert.equal(f.w.document.querySelector('[aria-label="Deleted character to restore"]'),null);
+  assert.equal(f.w.document.querySelector('[aria-label="Character to manage"]').options[0].textContent,'Original');
+  assert.ok(f.w.document.querySelector('[aria-label="Player to assign"]'));
+  assert.match(f.w.document.querySelector('[role=status]').textContent,/restored/);
   f.w.close();
 });
