@@ -122,18 +122,20 @@ export async function characterApi(request: Request, env: RuntimeEnv, identity: 
   if (path === '/api/roster' && request.method === 'GET') {
     const rows = (await db.prepare(`SELECT c.id,c.name,c.version,
       EXISTS(SELECT 1 FROM character_owners o WHERE o.character_id=c.id AND o.user_id=?) AS is_owner,
+      EXISTS(SELECT 1 FROM assignments a WHERE a.character_id=c.id AND a.user_id=?) AS is_assigned,
       (?=1 OR EXISTS(SELECT 1 FROM character_owners o WHERE o.character_id=c.id AND o.user_id=?) OR
       EXISTS(SELECT 1 FROM assignments a WHERE a.character_id=c.id AND a.user_id=?)) AS can_edit
-      FROM characters c WHERE NOT EXISTS(SELECT 1 FROM character_deletions d WHERE d.character_id=c.id) ORDER BY c.name,c.id`).bind(identity.id, Number(admin), identity.id, identity.id).all()).results;
+      FROM characters c WHERE NOT EXISTS(SELECT 1 FROM character_deletions d WHERE d.character_id=c.id) ORDER BY c.name,c.id`).bind(identity.id, identity.id, Number(admin), identity.id, identity.id).all()).results;
     return json(rows);
   }
   const rosterId = /^\/api\/roster\/([a-f0-9-]{36})$/.exec(path)?.[1];
   if (rosterId && request.method === 'GET') {
     const row = await db.prepare(`SELECT c.id,c.name,c.version,c.document,
       EXISTS(SELECT 1 FROM character_owners o WHERE o.character_id=c.id AND o.user_id=?) AS is_owner,
+      EXISTS(SELECT 1 FROM assignments a WHERE a.character_id=c.id AND a.user_id=?) AS is_assigned,
       (?=1 OR EXISTS(SELECT 1 FROM character_owners o WHERE o.character_id=c.id AND o.user_id=?) OR
       EXISTS(SELECT 1 FROM assignments a WHERE a.character_id=c.id AND a.user_id=?)) AS can_edit
-      FROM characters c WHERE c.id=? AND NOT EXISTS(SELECT 1 FROM character_deletions d WHERE d.character_id=c.id)`).bind(identity.id, Number(admin), identity.id, identity.id, rosterId).first<CharacterRow>();
+      FROM characters c WHERE c.id=? AND NOT EXISTS(SELECT 1 FROM character_deletions d WHERE d.character_id=c.id)`).bind(identity.id, identity.id, Number(admin), identity.id, identity.id, rosterId).first<CharacterRow>();
     if (!row) fail(404, 'Character not found.');
     return json(unpack(row!));
   }

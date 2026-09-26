@@ -178,9 +178,14 @@ function installCloudCharacters() {
     el.style.margin = '4px'; el.disabled = busy || disabled;
     el.onclick = () => task(action); return el;
   }
+  async function signOut() {
+    const result = await fetch('/cdn-cgi/access/logout', {credentials:'same-origin', redirect:'manual', signal:AbortSignal.timeout(20000)});
+    if (result.status >= 400) throw new Error('Sign out failed. Please try again.');
+    location.assign('/?guest=1');
+  }
   function render() {
     const dirty = !guest && current.some((doc, i) => doc && encode(doc) !== encode(slots[i]?.document || baselines[i]));
-    open.textContent = `TEST · Cloud characters${dirty ? ' • unsaved' : ''}`;
+    open.textContent = user && !user.admin ? 'Sign out' : `TEST · Cloud characters${dirty ? ' • unsaved' : ''}`;
     open.title = status;
     dialog.replaceChildren();
     adminOpen.hidden = !user?.admin;
@@ -193,8 +198,8 @@ function installCloudCharacters() {
     close.onclick = () => dialog.close();
     element('p', user ? `${user.email}${user.admin ? ' · Administrator' : ''}` : guest ? 'Guest · Simulation only' : 'Choose how to continue');
     const message = element('p', status); message.setAttribute('role', 'status');
-    button('Refresh', async () => { await refresh(); status = 'Character list refreshed.'; });
-    if (user || loginExpired) {
+    if (user?.admin) button('Refresh', async () => { await refresh(); status = 'Character list refreshed.'; });
+    if (user?.admin || loginExpired) {
       const signIn = element('a', 'Sign in with Google (new tab)');
       signIn.href = '/api/login'; signIn.target = '_blank'; signIn.rel = 'noopener';
       Object.assign(signIn.style, {display:'inline-block',margin:'4px',color:'#9ecbff'});
@@ -202,20 +207,15 @@ function installCloudCharacters() {
         element('p', 'Keep this tab open. Sign in with the same Google account in the new tab, then return here.');
         button('Check sign-in', async () => { await refresh(); status = 'Signed in again. Retry Create my character or Save online; your edits are still here.'; dialog.close(); });
       }
-    } else button('Sign in with Google', () => location.assign('/api/login'));
+    } else if (!user) button('Sign in with Google', () => location.assign('/api/login'));
     if (!user) button('Continue without logging in', async () => {
       guest = true; loginExpired = false;
       const url = new URL(location.href); url.searchParams.set('guest', '1');
       history.replaceState(null, '', url);
       await refresh(); dialog.close();
     });
-    if (user) button('Sign out', async () => {
-      // Process Access's cookie clearing without navigating to its login-only page.
-      const result = await fetch('/cdn-cgi/access/logout', {credentials:'same-origin', redirect:'manual', signal:AbortSignal.timeout(20000)});
-      if (result.status >= 400) throw new Error('Sign out failed. Please try again.');
-      location.assign('/?guest=1');
-    });
-    if (!user) return;
+    if (user) button('Sign out', signOut);
+    if (!user || !user.admin) return;
     if (adminView && user.admin) { renderAdmin(); return; }
     element('h3', 'Online characters and local drafts');
     if (!roster.length) element('p', 'No online characters yet. Create your first character from Core.');
@@ -393,7 +393,7 @@ function installCloudCharacters() {
     snapshot(slot) {
       const row = slots[slot];
       return encode({ signed_in: !!user, login_expired: loginExpired, guest, busy, status, admin: !!user?.admin,
-        characters: roster.map(c => ({id:c.id, name:c.name, is_owner:!!c.is_owner, can_edit:!!c.can_edit})),
+        characters: roster.map(c => ({id:c.id, name:c.name, is_owner:!!c.is_owner, is_mine:!!c.is_owner || !!c.is_assigned, can_edit:!!c.can_edit})),
         loaded_id: row?.id || '', loaded_name: row?.name || '',
         can_delete: !!user && !guest && !!row && !!roster.find(c => c.id === row.id)?.is_owner,
         can_save: !!user && !guest && !!row && row.can_edit !== 0,
@@ -425,7 +425,7 @@ function installCloudCharacters() {
       if (!baselines[slot]) baselines[slot] = structuredClone(current[slot]);
       if (!pendingLoads[slot]) stash(slot, current[slot]);
       // Avoid replacing controls while the user is choosing a character/revision.
-      open.textContent = `TEST · Cloud characters${!guest && current.some((doc, i) => doc && encode(doc) !== encode(slots[i]?.document || baselines[i])) ? ' • unsaved' : ''}`;
+      open.textContent = user && !user.admin ? 'Sign out' : `TEST · Cloud characters${!guest && current.some((doc, i) => doc && encode(doc) !== encode(slots[i]?.document || baselines[i])) ? ' • unsaved' : ''}`;
       open.title = status;
     },
     loaded(slot, error) {
@@ -444,7 +444,23 @@ function installCloudCharacters() {
     error(message) { status = message; open.title = message; },
   };
   adminOpen.onclick = () => { adminView = true; render(); dialog.showModal(); void task(refresh); };
-  open.onclick = () => { adminView = false; render(); dialog.showModal(); if (!user) void task(refresh); };
+  open.onclick = () => { if (user && !user.admin) { void task(signOut); return; } adminView = false; render(); dialog.showModal(); if (!user) void task(refresh); };
+  // Pick up assignments/revocations without reloading or replacing open edits.
+  async function refreshRoster() {
+    if (busy || loginExpired || (!user && !guest) || document.visibilityState === 'hidden') return;
+    try {
+      const rows = await api('roster');
+      roster = rows;
+      for (const row of slots) {
+        if (!row) continue;
+        const latest = rows.find(c => c.id === row.id);
+        row.can_edit = latest?.can_edit ? 1 : 0;
+      }
+    } catch { /* Interactive operations present login/network errors with recovery controls. */ }
+  }
+  window.addEventListener('focus', () => { void refreshRoster(); });
+  document.addEventListener('visibilitychange', () => { void refreshRoster(); });
+  setInterval(() => { void refreshRoster(); }, 30000);
   window.addEventListener('beforeunload', event => {
     if (!guest && current.some((doc, i) => doc && encode(doc) !== encode(slots[i]?.document || baselines[i]))) {
       event.preventDefault(); event.returnValue = '';

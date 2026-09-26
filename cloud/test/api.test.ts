@@ -182,6 +182,8 @@ test('roster separates creators from assignments and grants no editing rights to
   assert.equal((await call('stranger', `characters/${own.id}`, 'PUT', saveBody(1))).status, 404);
   await call('admin', `characters/${own.id}/assignments`, 'PUT', {user_id:'stranger'});
   assert.equal((await call('stranger', 'roster')).data[0].can_edit, 1);
+  assert.equal((await call('stranger', 'roster')).data[0].is_assigned, 1);
+  assert.equal((await call('stranger', `roster/${own.id}`)).data.is_assigned, 1);
   assert.equal((await call('stranger', 'roster')).data[0].is_owner, 0);
   await call('stranger', `characters/${own.id}`, 'PUT', saveBody(1, document('Friend edit')));
   assert.equal((await call('player', 'roster')).data[0].is_owner, 1);

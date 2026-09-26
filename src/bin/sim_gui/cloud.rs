@@ -69,7 +69,7 @@ impl SimGuiApp {
 }
 
 #[derive(serde::Deserialize)]
-struct OnlineCharacter { id: String, name: String, is_owner: bool, can_edit: bool }
+struct OnlineCharacter { id: String, name: String, is_mine: bool, can_edit: bool }
 #[derive(serde::Deserialize)]
 struct OnlineSnapshot {
     signed_in: bool, login_expired: bool, guest: bool, busy: bool, status: String,
@@ -91,12 +91,12 @@ pub(super) fn show_core(ui: &mut egui::Ui, slot: usize) {
             for (mine, label) in [(true, "My Characters"), (false, "Party Members")] {
                 ui.add_enabled_ui(!mine || state.signed_in, |ui| { ui.horizontal(|ui| {
                     ui.label(label);
-                    let items: Vec<_> = state.characters.iter().filter(|c| c.is_owner == mine).collect();
+                    let items: Vec<_> = state.characters.iter().filter(|c| c.is_mine == mine).collect();
                     let selected = items.iter().find(|c| c.id == state.loaded_id)
                         .map(|c| c.name.as_str()).unwrap_or("Choose character…");
                     egui::ComboBox::from_id_source(("online", slot, mine)).selected_text(selected)
                         .width(210.0).show_ui(ui, |ui| {
-                            if items.is_empty() { ui.label(if mine { "No characters created yet" } else { "No party characters yet" }); }
+                            if items.is_empty() { ui.label(if mine { "No characters created or assigned yet" } else { "No party characters yet" }); }
                             for row in items {
                                 let text = if !mine && row.can_edit { format!("{} (editable)", row.name) } else { row.name.clone() };
                                 if ui.selectable_label(row.id == state.loaded_id, text).clicked() {

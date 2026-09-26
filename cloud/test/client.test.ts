@@ -17,6 +17,7 @@ async function fixture(admin = true, owner = true, signedIn = true, initiallyDel
   let row = { id: 'character', name: 'Original', version: 1, document: { schema_version: 1, player: { name: 'Original' } } };
   let failure = 0;
   let sessionId = 'user';
+  let assigned = false;
   let loseResponse = false;
   let writes = 0;
   let deleted = initiallyDeleted;
@@ -29,8 +30,8 @@ async function fixture(admin = true, owner = true, signedIn = true, initiallyDel
     if (!signedIn) return Response.json({error:'Sign in'}, {status:401});
     const path = String(url).replace('/api/', '');
     if (path === 'session') return Response.json({ user: { id: sessionId, email: 'test@example.com', admin } });
-    if (path === 'roster') return Response.json(deleted ? [] : [{...row,is_owner:Number(owner),can_edit:Number(owner)}]);
-    if (path === 'roster/character') return Response.json({...row,is_owner:Number(owner),can_edit:Number(owner)});
+    if (path === 'roster') return Response.json(deleted ? [] : [{...row,is_owner:Number(owner),is_assigned:Number(assigned),can_edit:Number(owner || assigned)}]);
+    if (path === 'roster/character') return Response.json({...row,is_owner:Number(owner),is_assigned:Number(assigned),can_edit:Number(owner || assigned)});
     if (path === 'users') return Response.json([{id:'friend',email:'friend@example.com'}]);
     if (path.endsWith('/assignments')) { if (options.method !== 'GET') assignments.push({url,method:options.method,...JSON.parse(options.body)}); return Response.json([]); }
     if (path.endsWith('/revisions')) return Response.json([]);
@@ -69,11 +70,11 @@ async function fixture(admin = true, owner = true, signedIn = true, initiallyDel
   };
   const drafts = () => new DraftStore(w.localStorage, 'user').list('character');
   const load = async () => {
-    await click('Load selected');
+    bridge.action(0,'load','character'); await tick();
     const loads = JSON.parse(bridge.takeLoads()); assert.equal(loads.length, 1);
     bridge.loaded(0, ''); bridge.publish(0, JSON.stringify(loads[0].document));
   };
-  return { w, bridge, click, load, drafts, assignments, account: id => sessionId = id, deletes: () => deletes, failure: n => failure = n, lose: value => loseResponse = value, writes: () => writes };
+  return { w, bridge, click, load, drafts, assignments, assign: value => assigned = value, account: id => sessionId = id, deletes: () => deletes, failure: n => failure = n, lose: value => loseResponse = value, writes: () => writes };
 }
 test('client retains drafts on network/auth/conflict failure, then confirms committed save', async () => {
   const f = await fixture(); await f.load();
@@ -132,8 +133,7 @@ test('admin assignment is separate and names both the character and player', asy
 test('player creation is available with recoverable creation drafts and no admin controls', async () => {
   const f = await fixture(false);
   assert.equal(f.w.document.querySelector('button:nth-child(2)').hidden, true);
-  await f.click('TEST · Cloud characters');
-  await f.click('Create my character');
+  f.bridge.action(0,'create',''); await tick();
   assert.equal(f.writes(), 1);
   const snapshot = JSON.parse(f.bridge.snapshot(0));
   assert.equal(snapshot.admin, false);
@@ -249,5 +249,21 @@ test('signing into a different account cannot submit the previous account draft'
   assert.equal(f.writes(),0);
   assert.equal(new DraftStore(f.w.localStorage,'user').list(null).length,1);
   assert.match(JSON.parse(f.bridge.snapshot(0)).status,/different account/);
+  f.w.close();
+});
+
+test('non-admin toolbar only offers sign out and assigned characters move into My Characters on focus', async () => {
+  const f=await fixture(false,false);
+  assert.deepEqual([...f.w.document.querySelector('body > div').querySelectorAll('button')].filter(b=>!b.hidden).map(b=>b.textContent),['Sign out']);
+  assert.equal(f.w.document.querySelector('[aria-label="Assigned character"]'),null);
+  assert.equal(JSON.parse(f.bridge.snapshot(0)).characters[0].is_mine,false);
+  f.assign(true); f.w.dispatchEvent(new f.w.Event('focus')); await tick();
+  assert.equal(JSON.parse(f.bridge.snapshot(0)).characters[0].is_mine,true);
+  await f.load();
+  assert.equal(JSON.parse(f.bridge.snapshot(0)).can_save,true);
+  assert.equal(JSON.parse(f.bridge.snapshot(0)).can_delete,false);
+  f.assign(false); f.w.dispatchEvent(new f.w.Event('focus')); await tick();
+  assert.equal(JSON.parse(f.bridge.snapshot(0)).characters[0].is_mine,false);
+  assert.equal(JSON.parse(f.bridge.snapshot(0)).can_save,false);
   f.w.close();
 });
