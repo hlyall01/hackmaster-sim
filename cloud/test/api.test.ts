@@ -13,6 +13,7 @@ function fixture() {
   sql.exec(readFileSync(new URL('../migrations/0002_character_owners.sql', import.meta.url), 'utf8'));
   sql.exec(readFileSync(new URL('../migrations/0003_character_deletion.sql', import.meta.url), 'utf8'));
   sql.exec(readFileSync(new URL('../migrations/0004_single_owner.sql', import.meta.url), 'utf8'));
+  sql.exec(readFileSync(new URL('../migrations/0005_character_limit.sql', import.meta.url), 'utf8'));
   const db = { prepare(query: string) {
     let args: (string | number | null)[] = [];
     return {
@@ -306,4 +307,35 @@ test('legacy assignment migration changes ownership without changing character c
   assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM revisions').get().n,1);
   assert.deepEqual(JSON.parse(sql.prepare('SELECT document FROM characters').get().document),document());
   sql.close();
+});
+
+test('ten-character limit is atomic for creation, retries and administrator accounts', async () => {
+  const {call,sql}=fixture();
+  for (let n=0;n<9;n++) assert.equal((await call('player','characters','POST',saveBody(1))).status,201);
+  const input=saveBody(1);
+  const attempts=await Promise.all([call('player','characters','POST',input),call('player','characters','POST',saveBody(1))]);
+  assert.deepEqual(attempts.map(r=>r.status).sort(),[201,409]);
+  assert.match(attempts.find(r=>r.status===409).data.error,/10 active characters/);
+  assert.equal((await call('player','characters')).data.length,10);
+  assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM revisions').get().n,10);
+  assert.equal((await call('player','characters','POST',input)).status,200);
+  for(let n=0;n<10;n++) assert.equal((await call('admin','characters','POST',saveBody(1))).status,201);
+  assert.equal((await call('admin','characters','POST',saveBody(1))).status,409);
+});
+test('transfers and restores respect the same cap without losing history or ownership', async () => {
+  const {call,sql}=fixture();
+  const rows=[];
+  for(let n=0;n<10;n++) rows.push((await call('player','characters','POST',saveBody(1))).data);
+  const extra=(await call('admin','characters','POST',saveBody(1))).data;
+  assert.equal((await call('admin',`characters/${extra.id}/owner`,'PUT',{user_id:'player'})).status,409);
+  assert.equal(sql.prepare('SELECT user_id FROM character_owners WHERE character_id=?').get(extra.id).user_id,'admin');
+  assert.equal((await call('admin',`characters/${rows[0].id}/owner`,'PUT',{user_id:'player'})).status,200);
+  assert.equal((await call('player',`characters/${rows[0].id}`,'DELETE',{version:1})).status,200);
+  assert.equal((await call('admin',`characters/${extra.id}/owner`,'PUT',{user_id:'player'})).status,200);
+  assert.equal((await call('admin',`characters/${rows[0].id}/restore`,'POST',{...saveBody(1),restore_version:1})).status,409);
+  assert.equal((await call('admin',`characters/${rows[0].id}/revisions`)).data.length,1);
+  assert.equal((await call('player','roster')).data.length,10);
+  assert.equal((await call('admin',`characters/${extra.id}/owner`,'PUT',{user_id:'admin'})).status,200);
+  assert.equal((await call('admin',`characters/${rows[0].id}/restore`,'POST',{...saveBody(1),restore_version:1})).status,200);
+  assert.equal((await call('player','characters')).data.length,10);
 });

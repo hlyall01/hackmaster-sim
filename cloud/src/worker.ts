@@ -91,6 +91,16 @@ function unpack(row: CharacterRow) { return { ...row, document: JSON.parse(row.d
 
 // Only fetch() calls this in the deployed Worker, after token verification.
 export async function characterApi(request: Request, env: RuntimeEnv, identity: Identity): Promise<Response> {
+  try { return await handleCharacterApi(request, env, identity); }
+  catch (error) {
+    if (error instanceof Error && error.message.includes('CHARACTER_LIMIT_10')) {
+      fail(409, 'This account has reached the limit of 10 active characters. Delete or transfer a character before creating, receiving, or restoring another. Your draft is preserved.');
+    }
+    throw error;
+  }
+}
+
+async function handleCharacterApi(request: Request, env: RuntimeEnv, identity: Identity): Promise<Response> {
   const url = new URL(request.url);
   if (url.origin !== env.APP_ORIGIN) fail(403, 'This hostname is not enabled for character access.');
   if (!['GET', 'POST', 'PUT', 'DELETE'].includes(request.method)) fail(405, 'Method not allowed.');
