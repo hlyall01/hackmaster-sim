@@ -66,6 +66,11 @@ pub const MOUNT_TYPE_OPTIONS: [(MountType, &str); 4] = [
     (MountType::Courser, "Courser (+1 die at trot+)"),
     (MountType::Destrier, "Destrier (+2 dice at trot+)"),
 ];
+pub const HORSE_GENDER_OPTIONS: [(HorseGender, &str); 3] = [
+    (HorseGender::Unspecified, "Unspecified"),
+    (HorseGender::Female, "Female"),
+    (HorseGender::Male, "Male"),
+];
 pub const RIDING_MASTERY_OPTIONS: [(RidingMastery, &str); 4] = [
     (RidingMastery::Average, "Average (-2 melee / -6 ranged)"),
     (RidingMastery::Advanced, "Advanced (0 melee / -4 ranged)"),
@@ -166,12 +171,19 @@ mod tests {
     fn mounted_settings_are_backward_compatible_and_round_trip() {
         let old: CombatManeuverConfig = serde_json::from_str(r#"{"mounted":true}"#).unwrap();
         assert_eq!(old.mounted_combat, MountedCombatConfig::default());
+        let old_settings: MountedCombatConfig = serde_json::from_str(
+            r#"{"mount":"courser","riding":"expert","trot_or_faster":true}"#,
+        ).unwrap();
+        assert_eq!(old_settings.horse_gender, HorseGender::Unspecified);
+        assert_eq!(old_settings.mount, MountType::Courser);
+        assert!(old_settings.trot_or_faster);
         let mut config = old;
         config.mounted_combat = MountedCombatConfig {
             mount: MountType::Destrier,
             riding: RidingMastery::Expert,
             trot_or_faster: true,
             target_size: MountedTargetSize::Other,
+            horse_gender: HorseGender::Male,
         };
         let saved = serde_json::to_string(&config).unwrap();
         assert_eq!(

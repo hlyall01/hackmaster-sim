@@ -22,6 +22,16 @@ pub enum MountType {
     Destrier,
 }
 
+/// Cosmetic horse appearance; does not affect mounted combat rules.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HorseGender {
+    #[default]
+    Unspecified,
+    Female,
+    Male,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MountedTargetSize {
@@ -36,6 +46,7 @@ pub enum MountedTargetSize {
 pub struct MountedCombatConfig {
     pub riding: RidingMastery,
     pub mount: MountType,
+    pub horse_gender: HorseGender,
     pub trot_or_faster: bool,
     pub target_size: MountedTargetSize,
 }

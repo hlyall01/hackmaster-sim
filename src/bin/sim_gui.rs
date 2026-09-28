@@ -659,6 +659,7 @@ impl SimGuiApp {
                 knocked_back,
                 weapon_icon,
                 player.mounted,
+                player.mounted_combat.horse_gender,
             );
             if knocked_back && !downed {
                 painter.text(
@@ -772,6 +773,7 @@ impl SimGuiApp {
         knocked_back: bool,
         weapon_icon: WeaponIcon,
         mounted: bool,
+        horse_gender: sim::HorseGender,
     ) {
         let head_color = color;
         let body_color = Color32::from_gray(230);
@@ -805,7 +807,7 @@ impl SimGuiApp {
         }
 
         if mounted {
-            self.draw_mounted_person(painter, base, facing, head_color, weapon_icon);
+            self.draw_mounted_person(painter, base, facing, head_color, weapon_icon, horse_gender);
             return;
         }
 
@@ -829,6 +831,7 @@ impl SimGuiApp {
         facing: f32,
         rider_color: Color32,
         weapon_icon: WeaponIcon,
+        horse_gender: sim::HorseGender,
     ) {
         let scale = 3.0_f32;
         let pt = |dx: f32, dy: f32| Pos2::new(base.x + facing * dx * scale, base.y + dy * scale);
@@ -909,6 +912,11 @@ impl SimGuiApp {
                 ],
                 (2.3, horse_accent),
             );
+        }
+
+        if horse_gender == sim::HorseGender::Male {
+            // Small cosmetic marker beneath the belly, between the legs.
+            painter.line_segment([belly_mid, pt(-4.8, -9.8)], (1.6, horse_line));
         }
 
         // Rider line art.
@@ -4473,6 +4481,14 @@ fn render_player_editor(
                         game_logic::MOUNT_TYPE_OPTIONS.into_iter().map(|(v, label)| (v, label.to_string(), true)));
                 });
                 ui.horizontal(|ui| {
+                    ui.label("Horse gender").on_hover_text("Appearance only; no effect on combat.");
+                    let label = game_logic::HORSE_GENDER_OPTIONS.iter()
+                        .find(|(value, _)| *value == player.mounted_combat.horse_gender).unwrap().1;
+                    searchable_select(ui, format!("{id_prefix}_horse_gender"), label,
+                        &mut player.mounted_combat.horse_gender,
+                        game_logic::HORSE_GENDER_OPTIONS.into_iter().map(|(v, label)| (v, label.to_string(), true)));
+                });
+                ui.horizontal(|ui| {
                     ui.label("Riding mastery");
                     let label = game_logic::RIDING_MASTERY_OPTIONS.iter()
                         .find(|(value, _)| *value == player.mounted_combat.riding).unwrap().1;
@@ -6530,6 +6546,27 @@ mod tests {
     }
 
     #[test]
+    fn horse_gender_survives_fighter_preset_save_load() {
+        let mut app = app_fixture();
+        app.players[0].mounted = true;
+        for (gender, _) in game_logic::HORSE_GENDER_OPTIONS {
+            app.players[0].mounted_combat.horse_gender = gender;
+            let saved = fighter_preset_from_player(
+                &app.players[0], &app.weapon_catalog, &app.armor_catalog,
+                &app.shield_catalog, "Rider",
+            );
+            let restored: FighterPreset =
+                serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+            apply_fighter_preset(
+                &mut app.players[1], &restored, &app.weapon_catalog,
+                &app.armor_catalog, &app.shield_catalog, &app.race_catalog,
+            );
+            assert!(app.players[1].mounted);
+            assert_eq!(app.players[1].mounted_combat.horse_gender, gender);
+        }
+    }
+
+    #[test]
     fn knockdown_draws_fighter_on_ground_in_both_directions() {
         let app = app_fixture();
         for facing in [-1.0, 1.0] {
@@ -6540,7 +6577,7 @@ mod tests {
                     let painter = ctx.layer_painter(egui::LayerId::background());
                     app.draw_person(
                         &painter, base, facing, Color32::RED, false, knocked_back,
-                        WeaponIcon::Other, false,
+                        WeaponIcon::Other, false, sim::HorseGender::Unspecified,
                     );
                 });
                 let head = output.shapes.iter().find_map(|shape| match &shape.shape {
