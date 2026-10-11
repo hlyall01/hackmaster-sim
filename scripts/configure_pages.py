@@ -45,6 +45,8 @@ if project == 'hackmaster-sim':
         raise SystemExit('Invalid GitHub App or installation ID')
     api('/' + project, 'PATCH', {'deployment_configs': {'production': {
         'compatibility_date': '2026-09-26',
+        'fail_open': False,
+        'services': {'CHARACTERS': {'service': 'hackmaster-characters', 'environment': 'production'}},
         'env_vars': {
             'GITHUB_ISSUES_TOKEN': None,
             'REQUEST_SIGNING_SECRET': {'type': 'secret_text', 'value': signing_secret},

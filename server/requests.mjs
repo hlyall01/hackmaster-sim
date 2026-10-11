@@ -336,6 +336,13 @@ export default {
     const env = { ...bindings, appToken: null };
     const url = new URL(request.url);
     try {
+      const isCharacterApi = /^\/api\/(login|session|users|roster|characters)(?:\/|$)/.test(url.pathname)
+        || /^\/guest\/characters(?:\/|$)/.test(url.pathname);
+      if (isCharacterApi) {
+        if (url.origin !== 'https://sim-gui.com') return json({ error: 'Character access is only available on sim-gui.com.' }, 403);
+        if (!env.CHARACTERS) return json({ error: 'Character service unavailable. Your local draft is preserved.' }, 503);
+        return await env.CHARACTERS.fetch(request);
+      }
       const isTicket = /^\/[1-9][0-9]{0,8}\/?$/.test(url.pathname);
       const isApi = url.pathname.startsWith('/api/');
       if ((isTicket || isApi) && url.origin !== ORIGIN) {

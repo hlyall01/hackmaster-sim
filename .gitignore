@@ -14,7 +14,7 @@
 /scripts/arthur_bp_bumps.py
 
 # Character service tooling and local credentials/state.
-/cloud/node_modules/
+/cloud/node_modules
 /cloud/.wrangler/
 /cloud/.dev.vars*
 /cloud/.env*

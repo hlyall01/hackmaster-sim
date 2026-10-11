@@ -109,6 +109,7 @@ pub(super) fn show_core(ui: &mut egui::Ui, slot: usize) {
             ui.horizontal_wrapped(|ui| {
                 if state.login_expired && ui.button("Sign in again").clicked() { cloud_action(slot, "reauth", ""); }
                 if state.signed_in {
+                if ui.button("Drafts / Export").clicked() { cloud_action(slot, "manage", ""); }
                 if ui.add_enabled(state.can_save, egui::Button::new("Save online")).clicked() { cloud_action(slot, "save", ""); }
                 if ui.button("Create my character").on_hover_text("Save the current fighter as a new character you own. Other signed-in players can load it for simulations.").clicked() { cloud_action(slot, "create", ""); }
                 if state.can_delete && ui.button("Delete my character").clicked() { cloud_action(slot, "delete", ""); }

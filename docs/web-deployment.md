@@ -17,6 +17,15 @@ Production assets use `max-age=0, must-revalidate` because their filenames are
 stable across deployments. The feature-domain migration also versions the main
 and form script URLs to invalidate copies already cached under the old policy.
 
+## Online characters
+
+Production also hosts Google-authenticated online characters. The Pages Worker
+routes character APIs and public guest roster reads to the private
+`hackmaster-characters` service. The former character-test database and Access
+application are retained so existing character ownership and history survive.
+See [online character operations](../cloud/README.md) for deployment, recovery,
+legacy-host behavior, and the explicit backend release command.
+
 ## Credentials and settings
 
 GitHub repository secrets:

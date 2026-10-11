@@ -6,9 +6,9 @@ import { DraftStore } from '../../web/cloud-drafts.js';
 
 const source = readFileSync(new URL('../../web/cloud.js', import.meta.url), 'utf8').replace("import { DraftStore } from './cloud-drafts.js';", '');
 const tick = () => new Promise(resolve => setImmediate(resolve));
-async function fixture(admin = true, owner = true, signedIn = true, initiallyDeleted = false, persisted = {}) {
-  const dom = new JSDOM('<html><head><meta name="hackmaster-cloud" content="character-test"></head><body></body></html>', {
-    url: 'https://characters-test.sim-gui.com', runScripts: 'outside-only',
+async function fixture(admin = true, owner = true, signedIn = true, initiallyDeleted = false, persisted = {}, environment = "character-test", hostname = "characters-test.sim-gui.com") {
+  const dom = new JSDOM(`<html><head><meta name="hackmaster-cloud" content="${environment}"></head><body></body></html>`, {
+    url: `https://${hostname}`, runScripts: 'outside-only',
   });
   const w = dom.window;
   for (const [key,value] of Object.entries(persisted.local || {})) w.localStorage.setItem(key,value);
@@ -64,7 +64,7 @@ async function fixture(admin = true, owner = true, signedIn = true, initiallyDel
   w.eval(source.replaceAll('location.assign(', 'window.navigate('));
   await tick();
   const bridge = w.hackmasterCloud;
-  bridge.publish(0, JSON.stringify(row.document));
+  bridge?.publish(0, JSON.stringify(row.document));
   const click = async (label, index = 0) => {
     const buttons = [...w.document.querySelectorAll('button')].filter(b => b.textContent === label);
     assert.ok(buttons[index], label);
@@ -280,7 +280,8 @@ test('signing into a different account cannot submit the previous account draft'
 test('non-admin toolbar only offers sign out and assigned characters move into My Characters on focus', async () => {
   const f=await fixture(false,false);
   assert.deepEqual([...f.w.document.querySelector('body > div').querySelectorAll('button')].filter(b=>!b.hidden).map(b=>b.textContent),['Sign out']);
-  assert.equal(f.w.document.querySelector('[aria-label="Assigned character"]'),null);
+  assert.ok(f.w.document.querySelector('[aria-label="Assigned character"]'));
+  assert.ok([...f.w.document.querySelectorAll('button')].some(b => b.textContent === 'Export current'));
   assert.equal(JSON.parse(f.bridge.snapshot(0)).characters[0].is_mine,false);
   f.assign(true); f.w.dispatchEvent(new f.w.Event('focus')); await tick();
   assert.equal(JSON.parse(f.bridge.snapshot(0)).characters[0].is_mine,true);
@@ -301,4 +302,38 @@ test('assigned characters have the same delete controls and behavior as created 
   assert.equal(f.deletes(),1);
   assert.equal(JSON.parse(f.bridge.snapshot(0)).characters.length,0);
   f.w.close();
+});
+
+
+test('production enables cloud saves only on the configured hostname', async () => {
+  const prod = await fixture(false, true, true, false, {}, 'production', 'sim-gui.com');
+  assert.ok(prod.bridge);
+  assert.ok(!prod.w.document.body.textContent.includes('TEST'));
+  assert.ok(prod.w.document.body.textContent.includes('Character saves'));
+  prod.w.close();
+  for (const host of ['feature.sim-gui.com', 'hackmaster-sim-previews.pages.dev']) {
+    const preview = await fixture(false, true, true, false, {}, 'production', host);
+    assert.equal(preview.bridge, undefined);
+    preview.w.close();
+  }
+});
+
+test('ordinary players recover saved drafts after reload and have export controls', async () => {
+  const first = await fixture(false); await first.load();
+  first.bridge.publish(0, JSON.stringify({schema_version:1,player:{name:'Unsaved recovery'}}));
+  first.failure(-1); first.bridge.action(0,'save',''); await tick();
+  assert.equal(first.writes(),0);
+  const local = Object.fromEntries(Object.keys(first.w.localStorage).map(k=>[k,first.w.localStorage.getItem(k)]));
+  first.w.close();
+  const resumed = await fixture(false,true,true,false,{local});
+  resumed.bridge.action(0,'manage','');
+  assert.ok(resumed.w.document.querySelector('dialog').open);
+  assert.ok([...resumed.w.document.querySelectorAll('button')].some(b=>b.textContent==='Export current'));
+  await resumed.click('Recover local draft');
+  const loads=JSON.parse(resumed.bridge.takeLoads());
+  assert.equal(loads[0].document.player.name,'Unsaved recovery');
+  resumed.bridge.loaded(0,''); resumed.bridge.publish(0,JSON.stringify(loads[0].document));
+  assert.equal(JSON.parse(resumed.bridge.snapshot(0)).dirty,true);
+  assert.equal(resumed.w.document.querySelector('[aria-label="Character to manage"]'),null);
+  resumed.w.close();
 });

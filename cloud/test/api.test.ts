@@ -339,3 +339,20 @@ test('transfers and restores respect the same cap without losing history or owne
   assert.equal((await call('admin',`characters/${rows[0].id}/restore`,'POST',{...saveBody(1),restore_version:1})).status,200);
   assert.equal((await call('player','characters')).data.length,10);
 });
+
+
+test('changing to production origin preserves character IDs, owners and revisions', async () => {
+  const f=fixture();
+  const created=await f.call('player','characters','POST',{document:document('Assigned'),mutation_id:crypto.randomUUID()});
+  const id=created.data.id;
+  await f.call('admin','session'); await f.call('stranger','session');
+  await f.call('admin',`characters/${id}/owner`,'PUT',{user_id:'stranger'});
+  const before=f.sql.prepare('SELECT * FROM revisions ORDER BY version').all();
+  f.env.APP_ORIGIN='https://sim-gui.com'; f.env.ENVIRONMENT='production';
+  const mine=await f.call('stranger','roster');
+  assert.equal(mine.data[0].id,id); assert.equal(mine.data[0].is_owner,1);
+  assert.equal((await f.call('player',`characters/${id}`)).status,404);
+  assert.deepEqual(f.sql.prepare('SELECT * FROM revisions ORDER BY version').all(),before);
+  assert.equal((await f.call('stranger',`characters/${id}`,'PUT',saveBody(1))).status,200);
+  assert.equal((await f.call('stranger',`characters/${id}`,'PUT',saveBody(2), 'https://characters-test.sim-gui.com')).status,403);
+});

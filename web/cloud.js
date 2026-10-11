@@ -1,6 +1,10 @@
-// Enabled only by the isolated character-test deployment's HTML marker.
+// Activation is injected only into a configured production or character-test deployment.
 import { DraftStore } from './cloud-drafts.js';
-const enabled = document.querySelector('meta[name="hackmaster-cloud"][content="character-test"]');
+const cloudEnvironment = document.querySelector('meta[name="hackmaster-cloud"]')?.content;
+const enabled = (cloudEnvironment === 'production' && location.hostname === 'sim-gui.com') ||
+  (cloudEnvironment === 'character-test' && location.hostname === 'characters-test.sim-gui.com');
+const testPrefix = cloudEnvironment === 'character-test' ? 'TEST · ' : '';
+const testSuffix = cloudEnvironment === 'character-test' ? ' — TEST environment' : '';
 if (enabled) installCloudCharacters();
 
 function installCloudCharacters() {
@@ -46,7 +50,7 @@ function installCloudCharacters() {
   const bar = document.createElement('div');
   Object.assign(bar.style, { position: 'fixed', right: '8px', bottom: '8px', zIndex: 100, padding: '4px', background: '#222', color: 'white' });
   const open = document.createElement('button');
-  open.textContent = 'TEST · Cloud characters';
+  open.textContent = `${testPrefix}Cloud characters`;
   bar.append(open);
   const adminOpen = document.createElement('button');
   adminOpen.textContent = 'Admin · Assign characters';
@@ -234,13 +238,13 @@ function installCloudCharacters() {
   }
   function render() {
     const dirty = !guest && current.some((doc, i) => doc && encode(doc) !== encode(slots[i]?.document || baselines[i]));
-    open.textContent = user && !user.admin ? 'Sign out' : `TEST · Cloud characters${dirty ? ' • unsaved' : ''}`;
+    open.textContent = user && !user.admin ? 'Sign out' : `${testPrefix}Cloud characters${dirty ? ' • unsaved' : ''}`;
     open.title = status;
     dialog.replaceChildren();
     adminOpen.hidden = !user?.admin;
     const header = element('div');
     Object.assign(header.style, {display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:'16px'});
-    const title = element('h2', adminView && user?.admin ? 'Assign characters — TEST environment' : 'Character saves — TEST environment', header);
+    const title = element('h2', adminView && user?.admin ? `Assign characters${testSuffix}` : `Character saves${testSuffix}`, header);
     title.style.margin = '0';
     const close = element('button', 'Close', header);
     close.style.flexShrink = '0';
@@ -256,7 +260,7 @@ function installCloudCharacters() {
       await refresh(); dialog.close();
     });
     if (user) button('Sign out', signOut);
-    if (!user || !user.admin) return;
+    if (!user) return;
     if (adminView && user.admin) { renderAdmin(); return; }
     element('h3', 'Online characters and local drafts');
     if (!roster.length) element('p', 'No online characters yet. Create your first character from Core.');
@@ -458,7 +462,7 @@ function installCloudCharacters() {
       if (!baselines[slot]) baselines[slot] = structuredClone(current[slot]);
       if (!pendingLoads[slot]) stash(slot, current[slot]);
       // Avoid replacing controls while the user is choosing a character/revision.
-      open.textContent = user && !user.admin ? 'Sign out' : `TEST · Cloud characters${!guest && current.some((doc, i) => doc && encode(doc) !== encode(slots[i]?.document || baselines[i])) ? ' • unsaved' : ''}`;
+      open.textContent = user && !user.admin ? 'Sign out' : `${testPrefix}Cloud characters${!guest && current.some((doc, i) => doc && encode(doc) !== encode(slots[i]?.document || baselines[i])) ? ' • unsaved' : ''}`;
       open.title = status;
     },
     loaded(slot, error) {

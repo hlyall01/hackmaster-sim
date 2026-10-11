@@ -62,8 +62,9 @@ jobs:
           FEATURE_REQUESTS_ENABLED: ${{ vars.FEATURE_REQUESTS_ENABLED }}
         run: |
           python3 scripts/configure_pages.py
+          python3 -c 'from pathlib import Path; p = Path("site/index.html"); p.write_text(p.read_text().replace("<head>", "<head>\n<meta name=\"hackmaster-cloud\" content=\"production\">", 1))'
           python3 -c 'from pathlib import Path; Path("site/_worker.js").write_text(Path("server/requests.mjs").read_text().replace("export async function", "async function"))'
-          printf '{"version":1,"include":["/api/*","/1*","/2*","/3*","/4*","/5*","/6*","/7*","/8*","/9*"],"exclude":[]}' > site/_routes.json
+          printf '{"version":1,"include":["/api/*","/guest/*","/1*","/2*","/3*","/4*","/5*","/6*","/7*","/8*","/9*"],"exclude":[]}' > site/_routes.json
           # Asset filenames are stable across builds: revalidate instead of serving
           # a cached loader/form from a previous deployment for four hours.
           printf '/*\n  Cache-Control: public, max-age=0, must-revalidate\n' > site/_headers
