@@ -43,7 +43,7 @@ if project == 'hackmaster-sim':
         raise SystemExit('Missing request signing secret or PKCS#8 app private key')
     if not re.fullmatch('[1-9][0-9]*', app_id) or not re.fullmatch('[1-9][0-9]*', installation_id):
         raise SystemExit('Invalid GitHub App or installation ID')
-    api('/' + project, 'PATCH', {'deployment_configs': {'production': {
+    api('/' + project, 'PATCH', {'deployment_configs': {'preview': {'fail_open': False}, 'production': {
         'compatibility_date': '2026-09-26',
         'fail_open': False,
         'services': {'CHARACTERS': {'service': 'hackmaster-characters', 'environment': 'production'}},
