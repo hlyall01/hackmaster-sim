@@ -1058,7 +1058,23 @@ impl Combatant {
         if matches!(stat, StatIdI32::AttackBonus | StatIdI32::AttackBonusBase) {
             value += self.intimidation_penalty();
         }
+        let ideal = self.ideal_self_bonuses();
+        value += match stat {
+            StatIdI32::StrengthDamage | StatIdI32::StrengthDamageBase => ideal.damage,
+            StatIdI32::ArmorDr | StatIdI32::NaturalDr => ideal.damage_reduction,
+            _ => 0,
+        };
         value
+    }
+
+    pub fn ideal_self_bonuses(&self) -> IdealSelfBonuses {
+        if self.state.hp >= self.sheet.vitals.max_hp && self.state.hp > 0
+            && self.sheet.modifiers.apply_i32(0, StatIdI32::FlagIdealSelf) > 0
+        {
+            IdealSelfBonuses::for_level(self.magic.level)
+        } else {
+            IdealSelfBonuses::default()
+        }
     }
 
     pub(crate) fn apply_f32(&self, stat: StatIdF32, base: f32) -> f32 {
@@ -1087,5 +1103,24 @@ impl Combatant {
 impl Default for Combatant {
     fn default() -> Self {
         Self::new(CombatantSheet::default())
+    }
+}
+
+/// Ideal Self's bonuses apply only while completely uninjured.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct IdealSelfBonuses {
+    pub damage: i32,
+    pub feat_of_strength: i32,
+    pub damage_reduction: i32,
+}
+
+impl IdealSelfBonuses {
+    pub fn for_level(level: u8) -> Self {
+        let level = i32::from(level.min(20));
+        Self {
+            damage: (level / 3 - 1).max(0),
+            feat_of_strength: ((2 * level - 7) / 3).max(0),
+            damage_reduction: (level / 4 - 1).max(0),
+        }
     }
 }

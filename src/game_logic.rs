@@ -673,6 +673,7 @@ struct TalentModifiers {
     falling_sun_style: bool,
     fymblwnger_style: bool,
     project_confidence: bool,
+    ideal_self: bool,
     intimidate_adversary: bool,
     hammerer_style: bool,
     hobbler_style: bool,
@@ -796,6 +797,7 @@ impl Default for TalentModifiers {
             falling_sun_style: false,
             fymblwnger_style: false,
             project_confidence: false,
+            ideal_self: false,
             intimidate_adversary: false,
             hammerer_style: false,
             hobbler_style: false,
@@ -3170,6 +3172,9 @@ fn resolve_talent_modifiers_with_grants(
                 TalentEffect::FymblwngerStyle => {
                     modifiers.fymblwnger_style = true;
                 }
+                TalentEffect::IdealSelf => {
+                    modifiers.ideal_self = true;
+                }
                 TalentEffect::ProjectConfidence => {
                     modifiers.project_confidence = true;
                 }
@@ -4679,6 +4684,7 @@ pub fn derived_stat_breakdowns(
     if misc.armor_dr_bonus != 0 {
         armor_dr.add_i32(misc.armor_dr_bonus, "Miscellaneous armor DR");
     }
+    armor_dr.add_i32(combatant.ideal_self_bonuses().damage_reduction, "Ideal Self (while completely uninjured)");
     breakdowns.insert(DerivedStatId::ArmorDr, armor_dr);
 
     let mut carry = StatBreakdown::new(format!("{:?}", summary.derived.carry_capacity));
@@ -5747,6 +5753,9 @@ fn build_combatant_profile(
             sim::ModifierOpI32::Set(1),
         );
     }
+    if modifiers.ideal_self {
+        sheet_modifiers.add_i32(sim::StatIdI32::FlagIdealSelf, sim::ModifierOpI32::Set(1));
+    }
     if modifiers.project_confidence {
         sheet_modifiers.add_i32(sim::StatIdI32::FlagProjectConfidence, sim::ModifierOpI32::Set(1));
     }
@@ -6048,7 +6057,7 @@ fn build_combatant_profile(
         .improved(modifiers.initiative_die_bonus + misc_modifiers.initiative_die_bonus);
     derived.hit_points = combatant.sheet.vitals.max_hp as u32;
     derived.drain_resistance = combatant.sheet.vitals.drain_resistance;
-    derived.armor_dr = combatant.sheet.defense.armor_dr;
+    derived.armor_dr = combatant.spell_damage_reduction(true);
     // Base DV excludes mastery and situational bonuses. Both come from this
     // profile's resolved combat values, not a second character calculation.
     derived.base_dv = combatant.sheet.defense.defense_mod - defense_mastery
@@ -6059,6 +6068,7 @@ fn build_combatant_profile(
         damage_breakdown.lines.clear();
         damage_breakdown.add_i32(0, "Projectile attack uses its weapon damage expression");
     }
+    damage_breakdown.add_i32(combatant.ideal_self_bonuses().damage, "Ideal Self (while completely uninjured)");
     damage_breakdown.result = sim::combat::preview_damage_bonus(&combatant, sim::WeaponSlot::Primary, primary_is_ranged).to_string();
     let roll = RollSummary {
         attack_breakdown,
@@ -8401,6 +8411,36 @@ mod tests {
             .unwrap_or_else(|| weapons.entries().first().expect("weapon catalog empty"));
         let mastery = effective_speed_mastery(&player, weapon);
         assert_eq!(mastery, 4);
+    }
+
+    #[test]
+    fn ideal_self_is_an_essence_talent_with_no_proficiency_requirement() {
+        let (weapons, armor, shields) = sample_catalogs();
+        let talents = sample_talents();
+        let spec = talents.entries().iter().find(|t| t.id == "ideal_self").unwrap();
+        assert_eq!(spec.category, "Essence");
+        assert!(spec.requirements.is_empty());
+        assert!(talent_is_implemented(spec));
+        let mut player = base_player(one_handed_weapon_id(&weapons));
+        player.level = 20;
+        let npcs = Catalog::new(Vec::new());
+        let base = resolve_player_stats(&player, &weapons, &armor, &shields, &npcs, &talents);
+        add_talent(&mut player, "ideal_self", None);
+        assert!(player.magic.essences.is_empty());
+        let selected = resolve_player_stats(&player, &weapons, &armor, &shields, &npcs, &talents);
+        assert_eq!(selected.combatant.ideal_self_bonuses(), sim::IdealSelfBonuses {
+            damage: 5, feat_of_strength: 11, damage_reduction: 4,
+        });
+        assert_eq!(selected.summary.derived.armor_dr, base.summary.derived.armor_dr + 4);
+        assert_eq!(sim::combat::preview_damage_bonus(&selected.combatant, sim::WeaponSlot::Primary, false),
+            sim::combat::preview_damage_bonus(&base.combatant, sim::WeaponSlot::Primary, false) + 5);
+        let saved = serde_json::to_string(&player).unwrap();
+        let loaded: PlayerConfig = serde_json::from_str(&saved).unwrap();
+        assert_eq!(build_combatant(&loaded, &weapons, &armor, &shields, &npcs, &talents).ideal_self_bonuses(),
+            selected.combatant.ideal_self_bonuses());
+        player.talents.clear();
+        assert_eq!(build_combatant(&player, &weapons, &armor, &shields, &npcs, &talents).ideal_self_bonuses(),
+            sim::IdealSelfBonuses::default());
     }
 
     #[test]

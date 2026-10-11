@@ -1,6 +1,15 @@
 {
   "talents": [
     {
+      "id": "ideal_self",
+      "name": "Ideal Self",
+      "description": "Your untarnished pride fortifies you while you are completely uninjured. Gain level-scaled Damage, Feat of Strength, and Damage Reduction bonuses only at full HP. Bonuses end when injured and return when fully healed.",
+      "cost_bp": 0,
+      "category": "Essence",
+      "max_rank": 1,
+      "effects": [{ "type": "ideal_self" }]
+    },
+    {
       "id": "hit_point_bonus",
       "name": "Hit Point Bonus",
       "description": "Gain +2 hit points per rank.",

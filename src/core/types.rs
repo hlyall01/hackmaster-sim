@@ -123,6 +123,7 @@ pub enum TalentEffect {
         amount: i32,
     },
     EssenceAdvancement,
+    IdealSelf,
     ArmorDrBonus {
         amount: i32,
     },

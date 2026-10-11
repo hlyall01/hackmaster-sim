@@ -38,7 +38,7 @@ pub use types::{
     CombatantTacticalProfile, CriticalHit, DamageBreakdown, DamageDie, DefenseProfile, GridPos,
     KnockAsideEvent, KnockAsideRollBreakdown, ManeuverProfile, MobilityProfile, OffenseProfile,
     OffhandProfile, ShieldBreakageStep, ShieldDamageBreakdown, SimActor, SimConfig, TacticalEvent,
-    TacticalProfileKey, Vitals, WeaponCache, WeaponProfile, WeaponSlot,
+    IdealSelfBonuses, TacticalProfileKey, Vitals, WeaponCache, WeaponProfile, WeaponSlot,
 };
 
 #[cfg(test)]
@@ -74,3 +74,6 @@ pub(crate) fn counter_event(counter: combat::CounterAttackOutcome) -> AttackEven
 
 #[cfg(test)]
 pub(crate) mod test_support;
+
+#[cfg(test)]
+mod ideal_self_tests;
