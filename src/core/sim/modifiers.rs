@@ -38,6 +38,7 @@ pub enum StatIdI32 {
     FlagFallingSunStyle,
     FlagFymblwngerStyle,
     FlagProjectConfidence,
+    FlagIdealSelf,
     FlagIntimidateAdversary,
     FlagHammererStyle,
     FlagHobblerStyle,

@@ -1528,6 +1528,13 @@ impl SimGuiApp {
                 ));
                 let mut spell_action = None;
                 for (index, combatant) in self.sim.combatants.iter().enumerate() {
+                    if combatant.sheet.modifiers.apply_i32(0, sim::StatIdI32::FlagIdealSelf) > 0 {
+                        let bonus = combatant.ideal_self_bonuses();
+                        ui.label(format!("{} — Ideal Self: {}", combatant.sheet.name,
+                            if combatant.state.hp >= combatant.sheet.vitals.max_hp { "active" } else { "injured" }));
+                        ui.small(format!("Damage {:+}, Feat of Strength {:+}, DR {:+}",
+                            bonus.damage, bonus.feat_of_strength, bonus.damage_reduction));
+                    }
                     if combatant.magic.loadout.knows_echo_strike
                         || !combatant.magic.loadout.known_spells.is_empty()
                     {
@@ -6185,6 +6192,11 @@ fn render_talent_entry(
             }
         } else {
             ui.label(spec.description.as_str());
+            if spec.id == "ideal_self" {
+                let bonus = sim::IdealSelfBonuses::for_level(player.level);
+                ui.label(format!("Level {} at full HP: Damage {:+}, Feat of Strength {:+}, DR {:+}",
+                    player.level, bonus.damage, bonus.feat_of_strength, bonus.damage_reduction));
+            }
         }
         if locked && (!is_nyi || is_runtime_prerequisite) {
             ui.colored_label(Color32::from_rgb(180, 70, 70), "Requirements not met:");

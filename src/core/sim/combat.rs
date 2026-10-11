@@ -423,6 +423,7 @@ struct AttackProfile {
     weapon: Arc<super::types::WeaponProfile>,
     attack_bonus: i32,
     strength_damage: i32,
+    ideal_self_damage: i32,
     armor_penetration: i32,
     use_jab: bool,
     uses_projectiles: bool,
@@ -432,6 +433,7 @@ struct AttackProfile {
 fn attack_profile_for_slot(attacker: &Combatant, slot: WeaponSlot) -> Option<AttackProfile> {
     match slot {
         WeaponSlot::Primary => Some(AttackProfile {
+            ideal_self_damage: attacker.ideal_self_bonuses().damage,
             weapon: attacker.sheet.offense.weapon.clone(),
             attack_bonus: attacker
                 .apply_i32(StatIdI32::AttackBonus, attacker.sheet.offense.attack_bonus),
@@ -460,6 +462,7 @@ fn attack_profile_for_slot(attacker: &Combatant, slot: WeaponSlot) -> Option<Att
                 .offhand
                 .as_ref()
                 .map(|offhand| AttackProfile {
+                    ideal_self_damage: attacker.ideal_self_bonuses().damage,
                     weapon: offhand.weapon.clone(),
                     attack_bonus: attacker.apply_i32(StatIdI32::AttackBonus, offhand.attack_bonus),
                     strength_damage: attacker
@@ -556,7 +559,7 @@ fn standard_attack_bonus(combatant: &Combatant, profile: &AttackProfile) -> i32 
 }
 
 fn attack_damage_bonus(profile: &AttackProfile, is_ranged: bool) -> i32 {
-    if is_ranged && profile.uses_projectiles { 0 } else { profile.strength_damage }
+    if is_ranged && profile.uses_projectiles { profile.ideal_self_damage } else { profile.strength_damage }
 }
 
 pub(crate) fn preview_damage_bonus(combatant: &Combatant, slot: WeaponSlot, is_ranged: bool) -> i32 {
