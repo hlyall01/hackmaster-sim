@@ -68,7 +68,7 @@ fn quiet_river_shield_hits_halve_damage_and_bypass_shield_armor_and_natural_dr()
         p.strength_base = 16;
         p.mastery_mut(crate::character::WeaponGroup::Unarmed).damage = 4;
     });
-    assert_eq!(attacker.sheet.offense.weapon.shield_damage_expr.as_deref(), Some("d4p-2"));
+    assert_eq!(attacker.sheet.offense.weapon.shield_damage_expr.as_deref(), Some("max(1,d4p-2)"));
     for counter in [false, true] {
         for ignore_dr in [false, true] {
             let mut checked = 0;
@@ -114,6 +114,31 @@ fn quiet_river_shield_hits_halve_damage_and_bypass_shield_armor_and_natural_dr()
             assert!(checked >= 10, "Exercise shield hits on attacks and counters");
         }
     }
+}
+
+#[test]
+fn quiet_river_fist_minimums_apply_before_modifiers_and_style_halving() {
+    let mut attacker = fixture("quiet_river", "Fist", None, |_| {});
+    attacker.sheet.offense.attack_bonus = 100;
+    attacker.sheet.offense.strength_damage = 4;
+    let mut actors = vec![attacker.clone(), target()];
+    let event = resolve_attack(&mut actors, 0, 1, 0, false, 1.0, AttackMode::Normal,
+        WeaponSlot::Primary, 0.0, None, &mut rand::rngs::mock::StepRng::new(0, 0));
+    let hit = event.damage_breakdown.unwrap();
+    assert_eq!(hit.rolled_damage, 2, "Each 1d4p-2 roll contributes at least one");
+    assert_eq!(event.damage, 3, "Add +4, then halve (2+4)/2");
+
+    attacker.sheet.offense.attack_bonus = 0;
+    let mut defender = target();
+    defender.sheet.defense.shield_name = Some("Shield".into());
+    defender.sheet.defense.shield_dr = 100;
+    defender.reset_state();
+    let mut actors = vec![attacker, defender];
+    let event = resolve_attack(&mut actors, 0, 1, 0, false, 1.0, AttackMode::Normal,
+        WeaponSlot::Primary, 0.0, None, &mut rand::rngs::mock::StepRng::new(0, 0));
+    let hit = event.shield_damage_breakdown.unwrap();
+    assert_eq!(hit.rolled_damage, 1);
+    assert_eq!(event.damage, 2, "Shield pool is floor((1+4)/2), ignoring DR");
 }
 
 #[test]

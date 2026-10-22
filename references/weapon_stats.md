@@ -10,6 +10,10 @@
 | Gauntlet | 4 | minimal | (d4[p]-1)+(d4[p]-1) | - | 10* | S | 1 foot | C | 1 lb |
 | Spiked gauntlet | 4 | minimal | 1d8[p] | - | 10* | S | 1 foot | C/P | 1 lb |
 
+For Fist damage, each individual `d4[p]-2` component has a minimum of 1. Resolve
+`max(1,d4p-2) + max(1,d4p-2)`, then add normal damage modifiers and apply any
+style damage halving. Quiet River's single-die shield pool uses the same minimum.
+
 ## HackMaster 5e Weapon Stats (Reference)
 
 Notation for parsing:

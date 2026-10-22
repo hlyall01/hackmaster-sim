@@ -14,6 +14,7 @@ struct Term {
 #[derive(Clone, Debug)]
 enum Value {
     Constant(i32),
+    MinimumDie { sides: i32, penetrating: bool, offset: i32, minimum: i32 },
     Dice {
         count: i32,
         sides: i32,
@@ -50,6 +51,12 @@ impl Expression {
             if term.sign < 0 { result.push('-'); } else if !result.is_empty() { result.push('+'); }
             match term.value {
                 Value::Constant(value) => result.push_str(&value.to_string()),
+                Value::MinimumDie { sides, penetrating, offset, minimum } => {
+                    let die = Self(vec![Term { sign: 1, value: Value::Dice {
+                        count: 1, sides, penetrating,
+                    }}]).roll20(nonpenetrating, triggers, max_minus_one)?;
+                    result.push_str(&format!("{{[[{die}{offset:+}]],{minimum}}}kh1"));
+                }
                 Value::Dice { count, sides, penetrating } => {
                     result.push_str(&format!("{count}d{sides}"));
                     if penetrating && !nonpenetrating {
@@ -101,6 +108,18 @@ impl Expression {
         for term in &self.0 {
             let value = match term.value {
                 Value::Constant(value) => value,
+                Value::MinimumDie { sides, penetrating, offset, minimum } => {
+                    let roll = if !penetrating || nonpenetrating {
+                        standard_roll(sides, rng)
+                    } else if max_minus_one {
+                        penetrating_roll_trigger_set(sides, &[(sides - 1).max(1), sides], rng)
+                    } else if let Some(triggers) = triggers.filter(|_| sides == 6) {
+                        penetrating_roll_trigger_set(sides, triggers, rng)
+                    } else {
+                        penetrating_roll(sides, rng)
+                    };
+                    roll.saturating_add(offset).max(minimum)
+                }
                 Value::Dice {
                     count,
                     sides,
@@ -138,6 +157,10 @@ impl Expression {
                 f64::from(term.sign)
                     * match term.value {
                         Value::Constant(value) => f64::from(value),
+                        Value::MinimumDie { sides, penetrating, offset, minimum } => {
+                            expected_minimum_die(sides, penetrating && !nonpenetrating,
+                                offset, minimum, triggers, max_minus_one)
+                        }
                         Value::Dice {
                             count,
                             sides,
@@ -159,6 +182,40 @@ impl Expression {
             })
             .sum()
     }
+}
+
+fn expected_minimum_die(
+    sides: i32, penetrating: bool, offset: i32, minimum: i32,
+    custom_triggers: Option<&[i32]>, max_minus_one: bool,
+) -> f64 {
+    let expanded = [(sides - 1).max(1), sides];
+    let normal = [sides];
+    let triggers = if !penetrating || sides <= 1 { &[][..] }
+        else if max_minus_one { &expanded[..] }
+        else if sides == 6 { custom_triggers.unwrap_or(&normal) }
+        else { &normal[..] };
+    let triggers = if triggers.len() >= sides as usize { &[][..] } else { triggers };
+    let mut expected = expected_die_with_trigger_count(f64::from(sides), triggers.len())
+        + f64::from(offset);
+    // Only outcomes below the floor need a correction. Penetration's tail is
+    // retained analytically; this bounded distribution is computed, never sampled.
+    let cutoff = minimum.saturating_sub(offset).max(1) as usize;
+    let mut probabilities = vec![0.0; cutoff];
+    for value in 1..cutoff {
+        let mut probability = if value <= sides as usize && !triggers.contains(&(value as i32)) {
+            1.0 / f64::from(sides)
+        } else { 0.0 };
+        for &trigger in triggers.iter().filter(|&&face| face > 1) {
+            let increment = (trigger - 1) as usize;
+            if increment < value {
+                probability += probabilities[value - increment] / f64::from(sides);
+            }
+        }
+        if triggers.contains(&1) { probability /= 1.0 - 1.0 / f64::from(sides); }
+        probabilities[value] = probability;
+        expected += (f64::from(minimum) - value as f64 - f64::from(offset)) * probability;
+    }
+    expected
 }
 
 struct Parser<'a> {
@@ -186,7 +243,10 @@ impl Parser<'_> {
                 _ => return Err(DamageExprError("Expected '+' or '-' between damage terms")),
             };
             first = false;
-            if self.bytes.get(self.pos) == Some(&b'(') {
+            if self.bytes[self.pos..].starts_with(b"max(") {
+                let value = self.minimum_die()?;
+                self.terms.push(Term { sign, value });
+            } else if self.bytes.get(self.pos) == Some(&b'(') {
                 self.pos += 1;
                 self.expression(sign, depth + 1)?;
                 if self.bytes.get(self.pos) != Some(&b')') {
@@ -228,6 +288,38 @@ impl Parser<'_> {
                 return Ok(());
             }
         }
+    }
+    fn minimum_die(&mut self) -> Result<Value, DamageExprError> {
+        self.pos += 4;
+        let minimum = self.number()?.ok_or(DamageExprError("Missing damage minimum"))?;
+        if self.bytes.get(self.pos) != Some(&b',') {
+            return Err(DamageExprError("Expected comma after damage minimum"));
+        }
+        self.pos += 1;
+        let count = self.number()?.unwrap_or(1);
+        if count != 1 || self.bytes.get(self.pos) != Some(&b'd') {
+            return Err(DamageExprError("A damage minimum applies to one die at a time"));
+        }
+        self.pos += 1;
+        let sides = self.number()?.filter(|s| *s > 0).ok_or(DamageExprError("Missing die size"))?;
+        let penetrating = self.bytes.get(self.pos) == Some(&b'p');
+        if penetrating { self.pos += 1; }
+        let offset = match self.bytes.get(self.pos) {
+            Some(sign @ (b'+' | b'-')) => {
+                let sign = if *sign == b'-' { -1 } else { 1 };
+                self.pos += 1;
+                sign * self.number()?.ok_or(DamageExprError("Missing die modifier"))?
+            }
+            _ => 0,
+        };
+        if self.bytes.get(self.pos) != Some(&b')') {
+            return Err(DamageExprError("Unclosed single-die minimum"));
+        }
+        self.pos += 1;
+        if minimum.saturating_sub(offset) > 10_000 || self.terms.len() >= 4096 {
+            return Err(DamageExprError("Damage minimum is too large"));
+        }
+        Ok(Value::MinimumDie { sides, penetrating, offset, minimum })
     }
     fn number(&mut self) -> Result<Option<i32>, DamageExprError> {
         let start = self.pos;

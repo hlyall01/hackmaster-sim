@@ -186,7 +186,7 @@ pub fn clean_damage_expr(expr: &str) -> String {
         if ch == '^' {
             break;
         }
-        if ch.is_ascii_alphanumeric() || "+-()".contains(ch) {
+        if ch.is_ascii_alphanumeric() || "+-(),".contains(ch) {
             cleaned.push(ch);
         }
     }
@@ -314,6 +314,10 @@ fn evaluate_term(
     rng: &mut impl Rng,
 ) -> i32 {
     let trimmed = strip_outer_parens(term);
+    if let Some((minimum, body)) = single_die_minimum(trimmed) {
+        return evaluate_expression(body, d6_penetration_triggers, penetrate_on_max_minus_one, rng)
+            .max(minimum);
+    }
 
     if has_top_level_operator(trimmed) {
         return evaluate_expression(
@@ -369,6 +373,12 @@ fn expected_term(
     penetrate_on_max_minus_one: bool,
 ) -> f64 {
     let trimmed = strip_outer_parens(term);
+    if single_die_minimum(trimmed).is_some() {
+        let cache = if penetrate_on_max_minus_one {
+            DamageExprCache::new_with_max_minus_one_penetration(trimmed)
+        } else { DamageExprCache::new(trimmed) };
+        return cache.expected(false);
+    }
 
     if has_top_level_operator(trimmed) {
         return expected_expression(
@@ -473,8 +483,18 @@ pub(crate) fn evaluate_expression_with_detail(expr: &str, rng: &mut impl Rng) ->
     (total, detail)
 }
 
+fn single_die_minimum(term: &str) -> Option<(i32, &str)> {
+    let (minimum, body) = term.strip_prefix("max(")?.strip_suffix(')')?.split_once(',')?;
+    Some((minimum.parse().ok()?, body))
+}
+
 fn evaluate_term_with_detail(term: &str, rng: &mut impl Rng) -> (i32, String) {
     let trimmed = strip_outer_parens(term);
+    if let Some((minimum, body)) = single_die_minimum(trimmed) {
+        let (raw, detail) = evaluate_expression_with_detail(body, rng);
+        let result = raw.max(minimum);
+        return (result, format!("max({minimum}, {detail})={result}"));
+    }
 
     if has_top_level_operator(trimmed) {
         return evaluate_expression_with_detail(trimmed, rng);
@@ -684,10 +704,39 @@ fn has_top_level_operator(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn fist_components_each_have_a_minimum_before_they_are_added() {
+        use rand::{RngCore, SeedableRng, rngs::StdRng};
+        let expression = "max(1,d4p-2)+max(1,d4p-2)";
+        let cache = super::DamageExprCache::try_new(expression).unwrap();
+        assert_eq!(cache.expected(false), 3.5);
+        assert_eq!(cache.expected(true), 2.5);
+        assert_eq!(super::DamageExprCache::new_with_max_minus_one_penetration(expression)
+            .expected(false), 5.5);
+        assert_eq!(cache.roll20_expression(false).unwrap(),
+            "{[[1d4!p-2]],1}kh1+{[[1d4!p-2]],1}kh1");
+        let mut saw_component_floor_differ_from_total_floor = false;
+        for seed in 0..1000 {
+            let mut expected_rng = StdRng::seed_from_u64(seed);
+            let a = super::penetrating_roll(4, &mut expected_rng) - 2;
+            let b = super::penetrating_roll(4, &mut expected_rng) - 2;
+            let expected = a.max(1) + b.max(1);
+            saw_component_floor_differ_from_total_floor |= expected != (a + b).max(2);
+            let mut rng = StdRng::seed_from_u64(seed);
+            assert_eq!(cache.roll(&mut rng, false), expected);
+            assert_eq!(rng.next_u64(), expected_rng.next_u64());
+            assert_eq!(super::roll_damage_expr_with_detail(expression,
+                &mut StdRng::seed_from_u64(seed)).0, expected);
+        }
+        assert!(saw_component_floor_differ_from_total_floor);
+    }
+
+    #[test]
     fn malformed_expressions_are_rejected_without_hanging() {
         use rand::SeedableRng;
         let mut rng = rand::rngs::StdRng::seed_from_u64(7);
-        for expression in ["d6)", "(d6", "d6+", "()", "d0", "2dd6", "999999999999d6"] {
+        for expression in ["d6)", "(d6", "d6+", "()", "d0", "2dd6", "999999999999d6",
+            "max(1,2d4p-2)", "max(1,d0-2)", "max(1,d4p-)", "max(1,d4p-2",
+            "max(999999,d4p-2)"] {
             assert!(
                 super::DamageExprCache::try_new(expression).is_err(),
                 "{expression}"
