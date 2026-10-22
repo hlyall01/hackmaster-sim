@@ -15,7 +15,7 @@ use super::movement::{max_range_for_weapon, range_modifier_for_weapon_with_scale
 use super::types::{
     AttackEvent, CalledShotDelayProfile, CombatEvent, CombatEventKind, Combatant, DamageBreakdown,
     GridPos, KnockAsideEvent, ShieldDamageBreakdown, SimActor, SimConfig, TacticalEvent,
-    WeaponSlot,
+    WeaponProfile, WeaponSlot,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -25,6 +25,32 @@ mod spell_effect_engine;
 const CHARGE_MIN_DISTANCE_FT: f32 = 20.0;
 const SHIELD_STRIKE_SPEEDUP_SECONDS: f32 = 2.0;
 const SIX_PATHS_FOLLOWUP_SECONDS: f32 = 1.0;
+
+fn unarmed_opponent(defender: &Combatant) -> bool {
+    let armed_weapon = |weapon: &WeaponProfile| {
+        weapon.has_weapon && !weapon.is_unarmed
+    };
+    !armed_weapon(&defender.sheet.offense.weapon)
+        && !defender.sheet.offense.offhand.as_ref()
+            .is_some_and(|offhand| armed_weapon(&offhand.weapon))
+}
+
+fn faster_against_unarmed(weapon: &WeaponProfile, defender: &Combatant, is_ranged: bool) -> bool {
+    !is_ranged && weapon.has_weapon && !weapon.is_unarmed && unarmed_opponent(defender)
+}
+
+fn recovery_against_opponent(
+    speed: f32, weapon: &WeaponProfile, defender: &Combatant, is_ranged: bool,
+) -> f32 {
+    if faster_against_unarmed(weapon, defender, is_ranged) {
+        // Quiet River remains unarmed. Vulnerability speed bonuses do not stack.
+        (speed / 2.0).ceil().max(1.0)
+    } else if defender.state.trauma_remaining_seconds > 0 {
+        (speed / 2.0).ceil().max(1.0)
+    } else {
+        speed
+    }
+}
 
 fn damage_prevented(
     damage: Option<&DamageBreakdown>,
@@ -1031,10 +1057,16 @@ impl SimState {
                 )
                 .max(1.0)
         };
-        let attack_speed = |combatant: &Combatant| {
-            combatant
+        let attack_speed = |combatant: &Combatant, opponent: &Combatant| {
+            let weapon = &combatant.sheet.offense.weapon;
+            let speed = combatant
                 .apply_f32(StatIdF32::WeaponSpeed, combatant.sheet.offense.weapon.speed)
-                .max(1.0)
+                .max(1.0);
+            let is_ranged = max_range_for_weapon(weapon).is_some()
+                && (weapon.uses_projectiles
+                    || self.distance_between(my_idx, enemy_idx).unwrap_or(0.0)
+                        > weapon.reach_ft.max(1.0));
+            recovery_against_opponent(speed, weapon, opponent, is_ranged)
         };
         let move_speed = |combatant: &Combatant| {
             combatant
@@ -1151,12 +1183,12 @@ impl SimState {
                 0.0
             },
             my_attack_speed_seconds: if needs_attack_speed {
-                attack_speed(mine)
+                attack_speed(mine, enemy)
             } else {
                 0.0
             },
             enemy_attack_speed_seconds: if needs_attack_speed {
-                attack_speed(enemy)
+                attack_speed(enemy, mine)
             } else {
                 0.0
             },
@@ -2445,9 +2477,10 @@ impl SimState {
                     }
                     speed += recovery_penalty;
                 }
-                if self.combatants[defender_idx].state.trauma_remaining_seconds > 0 {
-                    speed = (speed / 2.0).ceil().max(1.0);
-                }
+                speed = recovery_against_opponent(
+                    speed, &self.combatants[attacker_idx].sheet.offense.weapon,
+                    &self.combatants[defender_idx], event.is_ranged,
+                );
                 speed += called_shot_delay_seconds(
                     &self.combatants[attacker_idx],
                     &self.combatants[event.defender_idx],
@@ -2531,6 +2564,13 @@ impl SimState {
                         2.0
                     } else {
                         2.0 + (primary_speed_base / 2.0).ceil()
+                    };
+                    let offset = if faster_against_unarmed(
+                        weapon, &self.combatants[defender_idx], use_ranged,
+                    ) {
+                        (offset / 2.0).ceil().max(1.0)
+                    } else {
+                        offset
                     };
                     let called_shot_delay = called_shot_delay_seconds(
                         &self.combatants[attacker_idx],
@@ -2745,9 +2785,9 @@ impl SimState {
                         .apply_f32(StatIdF32::WeaponSpeed, weapon.speed)
                         .max(1.0)
                         + recovery_penalty;
-                    if self.combatants[defender_idx].state.trauma_remaining_seconds > 0 {
-                        speed = (speed / 2.0).ceil().max(1.0);
-                    }
+                    speed = recovery_against_opponent(
+                        speed, weapon, &self.combatants[defender_idx], event.is_ranged,
+                    );
                     speed += called_shot_delay_seconds(
                         &self.combatants[attacker_idx],
                         &self.combatants[event.defender_idx],
@@ -2772,6 +2812,148 @@ mod tests {
     use crate::core::sim::{CombatantTacticalProfile, TacticalProfileKey};
     use crate::core::sim::{ModifierOpF32, ModifierOpI32, TemporaryEffect};
     use crate::core::tactics::{TacticalCondition, TacticalPolicy, TacticalRule};
+
+    #[test]
+    fn unarmed_opponent_checks_both_hands_and_keeps_quiet_river_unarmed() {
+        use crate::core::sim::OffhandProfile;
+        use std::sync::Arc;
+
+        let mut defender = Combatant::default();
+        assert!(unarmed_opponent(&defender));
+        let weapon = Arc::make_mut(&mut defender.sheet.offense.weapon);
+        weapon.has_weapon = true;
+        weapon.is_unarmed = true;
+        defender.sheet.modifiers.add_i32(StatIdI32::FlagQuietRiverStyle, ModifierOpI32::Set(1));
+        assert!(unarmed_opponent(&defender));
+        defender.sheet.defense.shield_name = Some("Shield".into());
+        defender.state.shield_intact = true;
+        assert!(unarmed_opponent(&defender));
+
+        let mut offhand = (*defender.sheet.offense.weapon).clone();
+        offhand.is_unarmed = false;
+        defender.sheet.offense.offhand = Some(OffhandProfile {
+            attack_bonus: 0,
+            strength_damage: 0,
+            weapon: Arc::new(offhand),
+        });
+        assert!(!unarmed_opponent(&defender));
+        defender.sheet.offense.offhand = None;
+        Arc::make_mut(&mut defender.sheet.offense.weapon).is_unarmed = false;
+        assert!(!unarmed_opponent(&defender));
+    }
+
+    fn speed_duel(attacker_unarmed: bool, defender_unarmed: bool, ranged: bool) -> SimState {
+        use std::sync::Arc;
+        let mut attacker = Combatant::default();
+        attacker.team_id = 0;
+        attacker.sheet.vitals.max_hp = 10_000;
+        attacker.sheet.vitals.threshold_of_pain = 10_000;
+        let weapon = Arc::make_mut(&mut attacker.sheet.offense.weapon);
+        weapon.has_weapon = true;
+        weapon.is_unarmed = attacker_unarmed;
+        weapon.speed = 7.0;
+        weapon.crit_min_roll = 21;
+        if ranged {
+            weapon.range_bands_feet = Some([30.0, 60.0, 90.0, 120.0]);
+            weapon.uses_projectiles = true;
+        }
+        let mut defender = Combatant::default();
+        defender.team_id = 1;
+        defender.sheet.vitals.max_hp = 10_000;
+        defender.sheet.vitals.threshold_of_pain = 10_000;
+        defender.sheet.defense.knockback_step = 10_000;
+        defender.sheet.maneuvers.passive = true;
+        let weapon = Arc::make_mut(&mut defender.sheet.offense.weapon);
+        weapon.has_weapon = true;
+        weapon.is_unarmed = defender_unarmed;
+        let mut sim = SimState::with_rng(SimConfig::new(1.0, 1.0), SimRng::from_seed(77));
+        sim.reset_with_combatants(vec![attacker, defender]);
+        sim
+    }
+
+    #[test]
+    fn only_armed_melee_attacks_halve_recovery_rounding_up_against_unarmed_opponents() {
+        for (attacker_unarmed, defender_unarmed, ranged, expected) in [
+            (false, true, false, 4.0),
+            (true, true, false, 7.0),
+            (false, false, false, 7.0),
+            (false, true, true, 7.0),
+        ] {
+            let mut sim = speed_duel(attacker_unarmed, defender_unarmed, ranged);
+            sim.tick();
+            assert!(sim.combatants[0].state.has_attacked);
+            assert_eq!(sim.combatants[0].state.next_attack_time_primary, Some(expected));
+            if expected == 4.0 {
+                for _ in 0..4 { sim.tick(); }
+                assert_eq!(sim.combatants[0].state.next_attack_time_primary, Some(8.0),
+                    "Each halved recovery rounds up to a whole second");
+            }
+        }
+    }
+
+    #[test]
+    fn unarmed_speed_bonus_updates_after_equipment_changes_without_restarting_recovery() {
+        let mut sim = speed_duel(false, true, false);
+        sim.tick();
+        assert_eq!(sim.combatants[0].state.next_attack_time_primary, Some(4.0));
+        std::sync::Arc::make_mut(&mut sim.combatants[1].sheet.offense.weapon).is_unarmed = false;
+        for _ in 0..3 { sim.tick(); }
+        assert_eq!(sim.combatants[0].state.next_attack_time_primary, Some(4.0));
+        sim.tick();
+        assert_eq!(sim.combatants[0].state.next_attack_time_primary, Some(11.0));
+    }
+
+    #[test]
+    fn unarmed_speed_bonus_applies_to_both_dualwielding_clocks() {
+        use crate::core::sim::OffhandProfile;
+        use std::sync::Arc;
+        let mut sim = speed_duel(false, true, false);
+        let attacker = &mut sim.combatants[0];
+        Arc::make_mut(&mut attacker.sheet.offense.weapon).speed = 10.0;
+        let mut offhand = (*attacker.sheet.offense.weapon).clone();
+        offhand.speed = 6.0;
+        attacker.sheet.offense.offhand = Some(OffhandProfile {
+            attack_bonus: 0, strength_damage: 0, weapon: Arc::new(offhand),
+        });
+        attacker.sheet.maneuvers.offensive_dualwielding = true;
+        sim.tick();
+        assert_eq!(sim.combatants[0].state.next_attack_time_primary, Some(6.0));
+        assert_eq!(sim.combatants[0].state.next_attack_time_secondary, Some(4.0));
+        for _ in 0..4 { sim.tick(); }
+        assert_eq!(sim.combatants[0].state.next_attack_time_secondary, Some(8.0));
+    }
+
+    #[test]
+    fn unarmed_speed_bonus_keeps_called_shot_delays_and_one_second_minimum() {
+        let run = |unarmed| {
+            let mut sim = speed_duel(false, unarmed, false);
+            sim.combatants[0].sheet.maneuvers.called_shot = true;
+            for _ in 0..100 {
+                sim.tick();
+                if sim.combatants[0].state.has_attacked { break; }
+            }
+            sim.combatants[0].state.next_attack_time_primary.unwrap()
+        };
+        assert_eq!(run(false) - run(true), 3.0, "Only weapon recovery is halved and rounded up");
+        let mut sim = speed_duel(false, true, false);
+        std::sync::Arc::make_mut(&mut sim.combatants[0].sheet.offense.weapon).speed = 1.0;
+        sim.tick();
+        assert_eq!(sim.combatants[0].state.next_attack_time_primary, Some(1.0));
+    }
+
+    #[test]
+    fn tactical_speed_comparisons_include_the_unarmed_opponent_bonus_and_temporary_modifiers() {
+        let mut sim = speed_duel(false, true, false);
+        let context = sim.tactical_context(0, 1);
+        assert_eq!(context.my_attack_speed_seconds, 4.0);
+        assert_eq!(context.enemy_attack_speed_seconds, 10.0);
+        let mut effect = TemporaryEffect::new("speed_buff", 10);
+        effect.modifiers.add_f32(StatIdF32::WeaponSpeed, ModifierOpF32::Add(-2.0));
+        sim.combatants[0].state.active_effects.push(effect);
+        assert_eq!(sim.tactical_context(0, 1).my_attack_speed_seconds, 3.0);
+        sim.tick();
+        assert_eq!(sim.combatants[0].state.next_attack_time_primary, Some(3.0));
+    }
 
     fn tactical_profile(
         base: &Combatant,

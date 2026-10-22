@@ -1393,7 +1393,11 @@ fn shield_block_raw_damage(
         return (0, 0);
     };
     let rolled_damage = roll_mounted_weapon_damage(weapon, mounted_plan, false, true, average, rng);
-    let mut raw = rolled_damage + strength_damage + damage_penalty;
+    let mut raw = rolled_damage + strength_damage;
+    if weapon.halve_damage {
+        raw /= 2;
+    }
+    raw += damage_penalty;
     if raw < 0 {
         raw = 0;
     }
@@ -1844,6 +1848,12 @@ fn resolve_counter_attack(
         |weapon| DamageSource::weapon(weapon, weapon_slot),
     );
     let unarmed_expr = unarmed_expr.unwrap_or("d4p");
+    let quiet_river_unarmed = !use_weapon
+        && combatants[attacker_idx].apply_i32(StatIdI32::FlagQuietRiverStyle, 0) > 0;
+    let halve_damage = quiet_river_unarmed
+        || weapon_profile.as_ref().is_some_and(|weapon| weapon.halve_damage);
+    let weapon_ignores_all_dr = quiet_river_unarmed
+        || weapon_profile.as_ref().is_some_and(|weapon| weapon.ignore_all_dr);
     let mounted_plan = weapon_profile.as_ref().map(|weapon| mounted_damage_plan(
         &combatants[attacker_idx], &combatants[defender_idx], weapon, false,
     )).unwrap_or_default();
@@ -2003,12 +2013,7 @@ fn resolve_counter_attack(
             rolled_damage = rolled_damage.min(roll(rng));
         }
         let mut raw = rolled_damage + strength_damage + damage_penalty;
-        if use_weapon
-            && weapon_profile
-                .as_ref()
-                .map(|weapon| weapon.halve_damage)
-                .unwrap_or(false)
-        {
+        if halve_damage {
             raw /= 2;
         }
         raw = raw.saturating_mul(damage_multiplier);
@@ -2017,11 +2022,6 @@ fn resolve_counter_attack(
         }
         let raw_base = raw;
         let defender_hp_before = combatants[defender_idx].state.hp;
-        let weapon_ignores_all_dr = use_weapon
-            && weapon_profile
-                .as_ref()
-                .map(|weapon| weapon.ignore_all_dr)
-                .unwrap_or(false);
         let mut effective_dr = if weapon_ignores_all_dr {
             0
         } else if ignore_armor {
@@ -2198,15 +2198,29 @@ fn resolve_counter_attack(
                     average_damage,
                     rng,
                 )
+            } else if quiet_river_unarmed {
+                // Near-perfect defenses punch with the unarmed pool rather than
+                // the held weapon; Quiet River still applies to those punches.
+                let expr = if superior_unarmed { "d4p" } else { "d4p-2" };
+                let rolled = if average_damage {
+                    average_damage_cache_rounded_down(&DamageExprCache::new(expr), false)
+                } else {
+                    roll_damage_expr(expr, rng, false)
+                };
+                let raw = ((rolled + strength_damage) / 2 + damage_penalty)
+                    .max(0).saturating_mul(damage_multiplier.max(1));
+                (rolled, raw)
             } else {
                 // Unarmed has no dedicated shield-damage expression, so shield hits do zero.
                 (0, 0)
             };
             shield_damage = raw;
             knockback_ft = knockback_rule.distance_ft(raw);
-            let effective_shield_dr = if ignore_armor { 0 } else { shield_dr };
+            let effective_shield_dr = if ignore_armor || weapon_ignores_all_dr { 0 } else { shield_dr };
             let shield_after_dr = (raw - effective_shield_dr).max(0);
-            let effective_dr = if ignore_armor {
+            let effective_dr = if weapon_ignores_all_dr {
+                0
+            } else if ignore_armor {
                 natural_dr.max(0)
             } else if armor_dr >= 5 || armor_is_heavy {
                 (armor_dr - armor_penetration).max(0)
@@ -2245,8 +2259,8 @@ fn resolve_counter_attack(
                 strength_damage,
                 raw_damage: raw,
                 shield_dr: effective_shield_dr,
-                armor_dr: if ignore_armor { natural_dr } else { armor_dr },
-                armor_penetration: if ignore_armor { 0 } else { armor_penetration },
+                armor_dr: if weapon_ignores_all_dr { 0 } else if ignore_armor { natural_dr } else { armor_dr },
+                armor_penetration: if ignore_armor || weapon_ignores_all_dr { 0 } else { armor_penetration },
                 effective_armor_dr: effective_dr,
                 hp_damage,
                 shield_broken,
@@ -2990,12 +3004,16 @@ pub(crate) fn resolve_attack(
             let raw = if halve_aggressive_damage { raw / 2 } else { raw };
             shield_damage = raw;
             knockback_ft = knockback_rule.distance_ft(raw);
-            let shield_after_dr = (raw - shield_dr).max(0);
+            let effective_shield_dr = if weapon.ignore_all_dr { 0 } else { shield_dr };
+            let shield_after_dr = (raw - effective_shield_dr).max(0);
 
-            let mut effective_dr = armor_dr;
-            if armor_dr >= 5 || armor_is_heavy {
-                effective_dr = (armor_dr - armor_penetration).max(0);
-            }
+            let effective_dr = if weapon.ignore_all_dr {
+                0
+            } else if armor_dr >= 5 || armor_is_heavy {
+                (armor_dr - armor_penetration).max(0)
+            } else {
+                armor_dr
+            };
             let hp_damage = (shield_after_dr - effective_dr).max(0);
             if hp_damage > 0 {
                 if !defender_infinite_hp {
@@ -3005,7 +3023,7 @@ pub(crate) fn resolve_attack(
             }
 
             let breakage_raw = if defender_unbreakable_wall {
-                (raw - shield_dr).max(0)
+                (raw - effective_shield_dr).max(0)
             } else {
                 raw
             };
@@ -3028,9 +3046,9 @@ pub(crate) fn resolve_attack(
                 rolled_damage,
                 strength_damage,
                 raw_damage: raw,
-                shield_dr,
-                armor_dr,
-                armor_penetration,
+                shield_dr: effective_shield_dr,
+                armor_dr: if weapon.ignore_all_dr { 0 } else { armor_dr },
+                armor_penetration: if weapon.ignore_all_dr { 0 } else { armor_penetration },
                 effective_armor_dr: effective_dr,
                 hp_damage,
                 shield_broken,

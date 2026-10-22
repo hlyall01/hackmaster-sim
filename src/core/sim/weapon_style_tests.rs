@@ -63,6 +63,103 @@ fn target() -> Combatant {
 }
 
 #[test]
+fn quiet_river_shield_hits_halve_damage_and_bypass_shield_armor_and_natural_dr() {
+    let attacker = fixture("quiet_river", "Fist", None, |p| {
+        p.strength_base = 16;
+        p.mastery_mut(crate::character::WeaponGroup::Unarmed).damage = 4;
+    });
+    assert_eq!(attacker.sheet.offense.weapon.shield_damage_expr.as_deref(), Some("d4p-2"));
+    for counter in [false, true] {
+        for ignore_dr in [false, true] {
+            let mut checked = 0;
+            for seed in 0..200 {
+                let mut striker = attacker.clone();
+                Arc::make_mut(&mut striker.sheet.offense.weapon).ignore_all_dr = ignore_dr;
+                let mut defender = target();
+                defender.sheet.defense.shield_name = Some("Test shield".into());
+                defender.sheet.defense.shield_defense_bonus = 3;
+                defender.sheet.defense.shield_dr = 100;
+                defender.sheet.defense.armor_dr = 50;
+                defender.sheet.defense.natural_dr = 30;
+                defender.reset_state();
+                let mut actors = vec![striker, defender];
+                let mut rng = StdRng::seed_from_u64(seed);
+                let (damage, shield_damage, roll) = if counter {
+                    let outcome = resolve_style_strike(&mut actors, 0, 1,
+                        WeaponSlot::Primary, 1.0, 0.0, &mut rng).unwrap();
+                    (outcome.damage, outcome.shield_damage_breakdown, outcome.roll)
+                } else {
+                    let outcome = resolve_attack(&mut actors, 0, 1, 0, false, 1.0,
+                        AttackMode::Normal, WeaponSlot::Primary, 0.0, None, &mut rng);
+                    (outcome.damage, outcome.shield_damage_breakdown, outcome.roll)
+                };
+                let Some(shield) = shield_damage else { continue; };
+                assert_eq!(roll.shield_defense_bonus, 7, "Shield still contributes to defense");
+                assert_eq!(shield.raw_damage,
+                    ((shield.rolled_damage + shield.strength_damage) / 2).max(0));
+                assert!(shield.raw_damage > 0, "Normal modifiers apply to the shield pool");
+                if ignore_dr {
+                    assert_eq!(shield.shield_dr, 0);
+                    assert_eq!(shield.armor_dr, 0);
+                    assert_eq!(shield.effective_armor_dr, 0);
+                    assert_eq!(damage, shield.raw_damage);
+                    assert_eq!(actors[1].state.hp, 1000 - damage);
+                } else {
+                    assert_eq!(shield.shield_dr, 100);
+                    assert_eq!(shield.effective_armor_dr, 50);
+                    assert_eq!(damage, 0);
+                }
+                checked += 1;
+            }
+            assert!(checked >= 10, "Exercise shield hits on attacks and counters");
+        }
+    }
+}
+
+#[test]
+fn quiet_river_near_perfect_defense_punches_keep_damage_and_dr_rules() {
+    for superior in [false, true] {
+        let mut quiet = fixture("quiet_river", "Fist", None, |p| {
+            p.strength_base = 16;
+            p.mastery_mut(crate::character::WeaponGroup::Unarmed).damage = 4;
+        });
+        quiet.sheet.defense.defense_mod = 100;
+        if superior {
+            quiet.sheet.modifiers.add_i32(StatIdI32::FlagSuperiorDefense, ModifierOpI32::Set(1));
+        }
+        let mut direct_hits = 0;
+        let mut shield_hits = 0;
+        for seed in 0..2000 {
+            let mut opponent = target();
+            opponent.sheet.defense.shield_name = Some("Test shield".into());
+            opponent.sheet.defense.shield_dr = 100;
+            opponent.sheet.defense.armor_dr = 50;
+            opponent.sheet.defense.natural_dr = 30;
+            opponent.reset_state();
+            let mut actors = vec![opponent, quiet.clone()];
+            let event = resolve_attack(&mut actors, 0, 1, 0, false, 1.0,
+                AttackMode::Normal, WeaponSlot::Primary, 0.0, None,
+                &mut StdRng::seed_from_u64(seed));
+            if event.roll.defense_die != 19 { continue; }
+            let Some(counter) = event.counter_attack else { continue; };
+            if let Some(hit) = counter.damage_breakdown {
+                assert_eq!(hit.effective_armor_dr, 0);
+                assert_eq!(counter.damage, ((hit.rolled_damage + hit.strength_damage) / 2).max(0));
+                direct_hits += 1;
+            }
+            if let Some(hit) = counter.shield_damage_breakdown {
+                assert_eq!(hit.shield_dr, 0);
+                assert_eq!(hit.effective_armor_dr, 0);
+                assert_eq!(counter.damage, ((hit.rolled_damage + hit.strength_damage) / 2).max(0));
+                assert!(counter.damage > 0);
+                shield_hits += 1;
+            }
+        }
+        assert!(direct_hits > 0 && shield_hits > 0);
+    }
+}
+
+#[test]
 fn new_styles_are_trained_and_have_catalog_effects() {
     let talents = data::load_talents(data::TALENTS_PATH).unwrap();
     for id in [
