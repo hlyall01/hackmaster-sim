@@ -922,7 +922,7 @@
     {
       "id": "quiet_river",
       "name": "Quiet River",
-      "description": "A quiet river carves mountains. You deal half damage, but ignore all DR. While not wearing armor or using a shield, your base defense with your bare hands is d20p and you receive double the defense bonus from unarmed weapons mastery. You are not considered armed, however armed opponents do not receive free counterattacks against you.",
+      "description": "A quiet river carves mountains. You deal half damage, but ignore all DR (natural, armor, shield, or otherwise). While not wearing armor or using a shield, your base defense with your bare hands is d20p, you gain a base shield damage (half your standard dice plus any normal modifiers), and you receive double the defense bonus from unarmed weapons mastery. You are not considered armed, however armed opponents do not receive free counterattacks against you.",
       "cost_bp": 20,
       "category": "Weapon Styles",
       "max_rank": 1,

@@ -5832,7 +5832,11 @@ fn build_combatant_profile(
     } else {
         damage_expr_cache
     };
-    let shield_damage_expr = if one_path {
+    let shield_damage_expr = if quiet_river_active {
+        // Fist's standard pool is (d4p-2)+(d4p-2); Quiet River grants half
+        // that pool against shields, before normal modifiers and style halving.
+        Some("d4p-2".to_string())
+    } else if one_path {
         shield_damage_expr.map(|expr| reduce_damage_dice(&expr))
     } else {
         shield_damage_expr
@@ -9612,6 +9616,8 @@ mod tests {
 
         assert!(combatant.sheet.offense.weapon.halve_damage);
         assert!(combatant.sheet.offense.weapon.ignore_all_dr);
+        assert_eq!(combatant.sheet.offense.weapon.shield_damage_expr.as_deref(), Some("d4p-2"));
+        assert!(baseline_combatant.sheet.offense.weapon.shield_damage_expr.is_none());
         assert_eq!(
             combatant.sheet.defense.defense_mod - baseline_combatant.sheet.defense.defense_mod,
             player
