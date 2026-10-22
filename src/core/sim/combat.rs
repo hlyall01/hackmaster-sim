@@ -1812,7 +1812,7 @@ fn resolve_counter_attack(
         let damage_expr = if superior_unarmed {
             "(d4p)+(d4p)"
         } else {
-            "(d4p-2)+(d4p-2)"
+            "max(1,d4p-2)+max(1,d4p-2)"
         };
         let (attack_bonus, strength_damage_base, unarmed_damage_bonus) = {
             let attacker = &combatants[attacker_idx];
@@ -2201,7 +2201,7 @@ fn resolve_counter_attack(
             } else if quiet_river_unarmed {
                 // Near-perfect defenses punch with the unarmed pool rather than
                 // the held weapon; Quiet River still applies to those punches.
-                let expr = if superior_unarmed { "d4p" } else { "d4p-2" };
+                let expr = if superior_unarmed { "d4p" } else { "max(1,d4p-2)" };
                 let rolled = if average_damage {
                     average_damage_cache_rounded_down(&DamageExprCache::new(expr), false)
                 } else {
