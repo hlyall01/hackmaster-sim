@@ -18,7 +18,7 @@ pub use knockback::{KnockbackRule, knockback_rule_for_attack};
 mod modifiers;
 mod movement;
 mod mounted;
-pub use mounted::{MountedCombatConfig, MountType, RidingMastery, MountedTargetSize};
+pub use mounted::{HorseGender, MountedCombatConfig, MountType, RidingMastery, MountedTargetSize};
 mod types;
 
 pub use engine::{
