@@ -1,6 +1,52 @@
 {
   "races": [
     {
+      "id": "arborite",
+      "name": "Arborite",
+      "category": "Arborite",
+      "base_hp": 5,
+      "size": "medium",
+      "knockback_size": "small",
+      "ability_adjustments": {
+        "strength": -2,
+        "intelligence": 1,
+        "wisdom": -2,
+        "dexterity": 4,
+        "constitution": -4,
+        "charisma": 2,
+        "looks": 2
+      },
+      "pros": [
+        "+2 defense bonus",
+        "-1 speed in natural surroundings",
+        "-2 initiative in natural surroundings",
+        "+1 DR in natural surroundings",
+        "+50 Hiding and Sneaking in natural surroundings",
+        "Age Gracefully talent",
+        "Charm Resistance talent",
+        "Illusion Resistance talent",
+        "Initiative die begins at d10",
+        "1 free Botany skill purchase",
+        "1 free Animal Empathy skill purchase",
+        "1 free Listening skill purchase",
+        "1 free Observation skill purchase",
+        "1 free Hiding skill purchase",
+        "1 free Sneaking skill purchase"
+      ],
+      "cons": [
+        "Size small for knock backs",
+        "Iron anathema: cannot touch iron without being burnt; double damage dice from iron objects"
+      ],
+      "native_languages": [
+        "Arborian"
+      ],
+      "plural": "arborites",
+      "other_names": [
+        "arborians"
+      ],
+      "description": "Generally tall, slender and long-limbed. Skin ranges from pale to rosy, often with freckles. Hair usually falls in deep chestnuts, coppers, golds and silvers, typically fine and lustrous. Eyes are large and striking, often vibrant blues and greens. Facial features are refined, with high cheekbones and smooth contours; ears taper into sharp points."
+    },
+    {
       "id": "armeroci",
       "name": "Armeroci",
       "category": "Human",

@@ -14,6 +14,10 @@ pub struct DamageExprCache {
 }
 
 impl DamageExprCache {
+    pub(crate) fn with_multiplied_dice(&self, multiplier: i32) -> Self {
+        Self { expression: self.expression.with_multiplied_dice(multiplier), ..self.clone() }
+    }
+
     pub(crate) fn roll20_extra_dice(&self, nonpenetrating: bool, dice: &[(i32, bool)]) -> Result<String, DamageExprError> {
         Expression::empty().with_added_dice(dice).roll20(nonpenetrating,
             self.d6_penetration_triggers.as_deref(), self.penetrate_on_max_minus_one)

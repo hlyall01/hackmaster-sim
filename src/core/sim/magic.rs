@@ -295,7 +295,9 @@ impl Combatant {
     }
 
     pub fn magic_can_attack(&self, slot: WeaponSlot, now: f32) -> bool {
-        self.state.magic.can_attack(self.magic.talents, slot, now)
+        !self.racial_actions_blocked() && self.state.weapon_setup.pending.is_none()
+            && now >= self.state.weapon_setup.attack_ready_at
+            && self.state.magic.can_attack(self.magic.talents, slot, now)
     }
 
     pub fn validate_echo_cast(&self) -> Result<u32, MagicError> {
@@ -374,7 +376,7 @@ impl Combatant {
             essence_index,
         } = request;
         self.expire_spell_fatigue(now);
-        if self.state.hp <= 0
+        if self.racial_actions_blocked() || self.state.weapon_setup.pending.is_some() || self.state.hp <= 0
             || self.state.trauma_remaining_seconds > 0
             || self.sheet.maneuvers.passive
         {
@@ -693,6 +695,11 @@ impl Combatant {
 
     pub fn advance_magic(&mut self, now: u32, rng: &mut impl Rng) {
         self.expire_spell_fatigue(now);
+        if self.racial_actions_blocked() || self.state.weapon_setup.pending.is_some() {
+            self.state.magic.casting = None;
+            self.state.magic.channeling = None;
+            return;
+        }
         self.state.magic.owned_buffs.retain(|id| {
             self.state
                 .active_effects

@@ -152,7 +152,10 @@ fn predictor_waits_if_ranged_retreat_will_take_target_out_of_range() {
     sim.combatants[1]
         .state
         .invalidate_weapon_cache(WeaponSlot::Primary);
-    sim.combatants[1].sheet.mobility.move_speed = 10.0;
+    // Whistling Wind permits this archer to retreat at a jog while shooting.
+    Arc::make_mut(&mut sim.combatants[1].sheet.offense.weapon)
+        .ranged_styles.whistling_wind_pace = Some(crate::core::sim::BowPace::Jog);
+    sim.combatants[1].sheet.mobility.move_speed = 20.0;
     sim.prepare_spell_targets(0);
     assert!(sim.combatants[0].state.magic.range_targets.is_empty());
     sim.combatants[1].sheet.mobility.move_speed = 0.0;

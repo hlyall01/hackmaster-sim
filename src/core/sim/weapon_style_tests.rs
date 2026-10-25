@@ -741,3 +741,363 @@ fn unarmed_near_perfect_counters_use_unarmed_mastery_instead_of_the_held_sword()
         );
     }
 }
+
+#[test]
+fn ranged_styles_require_the_right_proficiency_and_weapon_group() {
+    for (style, valid_weapon) in [
+        ("whistling_wind", "Shortbow"),
+        ("gravesend", "Light crossbow"),
+    ] {
+        let valid = fixture(style, valid_weapon, None, |_| {});
+        let profile = valid.sheet.offense.weapon.ranged_styles;
+        assert!(profile.whistling_wind_pace.is_some() || profile.gravesend_aim.is_some());
+        let missing = fixture(style, valid_weapon, None, |p| p.proficiencies.clear());
+        assert!(missing.active_style_ids.is_empty());
+        let melee = fixture(style, "Halberd", None, |p| {
+            p.proficiencies.push(valid_weapon.into())
+        });
+        assert!(
+            melee
+                .sheet
+                .offense
+                .weapon
+                .ranged_styles
+                .whistling_wind_pace
+                .is_none()
+        );
+        assert!(
+            melee
+                .sheet
+                .offense
+                .weapon
+                .ranged_styles
+                .gravesend_aim
+                .is_none()
+        );
+    }
+    let crossbow = fixture("whistling_wind", "Light crossbow", None, |p| {
+        p.proficiencies.push("Shortbow".into())
+    });
+    assert!(
+        crossbow
+            .sheet
+            .offense
+            .weapon
+            .ranged_styles
+            .whistling_wind_pace
+            .is_none()
+    );
+}
+
+#[test]
+fn gravesend_reverses_all_four_range_bands_without_extending_range() {
+    let attacker = fixture("gravesend", "Shortbow", None, |_| {});
+    for (distance, normal, inverted) in [
+        (50.0, 0, -8),
+        (80.0, -4, -6),
+        (120.0, -6, -4),
+        (150.0, -8, 0),
+    ] {
+        let mut actors = vec![attacker.clone(), target()];
+        let outcome = resolve_attack(
+            &mut actors,
+            0,
+            1,
+            normal,
+            true,
+            distance,
+            AttackMode::Normal,
+            WeaponSlot::Primary,
+            5.0,
+            None,
+            &mut StdRng::seed_from_u64(42),
+        );
+        assert_eq!(outcome.roll.range_mod, inverted);
+    }
+    let weapon = &attacker.sheet.offense.weapon;
+    assert_eq!(
+        super::movement::range_modifier_for_weapon_with_scale(weapon, 150.1, 1.0),
+        None
+    );
+    assert_eq!(
+        super::movement::range_modifier_for_weapon_with_scale(weapon, 75.0, 2.0),
+        Some(-8)
+    );
+}
+
+#[test]
+fn gravesend_second_tier_adds_two_attack_and_preserves_natural_and_shield_dr() {
+    let attacker = fixture("gravesend", "Shortbow", None, |p| {
+        p.ranged_styles.gravesend_aim = GravesendAim::PierceArmor
+    });
+    let mut body_hits = 0;
+    let mut covered_misses = 0;
+    for seed in 0..500 {
+        let mut defender = target();
+        defender.sheet.defense.armor_dr = 103;
+        defender.sheet.defense.natural_dr = 3;
+        defender.sheet.defense.shield_name = Some("Shield".into());
+        defender.sheet.defense.shield_defense_bonus = 4;
+        defender.sheet.defense.shield_dr = 5;
+        if seed % 2 == 0 {
+            defender.sheet.defense.shield_cover_value = Some(6);
+        }
+        defender.reset_state();
+        let mut actors = vec![attacker.clone(), defender];
+        let outcome = resolve_attack(
+            &mut actors,
+            0,
+            1,
+            -8,
+            true,
+            140.0,
+            AttackMode::Normal,
+            WeaponSlot::Primary,
+            10.0,
+            None,
+            &mut StdRng::seed_from_u64(seed),
+        );
+        assert_eq!(
+            outcome.roll.attack_bonus,
+            attacker.sheet.offense.attack_bonus + 2
+        );
+        if let Some(damage) = outcome.damage_breakdown {
+            assert_eq!(damage.effective_armor_dr, 3);
+            body_hits += 1;
+        }
+        // Ranged shields provide cover rather than the melee shield-hit window.
+        assert!(outcome.shield_damage_breakdown.is_none());
+        assert_eq!(actors[1].sheet.defense.shield_dr, 5);
+        if seed % 2 == 0 {
+            assert!(outcome.roll.attack_total <= 6);
+            covered_misses += usize::from(!outcome.hit);
+        }
+    }
+    assert!(
+        body_hits > 20 && covered_misses > 20,
+        "exercise hits and shield cover: {body_hits}/{covered_misses}"
+    );
+}
+
+#[test]
+fn gravesend_forces_failure_only_when_actual_damage_exceeds_pain_threshold() {
+    for aim in [
+        GravesendAim::InvertRange,
+        GravesendAim::PierceArmor,
+        GravesendAim::ForceTrauma,
+    ] {
+        for threshold in [19, 20, 21] {
+            let mut attacker = fixture("gravesend", "Shortbow", None, |p| {
+                p.ranged_styles.gravesend_aim = aim
+            });
+            let weapon = Arc::make_mut(&mut attacker.sheet.offense.weapon);
+            weapon.damage_expr = "20".into();
+            weapon.damage_expr_cache = DamageExprCache::new("20");
+            weapon.crit_min_roll = 21;
+            let mut defender = target();
+            defender.sheet.defense.ranged_defense_mod = -1000;
+            defender.sheet.vitals.threshold_of_pain = threshold;
+            defender.sheet.vitals.constitution = 40;
+            defender.sheet.vitals.trauma_die_sides = 1;
+            defender.sheet.vitals.trauma_die_penetrating = false;
+            defender.reset_state();
+            let mut actors = vec![attacker, defender];
+            let outcome = resolve_attack(
+                &mut actors,
+                0,
+                1,
+                -8,
+                true,
+                140.0,
+                AttackMode::Normal,
+                WeaponSlot::Primary,
+                20.0,
+                None,
+                &mut StdRng::seed_from_u64(9),
+            );
+            assert_eq!(outcome.damage, 20);
+            assert_eq!(
+                outcome.trauma_applied,
+                aim == GravesendAim::ForceTrauma && threshold < 20
+            );
+        }
+    }
+}
+
+#[test]
+fn gravesend_charges_total_aim_time_on_first_and_every_subsequent_shot() {
+    for aim in [
+        GravesendAim::InvertRange,
+        GravesendAim::PierceArmor,
+        GravesendAim::ForceTrauma,
+    ] {
+        let mut attacker = fixture("gravesend", "Shortbow", None, |p| {
+            p.ranged_styles.gravesend_aim = aim;
+            p.move_speed = 0.0;
+        });
+        attacker.team_id = 0;
+        let speed = attacker.sheet.offense.weapon.speed;
+        let mut defender = target();
+        defender.team_id = 1;
+        defender.sheet.maneuvers.passive = true;
+        defender.sheet.offense.weapon = Arc::new(WeaponProfile {
+            has_weapon: true,
+            ..WeaponProfile::default()
+        });
+        let mut sim = SimState::with_rng(
+            SimConfig::new(100.0, 1.0),
+            crate::core::rng::SimRng::from_seed(52),
+        );
+        sim.log_events = true;
+        sim.reset_with_combatants(vec![attacker, defender]);
+        for _ in 0..90 {
+            sim.tick();
+        }
+        let times: Vec<_> = sim
+            .combat_events
+            .iter()
+            .filter_map(|e| match &e.kind {
+                CombatEventKind::Attack(a) if e.attacker_idx == 0 && a.is_ranged => Some(e.time),
+                _ => None,
+            })
+            .collect();
+        assert!(times.len() >= 2, "{aim:?}: {times:?}");
+        assert_eq!(times[0], aim.seconds() as u32);
+        assert_eq!(times[1] - times[0], (speed + aim.seconds()).ceil() as u32);
+    }
+}
+
+#[test]
+fn whistling_wind_allows_jogging_then_running_with_a_lingering_next_attack_penalty() {
+    use super::ranged_styles::shooting_move_speed;
+    let mut jogger = fixture("whistling_wind", "Shortbow", None, |p| p.move_speed = 20.0);
+    assert_eq!(shooting_move_speed(&jogger, 20.0), 10.0);
+    assert_eq!(
+        super::combat::preview_attack_bonus(&jogger, WeaponSlot::Primary),
+        jogger.sheet.offense.attack_bonus
+    );
+    let mut runner = fixture("whistling_wind", "Shortbow", None, |p| {
+        p.move_speed = 20.0;
+        p.ranged_styles.whistling_wind_pace = BowPace::Run;
+    });
+    assert_eq!(shooting_move_speed(&runner, 20.0), 10.0, "start at a jog");
+    runner.state.moved_last_tick = true;
+    assert_eq!(shooting_move_speed(&runner, 20.0), 15.0);
+    runner.state.whistling_wind_running = true;
+    runner.state.whistling_wind_next_attack_penalty = true;
+    let mut actors = vec![runner, target()];
+    for shot in 0..3 {
+        if shot == 1 {
+            actors[0].state.whistling_wind_running = false;
+            actors[0].state.whistling_wind_next_attack_penalty = true;
+        }
+        let expected = actors[0].sheet.offense.attack_bonus - if shot < 2 { 4 } else { 0 };
+        let outcome = resolve_attack(
+            &mut actors,
+            0,
+            1,
+            0,
+            true,
+            50.0,
+            AttackMode::Normal,
+            WeaponSlot::Primary,
+            shot as f32,
+            None,
+            &mut StdRng::seed_from_u64(101),
+        );
+        assert_eq!(outcome.roll.attack_bonus, expected);
+    }
+    Arc::make_mut(&mut jogger.sheet.offense.weapon).ranged_styles = RangedStyleProfile::default();
+    assert_eq!(shooting_move_speed(&jogger, 20.0), 5.0);
+    assert_eq!(
+        shooting_move_speed(&jogger, 2.5),
+        2.5,
+        "slowing magic is not applied twice"
+    );
+}
+
+#[test]
+fn whistling_wind_real_movement_accelerates_and_does_not_penalize_a_blocked_retreat() {
+    for blocked in [false, true] {
+        let mut attacker = fixture("whistling_wind", "Shortbow", None, |p| {
+            p.move_speed = 20.0;
+            p.ranged_styles.whistling_wind_pace = BowPace::Run;
+        });
+        attacker.team_id = 0;
+        let mut defender = target();
+        defender.team_id = 1;
+        defender.sheet.maneuvers.passive = true;
+        let mut config = SimConfig::new(100.0, 1.0);
+        config.tile_size_ft = 5.0;
+        config.grid_width = 200;
+        let mut sim = SimState::with_rng(config, crate::core::rng::SimRng::from_seed(42));
+        sim.reset_with_combatants(vec![attacker, defender]);
+        let start_x = if blocked { 0 } else { 50 };
+        sim.actors[0].position = GridPos::new(start_x, 0);
+        sim.actors[1].position = GridPos::new(start_x + 20, 0);
+        sim.tick();
+        assert_eq!(sim.actors[0].position.x, if blocked { 0 } else { 48 });
+        assert!(!sim.combatants[0].state.whistling_wind_running);
+        sim.tick();
+        assert_eq!(sim.actors[0].position.x, if blocked { 0 } else { 45 });
+        assert_eq!(sim.combatants[0].state.whistling_wind_running, !blocked);
+        assert_eq!(
+            sim.combatants[0].state.whistling_wind_next_attack_penalty,
+            !blocked
+        );
+    }
+}
+
+#[test]
+fn gravesend_tactical_activation_pays_the_full_aim_delay() {
+    use crate::core::tactics::{TacticalAction, TacticalCondition, TacticalRule};
+    let mut attacker = fixture("gravesend", "Shortbow", None, |p| {
+        p.move_speed = 0.0;
+        p.ranged_styles.gravesend_aim = GravesendAim::ForceTrauma;
+        p.default_weapon_style_ids = Some(vec![]);
+        p.tactical_policy.enabled = true;
+        p.tactical_policy.rules = vec![TacticalRule::new(
+            TacticalAction::UseWeaponStyle {
+                style_ids: vec!["gravesend".into()],
+            },
+            vec![TacticalCondition::Always],
+        )];
+    });
+    attacker.team_id = 0;
+    let speed = attacker.sheet.offense.weapon.speed;
+    let mut defender = target();
+    defender.team_id = 1;
+    defender.sheet.maneuvers.passive = true;
+    let mut sim = SimState::with_rng(
+        SimConfig::new(100.0, 1.0),
+        crate::core::rng::SimRng::from_seed(43),
+    );
+    sim.log_events = true;
+    sim.reset_with_combatants(vec![attacker, defender]);
+    sim.tick();
+    assert!(!sim.combatants[0].state.has_attacked);
+    assert_eq!(sim.combatants[0].state.next_attack_time_primary, Some(20.0));
+    for _ in 0..80 {
+        sim.tick();
+    }
+    let times: Vec<_> = sim
+        .combat_events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            CombatEventKind::Attack(a) if e.attacker_idx == 0 && a.is_ranged => Some(e.time),
+            _ => None,
+        })
+        .collect();
+    assert!(times.len() >= 2);
+    assert_eq!(times[0], 20);
+    assert_eq!(times[1] - times[0], (speed + 20.0).ceil() as u32);
+}
+
+#[test]
+fn a_static_whistling_wind_style_is_recorded_without_enabling_tactics() {
+    let actor = fixture("whistling_wind", "Longbow", None, |_| {});
+    assert!(!actor.tactical_policy.enabled);
+    assert_eq!(actor.active_style_ids, vec!["whistling_wind"]);
+    assert_eq!(actor.state.activated_style_ids, actor.active_style_ids);
+    assert_eq!(actor.sheet.offense.weapon.ranged_styles.whistling_wind_pace, Some(BowPace::Jog));
+}

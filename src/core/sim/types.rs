@@ -97,6 +97,8 @@ pub struct CombatantCache {
 
 #[derive(Clone, Debug)]
 pub struct WeaponProfile {
+    pub is_iron: bool,
+    pub ranged_styles: super::RangedStyleProfile,
     pub name: String,
     pub damage_expr: String,
     pub damage_expr_cache: DamageExprCache,
@@ -321,6 +323,8 @@ pub struct CombatantSheet {
 
 #[derive(Clone, Debug)]
 pub struct CombatantState {
+    pub weapon_setup: super::WeaponSetupState,
+    pub arborite: super::ArboriteState,
     pub attack_events: u64,
     pub magic: super::magic::MagicState,
     pub hp: i32,
@@ -328,6 +332,8 @@ pub struct CombatantState {
     pub next_attack_time_secondary: Option<f32>,
     pub defense_plus_four_ready: bool,
     pub moved_last_tick: bool,
+    pub whistling_wind_running: bool,
+    pub whistling_wind_next_attack_penalty: bool,
     pub charge_distance_ft: f32,
     pub charge_target_idx: Option<usize>,
     pub charge_attacks: u32,
@@ -398,6 +404,8 @@ pub struct CombatantTacticalProfile {
 
 #[derive(Clone, Debug)]
 pub struct Combatant {
+    pub weapon_setups: Option<Arc<super::WeaponSetups>>,
+    pub arborite: super::ArboriteProfile,
     pub magic: super::magic::MagicProfile,
     pub sheet: CombatantSheet,
     pub state: CombatantState,
@@ -541,6 +549,8 @@ impl Default for WeaponProfile {
         let damage_expr = "d4p".to_string();
         let damage_expr_cache = DamageExprCache::new(&damage_expr);
         Self {
+            is_iron: false,
+            ranged_styles: super::RangedStyleProfile::default(),
             name: "Weapon".to_string(),
             damage_expr,
             damage_expr_cache,
@@ -680,10 +690,14 @@ impl CombatantState {
             attack_events: 0,
             magic: super::magic::MagicState::default(),
             hp: sheet.vitals.max_hp,
+            weapon_setup: super::WeaponSetupState::default(),
+            arborite: super::ArboriteState::default(),
             next_attack_time_primary: None,
             next_attack_time_secondary: None,
             defense_plus_four_ready: false,
             moved_last_tick: false,
+            whistling_wind_running: false,
+            whistling_wind_next_attack_penalty: false,
             charge_distance_ft: 0.0,
             charge_target_idx: None,
             charge_attacks: 0,
@@ -845,6 +859,8 @@ impl Combatant {
     pub fn new_with_team(sheet: CombatantSheet, team_id: u8) -> Self {
         let state = CombatantState::new(&sheet);
         Self {
+            weapon_setups: None,
+            arborite: super::ArboriteProfile::default(),
             magic: super::magic::MagicProfile::default(),
             sheet,
             state,
@@ -861,7 +877,13 @@ impl Combatant {
     }
 
     pub(crate) fn reset_state(&mut self) {
+        self.reset_starting_weapon_setup();
         self.state = CombatantState::new(&self.sheet);
+        if let Some(setups) = &self.weapon_setups {
+            self.state.weapon_setup.active = setups.start_with;
+            self.state.weapon_setup.melee_shield_intact = setups.melee.sheet.defense.shield_name.is_some();
+        }
+        self.state.arborite.compelled = self.arborite.initially_compelled;
         self.state.magic = super::magic::MagicState::new(&self.magic);
         self.state.activated_style_ids = self.active_style_ids.clone();
         self.last_tactical_directive = None;
@@ -1034,9 +1056,14 @@ impl Combatant {
     }
 
     fn spell_strength_delta(&self) -> i32 {
-        self.state.active_effects.iter().filter_map(|e| e.strength_override)
-            .max_by_key(|(_, priority)| *priority)
-            .map_or(0, |(damage, _)| damage - self.magic.strength_damage)
+        let strongest = self.state.active_effects.iter().filter(|e| e.strength_override.is_some())
+            .max_by_key(|e| e.strength_override.unwrap().1);
+        let delta = strongest.map_or(0, |e| e.strength_override.unwrap().0 - self.magic.strength_damage);
+        let increase = self.state.active_effects.iter().map(|e| u32::from(e.strength_increase)).sum::<u32>();
+        if increase == 0 { return delta; }
+        let base = strongest.and_then(|e| e.strength_score_override).unwrap_or(self.magic.strength);
+        let boosted = self.current_strength();
+        delta + crate::character::lookup_strength(&boosted).damage - crate::character::lookup_strength(&base).damage
     }
 
     pub(crate) fn strength_damage_for_slot(&self, slot: WeaponSlot, base: i32) -> i32 {

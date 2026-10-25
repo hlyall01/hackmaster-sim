@@ -196,6 +196,8 @@ fn combatant_basic(
             strength_damage_base: strength_damage,
             unarmed_damage_bonus: 0,
             weapon: Arc::new(WeaponProfile {
+                is_iron: false,
+                ranged_styles: super::RangedStyleProfile::default(),
                 name: weapon_name,
                 damage_expr,
                 damage_expr_cache,
@@ -562,6 +564,10 @@ fn player_config_from_preset(
     player.constitution = preset.constitution;
     player.looks = preset.looks;
     player.charisma = preset.charisma;
+    player.ranged_weapon_setup = preset.ranged_weapon_setup.clone();
+    player.iron_weapon = preset.iron_weapon;
+    player.offhand_iron_weapon = preset.offhand_iron_weapon;
+    player.racial_talents = preset.racial_talents;
     player.weapon_material_tier = preset.weapon_material_tier;
     player.offhand_weapon_material_tier = preset.offhand_weapon_material_tier;
     player.armor_material_tier = preset.armor_material_tier;
@@ -575,6 +581,7 @@ fn player_config_from_preset(
     player.use_jab = maneuvers.use_jab;
     player.hold_at_bay = maneuvers.hold_at_bay;
     player.called_shot = maneuvers.called_shot;
+    player.ranged_styles = maneuvers.ranged_styles;
     player.power_attack = maneuvers.power_attack;
     player.aggressive_attack = maneuvers.aggressive_attack;
     player.charge = maneuvers.charge;
@@ -1361,6 +1368,8 @@ fn critical_effects_follow_severity_table() {
 #[test]
 fn advanced_sighting_scale_keeps_throwing_axe_at_minus_six_at_sixty_feet() {
     let weapon = WeaponProfile {
+        is_iron: false,
+                ranged_styles: super::RangedStyleProfile::default(),
         name: "Throwing axe".to_string(),
         damage_expr: "d4p+d6p".to_string(),
         damage_expr_cache: DamageExprCache::new("d4p+d6p"),
@@ -1834,6 +1843,8 @@ fn hold_at_bay_hit_with_jab_deals_damage() {
 #[test]
 fn ranged_weapons_cannot_hold_at_bay() {
     let ranged_weapon = Arc::new(WeaponProfile {
+        is_iron: false,
+                ranged_styles: super::RangedStyleProfile::default(),
         name: "Test Thrower".to_string(),
         damage_expr: "1d1".to_string(),
         damage_expr_cache: DamageExprCache::new("1d1"),
@@ -1868,6 +1879,8 @@ fn ranged_weapons_cannot_hold_at_bay() {
         defender_knockback_step_adjustment: 0,
     });
     let melee_weapon = Arc::new(WeaponProfile {
+        is_iron: false,
+                ranged_styles: super::RangedStyleProfile::default(),
         name: "Test Blade".to_string(),
         damage_expr: "1d1".to_string(),
         damage_expr_cache: DamageExprCache::new("1d1"),
@@ -2080,6 +2093,8 @@ fn equal_reach_trauma_does_not_block_simultaneous_attacks() {
             strength_damage_base: 0,
             unarmed_damage_bonus: 0,
             weapon: Arc::new(WeaponProfile {
+                is_iron: false,
+                ranged_styles: super::RangedStyleProfile::default(),
                 name: "Test Blade".to_string(),
                 damage_expr: "1d1".to_string(),
                 damage_expr_cache: DamageExprCache::new("1d1"),
@@ -3023,6 +3038,8 @@ fn equal_reach_knockback_does_not_block_simultaneous_attacks() {
             strength_damage_base: 0,
             unarmed_damage_bonus: 0,
             weapon: Arc::new(WeaponProfile {
+                is_iron: false,
+                ranged_styles: super::RangedStyleProfile::default(),
                 name: "Test Blade".to_string(),
                 damage_expr: "30".to_string(),
                 damage_expr_cache: DamageExprCache::new("30"),
@@ -7125,6 +7142,8 @@ fn moving_flag_clear_when_no_movement() {
 #[test]
 fn throwing_axe_switches_to_melee_at_close_range() {
     let throwing_axe = Arc::new(WeaponProfile {
+        is_iron: false,
+                ranged_styles: super::RangedStyleProfile::default(),
         name: "Throwing axe".to_string(),
         damage_expr: "1d1".to_string(),
         damage_expr_cache: DamageExprCache::new("1d1"),
@@ -7159,6 +7178,8 @@ fn throwing_axe_switches_to_melee_at_close_range() {
         defender_knockback_step_adjustment: 0,
     });
     let melee_weapon = Arc::new(WeaponProfile {
+        is_iron: false,
+                ranged_styles: super::RangedStyleProfile::default(),
         name: "Sword".to_string(),
         damage_expr: "1d1".to_string(),
         damage_expr_cache: DamageExprCache::new("1d1"),
@@ -7326,6 +7347,8 @@ fn throwing_axe_switches_to_melee_at_close_range() {
 #[test]
 fn throwing_axe_cooldown_resets_on_melee_engagement() {
     let throwing_axe = Arc::new(WeaponProfile {
+        is_iron: false,
+                ranged_styles: super::RangedStyleProfile::default(),
         name: "Throwing axe".to_string(),
         damage_expr: "1d1".to_string(),
         damage_expr_cache: DamageExprCache::new("1d1"),
@@ -7360,6 +7383,8 @@ fn throwing_axe_cooldown_resets_on_melee_engagement() {
         defender_knockback_step_adjustment: 0,
     });
     let melee_weapon = Arc::new(WeaponProfile {
+        is_iron: false,
+                ranged_styles: super::RangedStyleProfile::default(),
         name: "Sword".to_string(),
         damage_expr: "1d1".to_string(),
         damage_expr_cache: DamageExprCache::new("1d1"),

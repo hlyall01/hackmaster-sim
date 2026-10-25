@@ -10,6 +10,119 @@
       "effects": [{ "type": "ideal_self" }]
     },
     {
+      "id": "barkskin",
+      "name": "Barkskin",
+      "description": "Your bonus to DR in natural surroundings is improved to a total of +3.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "arborite"
+      ],
+      "max_rank": 1,
+      "requirements": [],
+      "effects": [
+        {
+          "type": "barkskin"
+        }
+      ]
+    },
+    {
+      "id": "shillelagh",
+      "name": "Shillelagh",
+      "description": "You may use the mastery of your greatest melee weapon group with sticks, clubs and staves. The simulator copies the whole melee group with the highest total ATK, DMG, SPD and DEF bonuses.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "arborite"
+      ],
+      "max_rank": 1,
+      "requirements": [],
+      "effects": [
+        {
+          "type": "shillelagh"
+        }
+      ]
+    },
+    {
+      "id": "silent_defiance",
+      "name": "Silent Defiance",
+      "description": "Whenever forced to perform an action by any mental effect, magical or otherwise, you may choose to hold completely still instead.",
+      "cost_rp": 5,
+      "category": "Racials",
+      "race_ids": [
+        "arborite"
+      ],
+      "max_rank": 1,
+      "requirements": [],
+      "effects": [
+        {
+          "type": "silent_defiance"
+        }
+      ]
+    },
+    {
+      "id": "arborhide",
+      "name": "Arborhide",
+      "description": "Requires Barkskin. Your racial DR bonus is always +8, including outside natural surroundings. Receive triple damage dice from iron objects instead of double, and gain a phobia toward iron (as the quirk).",
+      "cost_rp": 10,
+      "category": "Racials",
+      "race_ids": [
+        "arborite"
+      ],
+      "max_rank": 1,
+      "requirements": [
+        {
+          "type": "requires_talent",
+          "id": "barkskin"
+        }
+      ],
+      "effects": [
+        {
+          "type": "arborhide"
+        }
+      ]
+    },
+    {
+      "id": "overcome_naivety",
+      "name": "Overcome Naivety",
+      "description": "Requires age over five hundred years. Gain +3 to your Wisdom score.",
+      "cost_rp": 10,
+      "category": "Racials",
+      "race_ids": [
+        "arborite"
+      ],
+      "max_rank": 1,
+      "requirements": [
+        {
+          "type": "min_age",
+          "years": 501
+        }
+      ],
+      "effects": [
+        {
+          "type": "overcome_naivety"
+        }
+      ]
+    },
+    {
+      "id": "whistling_wind",
+      "name": "Whistling Wind",
+      "description": "Requires proficiency in at least one type of bow. Each step leaves an arrow whistling in its wake. You can move at a jog while shooting normally. You can run while using your bow, suffering -4 to your next attack and as long as you continue running.",
+      "cost_bp": 10,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [{ "type": "whistling_wind_style" }]
+    },
+    {
+      "id": "gravesend",
+      "name": "Gravesend",
+      "description": "Requires proficiency in at least one bow or crossbow. The farther the target, the closer their doom. Aim 5 additional seconds to invert the ranged attack chart categories. Aim 10 additional seconds total to also gain +2 attack and ignore armor DR. Aim 20 additional seconds total to also make the target automatically fail a Trauma save when damage exceeds its Threshold of Pain.",
+      "cost_bp": 10,
+      "category": "Weapon Styles",
+      "max_rank": 1,
+      "effects": [{ "type": "gravesend_style" }]
+    },
+    {
       "id": "hit_point_bonus",
       "name": "Hit Point Bonus",
       "description": "Gain +2 hit points per rank.",
@@ -3150,14 +3263,24 @@
     {
       "id": "warrior_woad",
       "name": "Warrior Woad",
-      "description": "Requires Average Artistry (painting). Apply warpaint over 10 minutes. After taking at least 1 point of piercing or hacking damage, add d6 to Strength and gain +6 Defense for 5d12p seconds. On expiration, succeed at Physical and Mental saving throws vs d20p+11 or fall unconscious for about an hour. Armeroci only.",
+      "description": "Requires Average Artistry (painting). Apply warpaint over 10 minutes. After taking at least 1 point of piercing or hacking damage, add d6 to Strength and gain +6 Defense for 5d12p seconds. On expiration, succeed at Physical and Mental saving throws vs d20p+11 or fall unconscious for about an hour. Armeroci and Arborite.",
       "cost_rp": 10,
       "category": "Racials",
       "race_ids": [
-        "armeroci"
+        "armeroci",
+        "arborite"
       ],
       "max_rank": 1,
-      "effects": []
+      "effects": [
+        {
+          "type": "warrior_woad"
+        }
+      ],
+      "requirements": [
+        {
+          "type": "average_artistry_painting"
+        }
+      ]
     },
     {
       "id": "huntsman",
