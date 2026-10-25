@@ -2398,6 +2398,8 @@ impl SimState {
                         defender_idx: event.defender_idx,
                         kind: CombatEventKind::Attack(AttackEvent {
                             source: crate::core::sim::AttackSource::Weapon,
+                            damage_source: event.damage_source.clone(),
+                            called_shot: self.combatants[attacker_idx].sheet.maneuvers.called_shot,
                             hit: event.hit,
                             shield_block: event.shield_block,
                             damage: event.damage,
@@ -2456,6 +2458,8 @@ impl SimState {
                             defender_idx: counter.defender_idx,
                             kind: CombatEventKind::Attack(AttackEvent {
                                 source: crate::core::sim::AttackSource::Weapon,
+                                damage_source: counter.damage_source.clone(),
+                                called_shot: false,
                                 hit: counter.hit,
                                 shield_block: counter.shield_block,
                                 damage: counter.damage,
@@ -2712,6 +2716,8 @@ impl SimState {
                             defender_idx: event.defender_idx,
                             kind: CombatEventKind::Attack(AttackEvent {
                                 source: crate::core::sim::AttackSource::Weapon,
+                                damage_source: event.damage_source.clone(),
+                                called_shot: self.combatants[attacker_idx].sheet.maneuvers.called_shot,
                                 hit: event.hit,
                                 shield_block: event.shield_block,
                                 damage: event.damage,
@@ -2770,6 +2776,8 @@ impl SimState {
                                 defender_idx: counter.defender_idx,
                                 kind: CombatEventKind::Attack(AttackEvent {
                                     source: crate::core::sim::AttackSource::Weapon,
+                                    damage_source: counter.damage_source.clone(),
+                                    called_shot: false,
                                     hit: counter.hit,
                                     shield_block: counter.shield_block,
                                     damage: counter.damage,

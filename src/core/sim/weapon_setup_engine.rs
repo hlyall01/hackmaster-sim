@@ -177,6 +177,30 @@ impl SimState {
         true
     }
 
+    /// A shorter weapon's opening delay starts at enemy contact, while closing
+    /// to its own reach. Starting it again after closing would count that second twice.
+    fn prime_melee_engagement_attack(&mut self, idx: usize, enemy: usize) {
+        let now = self.elapsed_seconds as f32;
+        let c = &self.combatants[idx];
+        if c.weapon_setups.is_none()
+            || c.state.weapon_setup.active != WeaponSetup::Melee
+            || c.state.weapon_setup.has_attacked[WeaponSetup::Melee.index()]
+            || c.state.next_attack_time_primary.is_some()
+            || !c.magic_can_attack(WeaponSlot::Primary, now)
+            || c.state.hp <= 0 || c.state.trauma_remaining_seconds > 0
+            || c.sheet.maneuvers.passive
+        { return; }
+        let opponent = &self.combatants[enemy];
+        if opponent.sheet.offense.weapon.uses_projectiles { return; }
+        let distance = self.distance_between(idx, enemy).unwrap_or(f32::INFINITY);
+        let mine = c.apply_f32(StatIdF32::WeaponReach, c.sheet.offense.weapon.reach_ft).max(1.0);
+        let theirs = opponent.apply_f32(StatIdF32::WeaponReach, opponent.sheet.offense.weapon.reach_ft).max(1.0);
+        if distance <= mine || distance > theirs { return; }
+        self.refresh_called_shot_tactic(idx, enemy, distance);
+        let aim = called_shot_delay_seconds(&self.combatants[idx], &self.combatants[enemy], false, &mut self.rng);
+        self.combatants[idx].state.set_next_attack_time(WeaponSlot::Primary, Some(now + 1.0 + aim));
+    }
+
     pub(super) fn advance_weapon_setups(&mut self, a: usize, b: usize) {
         let now = self.elapsed_seconds as f32;
         self.combatants[a].finish_weapon_setup(now);
@@ -234,6 +258,7 @@ impl SimState {
                     }
                 }
             }
+            self.prime_melee_engagement_attack(idx, enemy);
         }
     }
 }
@@ -290,6 +315,7 @@ mod tests {
             material_tier: 2,
             projectile_material_tier: 1,
             iron: true,
+            called_shot: Some(false),
             default_style_ids: Some(if grave {
                 vec!["gravesend".into()]
             } else {
@@ -651,5 +677,59 @@ mod opening_and_shield_tests {
             sim.combatants[0].state.next_attack_time_primary,
             Some(expected)
         );
+    }
+}
+
+#[cfg(test)]
+mod historical_log_and_aim_tests {
+    use super::tests::{arena, fixture};
+    use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn a_shorter_melee_weapon_pays_only_the_normal_reach_delay_after_bow_aiming() {
+        let mut c = fixture(true, false);
+        let pair = Arc::make_mut(c.weapon_setups.as_mut().unwrap());
+        pair.melee_draw_seconds = 1.0;
+        Arc::make_mut(&mut pair.melee.sheet.offense.weapon).reach_ft = 3.5;
+        pair.ranged.sheet.maneuvers.called_shot = true;
+        pair.ranged.sheet.maneuvers.called_shot_delay_profile = CalledShotDelayProfile::PrecisionAiming;
+        let mut sim = arena(c, 150, true);
+        Arc::make_mut(&mut sim.combatants[1].sheet.offense.weapon).reach_ft = 7.0;
+        for _ in 0..40 {
+            sim.tick();
+            if sim.combat_events.iter().any(|e| e.attacker_idx == 0 && matches!(&e.kind, CombatEventKind::Attack(a) if !a.is_ranged)) { break; }
+        }
+        let first = |idx| sim.combat_events.iter().find(|e| e.attacker_idx == idx && matches!(&e.kind, CombatEventKind::Attack(a) if !a.is_ranged)).unwrap().time;
+        assert_eq!(first(0), first(1) + 1, "a shorter weapon gets its opening attack one second later, without bow aiming or recovery");
+        let swap = sim.combat_events.iter().find(|e| e.attacker_idx == 0 && matches!(&e.kind, CombatEventKind::Tactical(t) if t.action == "Equip melee setup")).unwrap();
+        assert_eq!(swap.time + 1, first(1), "the sword was already drawn for engagement");
+    }
+
+    #[test]
+    fn bow_log_and_aiming_do_not_change_when_the_melee_setup_is_drawn() {
+        let mut c = fixture(true, false);
+        let setup = Arc::make_mut(c.weapon_setups.as_mut().unwrap());
+        setup.ranged.sheet.maneuvers.called_shot = true;
+        setup.ranged.sheet.maneuvers.called_shot_delay_profile = CalledShotDelayProfile::PrecisionAiming;
+        assert!(!setup.melee.sheet.maneuvers.called_shot);
+        let mut sim = arena(c, 150, true);
+        for _ in 0..40 {
+            sim.tick();
+            if sim.combat_events.iter().any(|e| e.attacker_idx == 0 && matches!(&e.kind, CombatEventKind::Attack(a) if !a.is_ranged)) { break; }
+        }
+        let bow = sim.combat_events.iter().find(|e| e.attacker_idx == 0 && matches!(&e.kind, CombatEventKind::Attack(a) if a.is_ranged)).unwrap().clone();
+        let melee = sim.combat_events.iter().find(|e| e.attacker_idx == 0 && matches!(&e.kind, CombatEventKind::Attack(a) if !a.is_ranged)).unwrap();
+        let swapped = sim.combat_events.iter().find(|e| e.attacker_idx == 0 && matches!(&e.kind, CombatEventKind::Tactical(t) if t.action == "Equip melee setup")).unwrap();
+        let draw = sim.combatants[0].weapon_setups.as_ref().unwrap().melee_draw_seconds as u32;
+        assert_eq!(melee.time, swapped.time + draw);
+        assert!(crate::sim::format_combat_event_line(&bow, &sim.combatants).contains("with Shortbow"));
+        assert!(crate::sim::format_combat_event_line(&bow, &sim.combatants).contains("called shot"));
+        assert!(crate::sim::format_combat_event_line(melee, &sim.combatants).contains("with Halberd"));
+        assert!(!crate::sim::format_combat_event_line(melee, &sim.combatants).contains("called shot"));
+        let old = crate::sim::format_combat_event_line(&bow, &sim.combatants);
+        assert!(sim.request_weapon_setup(0, 1, WeaponSetup::Ranged, None));
+        // The same past shot must remain correctly labeled during the unarmed draw.
+        assert_eq!(crate::sim::format_combat_event_line(&bow, &sim.combatants), old);
     }
 }

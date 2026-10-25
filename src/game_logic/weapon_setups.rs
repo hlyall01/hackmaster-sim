@@ -28,6 +28,7 @@ pub fn player_for_ranged_setup(
     ranged.weapon_material_tier = config.material_tier;
     ranged.projectile_material_tier = config.projectile_material_tier;
     ranged.iron_weapon = config.iron;
+    ranged.called_shot = config.called_shot.unwrap_or(player.called_shot);
     ranged.offhand_weapon_id = None;
     ranged.shield_id = shields
         .entries()
@@ -119,4 +120,30 @@ pub fn resolve_player_stats(
         .is_some();
     selected.config = player.clone();
     selected
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn aiming_is_configured_per_setup_and_legacy_saves_keep_their_preference() {
+        let (w, a, s) = crate::data::load_catalogs().unwrap();
+        let t = crate::data::load_talents(crate::data::TALENTS_PATH).unwrap();
+        let id = w.id_from_index(w.entries().iter().position(|w| w.name == "Longsword").unwrap()).unwrap();
+        let mut p = PlayerConfig::new("Archer", id);
+        p.ranged_weapon_setup = Some(serde_json::from_value(serde_json::json!({
+            "weapon":"Longbow", "called_shot":true
+        })).unwrap());
+        let c = build_combatant(&p, &w, &a, &s, &NpcPresetCatalog::new(vec![]), &t);
+        let pair = c.weapon_setups.as_ref().unwrap();
+        assert!(pair.ranged.sheet.maneuvers.called_shot);
+        assert!(!pair.melee.sheet.maneuvers.called_shot);
+        // Old saved setups had one shared checkbox; preserve it until edited.
+        p.called_shot = true;
+        p.ranged_weapon_setup.as_mut().unwrap().called_shot = None;
+        let legacy = player_for_ranged_setup(&p, &w, &s).unwrap();
+        assert!(legacy.called_shot);
+        p.called_shot = false;
+        assert!(!player_for_ranged_setup(&p, &w, &s).unwrap().called_shot);
+    }
 }

@@ -38,6 +38,9 @@ pub struct RangedWeaponSetup {
     pub projectile_material_tier: i32,
     #[serde(default)]
     pub iron: bool,
+    /// Missing values inherit the legacy shared Called Shot preference.
+    #[serde(default)]
+    pub called_shot: Option<bool>,
     #[serde(default)]
     pub default_style_ids: Option<Vec<String>>,
     #[serde(default)]
