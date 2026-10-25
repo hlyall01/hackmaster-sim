@@ -3250,6 +3250,7 @@ fn render_weapon_setups_editor(
                         0
                     },
                     iron: current.is_some_and(game_logic::is_ranged_weapon) && player.iron_weapon,
+                    called_shot: Some(current.is_some_and(game_logic::is_ranged_weapon) && player.called_shot),
                     default_style_ids: if current.is_some_and(game_logic::is_ranged_weapon) {
                         player.default_weapon_style_ids.clone()
                     } else {
@@ -3267,6 +3268,7 @@ fn render_weapon_setups_editor(
                     {
                         player.weapon_id = weapons.id_from_index(index).unwrap();
                         player.two_hand_grip = false;
+                        player.called_shot = false;
                         player.iron_weapon = false;
                         player.default_weapon_style_ids = Some(vec![]);
                     }
@@ -3290,6 +3292,11 @@ fn render_weapon_setups_editor(
         material_tier_combo(ui, format!("{id_prefix}_carried_ranged_material"), "Weapon material", &mut setup.material_tier);
         material_tier_combo(ui, format!("{id_prefix}_carried_ammo_material"), "Ammo material", &mut setup.projectile_material_tier);
         ui.checkbox(&mut setup.iron, "Iron ranged weapon / projectile");
+        let mut ranged_called_shot = setup.called_shot.unwrap_or(player.called_shot);
+        if ui.checkbox(&mut ranged_called_shot, "Called Shot with ranged setup").changed() {
+            setup.called_shot = Some(ranged_called_shot);
+        }
+        ui.small("The Called Shot option in Combat Maneuvers controls the melee setup.");
         egui::ComboBox::from_id_source(format!("{id_prefix}_starting_weapon_setup"))
             .selected_text(format!("Start with {}", setup.start_with.label())).show_ui(ui, |ui| {
                 for side in [sim::WeaponSetup::Ranged, sim::WeaponSetup::Melee] {
@@ -4590,7 +4597,7 @@ fn render_player_editor(
             ui.checkbox(&mut player.hold_at_bay, "Hold at bay");
             ui.horizontal(|ui| {
                 ui.add_enabled_ui(!tactics_controlled, |ui| {
-                    ui.checkbox(&mut player.called_shot, "Called shot");
+                    ui.checkbox(&mut player.called_shot, if player.ranged_weapon_setup.is_some() { "Called shot (melee setup)" } else { "Called shot" });
                 });
                 let (called_shot_light_bonus, called_shot_medium_bonus, called_shot_heavy_bonus) =
                     game_logic::called_shot_target_defense_bonuses_for_player(player);
@@ -7071,7 +7078,7 @@ mod tests {
         let app = app_fixture();
         let mut player = app.players[0].clone();
         let setup = sim::RangedWeaponSetup { weapon: "Shortbow".into(), material_tier: 2,
-            projectile_material_tier: 1, iron: true, default_style_ids: Some(vec![]),
+            projectile_material_tier: 1, iron: true, called_shot: Some(true), default_style_ids: Some(vec![]),
             start_with: sim::WeaponSetup::Melee, auto_switch_to_melee: false };
         player.ranged_weapon_setup = Some(setup.clone());
         let ctx = egui::Context::default();
@@ -7113,7 +7120,7 @@ mod tests {
             ..MagicLoadout::default()
         };
         app.players[0].ranged_weapon_setup = Some(sim::RangedWeaponSetup {
-            weapon: "Shortbow".into(), material_tier: 2, projectile_material_tier: 1, iron: true,
+            weapon: "Shortbow".into(), material_tier: 2, projectile_material_tier: 1, iron: true, called_shot: Some(true),
             default_style_ids: Some(vec![]), start_with: sim::WeaponSetup::Melee, auto_switch_to_melee: false,
         });
         app.players[0].iron_weapon = true;

@@ -507,6 +507,8 @@ pub enum AttackSource {
 #[derive(Clone, Debug)]
 pub struct AttackEvent {
     pub source: AttackSource,
+    pub damage_source: super::DamageSource,
+    pub called_shot: bool,
     pub hit: bool,
     pub shield_block: bool,
     pub damage: i32,

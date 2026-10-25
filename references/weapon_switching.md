@@ -1,6 +1,6 @@
 # Carried melee and ranged weapons
 
-Enable **Carry both a melee and a ranged weapon** in Equipment. The existing weapon, offhand, shield, materials, iron flag and default style form the melee setup. Configure the ranged weapon, weapon/ammunition materials, iron flag, default style and starting setup separately. Existing single-weapon characters remain single-weapon characters until this option is enabled.
+Enable **Carry both a melee and a ranged weapon** in Equipment. The existing weapon, offhand, shield, materials, iron flag and default style form the melee setup. Configure the ranged weapon, weapon/ammunition materials, iron flag, Called Shot, default style and starting setup separately. The Called Shot option in Combat Maneuvers controls the melee setup; bow aiming does not have to carry into melee. Existing saved setups inherit the old shared preference until edited. Existing single-weapon characters remain single-weapon characters until this option is enabled.
 
 **Automatically draw melee before engagement** is enabled by default. Each second, the simulator estimates contact using current distance, weapon reach, movement speeds, ranged retreat and arena edges. It begins the melee draw at the latest whole second that leaves the weapon ready for the first engagement attack under the current movement conditions. It rechecks after a readied final ranged shot, allowing the shot before dropping the bow when doing so costs no draw time. This is a prediction using current motion, not knowledge of future random effects.
 
@@ -19,3 +19,7 @@ Equipment tactics use their own channel and run **Each second**, including while
 - **Engaged in melee** is available as a Boolean condition; existing distance, HP, reach, styles and time-to-contact conditions also work.
 
 An automatic switch stays in melee until an equipment tactic requests ranged again. The live Status panel shows the active setup, draw readiness and whether the ranged weapon was dropped. Both setups and all options survive fighter presets and online character documents. Runtime draw/drop/recovery state resets between fights.
+
+Combat log entries retain the weapon and Called Shot setting used for each historical attack, including offhand attacks, after subsequent equipment changes.
+
+When the opponent has longer reach, the melee setup starts its one-second opening delay at contact while closing to its own range. It does not add another second after closing. Explicit melee Called Shot aiming still adds its normal delay.

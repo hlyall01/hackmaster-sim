@@ -25,19 +25,10 @@ pub fn format_combat_event(event: &CombatEvent, combatants: &[Combatant]) -> Str
                     attack.damage
                 );
             }
-            let weapon_name = combatants
-                .get(event.attacker_idx)
-                .map(|combatant| match attack.weapon_slot {
-                    WeaponSlot::Primary => combatant.sheet.offense.weapon.name.as_str(),
-                    WeaponSlot::Secondary => combatant
-                        .sheet
-                        .offense
-                        .offhand
-                        .as_ref()
-                        .map(|offhand| offhand.weapon.name.as_str())
-                        .unwrap_or(combatant.sheet.offense.weapon.name.as_str()),
-                })
-                .unwrap_or("Weapon");
+            let weapon_name = match &attack.damage_source {
+                DamageSource::Weapon { name, .. } | DamageSource::Unarmed { name }
+                | DamageSource::Spell { name } | DamageSource::Ability { name } => name.as_str(),
+            };
             let base = if attack.hit {
                 if attack.hold_at_bay {
                     if attack.damage > 0 {
@@ -88,6 +79,9 @@ pub fn format_combat_event(event: &CombatEvent, combatants: &[Combatant]) -> Str
                 details.push(format_shield_damage_breakdown(breakdown));
             }
             details.push(format!("hp {}", attack.defender_hp_after.max(0)));
+            if attack.called_shot {
+                details.push("called shot".to_string());
+            }
             if attack.is_ranged {
                 details.push("ranged".to_string());
             }
@@ -220,4 +214,34 @@ fn format_shield_damage_breakdown(breakdown: &ShieldDamageBreakdown) -> String {
         text.push_str(" (shield broken)");
     }
     text
+}
+
+#[cfg(test)]
+mod historical_weapon_tests {
+    use super::*;
+    use std::sync::Arc;
+    #[test]
+    fn offhand_events_keep_their_weapon_after_it_is_unequipped() {
+        let mut attacker = Combatant::default();
+        attacker.sheet.vitals.max_hp = 10000;
+        attacker.sheet.offense.attack_bonus = -1000;
+        attacker.sheet.maneuvers.offensive_dualwielding = true;
+        let primary = Arc::make_mut(&mut attacker.sheet.offense.weapon);
+        primary.name = "Longsword".into(); primary.has_weapon = true; primary.reach_ft = 3.0;
+        let mut dagger = WeaponProfile::default();
+        dagger.name = "Dagger".into(); dagger.has_weapon = true; dagger.reach_ft = 3.0;
+        attacker.sheet.offense.offhand = Some(OffhandProfile { attack_bonus: -1000, strength_damage: 0, weapon: Arc::new(dagger) });
+        let mut defender = Combatant::default(); defender.team_id = 1;
+        defender.sheet.vitals.max_hp = 10000; defender.sheet.offense.attack_bonus = -1000;
+        Arc::make_mut(&mut defender.sheet.offense.weapon).reach_ft = 3.0;
+        let mut sim = SimState::new(SimConfig::new(3.0, 1.0));
+        sim.reset_with_combatants(vec![attacker, defender]);
+        for _ in 0..20 { sim.tick(); }
+        let event = sim.combat_events.iter().find(|e| e.attacker_idx == 0 && matches!(&e.kind, CombatEventKind::Attack(a) if a.weapon_slot == WeaponSlot::Secondary)).unwrap();
+        let original = format_combat_event_line(event, &sim.combatants);
+        assert!(original.contains("with Dagger"));
+        sim.combatants[0].sheet.offense.offhand = None;
+        Arc::make_mut(&mut sim.combatants[0].sheet.offense.weapon).name = "Longbow".into();
+        assert_eq!(format_combat_event_line(event, &sim.combatants), original);
+    }
 }

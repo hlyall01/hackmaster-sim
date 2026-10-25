@@ -109,6 +109,7 @@ mod tests {
         player.level = 9;
         player.ranged_weapon_setup = Some(crate::sim::RangedWeaponSetup {
             weapon: "Shortbow".into(), material_tier: 3, projectile_material_tier: 2, iron: true,
+            called_shot: Some(true),
             default_style_ids: Some(vec!["gravesend".into()]), start_with: crate::sim::WeaponSetup::Melee,
             auto_switch_to_melee: false,
         });

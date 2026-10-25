@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 #[derive(Default)]
 pub(super) struct CombatLogView {
-    names: Vec<(String, String, Option<String>)>,
+    names: Vec<String>,
     layout: Option<(
         egui::FontId,
         Option<egui::FontId>,
@@ -41,36 +41,10 @@ impl CombatLogView {
                     ui.wrap_text(),
                 );
                 let names_match = self.names.len() == sim.combatants.len()
-                    && self.names.iter().zip(&sim.combatants).all(
-                        |((name, weapon, offhand), actor)| {
-                            name == &actor.sheet.name
-                                && weapon == &actor.sheet.offense.weapon.name
-                                && offhand.as_deref()
-                                    == actor
-                                        .sheet
-                                        .offense
-                                        .offhand
-                                        .as_ref()
-                                        .map(|w| w.weapon.name.as_str())
-                        },
-                    );
+                    && self.names.iter().zip(&sim.combatants)
+                        .all(|(name, actor)| name == &actor.sheet.name);
                 if !names_match {
-                    self.names = sim
-                        .combatants
-                        .iter()
-                        .map(|actor| {
-                            (
-                                actor.sheet.name.clone(),
-                                actor.sheet.offense.weapon.name.clone(),
-                                actor
-                                    .sheet
-                                    .offense
-                                    .offhand
-                                    .as_ref()
-                                    .map(|w| w.weapon.name.clone()),
-                            )
-                        })
-                        .collect();
+                    self.names = sim.combatants.iter().map(|actor| actor.sheet.name.clone()).collect();
                 }
                 if !names_match
                     || self.layout.as_ref() != Some(&layout)

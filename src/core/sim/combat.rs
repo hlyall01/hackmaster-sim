@@ -230,6 +230,8 @@ pub(crate) fn resolve_echo(
     Some((
         AttackEvent {
             source: AttackSource::EchoStrike,
+            damage_source: DamageSource::Spell { name: "Echo Strike".into() },
+            called_shot: false,
             hit,
             shield_block: false,
             damage,
