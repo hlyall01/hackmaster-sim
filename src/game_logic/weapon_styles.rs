@@ -114,6 +114,8 @@ pub(super) fn new_style_proficiency(id: &str, context: &TalentContext<'_>) -> Op
         TALENT_ID_REAPER_OF_TERMON => {
             has_any_weapon_name_proficiency(context, &["Scythe", "Sickle"])
         }
+        "whistling_wind" => has_weapon_matching(context, |w| w.group == WeaponGroup::Bows),
+        "gravesend" => has_weapon_matching(context, |w| matches!(w.group, WeaponGroup::Bows | WeaponGroup::Crossbows)),
         _ => return None,
     })
 }
@@ -157,6 +159,20 @@ pub(super) fn new_style_defense_bonus(
         } else {
             0
         }
+}
+
+pub(super) fn ranged_style_profile(
+    player: &PlayerConfig,
+    modifiers: &TalentModifiers,
+    weapon: &WeaponPreset,
+) -> sim::RangedStyleProfile {
+    sim::RangedStyleProfile {
+        whistling_wind_pace: (modifiers.whistling_wind_style && weapon.group == WeaponGroup::Bows)
+            .then_some(player.ranged_styles.whistling_wind_pace),
+        gravesend_aim: (modifiers.gravesend_style
+            && matches!(weapon.group, WeaponGroup::Bows | WeaponGroup::Crossbows))
+        .then_some(player.ranged_styles.gravesend_aim),
+    }
 }
 
 #[cfg(test)]

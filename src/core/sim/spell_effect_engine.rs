@@ -209,7 +209,7 @@ impl SimState {
         let ability = if spell.definition.casting_ability == CastingAbility::Constitution {
             a.sheet.vitals.constitution
         } else {
-            a.magic.strength.base
+            a.current_strength().base
         };
         let attack = a.caster_magic_save_bonus(ability);
         let defense = self.combatants[target].magic_save_bonus(kind, SpellTags::default());
@@ -440,6 +440,7 @@ impl SimState {
         .damage;
         let mut buff = TemporaryEffect::new(&spell.id, spell.duration as i32);
         buff.strength_override = Some((damage, *priority));
+        buff.strength_score_override = Some(score);
         buff.consume_on_attack = *consume_on_attack;
         self.combatants[caster].state.add_effect(buff);
         self.effect_message(

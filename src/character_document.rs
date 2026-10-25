@@ -18,6 +18,12 @@ impl CharacterDocument {
         shields: &ShieldCatalog,
         npcs: &NpcPresetCatalog,
     ) -> Result<Self, String> {
+        if player.ranged_weapon_setup.is_some() {
+            crate::game_logic::player_for_ranged_setup(player, weapons, shields)?;
+            if weapons.get(player.weapon_id).is_some_and(crate::game_logic::is_ranged_weapon) {
+                return Err("Choose a melee weapon for the melee setup".into());
+            }
+        }
         let mut value = serde_json::to_value(player).map_err(|e| e.to_string())?;
         let p = value.as_object_mut().ok_or("Invalid character")?;
         p.insert("weapon_id".into(), Value::from(weapons.get(player.weapon_id).ok_or("Unknown weapon")?.name.clone()));
@@ -101,6 +107,19 @@ mod tests {
         let npcs = Catalog::new(vec![]);
         let mut player = PlayerConfig::new("Cloud character", WeaponId::new(1));
         player.level = 9;
+        player.ranged_weapon_setup = Some(crate::sim::RangedWeaponSetup {
+            weapon: "Shortbow".into(), material_tier: 3, projectile_material_tier: 2, iron: true,
+            default_style_ids: Some(vec!["gravesend".into()]), start_with: crate::sim::WeaponSetup::Melee,
+            auto_switch_to_melee: false,
+        });
+        player.iron_weapon = true;
+        player.offhand_iron_weapon = true;
+        player.racial_talents = crate::sim::RacialTalentConfig {
+            age_years: 650, average_artistry_painting: true, warpaint_prepared: true,
+            under_mental_compulsion: true, choose_silent_defiance: false,
+        };
+        player.ranged_styles.whistling_wind_pace = crate::sim::BowPace::Run;
+        player.ranged_styles.gravesend_aim = crate::sim::GravesendAim::ForceTrauma;
         player.intelligence = 17;
         player.offhand_weapon_id = Some(WeaponId::new(2));
         player.move_speed = 13.5;

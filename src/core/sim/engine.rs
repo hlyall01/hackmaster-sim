@@ -21,6 +21,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[path = "spell_effect_engine.rs"]
 mod spell_effect_engine;
+#[path = "weapon_setup_engine.rs"]
+mod weapon_setup_engine;
 
 const CHARGE_MIN_DISTANCE_FT: f32 = 20.0;
 const SHIELD_STRIKE_SPEEDUP_SECONDS: f32 = 2.0;
@@ -594,6 +596,7 @@ impl SimState {
         old_positions.extend(self.actors.iter().map(|actor| actor.position));
         let active_pair = self.active_pair();
         if let Some((a_idx, b_idx)) = active_pair {
+            self.advance_weapon_setups(a_idx, b_idx);
             if (self.hold_at_bay.active || self.hold_at_bay.pending)
                 && self.hold_at_bay.holder_idx != a_idx
                 && self.hold_at_bay.holder_idx != b_idx
@@ -773,11 +776,16 @@ impl SimState {
                 .zip(old_positions.get(idx))
                 .map(|(actor, old)| actor.position.x != old.x || actor.position.y != old.y)
                 .unwrap_or(false);
+            let speed = combatant.apply_f32(StatIdF32::MoveSpeed, combatant.sheet.mobility.move_speed).max(0.0);
+            let running = moved && super::ranged_styles::bow_running(combatant, speed);
+            combatant.state.whistling_wind_running = running;
+            combatant.state.whistling_wind_next_attack_penalty |= running;
             combatant.state.moved_last_tick = moved;
         }
         self.previous_positions = old_positions;
         self.refresh_intimidation();
         for combatant in &mut self.combatants {
+            combatant.tick_racial_effects(&mut self.rng);
             combatant.state.tick_effects();
         }
         self.refresh_streamline_coverage();
@@ -1115,6 +1123,11 @@ impl SimState {
         };
 
         TacticalContext {
+            engaged_in_melee: enemy.state.weapon_setup.pending.is_none()
+                && !enemy.sheet.offense.weapon.uses_projectiles
+                && distance_ft <= enemy.apply_f32(StatIdF32::WeaponReach, enemy.sheet.offense.weapon.reach_ft).max(1.0),
+            can_equip_melee: mine.weapon_setups.is_some(),
+            can_equip_ranged: mine.weapon_setups.is_some(),
             my_hp_percent: if needs_condition(|c| {
                 matches!(c, TacticalCondition::MyHpPercent { .. })
             }) {
@@ -1631,8 +1644,12 @@ impl SimState {
     }
 
     fn move_tiles(&self, idx: usize) -> i32 {
-        let combatant = &self.combatants[idx];
-        if combatant.sheet.maneuvers.passive {
+        self.move_tiles_for(&self.combatants[idx])
+    }
+
+    fn move_tiles_for(&self, combatant: &Combatant) -> i32 {
+        if combatant.sheet.maneuvers.passive || combatant.racial_actions_blocked()
+            || combatant.state.weapon_setup.pending.is_some() {
             return 0;
         }
         if combatant.state.trauma_remaining_seconds > 0
@@ -1643,6 +1660,7 @@ impl SimState {
         let speed_ft = combatant
             .apply_f32(StatIdF32::MoveSpeed, combatant.sheet.mobility.move_speed)
             .max(0.0);
+        let speed_ft = super::ranged_styles::shooting_move_speed(combatant, speed_ft);
         if speed_ft <= 0.0 {
             return 0;
         }
@@ -2181,7 +2199,7 @@ impl SimState {
             if use_ranged && ranged_mod.is_none() {
                 continue;
             }
-            let called_shot_delays =
+            let mut called_shot_delays =
                 self.refresh_called_shot_tactic(attacker_idx, defender_idx, distance);
             if self.combatants[attacker_idx]
                 .state
@@ -2200,7 +2218,8 @@ impl SimState {
                     use_ranged,
                     &mut self.rng,
                 );
-                let scheduled_time = now + delay + called_shot_delay;
+                let scheduled_time = now + delay + called_shot_delay
+                    + if use_ranged { self.combatants[attacker_idx].sheet.offense.weapon.ranged_styles.aim_seconds() } else { 0.0 };
                 self.combatants[attacker_idx]
                     .state
                     .set_next_attack_time(WeaponSlot::Primary, Some(scheduled_time));
@@ -2219,7 +2238,25 @@ impl SimState {
             };
             if now + 0.0001 >= next_attack {
                 primary_attack_time = Some(next_attack);
+                let previous_aim = self.combatants[attacker_idx].sheet.offense.weapon.ranged_styles.aim_seconds();
+                let previous_offhand_aim = self.combatants[attacker_idx].sheet.offense.offhand.as_ref()
+                    .map_or(0.0, |o| o.weapon.ranged_styles.aim_seconds());
                 self.apply_next_attack_tactics(attacker_idx, defender_idx);
+                let new_offhand_aim = self.combatants[attacker_idx].sheet.offense.offhand.as_ref()
+                    .map_or(0.0, |o| o.weapon.ranged_styles.aim_seconds());
+                let offhand_added = (new_offhand_aim - previous_offhand_aim).max(0.0);
+                if offhand_added > 0.0 {
+                    if let Some(scheduled) = self.combatants[attacker_idx].state.next_attack_time_secondary {
+                        let next = scheduled.max(now) + offhand_added;
+                        called_shot_delays[1] += next - scheduled;
+                        self.combatants[attacker_idx].state.set_next_attack_time(WeaponSlot::Secondary, Some(next));
+                    }
+                }
+                let aim_added = self.combatants[attacker_idx].sheet.offense.weapon.ranged_styles.aim_seconds() - previous_aim;
+                if aim_added > 0.0 {
+                    self.combatants[attacker_idx].state.set_next_attack_time(WeaponSlot::Primary, Some(now + aim_added));
+                    continue;
+                }
 
                 // Style/stance rules can change attack-mode conditions. Recheck
                 // before striking, and wait if that decision newly requires aim.
@@ -2487,6 +2524,7 @@ impl SimState {
                     event.is_ranged,
                     &mut self.rng,
                 );
+                if event.is_ranged { speed += self.combatants[attacker_idx].sheet.offense.weapon.ranged_styles.aim_seconds(); }
                 self.combatants[attacker_idx]
                     .state
                     .set_next_attack_time(WeaponSlot::Primary, Some(next_attack + speed));
@@ -2578,7 +2616,8 @@ impl SimState {
                         use_ranged,
                         &mut self.rng,
                     );
-                    let scheduled_time = primary_anchor + offset + called_shot_delay;
+                    let scheduled_time = primary_anchor + offset + called_shot_delay
+                        + if use_ranged { weapon.ranged_styles.aim_seconds() } else { 0.0 };
                     self.combatants[attacker_idx]
                         .state
                         .set_next_attack_time(WeaponSlot::Secondary, Some(scheduled_time));
@@ -2794,6 +2833,7 @@ impl SimState {
                         event.is_ranged,
                         &mut self.rng,
                     );
+                    if event.is_ranged { speed += weapon.ranged_styles.aim_seconds(); }
                     self.combatants[attacker_idx]
                         .state
                         .set_next_attack_time(WeaponSlot::Secondary, Some(next_attack + speed));

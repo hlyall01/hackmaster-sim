@@ -53,3 +53,17 @@
 ### Two Shields
 - **Attack:** Shield bash only.
 - **Defense:** As weapon and shield, but both shield bonuses apply against frontal and flank attackers; opponents attack at half their weapon speed.
+
+### Whistling Wind (10 BP)
+- Requires proficiency in at least one type of bow.
+- While using a bow, move at a jog and shoot normally. Running while using the bow imposes -4 to the next attack and while running continues.
+- Choose Walk, Jog, or Run in the Weapon Style controls. Running starts with one second at a jog; blocked movement does not count as running. The next-attack penalty persists after stopping until an attack consumes it.
+- This style does not apply to crossbows, slings, or thrown weapons. Ordinary projectile users remain limited to walking while shooting.
+
+### Gravesend (10 BP)
+- Requires proficiency in at least one bow or crossbow.
+- Choose additional aim time per shot: 5, 10, or 20 seconds total. These delays are added to normal weapon recovery and any Called Shot delay, including the first shot. Activating the style through a tactical directive also pays its aim time before firing.
+- At all three aim levels, reverse the four ranged categories: `0 / -4 / -6 / -8` becomes `-8 / -6 / -4 / 0`. This does not extend maximum range. Range-changing effects are applied before reversing the category.
+- At 10 or 20 seconds, also gain +2 attack and ignore worn armor DR on a hit. Natural DR and shield cover remain effective. Ranged shield defense continues to use cover rather than melee shield-hit damage.
+- At 20 seconds, also automatically fail the target's Trauma save if actual damage exceeds its Threshold of Pain. Roll the usual trauma die for duration, treating an otherwise successful roll as the smallest failed roll. This does not force a natural 20.
+- These effects apply to bows and crossbows only. The style and its aim choice persist in character saves and fighter presets.

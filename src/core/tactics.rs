@@ -12,6 +12,7 @@ pub enum TacticalDecisionPoint {
     #[default]
     NextAttackOpportunity,
     IncomingAttackReaction,
+    EverySecond,
 }
 
 impl TacticalDecisionPoint {
@@ -19,6 +20,7 @@ impl TacticalDecisionPoint {
         match self {
             Self::NextAttackOpportunity => "Next attack",
             Self::IncomingAttackReaction => "Incoming attack",
+            Self::EverySecond => "Each second",
         }
     }
 }
@@ -26,6 +28,7 @@ impl TacticalDecisionPoint {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TacticalChannel {
+    WeaponSetup,
     WeaponStyle,
     AttackMode,
     Stance,
@@ -33,7 +36,8 @@ pub enum TacticalChannel {
 }
 
 impl TacticalChannel {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
+        Self::WeaponSetup,
         Self::WeaponStyle,
         Self::AttackMode,
         Self::Stance,
@@ -42,6 +46,7 @@ impl TacticalChannel {
 
     pub fn label(self) -> &'static str {
         match self {
+            Self::WeaponSetup => "Equipment",
             Self::WeaponStyle => "Style",
             Self::AttackMode => "Attack",
             Self::Stance => "Stance",
@@ -154,6 +159,7 @@ pub enum TacticalCondition {
     MyHasAttacked {
         value: bool,
     },
+    EngagedInMelee { value: bool },
     EnemyTimeToReachSeconds {
         comparison: NumericComparison,
         value: f32,
@@ -197,6 +203,7 @@ impl TacticalCondition {
             Self::EnemyArmorType { .. } => "Enemy armor type",
             Self::EnemyCharging { .. } => "Enemy charging",
             Self::MyHasAttacked { .. } => "I have attacked this combat",
+            Self::EngagedInMelee { .. } => "Engaged in melee",
             Self::EnemyTimeToReachSeconds { .. } => "Enemy time to reach",
             Self::MyActiveStyle { .. } => "My active style",
             Self::EnemyActiveStyle { .. } => "Enemy active style",
@@ -210,6 +217,9 @@ impl TacticalCondition {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TacticalAction {
+    RetainWeaponSetup,
+    EquipMelee,
+    EquipRanged,
     RetainWeaponStyle,
     NeutralWeaponStyle,
     UseWeaponStyle {
@@ -231,6 +241,7 @@ pub enum TacticalAction {
 impl TacticalAction {
     pub fn channel(&self) -> TacticalChannel {
         match self {
+            Self::RetainWeaponSetup | Self::EquipMelee | Self::EquipRanged => TacticalChannel::WeaponSetup,
             Self::RetainWeaponStyle | Self::NeutralWeaponStyle | Self::UseWeaponStyle { .. } => {
                 TacticalChannel::WeaponStyle
             }
@@ -242,6 +253,7 @@ impl TacticalAction {
 
     pub fn decision_point(&self) -> TacticalDecisionPoint {
         match self.channel() {
+            TacticalChannel::WeaponSetup => TacticalDecisionPoint::EverySecond,
             TacticalChannel::Reaction => TacticalDecisionPoint::IncomingAttackReaction,
             _ => TacticalDecisionPoint::NextAttackOpportunity,
         }
@@ -249,6 +261,9 @@ impl TacticalAction {
 
     pub fn label(&self) -> String {
         match self {
+            Self::RetainWeaponSetup => "Retain current equipment".to_string(),
+            Self::EquipMelee => "Equip melee setup".to_string(),
+            Self::EquipRanged => "Equip ranged setup".to_string(),
             Self::RetainWeaponStyle => "Retain current style".to_string(),
             Self::NeutralWeaponStyle => "Use no weapon style".to_string(),
             Self::UseWeaponStyle { style_ids } => {
@@ -315,6 +330,9 @@ pub struct TacticalPreset {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TacticalContext {
+    pub engaged_in_melee: bool,
+    pub can_equip_melee: bool,
+    pub can_equip_ranged: bool,
     pub my_hp_percent: f32,
     pub enemy_hp_percent: f32,
     pub distance_ft: f32,
@@ -465,6 +483,7 @@ pub fn canonicalize_style_selection(mut style_ids: Vec<String>) -> Vec<String> {
 
 fn fallback_action(channel: TacticalChannel) -> TacticalAction {
     match channel {
+        TacticalChannel::WeaponSetup => TacticalAction::RetainWeaponSetup,
         TacticalChannel::WeaponStyle => TacticalAction::RetainWeaponStyle,
         TacticalChannel::AttackMode => TacticalAction::NormalAttack,
         TacticalChannel::Stance => TacticalAction::NeutralStance,
@@ -503,6 +522,7 @@ fn condition_matches(condition: &TacticalCondition, context: &TacticalContext) -
         }
         TacticalCondition::EnemyCharging { value } => context.enemy_charging == *value,
         TacticalCondition::MyHasAttacked { value } => context.my_has_attacked == *value,
+        TacticalCondition::EngagedInMelee { value } => context.engaged_in_melee == *value,
         TacticalCondition::EnemyTimeToReachSeconds { comparison, value } => {
             comparison.matches(context.enemy_time_to_reach_seconds, *value)
         }
@@ -528,6 +548,8 @@ fn condition_matches(condition: &TacticalCondition, context: &TacticalContext) -
 
 fn action_is_legal(action: &TacticalAction, context: &TacticalContext) -> bool {
     match action {
+        TacticalAction::EquipMelee => context.can_equip_melee,
+        TacticalAction::EquipRanged => context.can_equip_ranged,
         TacticalAction::Jab => context.my_weapon_can_jab,
         TacticalAction::GiveGround | TacticalAction::ScamperBack => context.give_ground_legal,
         TacticalAction::UseWeaponStyle { style_ids } => {
@@ -584,6 +606,9 @@ mod tests {
 
     fn context() -> TacticalContext {
         TacticalContext {
+            engaged_in_melee: false,
+            can_equip_melee: false,
+            can_equip_ranged: false,
             my_hp_percent: 35.0,
             enemy_hp_percent: 75.0,
             distance_ft: 10.0,

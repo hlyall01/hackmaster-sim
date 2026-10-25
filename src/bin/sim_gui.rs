@@ -1543,6 +1543,30 @@ impl SimGuiApp {
                         ui.small(format!("Damage {:+}, Feat of Strength {:+}, DR {:+}",
                             bonus.damage, bonus.feat_of_strength, bonus.damage_reduction));
                     }
+                    if combatant.weapon_setups.is_some() {
+                        if let Some(pending) = &combatant.state.weapon_setup.pending {
+                            ui.small(format!("{}: drawing {} setup (ready at {:.0}s)", combatant.sheet.name, pending.target.label(), pending.attack_ready_at));
+                        } else {
+                            ui.small(format!("{}: {} setup", combatant.sheet.name, combatant.state.weapon_setup.active.label()));
+                        }
+                        if combatant.state.weapon_setup.ranged_dropped {
+                            ui.small("Ranged weapon dropped");
+                        }
+                    }
+                    if let Some(woad) = combatant.state.active_effects.iter().find(|e| e.id == "racial_warrior_woad") {
+                        ui.small(format!("{}: Warrior Woad — STR {}/{:02}, +6 Defense, {}s", combatant.sheet.name,
+                            combatant.current_strength().base, combatant.current_strength().percentile, woad.remaining_seconds));
+                    }
+                    if combatant.state.arborite.unconscious_seconds > 0 {
+                        ui.small(format!("{}: unconscious (Warrior Woad), {}s", combatant.sheet.name, combatant.state.arborite.unconscious_seconds));
+                    }
+                    if let Some((physical, mental)) = combatant.state.arborite.woad_expiry_saved {
+                        ui.small(format!("{} Woad saves: Physical {}, Mental {}", combatant.sheet.name,
+                            if physical { "saved" } else { "failed" }, if mental { "saved" } else { "failed" }));
+                    }
+                    if combatant.silent_defiance_holding_still() {
+                        ui.small(format!("{}: Silent Defiance — holding still", combatant.sheet.name));
+                    }
                     if combatant.magic.loadout.knows_echo_strike
                         || !combatant.magic.loadout.known_spells.is_empty()
                     {
@@ -2806,6 +2830,7 @@ fn tactical_condition_editor(
             TacticalCondition::EnemyArmorType { .. } => 10,
             TacticalCondition::EnemyCharging { .. } => 11,
             TacticalCondition::MyHasAttacked { .. } => 12,
+            TacticalCondition::EngagedInMelee { .. } => 19,
             TacticalCondition::EnemyTimeToReachSeconds { .. } => 13,
             TacticalCondition::MyActiveStyle { .. } => 14,
             TacticalCondition::EnemyActiveStyle { .. } => 15,
@@ -2834,6 +2859,7 @@ fn tactical_condition_editor(
             "Enemy DR",
             "Enemy attack speed (seconds)",
             "Enemy speed vs mine",
+            "Engaged in melee",
         ];
         egui::ComboBox::from_id_source(format!("{id_prefix}_kind"))
             .selected_text(labels[kind])
@@ -2873,6 +2899,7 @@ fn tactical_condition_editor(
                 },
                 11 => TacticalCondition::EnemyCharging { value: true },
                 12 => TacticalCondition::MyHasAttacked { value: true },
+                19 => TacticalCondition::EngagedInMelee { value: true },
                 13 => TacticalCondition::EnemyTimeToReachSeconds {
                     comparison: NumericComparison::Greater,
                     value: 3.0,
@@ -2935,7 +2962,8 @@ fn tactical_condition_editor(
             | TacticalCondition::MyHasActiveShield { value }
             | TacticalCondition::EnemyHasActiveShield { value }
             | TacticalCondition::EnemyCharging { value }
-            | TacticalCondition::MyHasAttacked { value } => {
+            | TacticalCondition::MyHasAttacked { value }
+            | TacticalCondition::EngagedInMelee { value } => {
                 boolean_condition_editor(ui, format!("{id_prefix}_bool"), value);
             }
             TacticalCondition::EnemyWeaponGroup { value, negated } => {
@@ -3029,6 +3057,9 @@ fn tactical_action_editor(
         TacticalAction::GiveGround => 8,
         TacticalAction::ScamperBack => 9,
         TacticalAction::CalledShot => 10,
+        TacticalAction::RetainWeaponSetup => 11,
+        TacticalAction::EquipMelee => 12,
+        TacticalAction::EquipRanged => 13,
     };
     let old_kind = kind;
     let labels = [
@@ -3043,6 +3074,9 @@ fn tactical_action_editor(
         "Give Ground",
         "Scamper Back",
         "Called shot",
+        "Retain equipment",
+        "Equip melee setup",
+        "Equip ranged setup",
     ];
     egui::ComboBox::from_id_source(format!("{id_prefix}_action"))
         .selected_text(labels[kind])
@@ -3065,7 +3099,10 @@ fn tactical_action_editor(
             7 => TacticalAction::StandGround,
             8 => TacticalAction::GiveGround,
             9 => TacticalAction::ScamperBack,
-            _ => TacticalAction::CalledShot,
+            10 => TacticalAction::CalledShot,
+            11 => TacticalAction::RetainWeaponSetup,
+            12 => TacticalAction::EquipMelee,
+            _ => TacticalAction::EquipRanged,
         };
     }
     match action {
@@ -3173,6 +3210,145 @@ fn weapon_style_selection_label(style_ids: &[String], talent_catalog: &TalentCat
             .collect::<Vec<_>>()
             .join(" + ")
     }
+}
+
+fn render_weapon_setups_editor(
+    ui: &mut egui::Ui,
+    id_prefix: &str,
+    player: &mut PlayerConfig,
+    weapons: &WeaponCatalog,
+    armor: &ArmorCatalog,
+    shields: &ShieldCatalog,
+    talents: &TalentCatalog,
+) {
+    let mut enabled = player.ranged_weapon_setup.is_some();
+    if ui
+        .checkbox(&mut enabled, "Carry both a melee and a ranged weapon")
+        .changed()
+    {
+        if enabled {
+            let current = weapons.get(player.weapon_id);
+            let ranged = current
+                .filter(|w| game_logic::is_ranged_weapon(w))
+                .or_else(|| {
+                    weapons
+                        .entries()
+                        .iter()
+                        .find(|w| game_logic::is_ranged_weapon(w))
+                });
+            if let Some(weapon) = ranged {
+                player.ranged_weapon_setup = Some(sim::RangedWeaponSetup {
+                    weapon: weapon.name.clone(),
+                    material_tier: if current.is_some_and(game_logic::is_ranged_weapon) {
+                        player.weapon_material_tier
+                    } else {
+                        0
+                    },
+                    projectile_material_tier: if current.is_some_and(game_logic::is_ranged_weapon) {
+                        player.projectile_material_tier
+                    } else {
+                        0
+                    },
+                    iron: current.is_some_and(game_logic::is_ranged_weapon) && player.iron_weapon,
+                    default_style_ids: if current.is_some_and(game_logic::is_ranged_weapon) {
+                        player.default_weapon_style_ids.clone()
+                    } else {
+                        None
+                    },
+                    start_with: sim::WeaponSetup::Ranged,
+                    auto_switch_to_melee: true,
+                });
+                if current.is_some_and(game_logic::is_ranged_weapon) {
+                    if let Some((index, _)) = weapons
+                        .entries()
+                        .iter()
+                        .enumerate()
+                        .find(|(_, w)| w.name == "Fist")
+                    {
+                        player.weapon_id = weapons.id_from_index(index).unwrap();
+                        player.two_hand_grip = false;
+                        player.iron_weapon = false;
+                        player.default_weapon_style_ids = Some(vec![]);
+                    }
+                }
+            }
+        } else {
+            player.ranged_weapon_setup = None;
+        }
+    }
+    let Some(mut setup) = player.ranged_weapon_setup.clone() else {
+        return;
+    };
+    ui.group(|ui| {
+        ui.strong("Ranged setup");
+        egui::ComboBox::from_id_source(format!("{id_prefix}_carried_ranged"))
+            .selected_text(&setup.weapon).show_ui(ui, |ui| {
+                for weapon in weapons.entries().iter().filter(|w| game_logic::is_ranged_weapon(w)) {
+                    ui.selectable_value(&mut setup.weapon, weapon.name.clone(), &weapon.name);
+                }
+            });
+        material_tier_combo(ui, format!("{id_prefix}_carried_ranged_material"), "Weapon material", &mut setup.material_tier);
+        material_tier_combo(ui, format!("{id_prefix}_carried_ammo_material"), "Ammo material", &mut setup.projectile_material_tier);
+        ui.checkbox(&mut setup.iron, "Iron ranged weapon / projectile");
+        egui::ComboBox::from_id_source(format!("{id_prefix}_starting_weapon_setup"))
+            .selected_text(format!("Start with {}", setup.start_with.label())).show_ui(ui, |ui| {
+                for side in [sim::WeaponSetup::Ranged, sim::WeaponSetup::Melee] {
+                    ui.selectable_value(&mut setup.start_with, side, side.label());
+                }
+            });
+        ui.checkbox(&mut setup.auto_switch_to_melee, "Automatically draw melee before engagement")
+            .on_hover_text("Drop the ranged weapon instantly and begin the draw at the last safe second for an engagement attack. Equipment tactics override this setting.");
+        ui.small("Dropping takes no time. Drawing uses the melee weapon's size. Switching after engagement adds a weapon-speed wait.");
+        player.ranged_weapon_setup = Some(setup.clone());
+        match game_logic::player_for_ranged_setup(player, weapons, shields) {
+            Ok(mut ranged) => {
+                render_default_weapon_style_selector(ui, &format!("{id_prefix}_ranged"), &mut ranged, weapons, armor, shields, talents);
+                setup.default_style_ids = ranged.default_weapon_style_ids;
+                player.ranged_styles = ranged.ranged_styles;
+            }
+            Err(error) => {ui.colored_label(Color32::YELLOW, error);}
+        }
+    });
+    player.ranged_weapon_setup = Some(setup);
+    ui.strong("Melee setup");
+    ui.small("Derived stats show the chosen starting setup. During combat, Status shows the active equipment.");
+    ui.small("The weapon, offhand, shield and style below form the melee setup. A dropped ranged weapon takes one second to pick up; locations are not tracked.");
+}
+
+fn render_racial_talent_settings(ui: &mut egui::Ui, player: &mut PlayerConfig) {
+    let arborite = player.race_id.as_deref() == Some("arborite");
+    let has = |id: &str| player.talents.iter().any(|t| t.id == id && t.rank > 0);
+    let woad = has("warrior_woad");
+    let defiance = has("silent_defiance");
+    let woad_race = arborite || player.race_id.as_deref() == Some("armeroci");
+    if !woad_race && !woad { return; }
+    ui.group(|ui| {
+        ui.strong("Racial talent conditions");
+        if arborite {
+            ui.horizontal(|ui| { ui.label("Age (years)"); ui.add(egui::DragValue::new(&mut player.racial_talents.age_years).clamp_range(0..=65535)); });
+            ui.small("Overcome Naivety requires age 501+. Its +3 Wisdom is applied to derived stats.");
+            if player.talents.iter().any(|t| t.id == "arborhide" && t.rank > 0) {
+                ui.small("Arborhide: phobia toward iron; iron weapons deal triple damage dice.");
+            } else {
+                ui.small("Iron anathema: iron burns on contact; iron weapons deal double damage dice.");
+            }
+            if player.environment.natural_surroundings { ui.small("Arborite: +50 Hiding and Sneaking in natural surroundings."); }
+        }
+        if woad_race || woad {
+            ui.checkbox(&mut player.racial_talents.average_artistry_painting, "Average or better Artistry (painting)");
+        }
+        if woad {
+            ui.add_enabled_ui(player.racial_talents.average_artistry_painting, |ui| {
+                ui.checkbox(&mut player.racial_talents.warpaint_prepared, "Warpaint applied before combat (10 minutes)");
+            });
+            ui.small("The first hacking or piercing wound activates Warrior Woad once. After 5d12p seconds, both saves must succeed or you fall unconscious for about an hour.");
+        }
+        if defiance {
+            ui.checkbox(&mut player.racial_talents.under_mental_compulsion, "Forced to act by a mental effect");
+            ui.checkbox(&mut player.racial_talents.choose_silent_defiance, "Use Silent Defiance to hold completely still");
+        }
+    });
+    ui.separator();
 }
 
 fn render_default_weapon_style_selector(
@@ -3290,6 +3466,32 @@ fn render_default_weapon_style_selector(
                 "The selected style is learned but incompatible with the current equipment. Combat falls back to no style.",
             );
         }
+        if learned.iter().any(|id| id == "whistling_wind") {
+            ui.horizontal(|ui| {
+                ui.label("Whistling Wind pace");
+                egui::ComboBox::from_id_source(format!("{id_prefix}_bow_pace"))
+                    .selected_text(player.ranged_styles.whistling_wind_pace.label())
+                    .show_ui(ui, |ui| {
+                        for pace in [sim::BowPace::Walk, sim::BowPace::Jog, sim::BowPace::Run] {
+                            ui.selectable_value(&mut player.ranged_styles.whistling_wind_pace, pace, pace.label());
+                        }
+                    });
+            });
+            ui.small("Running imposes -4 on your next attack and while you keep running. Start at a jog.");
+        }
+        if learned.iter().any(|id| id == "gravesend") {
+            ui.horizontal(|ui| {
+                ui.label("Gravesend aim per shot");
+                egui::ComboBox::from_id_source(format!("{id_prefix}_gravesend_aim"))
+                    .selected_text(player.ranged_styles.gravesend_aim.label())
+                    .show_ui(ui, |ui| {
+                        for aim in [sim::GravesendAim::InvertRange, sim::GravesendAim::PierceArmor, sim::GravesendAim::ForceTrauma] {
+                            ui.selectable_value(&mut player.ranged_styles.gravesend_aim, aim, aim.label());
+                        }
+                    });
+            });
+            ui.small("Extra aiming is added to every shot. Armor bypass retains natural and shield DR.");
+        }
         if learned.is_empty() {
             ui.small("Learn weapon styles from the Talents tab to make them available here.");
         }
@@ -3317,13 +3519,18 @@ fn render_tactics_editor(
     applied: &mut bool,
 ) {
     let learned_styles = game_logic::learned_weapon_style_ids(player, talent_catalog);
-    let compatible_styles = game_logic::compatible_weapon_style_ids(
+    let mut compatible_styles = game_logic::compatible_weapon_style_ids(
         player,
         talent_catalog,
         weapon_catalog,
         armor_catalog,
         shield_catalog,
     );
+    if let Ok(ranged) = game_logic::player_for_ranged_setup(player, weapon_catalog, shield_catalog) {
+        for style in game_logic::compatible_weapon_style_ids(&ranged, talent_catalog, weapon_catalog, armor_catalog, shield_catalog) {
+            if !compatible_styles.contains(&style) { compatible_styles.push(style); }
+        }
+    }
     let style_options = talent_catalog
         .entries()
         .iter()
@@ -3996,6 +4203,7 @@ fn render_player_editor(
         }
         PlayerEditorTab::Gear => {
             let mut uses_projectiles = false;
+            render_weapon_setups_editor(ui, id_prefix, player, weapon_catalog, armor_catalog, shield_catalog, talent_catalog);
             ui.horizontal(|ui| {
                 ui.label("Weapon");
                 let mut selection = weapon_catalog.index_of(player.weapon_id);
@@ -4012,7 +4220,7 @@ fn render_player_editor(
                         .entries()
                         .iter()
                         .enumerate()
-                        .map(|(idx, weapon)| (idx, weapon.name.clone(), true)),
+                        .map(|(idx, weapon)| (idx, weapon.name.clone(), player.ranged_weapon_setup.is_none() || !game_logic::is_ranged_weapon(weapon))),
                 );
                 if let Some(id) = weapon_catalog.id_from_index(selection) {
                     player.weapon_id = id;
@@ -4023,6 +4231,8 @@ fn render_player_editor(
                         .first()
                         .expect("weapon catalog empty")
                 });
+                ui.checkbox(&mut player.iron_weapon, "Iron weapon")
+                    .on_hover_text("Marks the striking weapon as iron for iron anathema. For ranged attacks, this refers to the projectile, not the bow. Independent of material tier.");
                 game_logic::sanitize_projectile_tier(player, weapon);
                 uses_projectiles = game_logic::weapon_uses_projectiles(weapon);
                 material_tier_combo(
@@ -4284,6 +4494,8 @@ fn render_player_editor(
                         .and_then(|id| weapon_catalog.get(id));
                     let offhand_enabled = offhand.is_some() && can_use_offhand;
                     ui.add_enabled_ui(offhand_enabled, |ui| {
+                        ui.checkbox(&mut player.offhand_iron_weapon, "Iron offhand weapon")
+                            .on_hover_text("For a ranged offhand, marks the projectile as iron.");
                         material_tier_combo(
                             ui,
                             format!("{id_prefix}_offhand_material"),
@@ -4598,6 +4810,16 @@ fn render_player_editor(
                         race.base_hp,
                         race_adjustment_summary(race)
                     ));
+                    egui::CollapsingHeader::new("Race details")
+                        .id_source(format!("{id_prefix}_race_details"))
+                        .show(ui, |ui| {
+                            if !race.description.is_empty() { ui.label(&race.description); }
+                            if !race.plural.is_empty() { ui.label(format!("Plural: {}", race.plural)); }
+                            if !race.other_names.is_empty() { ui.label(format!("Also known as: {}", race.other_names.join(", "))); }
+                            if !race.native_languages.is_empty() { ui.label(format!("Native languages: {}", race.native_languages.join(", "))); }
+                            for pro in &race.pros { ui.label(format!("+ {pro}")); }
+                            for con in &race.cons { ui.label(format!("• {con}")); }
+                        });
                 }
                 if race_locked {
                     ui.label("Race adjustments apply only when creating a new character.");
@@ -4618,6 +4840,7 @@ fn render_player_editor(
                     ui.add(egui::DragValue::new(&mut player.environment.temperature_c).speed(1));
                 });
                 ui.separator();
+                render_racial_talent_settings(ui, player);
                 ui.label("Misc roll modifiers");
                 let mut misc_row = |label: &str, value: &mut i32| {
                     ui.horizontal(|ui| {
@@ -5405,6 +5628,10 @@ fn apply_fighter_preset(
     player.constitution = preset.constitution;
     player.looks = preset.looks;
     player.charisma = preset.charisma;
+    player.ranged_weapon_setup = preset.ranged_weapon_setup.clone();
+    player.iron_weapon = preset.iron_weapon;
+    player.offhand_iron_weapon = preset.offhand_iron_weapon;
+    player.racial_talents = preset.racial_talents;
     player.weapon_material_tier = preset.weapon_material_tier;
     player.offhand_weapon_material_tier = preset.offhand_weapon_material_tier;
     player.armor_material_tier = preset.armor_material_tier;
@@ -5418,6 +5645,7 @@ fn apply_fighter_preset(
     player.use_jab = maneuvers.use_jab;
     player.hold_at_bay = maneuvers.hold_at_bay;
     player.called_shot = maneuvers.called_shot;
+    player.ranged_styles = maneuvers.ranged_styles;
     player.power_attack = maneuvers.power_attack;
     player.aggressive_attack = maneuvers.aggressive_attack;
     player.charge = maneuvers.charge;
@@ -5565,6 +5793,10 @@ fn fighter_preset_from_player(
         offhand_weapon,
         armor,
         shield,
+        ranged_weapon_setup: player.ranged_weapon_setup.clone(),
+        iron_weapon: player.iron_weapon,
+        offhand_iron_weapon: player.offhand_iron_weapon,
+        racial_talents: player.racial_talents,
         weapon_material_tier: player.weapon_material_tier,
         offhand_weapon_material_tier: player.offhand_weapon_material_tier,
         armor_material_tier: player.armor_material_tier,
@@ -5575,6 +5807,7 @@ fn fighter_preset_from_player(
         one_path_piercing: player.one_path_piercing,
         decline_pursuit: player.decline_pursuit,
         maneuvers: game_logic::CombatManeuverConfig {
+            ranged_styles: player.ranged_styles,
             use_jab: player.use_jab,
             hold_at_bay: player.hold_at_bay,
             called_shot: player.called_shot,
@@ -5765,6 +5998,8 @@ fn format_talent_requirement_failure(
     talent_catalog: &TalentCatalog,
 ) -> String {
     match failure {
+        game_logic::TalentRequirementFailure::MinAge { required, current } => format!("Requires age {required}+ (current {current})"),
+        game_logic::TalentRequirementFailure::AverageArtistryPainting => "Requires Average Artistry (painting)".into(),
         game_logic::TalentRequirementFailure::MinLevel { required, current } => {
             format!("Requires level {required} (current {current}).")
         }
@@ -6019,6 +6254,8 @@ fn render_talent_selector(
     let talent_snapshot = player.talents.clone();
     let proficiency_snapshot = player.proficiencies.clone();
     let context = game_logic::TalentContext {
+        age_years: player.racial_talents.age_years,
+        average_artistry_painting: player.racial_talents.average_artistry_painting,
         level: player.level,
         stats: &abilities,
         talents: &talent_snapshot,
@@ -6823,6 +7060,35 @@ mod tests {
     }
 
     #[test]
+    fn paired_weapon_editor_renders_without_changing_saved_equipment_options() {
+        fn text_of(shape: &egui::epaint::Shape, text: &mut String) {
+            match shape {
+                egui::epaint::Shape::Text(s) => {text.push_str(&s.galley.job.text);text.push('\n');}
+                egui::epaint::Shape::Vec(shapes) => for s in shapes {text_of(s,text);},
+                _ => {}
+            }
+        }
+        let app = app_fixture();
+        let mut player = app.players[0].clone();
+        let setup = sim::RangedWeaponSetup { weapon: "Shortbow".into(), material_tier: 2,
+            projectile_material_tier: 1, iron: true, default_style_ids: Some(vec![]),
+            start_with: sim::WeaponSetup::Melee, auto_switch_to_melee: false };
+        player.ranged_weapon_setup = Some(setup.clone());
+        let ctx = egui::Context::default();
+        let output = ctx.run(egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 1600.0))),
+            ..Default::default()
+        }, |ctx| { egui::CentralPanel::default().show(ctx, |ui| {
+            render_weapon_setups_editor(ui, "paired_test", &mut player, &app.weapon_catalog, &app.armor_catalog, &app.shield_catalog, &app.talent_catalog);
+        }); });
+        let mut text = String::new();
+        for shape in output.shapes {text_of(&shape.shape, &mut text);}
+        assert!(text.contains("Automatically draw melee before engagement"));
+        assert!(text.contains("Ranged setup") && text.contains("Melee setup"));
+        assert_eq!(player.ranged_weapon_setup, Some(setup));
+    }
+
+    #[test]
     fn magic_preset_save_load_and_simulation_reset_preserve_configuration() {
         use hackmaster_sim::core::magic::*;
         let mut app = app_fixture();
@@ -6846,6 +7112,19 @@ mod tests {
             }],
             ..MagicLoadout::default()
         };
+        app.players[0].ranged_weapon_setup = Some(sim::RangedWeaponSetup {
+            weapon: "Shortbow".into(), material_tier: 2, projectile_material_tier: 1, iron: true,
+            default_style_ids: Some(vec![]), start_with: sim::WeaponSetup::Melee, auto_switch_to_melee: false,
+        });
+        app.players[0].iron_weapon = true;
+        app.players[0].offhand_iron_weapon = true;
+        app.players[0].racial_talents.age_years = 650;
+        app.players[0].racial_talents.average_artistry_painting = true;
+        app.players[0].racial_talents.warpaint_prepared = true;
+        app.players[0].ranged_styles = sim::RangedStyleConfig {
+            whistling_wind_pace: sim::BowPace::Run,
+            gravesend_aim: sim::GravesendAim::ForceTrauma,
+        };
         let saved = fighter_preset_from_player(
             &app.players[0],
             &app.weapon_catalog,
@@ -6865,6 +7144,11 @@ mod tests {
             &app.race_catalog,
         );
         assert_eq!(loaded.magic, app.players[0].magic);
+        assert_eq!(loaded.ranged_styles, app.players[0].ranged_styles);
+        assert_eq!(loaded.ranged_weapon_setup, app.players[0].ranged_weapon_setup);
+        assert_eq!(loaded.iron_weapon, app.players[0].iron_weapon);
+        assert_eq!(loaded.offhand_iron_weapon, app.players[0].offhand_iron_weapon);
+        assert_eq!(loaded.racial_talents, app.players[0].racial_talents);
         app.players[0] = loaded;
         app.reset_positions();
         assert_eq!(app.sim.combatants[0].magic.loadout, app.players[0].magic);

@@ -32,6 +32,22 @@ impl std::fmt::Display for DamageExprError {
 impl std::error::Error for DamageExprError {}
 
 impl Expression {
+    pub(super) fn with_multiplied_dice(&self, multiplier: i32) -> Self {
+        let multiplier = multiplier.clamp(1, 3);
+        let mut terms = Vec::new();
+        for term in &self.0 {
+            match &term.value {
+                Value::Dice { count, sides, penetrating } => terms.push(Term {
+                    sign: term.sign,
+                    value: Value::Dice { count: count.saturating_mul(multiplier), sides: *sides, penetrating: *penetrating },
+                }),
+                Value::MinimumDie { .. } => terms.extend(std::iter::repeat_n(term.clone(), multiplier as usize)),
+                Value::Constant(_) => terms.push(term.clone()),
+            }
+        }
+        Self(terms)
+    }
+
     pub(super) fn with_added_dice(&self, dice: &[(i32, bool)]) -> Self {
         let mut expression = self.clone();
         for &(sides, penetrating) in dice {

@@ -35,6 +35,14 @@ pub struct RaceSpec {
     #[serde(default)]
     pub pros: Vec<String>,
     #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub plural: String,
+    #[serde(default)]
+    pub other_names: Vec<String>,
+    #[serde(default)]
+    pub native_languages: Vec<String>,
+    #[serde(default)]
     pub cons: Vec<String>,
 }
 
@@ -67,6 +75,8 @@ impl AbilityKind {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TalentRequirement {
+    MinAge { years: u16 },
+    AverageArtistryPainting,
     MinLevel {
         level: u8,
     },
@@ -442,6 +452,14 @@ pub enum TalentEffect {
     OnePathStyle,
     PilgrimsPathStyle,
     ReaperOfTermonStyle,
+    WhistlingWindStyle,
+    GravesendStyle,
+    Barkskin,
+    Shillelagh,
+    SilentDefiance,
+    Arborhide,
+    OvercomeNaivety,
+    WarriorWoad,
 }
 
 fn default_talent_rank() -> u8 {

@@ -37,6 +37,10 @@ pub use npc::{NpcLoadout, apply_npc_preset};
 mod mastery_tests;
 mod weapon_styles;
 use weapon_styles::*;
+mod weapon_setups;
+pub use weapon_setups::{resolve_player_stats, player_for_ranged_setup};
+mod arborite;
+use arborite::*;
 pub use weapon_styles::{evonia_offhand_allowed, offhand_option_allowed};
 
 pub type WeaponCatalog = Catalog<WeaponTag, WeaponPreset>;
@@ -268,6 +272,8 @@ pub struct FighterMasteries {
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct CombatManeuverConfig {
+    #[serde(default)]
+    pub ranged_styles: sim::RangedStyleConfig,
     #[serde(default, skip_serializing_if = "is_false")]
     pub use_jab: bool,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -310,6 +316,7 @@ pub struct CombatManeuverConfig {
 impl Default for CombatManeuverConfig {
     fn default() -> Self {
         Self {
+            ranged_styles: sim::RangedStyleConfig::default(),
             use_jab: false,
             hold_at_bay: false,
             called_shot: false,
@@ -374,6 +381,14 @@ pub struct FighterPreset {
     pub offhand_weapon: Option<String>,
     pub armor: String,
     pub shield: String,
+    #[serde(default)]
+    pub iron_weapon: bool,
+    #[serde(default)]
+    pub offhand_iron_weapon: bool,
+    #[serde(default)]
+    pub racial_talents: sim::RacialTalentConfig,
+    #[serde(default)]
+    pub ranged_weapon_setup: Option<sim::RangedWeaponSetup>,
     pub weapon_material_tier: i32,
     #[serde(default)]
     pub offhand_weapon_material_tier: i32,
@@ -456,6 +471,14 @@ pub struct PlayerConfig {
     pub weapon_id: WeaponId,
     pub offhand_weapon_id: Option<WeaponId>,
     pub armor_id: ArmorId,
+    #[serde(default)]
+    pub iron_weapon: bool,
+    #[serde(default)]
+    pub offhand_iron_weapon: bool,
+    #[serde(default)]
+    pub racial_talents: sim::RacialTalentConfig,
+    #[serde(default)]
+    pub ranged_weapon_setup: Option<sim::RangedWeaponSetup>,
     pub weapon_material_tier: i32,
     pub offhand_weapon_material_tier: i32,
     pub armor_material_tier: i32,
@@ -469,6 +492,8 @@ pub struct PlayerConfig {
     pub two_hand_grip: bool,
     pub one_path_piercing: bool,
     pub decline_pursuit: bool,
+    #[serde(default)]
+    pub ranged_styles: sim::RangedStyleConfig,
     pub use_jab: bool,
     pub hold_at_bay: bool,
     pub called_shot: bool,
@@ -525,6 +550,10 @@ impl PlayerConfig {
             weapon_id,
             offhand_weapon_id: None,
             armor_id: ArmorId::new(0),
+            iron_weapon: false,
+            offhand_iron_weapon: false,
+            racial_talents: sim::RacialTalentConfig::default(),
+            ranged_weapon_setup: None,
             weapon_material_tier: 0,
             offhand_weapon_material_tier: 0,
             armor_material_tier: 0,
@@ -536,6 +565,7 @@ impl PlayerConfig {
             fighter_preset: None,
             weapon_masteries: WeaponMasteries::new(),
             two_hand_grip: false,
+            ranged_styles: sim::RangedStyleConfig::default(),
             one_path_piercing: false,
             decline_pursuit: false,
             use_jab: false,
@@ -692,6 +722,8 @@ struct TalentModifiers {
     one_path_style: bool,
     pilgrims_path_style: bool,
     reaper_of_termon_style: bool,
+    whistling_wind_style: bool,
+    gravesend_style: bool,
     unbreakable_wall_style: bool,
     forced_weapon_loadout: Option<ForcedWeaponLoadout>,
 }
@@ -816,6 +848,8 @@ impl Default for TalentModifiers {
             one_path_style: false,
             pilgrims_path_style: false,
             reaper_of_termon_style: false,
+            whistling_wind_style: false,
+            gravesend_style: false,
             unbreakable_wall_style: false,
             forced_weapon_loadout: None,
         }
@@ -1185,6 +1219,8 @@ pub fn sim_capability_report(talent_catalog: &TalentCatalog) -> SimCapabilityRep
 
 #[derive(Clone)]
 pub struct TalentContext<'a> {
+    pub age_years: u16,
+    pub average_artistry_painting: bool,
     pub level: u8,
     pub stats: &'a AbilitySet,
     pub talents: &'a [TalentSelection],
@@ -1194,6 +1230,8 @@ pub struct TalentContext<'a> {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TalentRequirementFailure {
+    MinAge { required: u16, current: u16 },
+    AverageArtistryPainting,
     MinLevel {
         required: u8,
         current: u8,
@@ -1513,6 +1551,14 @@ pub fn evaluate_talent_requirements(
         .find(|selection| selection.id == spec.id);
     for requirement in &spec.requirements {
         match requirement {
+            TalentRequirement::MinAge { years } => {
+                if context.age_years < *years {
+                    failures.push(TalentRequirementFailure::MinAge { required: *years, current: context.age_years });
+                }
+            }
+            TalentRequirement::AverageArtistryPainting => {
+                if !context.average_artistry_painting { failures.push(TalentRequirementFailure::AverageArtistryPainting); }
+            }
             TalentRequirement::MinLevel { level } => {
                 if context.level < *level {
                     failures.push(TalentRequirementFailure::MinLevel {
@@ -1867,6 +1913,8 @@ fn active_weapon_style_specs<'a>(
 ) -> Vec<&'a TalentSpec> {
     let stats = ability_set_from_player(player);
     let context = TalentContext {
+        age_years: player.racial_talents.age_years,
+        average_artistry_painting: player.racial_talents.average_artistry_painting,
         level: player.level,
         stats: &stats,
         talents: &player.talents,
@@ -1954,6 +2002,8 @@ pub fn compatible_weapon_style_ids(
 ) -> Vec<String> {
     let stats = ability_set_from_player(player);
     let context = TalentContext {
+        age_years: player.racial_talents.age_years,
+        average_artistry_painting: player.racial_talents.average_artistry_painting,
         level: player.level,
         stats: &stats,
         talents: &player.talents,
@@ -2019,6 +2069,9 @@ pub fn weapon_style_compatible_with_loadout(
                 && effective_two_hand_grip(weapon, player.two_hand_grip)
                 && selected_shield.is_none()
         }
+        "whistling_wind" => weapon.group == WeaponGroup::Bows,
+        "gravesend" => matches!(weapon.group, WeaponGroup::Bows | WeaponGroup::Crossbows)
+            || offhand.is_some_and(|w| w.group == WeaponGroup::Crossbows),
         TALENT_ID_PILGRIMS_PATH => weapon.name.eq_ignore_ascii_case("staff"),
         TALENT_ID_REAPER_OF_TERMON => {
             is_reaper_weapon(weapon)
@@ -2442,8 +2495,14 @@ fn resolve_talent_modifiers_with_grants(
     modifiers.chronoblur = player.magic.knows_spell("spell_chronoblur")
         || player.talents.iter().any(|talent| talent.id == "spell_chronoblur" && talent.rank > 0);
     modifiers.perfect_two_weapon_fighting = has_perfect_two_weapon_fighting_effect(player);
+    if player.race_id.as_deref() == Some("arborite") {
+        modifiers.magic.apply(crate::core::magic::MagicTalent::CharmResistant, 1);
+        modifiers.magic.apply(crate::core::magic::MagicTalent::IllusionResistant, 1);
+    }
     let stats = ability_set_from_player(player);
     let context = TalentContext {
+        age_years: player.racial_talents.age_years,
+        average_artistry_painting: player.racial_talents.average_artistry_painting,
         level: player.level,
         stats: &stats,
         talents: &player.talents,
@@ -3221,6 +3280,10 @@ fn resolve_talent_modifiers_with_grants(
                 TalentEffect::OnePathStyle => modifiers.one_path_style = true,
                 TalentEffect::PilgrimsPathStyle => modifiers.pilgrims_path_style = true,
                 TalentEffect::ReaperOfTermonStyle => modifiers.reaper_of_termon_style = true,
+                TalentEffect::WhistlingWindStyle => modifiers.whistling_wind_style = true,
+                TalentEffect::GravesendStyle => modifiers.gravesend_style = true,
+                TalentEffect::Barkskin | TalentEffect::Shillelagh | TalentEffect::SilentDefiance
+                | TalentEffect::Arborhide | TalentEffect::OvercomeNaivety | TalentEffect::WarriorWoad => {},
                 TalentEffect::UnbreakableWallStyle => {
                     modifiers.unbreakable_wall_style = true;
                 }
@@ -3430,6 +3493,14 @@ fn resolve_misc_modifiers(player: &PlayerConfig) -> MiscRollModifiers {
     let mut modifiers = player.misc_modifiers;
     if let Some(race_id) = player.race_id.as_deref() {
         match race_id {
+            "arborite" => {
+                modifiers.initiative_die_bonus += 1;
+                if player.environment.natural_surroundings {
+                    modifiers.speed_mod_bonus -= 1;
+                    modifiers.initiative_bonus -= 2;
+                }
+                modifiers.armor_dr_bonus += arborite_natural_dr(player);
+            }
             "armeroci" => {
                 modifiers.defense_bonus += 1;
                 modifiers.initiative_die_bonus += 1;
@@ -3693,17 +3764,15 @@ pub fn default_offhand_weapon_id(
 }
 
 pub fn effective_attack_mastery(player: &PlayerConfig, weapon: &WeaponPreset) -> i32 {
-    player.mastery(weapon.group).attack
+    mastery_for_weapon(player, weapon).attack
 }
 
 pub fn effective_defense_mastery(player: &PlayerConfig, weapon: &WeaponPreset) -> i32 {
-    player
-        .mastery(if shield_equipped(player, weapon) {
-            WeaponGroup::Shields
-        } else {
-            weapon.group
-        })
-        .defense
+    if shield_equipped(player, weapon) {
+        player.mastery(WeaponGroup::Shields).defense
+    } else {
+        mastery_for_weapon(player, weapon).defense
+    }
 }
 
 fn defense_mastery_bonus(
@@ -3715,7 +3784,7 @@ fn defense_mastery_bonus(
     defensive_dualwielding: bool,
     quiet_river_active: bool,
 ) -> i32 {
-    let primary = player.mastery(weapon.group).defense;
+    let primary = mastery_for_weapon(player, weapon).defense;
     let shield = player.mastery(WeaponGroup::Shields).defense;
     if has_shield {
         return shield + if twelve_paths_active { primary } else { 0 };
@@ -3726,7 +3795,8 @@ fn defense_mastery_bonus(
             .and_then(|id| weapon_catalog.get(id))
             .map(|weapon| weapon.group)
             .unwrap_or(weapon.group);
-        primary + player.mastery(secondary_group).defense
+        primary + player.offhand_weapon_id.and_then(|id| weapon_catalog.get(id))
+            .map_or(player.mastery(secondary_group).defense, |w| mastery_for_weapon(player, w).defense)
     } else {
         primary
     };
@@ -3734,11 +3804,11 @@ fn defense_mastery_bonus(
 }
 
 pub fn effective_damage_mastery(player: &PlayerConfig, weapon: &WeaponPreset) -> i32 {
-    player.mastery(weapon.group).damage
+    mastery_for_weapon(player, weapon).damage
 }
 
 pub fn effective_speed_mastery(player: &PlayerConfig, weapon: &WeaponPreset) -> i32 {
-    let speed = player.mastery(weapon.group).speed;
+    let speed = mastery_for_weapon(player, weapon).speed;
     if shield_equipped(player, weapon) {
         speed.min(player.mastery(WeaponGroup::Shields).speed)
     } else {
@@ -3985,7 +4055,10 @@ pub fn ability_set_from_player(player: &PlayerConfig) -> AbilitySet {
             normalize_percentile(player.strength_pct),
         ),
         intelligence: player.intelligence,
-        wisdom: player.wisdom,
+        wisdom: if player.race_id.as_deref() == Some("arborite")
+            && player.racial_talents.age_years > 500 && player_has_talent(player, "overcome_naivety") {
+            clamp_stat_adjustment(player.wisdom, 3)
+        } else { player.wisdom },
         dexterity: AbilityScore::new(player.dex_base, normalize_percentile(player.dex_pct)),
         constitution: player.constitution,
         looks: player.looks,
@@ -4068,6 +4141,12 @@ pub fn derived_stat_breakdowns(
     summary: &PlayerSummary,
     combatant: &Combatant,
 ) -> DerivedStatBreakdowns {
+    if player.ranged_weapon_setup.as_ref().is_some_and(|s| s.start_with == sim::WeaponSetup::Ranged) {
+        if let Ok(ranged) = player_for_ranged_setup(player, weapon_catalog, shield_catalog) {
+            return derived_stat_breakdowns(&ranged, weapon_catalog, armor_catalog, shield_catalog, talent_catalog, summary, combatant);
+        }
+    }
+
     let modifiers = resolve_talent_modifiers(player, talent_catalog, weapon_catalog);
     let weapon = weapon_for_player_with_modifiers(player, weapon_catalog, &modifiers);
     let weapon_id = weapon_id_for_player_with_modifiers(player, weapon_catalog, &modifiers);
@@ -4446,6 +4525,9 @@ pub fn derived_stat_breakdowns(
         .unwrap_or(0);
     let catalog_armor_defense = catalog_armor.map(|armor| armor.defense_adj).unwrap_or(0);
     let mut base_defense = StatBreakdown::new(summary.derived.base_dv.to_string());
+    if player.race_id.as_deref() == Some("arborite") {
+        base_defense.add_i32(2, "Arborite innate defense");
+    }
     base_defense.add_i32(crate::character::BASE_DV, "Unshielded base defense");
     base_defense.add_i32(
         dexterity_defense,
@@ -4602,6 +4684,9 @@ pub fn derived_stat_breakdowns(
     breakdowns.insert(DerivedStatId::MeleeDefense, melee_defense);
 
     let mut ranged_defense = StatBreakdown::new(summary.defense.ranged_roll_label.clone());
+    if player.race_id.as_deref() == Some("arborite") {
+        ranged_defense.add_i32(2, "Arborite innate defense");
+    }
     if mounted_defense != 0 {
         ranged_defense.add_i32(mounted_defense, mounted_defense_source);
     }
@@ -4923,6 +5008,11 @@ pub fn build_character(
     shield_catalog: &ShieldCatalog,
     talent_catalog: &TalentCatalog,
 ) -> Character {
+    if player.ranged_weapon_setup.as_ref().is_some_and(|s| s.start_with == sim::WeaponSetup::Ranged) {
+        if let Ok(ranged) = player_for_ranged_setup(player, weapon_catalog, shield_catalog) {
+            return build_character(&ranged, weapon_catalog, armor_catalog, shield_catalog, talent_catalog);
+        }
+    }
     let modifiers = resolve_talent_modifiers(player, talent_catalog, weapon_catalog);
     build_character_with_modifiers(
         player,
@@ -5292,12 +5382,11 @@ fn build_combatant_profile(
         0.0
     };
     let speed_mastery = if has_shield {
-        player
-            .mastery(weapon_preset.group)
+        mastery_for_weapon(player, weapon_preset)
             .speed
             .min(player.mastery(WeaponGroup::Shields).speed) as f32
     } else {
-        player.mastery(weapon_preset.group).speed as f32
+        mastery_for_weapon(player, weapon_preset).speed as f32
     };
     let jab_speed = (weapon_preset.jab_speed.unwrap_or(base_weapon_speed) + speed_mod
         - speed_mastery
@@ -5630,6 +5719,8 @@ fn build_combatant_profile(
                         attack_bonus: offhand_attack_bonus,
                         strength_damage: offhand_strength_damage,
                         weapon: Arc::new(WeaponProfile {
+                            is_iron: player.offhand_iron_weapon,
+                            ranged_styles: ranged_style_profile(player, &modifiers, offhand_preset),
                             name: offhand_preset.name.clone(),
                             damage_expr: offhand_damage_expr,
                             damage_expr_cache: offhand_damage_expr_cache,
@@ -5680,6 +5771,9 @@ fn build_combatant_profile(
         }
     }
     let mut sheet_modifiers = sim::ModifierStack::default();
+    if player.race_id.as_deref() == Some("arborite") {
+        sheet_modifiers.add_i32(sim::StatIdI32::AllDefenseBonus, sim::ModifierOpI32::Add(2));
+    }
     if player
         .npc_preset
         .and_then(|id| npc_presets.get(id))
@@ -5905,6 +5999,8 @@ fn build_combatant_profile(
             strength_damage_base,
             unarmed_damage_bonus,
             weapon: Arc::new(WeaponProfile {
+                is_iron: player.iron_weapon,
+                ranged_styles: ranged_style_profile(player, &modifiers, weapon_preset),
                 name: weapon_name,
                 damage_expr: weapon_damage,
                 damage_expr_cache,
@@ -5980,7 +6076,8 @@ fn build_combatant_profile(
             eyesmite: modifiers.eyesmite,
             armor_dr,
             natural_dr,
-            is_medium_sized: player.knockback_step == DEFAULT_KNOCKBACK_STEP,
+            is_medium_sized: player.race_id.as_deref() == Some("arborite")
+                || player.knockback_step == DEFAULT_KNOCKBACK_STEP,
             knockback_step,
             armor_is_heavy,
             shield_name,
@@ -6055,6 +6152,8 @@ fn build_combatant_profile(
             dodge: character.ability_mods.dexterity.dodge_save,
         },
     });
+    combatant.arborite = arborite_profile(player);
+    combatant.state.arborite.compelled = combatant.arborite.initially_compelled;
     combatant.weapon_group = format!("{:?}", weapon_preset.group);
     combatant.armor_type = format!("{armor_type:?}");
     derived.initiative_die = derived.initiative_die
@@ -6065,8 +6164,13 @@ fn build_combatant_profile(
     // Base DV excludes mastery and situational bonuses. Both come from this
     // profile's resolved combat values, not a second character calculation.
     derived.base_dv = combatant.sheet.defense.defense_mod - defense_mastery
-        + sim::combat::persistent_defense_bonus(&combatant);
+        + sim::combat::persistent_defense_bonus(&combatant)
+        + combatant.apply_i32(sim::StatIdI32::AllDefenseBonus, 0);
     attack_breakdown.add_i32(-sim::combat::fight_defensively_attack_penalty(&combatant), "Fight Defensively");
+    attack_breakdown.add_i32(
+        combatant.sheet.offense.weapon.ranged_styles.attack_bonus(),
+        "Gravesend aim",
+    );
     attack_breakdown.result = sim::combat::preview_attack_bonus(&combatant, sim::WeaponSlot::Primary).to_string();
     if primary_is_ranged && combatant.sheet.offense.weapon.uses_projectiles {
         damage_breakdown.lines.clear();
@@ -6101,7 +6205,7 @@ pub fn build_combatant(
         npc_presets, talent_catalog).combatant
 }
 
-pub fn resolve_player_stats(
+fn resolve_player_stats_single_setup(
     player: &PlayerConfig,
     weapon_catalog: &WeaponCatalog,
     armor_catalog: &ArmorCatalog,
@@ -6121,8 +6225,8 @@ pub fn resolve_player_stats(
     );
     if !player.tactical_policy.enabled || player.npc_preset.is_some() {
         let mut profile_player = player.clone();
-        profile_player.active_weapon_style_ids = Some(initial_style_ids);
-        return build_combatant_profile(
+        profile_player.active_weapon_style_ids = Some(initial_style_ids.clone());
+        let mut resolved = build_combatant_profile(
             &profile_player,
             weapon_catalog,
             armor_catalog,
@@ -6130,6 +6234,9 @@ pub fn resolve_player_stats(
             npc_presets,
             talent_catalog,
         );
+        resolved.combatant.active_style_ids = initial_style_ids.clone();
+        resolved.combatant.state.activated_style_ids = initial_style_ids;
+        return resolved;
     }
 
     let pair_allowed = tactical_style_pair_allowed(player, &compatible_style_ids);
@@ -7692,6 +7799,8 @@ mod tests {
             charisma: 10,
         };
         let context = TalentContext {
+            age_years: 0,
+            average_artistry_painting: false,
             level: 2,
             stats: &stats,
             talents: &[],
@@ -7738,6 +7847,8 @@ mod tests {
             charisma: 10,
         };
         let context = TalentContext {
+            age_years: 0,
+            average_artistry_painting: false,
             level: 1,
             stats: &stats,
             talents: &[],
@@ -7793,6 +7904,8 @@ mod tests {
             weapon: None,
         }];
         let context = TalentContext {
+            age_years: 0,
+            average_artistry_painting: false,
             level: 1,
             stats: &stats,
             talents: &selections,
@@ -7839,6 +7952,8 @@ mod tests {
             charisma: 10,
         };
         let context = TalentContext {
+            age_years: 0,
+            average_artistry_painting: false,
             level: 1,
             stats: &stats,
             talents: &[
@@ -7896,6 +8011,8 @@ mod tests {
             charisma: 10,
         };
         let context = TalentContext {
+            age_years: 0,
+            average_artistry_painting: false,
             level: 1,
             stats: &stats,
             talents: &[
@@ -9019,6 +9136,8 @@ mod tests {
 
             let stats = ability_set_from_player(&player);
             let context = TalentContext {
+                age_years: player.racial_talents.age_years,
+                average_artistry_painting: player.racial_talents.average_artistry_painting,
                 level: player.level,
                 stats: &stats,
                 talents: &player.talents,
@@ -9124,6 +9243,8 @@ mod tests {
         let spec = find_talent_spec(&talents, TALENT_ID_TWELVE_PATHS)
             .expect("twelve_paths talent missing");
         let context_missing = TalentContext {
+            age_years: 0,
+            average_artistry_painting: false,
             level: 1,
             stats: &stats,
             talents: &[],
@@ -9146,6 +9267,8 @@ mod tests {
             .expect("no size L large sword found");
         let prof_large_sword_only = vec![large_sword_name.clone()];
         let context_large_only = TalentContext {
+            age_years: 0,
+            average_artistry_painting: false,
             level: 1,
             stats: &stats,
             talents: &[],
@@ -9161,6 +9284,8 @@ mod tests {
 
         let prof_full = vec![large_sword_name, "Shields".to_string()];
         let context_full = TalentContext {
+            age_years: 0,
+            average_artistry_painting: false,
             level: 1,
             stats: &stats,
             talents: &[],
