@@ -3217,9 +3217,6 @@ fn render_weapon_setups_editor(
     id_prefix: &str,
     player: &mut PlayerConfig,
     weapons: &WeaponCatalog,
-    armor: &ArmorCatalog,
-    shields: &ShieldCatalog,
-    talents: &TalentCatalog,
 ) {
     let mut enabled = player.ranged_weapon_setup.is_some();
     if ui
@@ -3292,11 +3289,6 @@ fn render_weapon_setups_editor(
         material_tier_combo(ui, format!("{id_prefix}_carried_ranged_material"), "Weapon material", &mut setup.material_tier);
         material_tier_combo(ui, format!("{id_prefix}_carried_ammo_material"), "Ammo material", &mut setup.projectile_material_tier);
         ui.checkbox(&mut setup.iron, "Iron ranged weapon / projectile");
-        let mut ranged_called_shot = setup.called_shot.unwrap_or(player.called_shot);
-        if ui.checkbox(&mut ranged_called_shot, "Called Shot with ranged setup").changed() {
-            setup.called_shot = Some(ranged_called_shot);
-        }
-        ui.small("The Called Shot option in Combat Maneuvers controls the melee setup.");
         egui::ComboBox::from_id_source(format!("{id_prefix}_starting_weapon_setup"))
             .selected_text(format!("Start with {}", setup.start_with.label())).show_ui(ui, |ui| {
                 for side in [sim::WeaponSetup::Ranged, sim::WeaponSetup::Melee] {
@@ -3306,20 +3298,51 @@ fn render_weapon_setups_editor(
         ui.checkbox(&mut setup.auto_switch_to_melee, "Automatically draw melee before engagement")
             .on_hover_text("Drop the ranged weapon instantly and begin the draw at the last safe second for an engagement attack. Equipment tactics override this setting.");
         ui.small("Dropping takes no time. Drawing uses the melee weapon's size. Switching after engagement adds a weapon-speed wait.");
-        player.ranged_weapon_setup = Some(setup.clone());
-        match game_logic::player_for_ranged_setup(player, weapons, shields) {
-            Ok(mut ranged) => {
-                render_default_weapon_style_selector(ui, &format!("{id_prefix}_ranged"), &mut ranged, weapons, armor, shields, talents);
-                setup.default_style_ids = ranged.default_weapon_style_ids;
-                player.ranged_styles = ranged.ranged_styles;
-            }
-            Err(error) => {ui.colored_label(Color32::YELLOW, error);}
-        }
     });
     player.ranged_weapon_setup = Some(setup);
     ui.strong("Melee setup");
     ui.small("Derived stats show the chosen starting setup. During combat, Status shows the active equipment.");
-    ui.small("The weapon, offhand, shield and style below form the melee setup. A dropped ranged weapon takes one second to pick up; locations are not tracked.");
+    ui.small("The weapon, offhand and shield below form the melee setup. Set styles and aiming in Combat Maneuvers. A dropped ranged weapon takes one second to pick up; locations are not tracked.");
+}
+
+fn render_called_shot_editor(ui: &mut egui::Ui, player: &mut PlayerConfig, weapon: &game_logic::WeaponPreset, label: &str) -> bool {
+    let mut changed = false;
+    ui.horizontal_wrapped(|ui| {
+        ui.add_enabled_ui(!player.tactical_policy.enabled, |ui| {
+            changed = ui.checkbox(&mut player.called_shot, label).changed();
+        });
+        let (light, medium, heavy) = game_logic::called_shot_target_defense_bonuses_for_player(player);
+        let penalty = game_logic::called_shot_self_defense_penalty_for_player(player);
+        let delay = game_logic::called_shot_delay_expr_for_player(player, game_logic::is_ranged_weapon(weapon));
+        ui.label(format!("Target defense (light/medium/heavy): +{light}/+{medium}/+{heavy}, self -{penalty} defense, speed +{delay}"));
+    });
+    changed
+}
+
+fn render_ranged_combat_maneuvers(
+    ui: &mut egui::Ui, id_prefix: &str, player: &mut PlayerConfig,
+    weapons: &WeaponCatalog, armor: &ArmorCatalog, shields: &ShieldCatalog, talents: &TalentCatalog,
+) {
+    let Some(mut setup) = player.ranged_weapon_setup.clone() else { return; };
+    match game_logic::player_for_ranged_setup(player, weapons, shields) {
+        Ok(mut ranged) => {
+            ui.group(|ui| {
+                ui.strong(format!("Ranged setup — {}", setup.weapon));
+                render_default_weapon_style_selector(ui, &format!("{id_prefix}_ranged"), &mut ranged, weapons, armor, shields, talents);
+                let weapon = weapons.get(ranged.weapon_id).expect("validated ranged setup");
+                if render_called_shot_editor(ui, &mut ranged, weapon, "Called shot (ranged setup)") {
+                    setup.called_shot = Some(ranged.called_shot);
+                }
+                if ranged.tactical_policy.enabled {
+                    ui.small("Called Shot is controlled by Tactical Directives.");
+                }
+            });
+            setup.default_style_ids = ranged.default_weapon_style_ids;
+            player.ranged_styles = ranged.ranged_styles;
+            player.ranged_weapon_setup = Some(setup);
+        }
+        Err(error) => { ui.colored_label(Color32::YELLOW, error); }
+    }
 }
 
 fn render_racial_talent_settings(ui: &mut egui::Ui, player: &mut PlayerConfig) {
@@ -3473,7 +3496,7 @@ fn render_default_weapon_style_selector(
                 "The selected style is learned but incompatible with the current equipment. Combat falls back to no style.",
             );
         }
-        if learned.iter().any(|id| id == "whistling_wind") {
+        if compatible.iter().any(|id| id == "whistling_wind") {
             ui.horizontal(|ui| {
                 ui.label("Whistling Wind pace");
                 egui::ComboBox::from_id_source(format!("{id_prefix}_bow_pace"))
@@ -3486,7 +3509,7 @@ fn render_default_weapon_style_selector(
             });
             ui.small("Running imposes -4 on your next attack and while you keep running. Start at a jog.");
         }
-        if learned.iter().any(|id| id == "gravesend") {
+        if compatible.iter().any(|id| id == "gravesend") {
             ui.horizontal(|ui| {
                 ui.label("Gravesend aim per shot");
                 egui::ComboBox::from_id_source(format!("{id_prefix}_gravesend_aim"))
@@ -4210,7 +4233,7 @@ fn render_player_editor(
         }
         PlayerEditorTab::Gear => {
             let mut uses_projectiles = false;
-            render_weapon_setups_editor(ui, id_prefix, player, weapon_catalog, armor_catalog, shield_catalog, talent_catalog);
+            render_weapon_setups_editor(ui, id_prefix, player, weapon_catalog);
             ui.horizontal(|ui| {
                 ui.label("Weapon");
                 let mut selection = weapon_catalog.index_of(player.weapon_id);
@@ -4555,6 +4578,13 @@ fn render_player_editor(
                     .first()
                     .expect("weapon catalog empty")
             });
+            if player.ranged_weapon_setup.is_some() {
+                render_ranged_combat_maneuvers(
+                    ui, id_prefix, player, weapon_catalog, armor_catalog, shield_catalog, talent_catalog,
+                );
+                ui.separator();
+                ui.strong(format!("Melee setup — {}", weapon.name));
+            }
             render_default_weapon_style_selector(
                 ui,
                 id_prefix,
@@ -4595,22 +4625,8 @@ fn render_player_editor(
                 }
             }
             ui.checkbox(&mut player.hold_at_bay, "Hold at bay");
-            ui.horizontal(|ui| {
-                ui.add_enabled_ui(!tactics_controlled, |ui| {
-                    ui.checkbox(&mut player.called_shot, if player.ranged_weapon_setup.is_some() { "Called shot (melee setup)" } else { "Called shot" });
-                });
-                let (called_shot_light_bonus, called_shot_medium_bonus, called_shot_heavy_bonus) =
-                    game_logic::called_shot_target_defense_bonuses_for_player(player);
-                let called_shot_self_penalty =
-                    game_logic::called_shot_self_defense_penalty_for_player(player);
-                let called_shot_delay_expr = game_logic::called_shot_delay_expr_for_player(
-                    player,
-                    game_logic::is_ranged_weapon(weapon),
-                );
-                ui.label(format!(
-                    "Target defense (light/medium/heavy): +{called_shot_light_bonus}/+{called_shot_medium_bonus}/+{called_shot_heavy_bonus}, self -{called_shot_self_penalty} defense, speed +{called_shot_delay_expr}"
-                ));
-            });
+            let called_shot_label = if player.ranged_weapon_setup.is_some() { "Called shot (melee setup)" } else { "Called shot" };
+            render_called_shot_editor(ui, player, weapon, called_shot_label);
             ui.horizontal(|ui| {
                 let can_power_attack =
                     game_logic::power_attack_available_for_player(player, weapon);
@@ -7078,20 +7094,42 @@ mod tests {
         let app = app_fixture();
         let mut player = app.players[0].clone();
         let setup = sim::RangedWeaponSetup { weapon: "Shortbow".into(), material_tier: 2,
-            projectile_material_tier: 1, iron: true, called_shot: Some(true), default_style_ids: Some(vec![]),
+            projectile_material_tier: 1, iron: true, called_shot: Some(true), default_style_ids: Some(vec!["whistling_wind".into()]),
             start_with: sim::WeaponSetup::Melee, auto_switch_to_melee: false };
         player.ranged_weapon_setup = Some(setup.clone());
+        player.talents.push(TalentSelection { id: "whistling_wind".into(), rank: 1, weapon: None });
+        player.proficiencies.push("Shortbow".into());
+        player.ranged_styles.whistling_wind_pace = sim::BowPace::Run;
+        let original = serde_json::to_value(&player).unwrap();
         let ctx = egui::Context::default();
         let output = ctx.run(egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 1600.0))),
             ..Default::default()
         }, |ctx| { egui::CentralPanel::default().show(ctx, |ui| {
-            render_weapon_setups_editor(ui, "paired_test", &mut player, &app.weapon_catalog, &app.armor_catalog, &app.shield_catalog, &app.talent_catalog);
+            render_weapon_setups_editor(ui, "paired_test", &mut player, &app.weapon_catalog);
         }); });
         let mut text = String::new();
         for shape in output.shapes {text_of(&shape.shape, &mut text);}
         assert!(text.contains("Automatically draw melee before engagement"));
         assert!(text.contains("Ranged setup") && text.contains("Melee setup"));
+        assert!(!text.contains("Called shot (ranged setup)"));
+        assert!(!text.contains("Weapon Style"));
+        assert!(!text.contains("Whistling Wind pace"));
+        assert_eq!(player.ranged_weapon_setup, Some(setup.clone()));
+        let output = ctx.run(egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 1600.0))),
+            ..Default::default()
+        }, |ctx| { egui::CentralPanel::default().show(ctx, |ui| {
+            render_ranged_combat_maneuvers(ui, "paired_test", &mut player, &app.weapon_catalog, &app.armor_catalog, &app.shield_catalog, &app.talent_catalog);
+        }); });
+        let mut text = String::new();
+        for shape in output.shapes { text_of(&shape.shape, &mut text); }
+        assert!(text.contains("Ranged setup — Shortbow"));
+        assert!(text.contains("Called shot (ranged setup)"));
+        assert!(text.contains("Weapon Style"));
+        assert!(text.contains("Whistling Wind pace"));
+        assert!(text.contains("Run (-4 attack)"));
+        assert_eq!(serde_json::to_value(&player).unwrap(), original);
         assert_eq!(player.ranged_weapon_setup, Some(setup));
     }
 
