@@ -3306,16 +3306,18 @@ fn render_weapon_setups_editor(
 }
 
 fn render_called_shot_editor(ui: &mut egui::Ui, player: &mut PlayerConfig, weapon: &game_logic::WeaponPreset, label: &str) -> bool {
-    let mut changed = false;
-    ui.horizontal_wrapped(|ui| {
-        ui.add_enabled_ui(!player.tactical_policy.enabled, |ui| {
-            changed = ui.checkbox(&mut player.called_shot, label).changed();
-        });
-        let (light, medium, heavy) = game_logic::called_shot_target_defense_bonuses_for_player(player);
-        let penalty = game_logic::called_shot_self_defense_penalty_for_player(player);
-        let delay = game_logic::called_shot_delay_expr_for_player(player, game_logic::is_ranged_weapon(weapon));
-        ui.label(format!("Target defense (light/medium/heavy): +{light}/+{medium}/+{heavy}, self -{penalty} defense, speed +{delay}"));
-    });
+    let changed = ui.add_enabled_ui(!player.tactical_policy.enabled, |ui| {
+        ui.checkbox(&mut player.called_shot, label).changed()
+    }).inner;
+    let (light, medium, heavy) = game_logic::called_shot_target_defense_bonuses_for_player(player);
+    let penalty = game_logic::called_shot_self_defense_penalty_for_player(player);
+    let delay = game_logic::called_shot_delay_expr_for_player(player, game_logic::is_ranged_weapon(weapon));
+    ui.add(egui::Label::new(egui::RichText::new(format!(
+        "Target defense: light +{light}, medium +{medium}, heavy +{heavy}."
+    )).small()).wrap(true));
+    ui.add(egui::Label::new(egui::RichText::new(format!(
+        "Your defense: -{penalty}. Extra aiming time: {delay} seconds."
+    )).small()).wrap(true));
     changed
 }
 
