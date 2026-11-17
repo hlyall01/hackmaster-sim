@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-pub use crate::sim::{MountedCombatConfig, MountType, RidingMastery, MountedTargetSize};
+pub use crate::sim::{HorseGender, MountedCombatConfig, MountType, RidingMastery, MountedTargetSize};
 mod mounted;
 pub use mounted::*;
 mod masteries;

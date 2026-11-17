@@ -24,7 +24,7 @@ mod arborite;
 pub use arborite::{ArboriteProfile, ArboriteState, RacialTalentConfig};
 pub use ranged_styles::{BowPace, GravesendAim, RangedStyleConfig, RangedStyleProfile};
 mod mounted;
-pub use mounted::{MountedCombatConfig, MountType, RidingMastery, MountedTargetSize};
+pub use mounted::{HorseGender, MountedCombatConfig, MountType, RidingMastery, MountedTargetSize};
 mod types;
 
 pub use engine::{
