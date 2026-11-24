@@ -2,6 +2,17 @@
 //! are computed once, after merging raw counters and histograms.
 use super::*;
 
+// Mix the two inputs separately: seed + index would cause consecutive GUI
+// batches to reuse all but one of their fights when the batch seed increments.
+pub(super) fn fight_seed(seed: u64, index: u32) -> u64 {
+    fn mix(mut value: u64) -> u64 {
+        value = (value ^ (value >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94d049bb133111eb);
+        value ^ (value >> 31)
+    }
+    mix(seed ^ mix(u64::from(index).wrapping_add(0x9e3779b97f4a7c15)))
+}
+
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct BulkSimBatch {
     pub(super) runs: u32,
@@ -390,6 +401,18 @@ pub(super) mod source_totals {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn consecutive_batch_seeds_do_not_reuse_the_same_fights() {
+        for seed in [0, 1, 9876, u64::MAX] {
+            let current: HashSet<_> = (0..10_000).map(|index| fight_seed(seed, index)).collect();
+            let next: HashSet<_> = (0..10_000)
+                .map(|index| fight_seed(seed.wrapping_add(1), index))
+                .collect();
+            assert_eq!(current.len(), 10_000);
+            assert!(current.is_disjoint(&next));
+        }
+    }
 
     #[test]
     fn merging_keeps_weighted_medians_and_damage_percentiles() {

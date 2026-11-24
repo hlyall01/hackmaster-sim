@@ -4171,7 +4171,7 @@ fn bulk_simulate_batch_inner(
             return None;
         }
         if let Some(first_run) = first_run {
-            sim.rng = SimRng::from_seed(seed.wrapping_add(u64::from(first_run) + u64::from(run_idx)));
+            sim.rng = SimRng::from_seed(bulk_parallel::fight_seed(seed, first_run.wrapping_add(run_idx)));
             // Tactics and weapon changes may leave a different sheet selected.
             // Restore the same inputs before every independently seeded fight.
             sim.combatants.clone_from(initial_combatants.as_ref().unwrap());
