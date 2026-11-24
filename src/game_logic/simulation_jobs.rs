@@ -87,6 +87,80 @@ fn worker_count(work: usize, minimum_chunk: usize) -> usize {
         .min((work / minimum_chunk).max(1))
 }
 
+pub fn run_bulk_test(
+    config: SimConfig,
+    combatants: Vec<sim::Combatant>,
+    runs: u32,
+    max_seconds: u32,
+    seed: u64,
+    control: &JobControl,
+) -> Option<sim::BulkSimResult> {
+    run_bulk_with_workers(
+        config,
+        combatants,
+        runs,
+        max_seconds,
+        seed,
+        control,
+        worker_count(runs as usize, 2500),
+    )
+}
+
+fn run_bulk_with_workers(
+    config: SimConfig,
+    combatants: Vec<sim::Combatant>,
+    runs: u32,
+    max_seconds: u32,
+    seed: u64,
+    control: &JobControl,
+    workers: usize,
+) -> Option<sim::BulkSimResult> {
+    control.set_total(runs);
+    if !control.keep_running(0) {
+        return None;
+    }
+    let workers = workers.max(1).min(runs.max(1) as usize);
+    if workers == 1 {
+        return sim::bulk_simulate_batch(config, combatants, runs, max_seconds, seed, 0, |done| {
+            control.keep_running(done)
+        })
+        .map(sim::BulkSimBatch::finish);
+    }
+    let chunks = std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(workers);
+        for worker in 0..workers {
+            let first = (u64::from(runs) * worker as u64 / workers as u64) as u32;
+            let end = (u64::from(runs) * (worker + 1) as u64 / workers as u64) as u32;
+            let fighters = combatants.clone();
+            handles.push(scope.spawn(move || {
+                let mut previous = 0;
+                sim::bulk_simulate_batch(
+                    config,
+                    fighters,
+                    end - first,
+                    max_seconds,
+                    seed,
+                    first,
+                    |done| {
+                        let amount = done - previous;
+                        previous = done;
+                        control.advance(amount)
+                    },
+                )
+            }));
+        }
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("Bulk worker panicked"))
+            .collect::<Option<Vec<_>>>()
+    })?;
+    let mut merged = sim::BulkSimBatch::default();
+    for chunk in chunks {
+        merged.merge(chunk);
+    }
+    (!control.is_cancelled()).then(|| merged.finish())
+}
+
 pub fn run_dps_test(
     config: SimConfig,
     combatants: Vec<sim::Combatant>,
@@ -454,8 +528,105 @@ mod tests {
             player.magic.use_essence_costs = false;
             player.magic.auto_cast = crate::core::magic::AutoCast::SpellPolicies;
             player.tactical_policy.enabled = true;
+            player.tactical_policy.rules = vec![crate::core::tactics::TacticalRule::new(
+                crate::core::tactics::TacticalAction::FightDefensively { penalty: 4 },
+                vec![crate::core::tactics::TacticalCondition::Always],
+            )];
         }
         build_combatants(&players, &weapons, &armor, &shields, &npcs, &talents)
+    }
+
+    #[test]
+    fn parallel_bulk_preserves_all_statistics_and_progress() {
+        let fighters = combatants();
+        let config = SimConfig::new(30.0, 1.0);
+        let seed = u64::MAX - 5;
+        let control = JobControl::default();
+        let serial =
+            run_bulk_with_workers(config, fighters.clone(), 31, 180, seed, &control, 1).unwrap();
+        assert_eq!(control.completed(), 31);
+        for workers in [2, 3, 4, 8] {
+            let control = JobControl::default();
+            let parallel =
+                run_bulk_with_workers(config, fighters.clone(), 31, 180, seed, &control, workers)
+                    .unwrap();
+            assert_eq!(
+                serde_json::to_value(&serial).unwrap(),
+                serde_json::to_value(parallel).unwrap()
+            );
+            assert_eq!(control.completed(), 31);
+            assert_eq!(control.total(), 31);
+        }
+        // Exercise the exact JSON transport used between browser workers.
+        let mut merged = sim::BulkSimBatch::default();
+        for index in 0..31 {
+            let batch =
+                sim::bulk_simulate_batch(config, fighters.clone(), 1, 180, seed, index, |_| true)
+                    .unwrap();
+            let json = serde_json::to_string(&batch).unwrap();
+            merged.merge(serde_json::from_str(&json).unwrap());
+        }
+        assert_eq!(
+            serde_json::to_value(serial).unwrap(),
+            serde_json::to_value(merged.finish()).unwrap()
+        );
+    }
+
+    #[test]
+    fn parallel_bulk_cancels_without_publishing_partial_results() {
+        let control = JobControl::default();
+        std::thread::scope(|scope| {
+            let fighters = combatants();
+            let control = &control;
+            let worker = scope.spawn(move || {
+                run_bulk_with_workers(
+                    SimConfig::new(30.0, 1.0),
+                    fighters,
+                    u32::MAX,
+                    180,
+                    7,
+                    control,
+                    3,
+                )
+            });
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while control.completed() == 0 && std::time::Instant::now() < deadline {
+                std::thread::yield_now();
+            }
+            control.cancel();
+            assert!(worker.join().unwrap().is_none());
+            assert!(control.completed() > 0);
+            assert!(control.completed() < control.total());
+        });
+        let control = JobControl::default();
+        control.cancel();
+        assert!(
+            run_bulk_with_workers(
+                SimConfig::new(5.0, 1.0),
+                combatants(),
+                0,
+                180,
+                1,
+                &control,
+                4
+            )
+            .is_none()
+        );
+        assert_eq!(
+            run_bulk_with_workers(
+                SimConfig::new(5.0, 1.0),
+                combatants(),
+                0,
+                180,
+                1,
+                &JobControl::default(),
+                4
+            )
+            .unwrap()
+            .wins
+            .len(),
+            0
+        );
     }
 
     #[test]

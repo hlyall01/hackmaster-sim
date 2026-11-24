@@ -24,6 +24,10 @@ mod spell_effect_engine;
 #[path = "weapon_setup_engine.rs"]
 mod weapon_setup_engine;
 
+#[path = "bulk_parallel.rs"]
+mod bulk_parallel;
+pub use bulk_parallel::{BulkSimBatch, bulk_simulate_batch};
+
 const CHARGE_MIN_DISTANCE_FT: f32 = 20.0;
 const SHIELD_STRIKE_SPEEDUP_SECONDS: f32 = 2.0;
 const SIX_PATHS_FOLLOWUP_SECONDS: f32 = 1.0;
@@ -3808,8 +3812,9 @@ pub struct DetailedTeamStats {
     pub median_shield_break_seconds: Option<u32>,
 }
 
-#[derive(Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 struct DetailedTeamAccumulator {
+    #[serde(with = "bulk_parallel::source_totals")]
     damage_by_source: BTreeMap<DamageSource, u64>,
     team_id: u8,
     wins: u32,
@@ -4065,10 +4070,23 @@ pub fn bulk_simulate_with_seed_controlled(
     runs: u32,
     max_seconds: u32,
     seed: u64,
-    mut keep_running: impl FnMut(u32) -> bool,
+    keep_running: impl FnMut(u32) -> bool,
 ) -> Option<BulkSimResult> {
+    bulk_simulate_batch_inner(config, combatants, runs, max_seconds, seed, None, keep_running)
+        .map(BulkSimBatch::finish)
+}
+
+fn bulk_simulate_batch_inner(
+    config: SimConfig,
+    combatants: Vec<Combatant>,
+    runs: u32,
+    max_seconds: u32,
+    seed: u64,
+    first_run: Option<u32>,
+    mut keep_running: impl FnMut(u32) -> bool,
+) -> Option<BulkSimBatch> {
     if runs == 0 {
-        return Some(BulkSimResult::default());
+        return Some(BulkSimBatch::default());
     }
     let shields_present = combatants
         .iter()
@@ -4099,6 +4117,7 @@ pub fn bulk_simulate_with_seed_controlled(
                 .any(|combatant| combatant.team_id == *team_id && combatant.sheet.defense.eyesmite)
         })
         .collect();
+    let initial_combatants = first_run.map(|_| combatants.clone());
     let mut sim = SimState::with_rng(config, SimRng::from_seed(seed));
     sim.log_events = false;
     sim.collect_detailed_metrics = true;
@@ -4150,6 +4169,12 @@ pub fn bulk_simulate_with_seed_controlled(
     for run_idx in 0..runs {
         if !keep_running(run_idx) {
             return None;
+        }
+        if let Some(first_run) = first_run {
+            sim.rng = SimRng::from_seed(seed.wrapping_add(u64::from(first_run) + u64::from(run_idx)));
+            // Tactics and weapon changes may leave a different sheet selected.
+            // Restore the same inputs before every independently seeded fight.
+            sim.combatants.clone_from(initial_combatants.as_ref().unwrap());
         }
         sim.reset_preserve_rng();
         while !sim.done && sim.elapsed_seconds < max_seconds {
@@ -4414,72 +4439,18 @@ pub fn bulk_simulate_with_seed_controlled(
             max_total_knockback_one_side_ft.max(fight_max_knockback_side);
         total_max_knockback_one_side_ft += fight_max_knockback_side;
     }
-    let avg_duration = total_seconds as f32 / runs as f32;
-    let avg_damage_dealt_by_team = total_damage_dealt_by_team
-        .iter()
-        .copied()
-        .map(|value| value as f32 / runs as f32)
-        .collect();
-    let avg_damage_taken_by_team = total_damage_taken_by_team
-        .into_iter()
-        .map(|value| value as f32 / runs as f32)
-        .collect();
-    let avg_damage_landed_by_team = total_damage_landed_dealt_by_team
-        .into_iter()
-        .zip(damage_rolls_dealt_by_team.iter().copied())
-        .map(|(total, count)| {
-            if count > 0 {
-                total as f32 / count as f32
-            } else {
-                0.0
-            }
-        })
-        .collect();
-    let avg_damage_rolled_by_team = total_damage_rolled_dealt_by_team
-        .into_iter()
-        .zip(damage_rolls_dealt_by_team)
-        .map(|(total, count)| {
-            if count > 0 {
-                total as f32 / count as f32
-            } else {
-                0.0
-            }
-        })
-        .collect();
-    let avg_remaining_hp_by_team = total_remaining_hp_by_team
-        .into_iter()
-        .map(|value| value as f32 / runs as f32)
-        .collect();
-    let avg_hits_shield_survived = if shield_breaks > 0 {
-        total_hits_shield_survived as f32 / shield_breaks as f32
-    } else {
-        0.0
-    };
-    let detailed = DetailedSimStats {
-        duration_p10: histogram_percentile(&duration_histogram, 0.10) as u32,
-        duration_p50: histogram_percentile(&duration_histogram, 0.50) as u32,
-        duration_p90: histogram_percentile(&duration_histogram, 0.90) as u32,
-        duration_p99: histogram_percentile(&duration_histogram, 0.99) as u32,
-        teams: detailed_accumulators
-            .into_iter()
-            .map(|accumulator| accumulator.finish(runs, total_seconds))
-            .collect(),
-    };
     if !keep_running(runs) {
         return None;
     }
-    Some(BulkSimResult {
+    Some(BulkSimBatch {
+        runs,
         wins,
         ties,
         shields_present,
         shield_breaks,
-        avg_hits_shield_survived,
-        avg_duration,
-        shortest_duration: if shortest_duration == u32::MAX {
-            0
-        } else {
-            shortest_duration
-        },
+        total_hits_shield_survived,
+        total_seconds,
+        shortest_duration,
         longest_duration,
         fights_with_second_charge,
         fights_with_trauma,
@@ -4487,21 +4458,23 @@ pub fn bulk_simulate_with_seed_controlled(
         fights_with_knockback_20ft,
         fights_with_charge_within_20ft,
         instakills,
-        instakills_by_team,
         highest_single_crit_hit,
         highest_single_noncrit_hit,
         highest_single_shield_hit,
         highest_single_crit_hit_by_team,
         highest_single_noncrit_hit_by_team,
         highest_single_shield_hit_by_team,
-        avg_damage_dealt_by_team,
-        avg_damage_taken_by_team,
-        avg_damage_rolled_by_team,
-        avg_damage_landed_by_team,
-        avg_remaining_hp_by_team,
+        instakills_by_team,
+        total_damage_dealt_by_team,
+        total_damage_taken_by_team,
+        total_damage_rolled_dealt_by_team,
+        total_damage_landed_dealt_by_team,
+        damage_rolls_dealt_by_team,
+        total_remaining_hp_by_team,
         max_total_knockback_one_side_ft,
-        avg_max_knockback_one_side_ft: total_max_knockback_one_side_ft / runs as f32,
-        detailed,
+        total_max_knockback_one_side_ft,
+        duration_histogram,
+        detailed_accumulators,
     })
 }
 

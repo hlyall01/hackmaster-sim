@@ -17,6 +17,20 @@ Production assets use `max-age=0, must-revalidate` because their filenames are
 stable across deployments. The feature-domain migration also versions the main
 and form script URLs to invalidate copies already cached under the old policy.
 
+## Bulk calculations
+
+Bulk calculations use up to four browser workers, leaving one reported CPU core
+free and keeping batches below 5,000 fights on one worker. Completed workers are
+retained for subsequent calculations; cancelling terminates the running worker
+tree. Browsers without nested-worker support fall back to serial calculation.
+Raw totals and histograms are merged before calculating rates and percentiles.
+
+GUI bulk jobs now seed each fight independently (`seed + fight index`, wrapping
+at u64), so the same inputs and seed produce identical results across worker counts
+and native/browser execution. Older GUI releases used one continuous random
+stream for the whole batch, so their aggregate results for a seed can differ.
+The legacy `bulk_simulate_with_seed` library API retains that continuous stream.
+
 ## Online characters
 
 Production also hosts Google-authenticated online characters. The Pages Worker

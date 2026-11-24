@@ -28,7 +28,7 @@ pub use mounted::{MountedCombatConfig, MountType, RidingMastery, MountedTargetSi
 mod types;
 
 pub use engine::{
-    BulkSimResult, DetailedSimStats, DetailedTeamStats, SimState, bulk_simulate,
+    BulkSimBatch, bulk_simulate_batch, BulkSimResult, DetailedSimStats, DetailedTeamStats, SimState, bulk_simulate,
     bulk_simulate_with_seed, bulk_simulate_with_seed_controlled,
 };
 pub use modifiers::{

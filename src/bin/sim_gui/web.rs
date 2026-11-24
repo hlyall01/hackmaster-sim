@@ -2,7 +2,9 @@ use super::*;
 use std::{sync::mpsc, time::Duration};
 use wasm_bindgen::{JsCast, prelude::*};
 
-#[wasm_bindgen(inline_js = "export function show_feature_requests(visible, top) { window.dispatchEvent(new CustomEvent('sim-feature-tab', {detail: {visible, top}})); }")]
+#[wasm_bindgen(
+    inline_js = "export function show_feature_requests(visible, top) { window.dispatchEvent(new CustomEvent('sim-feature-tab', {detail: {visible, top}})); }"
+)]
 extern "C" {
     pub(super) fn show_feature_requests(visible: bool, top: f32);
 }
@@ -42,9 +44,12 @@ pub(super) struct BackgroundJob {
     pub start_distance: f32,
     pub label: &'static str,
     worker: Option<web_sys::Worker>,
+    completed: std::rc::Rc<std::cell::Cell<bool>>,
     _message: Closure<dyn FnMut(web_sys::MessageEvent)>,
     _error: Closure<dyn FnMut(web_sys::ErrorEvent)>,
 }
+
+thread_local! { static IDLE_WORKER: std::cell::RefCell<Option<web_sys::Worker>> = const { std::cell::RefCell::new(None) }; }
 
 impl BackgroundJob {
     pub fn spawn(app: &SimGuiApp, kind: JobKind) -> Self {
@@ -58,6 +63,8 @@ impl BackgroundJob {
         let (sender, receiver) = mpsc::channel();
         let progress = control.clone();
         let result_sender = sender.clone();
+        let completed = std::rc::Rc::new(std::cell::Cell::new(false));
+        let finished = completed.clone();
         let message = Closure::wrap(Box::new(move |event: web_sys::MessageEvent| {
             let result = event
                 .data()
@@ -76,6 +83,7 @@ impl BackgroundJob {
                     }
                 }
                 Ok(value) => {
+                    finished.set(true);
                     let result = serde_json::from_value::<JobResult>(value)
                         .unwrap_or_else(|err| Err(format!("Invalid calculation result: {err}")));
                     let _ = result_sender.send(result);
@@ -94,8 +102,14 @@ impl BackgroundJob {
         }) as Box<dyn FnMut(web_sys::ErrorEvent)>);
         let options = web_sys::WorkerOptions::new();
         options.set_type(web_sys::WorkerType::Module);
-        let worker =
-            web_sys::Worker::new_with_options("./worker.js", &options).and_then(|worker| {
+        let worker = IDLE_WORKER
+            .with(|idle| {
+                idle.borrow_mut()
+                    .take()
+                    .map(Ok)
+                    .unwrap_or_else(|| web_sys::Worker::new_with_options("./worker.js", &options))
+            })
+            .and_then(|worker| {
                 worker.set_onmessage(Some(message.as_ref().unchecked_ref()));
                 worker.set_onerror(Some(error.as_ref().unchecked_ref()));
                 let request = Request {
@@ -127,6 +141,7 @@ impl BackgroundJob {
             start_distance: app.sim.config.start_distance,
             label,
             worker,
+            completed,
             _message: message,
             _error: error,
         }
@@ -135,10 +150,18 @@ impl BackgroundJob {
 impl Drop for BackgroundJob {
     fn drop(&mut self) {
         self.control.cancel();
-        if let Some(worker) = &self.worker {
+        if let Some(worker) = self.worker.take() {
             worker.set_onmessage(None);
             worker.set_onerror(None);
-            worker.terminate();
+            if self.completed.get() {
+                IDLE_WORKER.with(|idle| {
+                    if let Some(previous) = idle.borrow_mut().replace(worker) {
+                        previous.terminate();
+                    }
+                });
+            } else {
+                worker.terminate();
+            }
         }
     }
 }
@@ -165,15 +188,16 @@ pub fn run_web_job(request: &str) -> String {
         let output = match request.kind {
             JobKind::Bulk { runs, seed } => {
                 control.set_total(runs);
-                sim::bulk_simulate_with_seed_controlled(
+                sim::bulk_simulate_batch(
                     config,
                     combatants,
                     runs,
                     BULK_SIM_MAX_SECONDS,
                     seed,
+                    0,
                     |completed| control.keep_running(completed),
                 )
-                .map(|result| JobOutput::Bulk(Box::new(result), seed))
+                .map(|result| JobOutput::Bulk(Box::new(result.finish()), seed))
             }
             JobKind::Dps(request) => {
                 simulation_jobs::run_dps_test(config, combatants, request, &control)
@@ -195,6 +219,69 @@ pub fn run_web_job(request: &str) -> String {
     })();
     serde_json::to_string(&result)
         .unwrap_or_else(|err| serde_json::to_string(&Err::<(), _>(err.to_string())).unwrap())
+}
+
+/// Worker protocol keeps the original JSON untouched so u64 seeds never pass
+/// through JavaScript's floating-point JSON numbers.
+#[wasm_bindgen]
+pub fn run_web_bulk_shard(request: &str, first_run: u32, runs: u32) -> String {
+    let result = (|| -> Result<sim::BulkSimBatch, String> {
+        let request: Request = serde_json::from_str(request).map_err(|e| e.to_string())?;
+        let JobKind::Bulk { runs: total, seed } = request.kind else {
+            return Err("Expected a bulk request".into());
+        };
+        if first_run > total || runs > total - first_run {
+            return Err("Invalid bulk range".into());
+        }
+        let (weapons, armor, shields) = data::load_catalogs()?;
+        let npcs = data::load_npc_presets("data/npc_presets.json")?;
+        let talents = data::load_talents(data::TALENTS_PATH)?;
+        let fighters = game_logic::build_combatants(
+            &request.players,
+            &weapons,
+            &armor,
+            &shields,
+            &npcs,
+            &talents,
+        );
+        let control = JobControl::default();
+        control.set_total(runs);
+        sim::bulk_simulate_batch(
+            SimConfig::new(request.start_distance, request.stop_distance),
+            fighters,
+            runs,
+            BULK_SIM_MAX_SECONDS,
+            seed,
+            first_run,
+            |completed| control.keep_running(completed),
+        )
+        .ok_or_else(|| "Calculation cancelled".into())
+    })();
+    serde_json::to_string(&result).unwrap()
+}
+
+#[wasm_bindgen]
+pub fn merge_web_bulk_shards(request: &str, shards: &str, elapsed_ms: f64) -> String {
+    let result = (|| -> JobResult {
+        let request: Request = serde_json::from_str(request).map_err(|e| e.to_string())?;
+        let JobKind::Bulk { runs, seed } = request.kind else {
+            return Err("Expected a bulk request".into());
+        };
+        let shards: Vec<sim::BulkSimBatch> =
+            serde_json::from_str(shards).map_err(|e| e.to_string())?;
+        let mut merged = sim::BulkSimBatch::default();
+        for shard in shards {
+            merged.merge(shard);
+        }
+        if merged.runs() != runs {
+            return Err("Incomplete bulk calculation".into());
+        }
+        Ok((
+            Some(JobOutput::Bulk(Box::new(merged.finish()), seed)),
+            Duration::from_secs_f64(elapsed_ms.max(0.0) / 1000.0),
+        ))
+    })();
+    serde_json::to_string(&result).unwrap()
 }
 
 #[wasm_bindgen]
