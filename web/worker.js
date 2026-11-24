@@ -158,7 +158,7 @@ self.onmessage = async ({ data: request }) => {
   try {
     await initialize();
     const bulk = JSON.parse(request).kind?.Bulk;
-    const count = bulkWorkerCount(bulk?.runs, self.navigator.hardwareConcurrency, bulk?.workers);
+    const count = bulkWorkerCount(bulk?.runs);
     if (bulk && count === 1) clearPool();
     const result = bulk && count > 1 ? await runBulk(request, bulk.runs, count) : run_web_job(request);
     self.postMessage(result);

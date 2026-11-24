@@ -1,7 +1,6 @@
-// Leave one logical core for the UI. Cap memory use and keep small jobs serial.
-export function bulkWorkerCount(runs, cores = 2, requested) {
-  if (Number.isFinite(requested)) return Math.max(1, Math.min(64, Math.floor(requested), runs || 1));
-  return Math.max(1, Math.min(4, Math.max(1, (cores || 2) - 1), Math.floor((runs || 0) / 2500)));
+// A fixed budget keeps native and browser bulk simulations consistent.
+export function bulkWorkerCount(runs) {
+  return Math.max(1, Math.min(24, runs || 1));
 }
 
 // Work is allocated when a worker becomes available, never reserved for a worker
