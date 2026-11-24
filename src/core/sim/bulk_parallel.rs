@@ -33,7 +33,7 @@ pub struct BulkSimBatch {
     pub(super) damage_rolls_dealt_by_team: Vec<u64>,
     pub(super) total_remaining_hp_by_team: Vec<u64>,
     pub(super) max_total_knockback_one_side_ft: f32,
-    pub(super) total_max_knockback_one_side_ft: f32,
+    pub(super) total_max_knockback_one_side_ft: f64,
     pub(super) duration_histogram: BTreeMap<u64, u64>,
     pub(super) detailed_accumulators: Vec<DetailedTeamAccumulator>,
 }
@@ -164,7 +164,7 @@ impl BulkSimBatch {
             avg_damage_landed_by_team,
             avg_remaining_hp_by_team,
             max_total_knockback_one_side_ft,
-            avg_max_knockback_one_side_ft: total_max_knockback_one_side_ft / runs as f32,
+            avg_max_knockback_one_side_ft: total_max_knockback_one_side_ft as f32 / runs as f32,
             detailed,
         }
     }
@@ -420,5 +420,25 @@ mod tests {
         assert_eq!(team.hp_damage_p50, 3);
         assert_eq!(team.hp_damage_p90, 3);
         assert_eq!(team.hp_damage_p99, 99);
+    }
+
+    #[test]
+    fn large_knockback_totals_do_not_depend_on_partition_rounding() {
+        let batch = |runs, total| BulkSimBatch {
+            runs,
+            wins: vec![runs],
+            total_max_knockback_one_side_ft: total,
+            ..Default::default()
+        };
+        let total = 16_777_216.0 + 5.0 + 5.0;
+        let serial = batch(3, total).finish();
+        let mut merged = batch(1, 16_777_216.0);
+        merged.merge(batch(1, 5.0));
+        merged.merge(batch(1, 5.0));
+        assert_eq!(merged.total_max_knockback_one_side_ft, total);
+        assert_eq!(
+            merged.finish().avg_max_knockback_one_side_ft,
+            serial.avg_max_knockback_one_side_ft
+        );
     }
 }

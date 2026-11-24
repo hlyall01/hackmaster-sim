@@ -4146,7 +4146,7 @@ fn bulk_simulate_batch_inner(
     let mut damage_rolls_dealt_by_team = vec![0u64; team_ids.len()];
     let mut total_remaining_hp_by_team = vec![0u64; team_ids.len()];
     let mut max_total_knockback_one_side_ft = 0.0f32;
-    let mut total_max_knockback_one_side_ft = 0.0f32;
+    let mut total_max_knockback_one_side_ft = 0.0f64;
     let mut shield_breaks = 0u32;
     let mut total_hits_shield_survived = 0u64;
     let mut total_seconds = 0u64;
@@ -4437,7 +4437,13 @@ fn bulk_simulate_batch_inner(
         }
         max_total_knockback_one_side_ft =
             max_total_knockback_one_side_ft.max(fight_max_knockback_side);
-        total_max_knockback_one_side_ft += fight_max_knockback_side;
+        if first_run.is_some() {
+            total_max_knockback_one_side_ft += f64::from(fight_max_knockback_side);
+        } else {
+            // Preserve the legacy API's original f32 accumulation.
+            total_max_knockback_one_side_ft =
+                f64::from(total_max_knockback_one_side_ft as f32 + fight_max_knockback_side);
+        }
     }
     if !keep_running(runs) {
         return None;
