@@ -14,6 +14,8 @@ pub(super) enum JobKind {
     Bulk {
         runs: u32,
         seed: u64,
+        #[serde(default = "default_bulk_workers")]
+        workers: u32,
     },
     Dps(DpsConfig),
     Plot {
@@ -112,6 +114,12 @@ impl BackgroundJob {
             .and_then(|worker| {
                 worker.set_onmessage(Some(message.as_ref().unchecked_ref()));
                 worker.set_onerror(Some(error.as_ref().unchecked_ref()));
+                let bootstrap = js_sys::Object::new();
+                if js_sys::Reflect::set(&bootstrap, &"module".into(), &wasm_bindgen::module())
+                    .is_ok()
+                {
+                    let _ = worker.post_message(&bootstrap);
+                }
                 let request = Request {
                     players: app.players.clone(),
                     start_distance: app.sim.config.start_distance,
@@ -186,7 +194,7 @@ pub fn run_web_job(request: &str) -> String {
         let control = JobControl::default();
         let start = js_sys::Date::now();
         let output = match request.kind {
-            JobKind::Bulk { runs, seed } => {
+            JobKind::Bulk { runs, seed, .. } => {
                 control.set_total(runs);
                 sim::bulk_simulate_batch(
                     config,
@@ -221,50 +229,79 @@ pub fn run_web_job(request: &str) -> String {
         .unwrap_or_else(|err| serde_json::to_string(&Err::<(), _>(err.to_string())).unwrap())
 }
 
-/// Worker protocol keeps the original JSON untouched so u64 seeds never pass
-/// through JavaScript's floating-point JSON numbers.
-#[wasm_bindgen]
-pub fn run_web_bulk_shard(request: &str, first_run: u32, runs: u32) -> String {
-    let result = (|| -> Result<sim::BulkSimBatch, String> {
-        let request: Request = serde_json::from_str(request).map_err(|e| e.to_string())?;
-        let JobKind::Bulk { runs: total, seed } = request.kind else {
-            return Err("Expected a bulk request".into());
-        };
-        if first_run > total || runs > total - first_run {
+struct PreparedBulkJob {
+    request: String,
+    config: SimConfig,
+    fighters: Vec<sim::Combatant>,
+    runs: u32,
+    seed: u64,
+}
+thread_local! { static PREPARED_BULK: std::cell::RefCell<Option<PreparedBulkJob>> = const { std::cell::RefCell::new(None) }; }
+
+fn bulk_shard(request: &str, first_run: u32, runs: u32, report_progress: bool) -> String {
+    let result = PREPARED_BULK.with(|cache| -> Result<sim::BulkSimBatch, String> {
+        let mut cache = cache.borrow_mut();
+        if cache.as_ref().is_none_or(|job| job.request != request) {
+            let parsed: Request = serde_json::from_str(request).map_err(|e| e.to_string())?;
+            let JobKind::Bulk { runs, seed, .. } = parsed.kind else {
+                return Err("Expected a bulk request".into());
+            };
+            let (weapons, armor, shields) = data::load_catalogs()?;
+            let npcs = data::load_npc_presets("data/npc_presets.json")?;
+            let talents = data::load_talents(data::TALENTS_PATH)?;
+            let fighters = game_logic::build_combatants(
+                &parsed.players,
+                &weapons,
+                &armor,
+                &shields,
+                &npcs,
+                &talents,
+            );
+            *cache = Some(PreparedBulkJob {
+                request: request.to_owned(),
+                config: SimConfig::new(parsed.start_distance, parsed.stop_distance),
+                fighters,
+                runs,
+                seed,
+            });
+        }
+        let job = cache.as_ref().unwrap();
+        if first_run > job.runs || runs > job.runs - first_run {
             return Err("Invalid bulk range".into());
         }
-        let (weapons, armor, shields) = data::load_catalogs()?;
-        let npcs = data::load_npc_presets("data/npc_presets.json")?;
-        let talents = data::load_talents(data::TALENTS_PATH)?;
-        let fighters = game_logic::build_combatants(
-            &request.players,
-            &weapons,
-            &armor,
-            &shields,
-            &npcs,
-            &talents,
-        );
         let control = JobControl::default();
         control.set_total(runs);
         sim::bulk_simulate_batch(
-            SimConfig::new(request.start_distance, request.stop_distance),
-            fighters,
+            job.config,
+            job.fighters.clone(),
             runs,
             BULK_SIM_MAX_SECONDS,
-            seed,
+            job.seed,
             first_run,
-            |completed| control.keep_running(completed),
+            |completed| !report_progress || control.keep_running(completed),
         )
         .ok_or_else(|| "Calculation cancelled".into())
-    })();
+    });
     serde_json::to_string(&result).unwrap()
+}
+
+/// Preserve the original request so JavaScript never rounds a u64 seed.
+#[wasm_bindgen]
+pub fn run_web_bulk_shard(request: &str, first_run: u32, runs: u32) -> String {
+    bulk_shard(request, first_run, runs, true)
+}
+
+/// The coordinator reports aggregate progress after each short local batch.
+#[wasm_bindgen]
+pub fn run_web_bulk_shard_quiet(request: &str, first_run: u32, runs: u32) -> String {
+    bulk_shard(request, first_run, runs, false)
 }
 
 #[wasm_bindgen]
 pub fn merge_web_bulk_shards(request: &str, shards: &str, elapsed_ms: f64) -> String {
     let result = (|| -> JobResult {
         let request: Request = serde_json::from_str(request).map_err(|e| e.to_string())?;
-        let JobKind::Bulk { runs, seed } = request.kind else {
+        let JobKind::Bulk { runs, seed, .. } = request.kind else {
             return Err("Expected a bulk request".into());
         };
         let shards: Vec<sim::BulkSimBatch> =

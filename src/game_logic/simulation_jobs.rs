@@ -106,6 +106,27 @@ pub fn run_bulk_test(
     )
 }
 
+/// Explicit GUI worker budget; a value of one uses the serial path.
+pub fn run_bulk_test_with_workers(
+    config: SimConfig,
+    combatants: Vec<sim::Combatant>,
+    runs: u32,
+    max_seconds: u32,
+    seed: u64,
+    control: &JobControl,
+    workers: usize,
+) -> Option<sim::BulkSimResult> {
+    run_bulk_with_workers(
+        config,
+        combatants,
+        runs,
+        max_seconds,
+        seed,
+        control,
+        workers.clamp(1, 64),
+    )
+}
+
 fn run_bulk_with_workers(
     config: SimConfig,
     combatants: Vec<sim::Combatant>,

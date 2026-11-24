@@ -197,6 +197,7 @@ struct SimGuiApp {
     talent_category_tabs: [String; 2],
     last_screen_size: egui::Vec2,
     bulk_runs: u32,
+    bulk_workers: u32,
     bulk_seed: u64,
     bulk_last_seed: Option<u64>,
     bulk_result: Option<BulkSimResult>,
@@ -352,6 +353,7 @@ impl SimGuiApp {
             talent_category_tabs: [TALENT_TAB_ALL.to_string(), TALENT_TAB_ALL.to_string()],
             last_screen_size: egui::vec2(0.0, 0.0),
             bulk_runs: 1000,
+            bulk_workers: default_bulk_workers(),
             bulk_seed: 1,
             bulk_last_seed: None,
             bulk_result: None,
@@ -474,6 +476,7 @@ impl SimGuiApp {
         if self.start_job(JobKind::Bulk {
             runs: self.bulk_runs,
             seed,
+            workers: self.bulk_workers.clamp(1, 64),
         }) {
             self.bulk_seed = seed.wrapping_add(1).max(1);
         }
@@ -1283,6 +1286,7 @@ impl SimGuiApp {
                     &self.players,
                     self.sim.config.start_distance,
                     &mut self.bulk_runs,
+                    &mut self.bulk_workers,
                     &mut self.bulk_seed,
                     self.bulk_last_seed,
                     &self.bulk_result,
@@ -1334,6 +1338,7 @@ impl SimGuiApp {
                             .speed(100.0),
                     );
                 });
+                render_bulk_workers(ui, &mut self.bulk_workers);
                 if ui.add_enabled(self.background_job.is_none(), egui::Button::new("Run bulk")).clicked() {
                     self.running = false;
                     self.run_bulk_sim();
@@ -2082,11 +2087,27 @@ fn render_ego_calculator(
         });
 }
 
+fn default_bulk_workers() -> u32 {
+    #[cfg(target_arch = "wasm32")]
+    let cores = web_sys::window().map_or(4, |window| window.navigator().hardware_concurrency() as u32);
+    #[cfg(not(target_arch = "wasm32"))]
+    let cores = std::thread::available_parallelism().map_or(4, |cores| cores.get() as u32);
+    cores.saturating_sub(1).clamp(1, 24)
+}
+
+fn render_bulk_workers(ui: &mut egui::Ui, workers: &mut u32) {
+    ui.label("Workers (maximum)");
+    ui.add(egui::Slider::new(workers, 1..=64)).on_hover_text(
+        "Higher values use more CPU and memory. Workers join as they become ready; small batches may finish before all workers start.",
+    );
+}
+
 fn render_detailed_stats_tab(
     ui: &mut egui::Ui,
     players: &[PlayerConfig; 2],
     start_distance: f32,
     bulk_runs: &mut u32,
+    bulk_workers: &mut u32,
     bulk_seed: &mut u64,
     bulk_last_seed: Option<u64>,
     bulk_result: &Option<BulkSimResult>,
@@ -2094,6 +2115,7 @@ fn render_detailed_stats_tab(
     run_bulk: &mut bool,
 ) {
     ui.heading("Detailed simulation statistics");
+    render_bulk_workers(ui, bulk_workers);
     ui.horizontal(|ui| {
         ui.label("Runs");
         ui.add(

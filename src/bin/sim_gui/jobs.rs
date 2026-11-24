@@ -8,6 +8,7 @@ pub(super) enum JobKind {
     Bulk {
         runs: u32,
         seed: u64,
+        workers: u32,
     },
     Dps(DpsConfig),
     Plot {
@@ -62,13 +63,18 @@ impl BackgroundJob {
                         &talents,
                     );
                     match kind {
-                        JobKind::Bulk { runs, seed } => simulation_jobs::run_bulk_test(
+                        JobKind::Bulk {
+                            runs,
+                            seed,
+                            workers,
+                        } => simulation_jobs::run_bulk_test_with_workers(
                             config,
                             combatants,
                             runs,
                             BULK_SIM_MAX_SECONDS,
                             seed,
                             &worker_control,
+                            workers as usize,
                         )
                         .map(|result| JobOutput::Bulk(Box::new(result), seed)),
                         JobKind::Dps(request) => simulation_jobs::run_dps_test(
