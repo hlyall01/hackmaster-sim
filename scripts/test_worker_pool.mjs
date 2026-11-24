@@ -2,20 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { bulkWorkerCount, bulkRanges, BulkQueue } from '../web/worker-pool.js';
 
-test('bulk workers leave a core free, cap memory use and keep small jobs serial', () => {
-  assert.equal(bulkWorkerCount(1000, 32), 1);
-  assert.equal(bulkWorkerCount(10000, 1), 1);
-  assert.equal(bulkWorkerCount(10000, 2), 1);
-  assert.equal(bulkWorkerCount(10000, 3), 2);
-  assert.equal(bulkWorkerCount(10000, 32), 4);
-  assert.equal(bulkWorkerCount(7500, 32), 3);
-  assert.equal(bulkWorkerCount(undefined, 32), 1); // DPS and plots use the existing worker.
-  assert.equal(bulkWorkerCount(10000, undefined), 1);
-  assert.equal(bulkWorkerCount(10000, 32, 64), 64);
-  assert.equal(bulkWorkerCount(10, 32, 64), 10);
-  assert.equal(bulkWorkerCount(10000, 2, 24), 24); // Explicit budget may exceed hardware threads.
-  assert.equal(bulkWorkerCount(10000, 32, 0), 1);
-  assert.equal(bulkWorkerCount(10000, 32, 1000), 64);
+test('bulk jobs use a fixed 24-worker budget regardless of old slider settings', () => {
+  assert.equal(bulkWorkerCount(1000), 24);
+  assert.equal(bulkWorkerCount(1000000), 24);
+  assert.equal(bulkWorkerCount(10), 10);
+  assert.equal(bulkWorkerCount(1), 1);
+  assert.equal(bulkWorkerCount(0), 1);
+  assert.equal(bulkWorkerCount(undefined), 1); // DPS and plots use the existing worker.
+  assert.equal(bulkWorkerCount(10000, 1, 1), 24);
+  assert.equal(bulkWorkerCount(10000, 32, 64), 24);
 });
 
 test('ready workers start without waiting and late workers take only unclaimed ranges', () => {

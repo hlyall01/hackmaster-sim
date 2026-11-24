@@ -14,8 +14,6 @@ pub(super) enum JobKind {
     Bulk {
         runs: u32,
         seed: u64,
-        #[serde(default = "default_bulk_workers")]
-        workers: u32,
     },
     Dps(DpsConfig),
     Plot {
@@ -194,7 +192,7 @@ pub fn run_web_job(request: &str) -> String {
         let control = JobControl::default();
         let start = js_sys::Date::now();
         let output = match request.kind {
-            JobKind::Bulk { runs, seed, .. } => {
+            JobKind::Bulk { runs, seed } => {
                 control.set_total(runs);
                 sim::bulk_simulate_batch(
                     config,
@@ -243,7 +241,7 @@ fn bulk_shard(request: &str, first_run: u32, runs: u32, report_progress: bool) -
         let mut cache = cache.borrow_mut();
         if cache.as_ref().is_none_or(|job| job.request != request) {
             let parsed: Request = serde_json::from_str(request).map_err(|e| e.to_string())?;
-            let JobKind::Bulk { runs, seed, .. } = parsed.kind else {
+            let JobKind::Bulk { runs, seed } = parsed.kind else {
                 return Err("Expected a bulk request".into());
             };
             let (weapons, armor, shields) = data::load_catalogs()?;
@@ -301,7 +299,7 @@ pub fn run_web_bulk_shard_quiet(request: &str, first_run: u32, runs: u32) -> Str
 pub fn merge_web_bulk_shards(request: &str, shards: &str, elapsed_ms: f64) -> String {
     let result = (|| -> JobResult {
         let request: Request = serde_json::from_str(request).map_err(|e| e.to_string())?;
-        let JobKind::Bulk { runs, seed, .. } = request.kind else {
+        let JobKind::Bulk { runs, seed } = request.kind else {
             return Err("Expected a bulk request".into());
         };
         let shards: Vec<sim::BulkSimBatch> =

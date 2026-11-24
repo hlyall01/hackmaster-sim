@@ -19,16 +19,14 @@ and form script URLs to invalidate copies already cached under the old policy.
 
 ## Bulk calculations
 
-Bulk calculations have a worker-budget slider from 1 to 64, defaulting to one
-fewer than the reported CPU threads, capped at 24. The coordinator starts fighting
-immediately while additional workers initialize in groups of at most four. Ready
+Bulk calculations use a fixed budget of 24 workers in the browser and native GUI.
+The coordinator starts fighting immediately while additional workers initialize in groups of at most four. Ready
 workers take short unclaimed batches from a common queue; slow or unavailable
 workers do not hold up completion. Small jobs may finish before the budget is reached.
 
 The app passes its compiled WASM module to the coordinator and child workers to
 avoid repeated downloads and compilation. Each worker retains its private memory
-and prepared fighter inputs. Completed workers are reused; reducing the budget
-releases surplus workers and cancellation terminates the whole running tree.
+and prepared fighter inputs. Completed workers are reused, and cancellation terminates the whole running tree.
 Raw totals and histograms are merged before calculating rates and percentiles.
 
 GUI bulk jobs derive each fight's seed by separately mixing the batch seed and
