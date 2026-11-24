@@ -62,13 +62,13 @@ impl BackgroundJob {
                         &talents,
                     );
                     match kind {
-                        JobKind::Bulk { runs, seed } => sim::bulk_simulate_with_seed_controlled(
+                        JobKind::Bulk { runs, seed } => simulation_jobs::run_bulk_test(
                             config,
                             combatants,
                             runs,
                             BULK_SIM_MAX_SECONDS,
                             seed,
-                            |completed| worker_control.keep_running(completed),
+                            &worker_control,
                         )
                         .map(|result| JobOutput::Bulk(Box::new(result), seed)),
                         JobKind::Dps(request) => simulation_jobs::run_dps_test(

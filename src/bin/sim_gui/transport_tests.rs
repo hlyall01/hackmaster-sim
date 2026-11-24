@@ -33,23 +33,52 @@ fn worker_character_transport_preserves_presets_and_seeded_results() {
                 &app.talent_catalog,
             )
         };
-        let before = sim::bulk_simulate_with_seed(
+        let before = sim::bulk_simulate_batch(
             app.sim.config,
             combatants(&app.players),
-            3,
+            7,
             120,
             u64::MAX - 1,
-        );
-        let after = sim::bulk_simulate_with_seed(
+            0,
+            |_| true,
+        )
+        .unwrap()
+        .finish();
+        let after = sim::bulk_simulate_batch(
             app.sim.config,
             combatants(&restored),
-            3,
+            7,
             120,
             u64::MAX - 1,
-        );
+            0,
+            |_| true,
+        )
+        .unwrap()
+        .finish();
+        let mut merged = sim::BulkSimBatch::default();
+        for (offset, runs) in [(0, 2), (2, 3), (5, 2)] {
+            let batch = sim::bulk_simulate_batch(
+                app.sim.config,
+                combatants(&restored),
+                runs,
+                120,
+                u64::MAX - 1,
+                offset,
+                |_| true,
+            )
+            .unwrap();
+            let encoded = serde_json::to_string(&batch).unwrap();
+            merged.merge(serde_json::from_str(&encoded).unwrap());
+        }
         let before = serde_json::to_value(before).unwrap();
         let after = serde_json::to_value(after).unwrap();
         assert_eq!(before, after, "{} changed seeded combat", preset.name);
+        assert_eq!(
+            serde_json::to_value(merged.finish()).unwrap(),
+            after,
+            "{} changed across worker ranges",
+            preset.name
+        );
         let restored: BulkSimResult = serde_json::from_value(after.clone()).unwrap();
         assert_eq!(serde_json::to_value(restored).unwrap(), after);
     }
