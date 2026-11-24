@@ -7085,6 +7085,25 @@ mod tests {
     }
 
     #[test]
+    fn default_arthur_uses_the_supplied_level_ten_character_sheet() {
+        let app = SimGuiApp::new();
+        let p = &app.players[0];
+        assert_eq!(p.name, "Arthur Du Randt");
+        let stored = app.fighter_presets.entries().iter().find(|p| p.name == "Arthur Du Randt").unwrap();
+        assert_eq!((stored.strength_pct, stored.dex_pct), (75, 4));
+        // The editor represents fractional ability scores by their low/high table bands.
+        assert_eq!((p.level, p.strength_base, p.strength_pct, p.intelligence), (10, 17, game_logic::normalize_percentile(75), 12));
+        assert_eq!((p.wisdom, p.dex_base, p.dex_pct, p.constitution, p.looks, p.charisma), (13, 16, game_logic::normalize_percentile(4), 16, 8, 8));
+        assert_eq!(p.progression.health, ProgressionTier::V);
+        assert_eq!(p.mastery(WeaponGroup::Unarmed).attack, 1);
+        assert_eq!(p.mastery(WeaponGroup::Unarmed).defense, 1);
+        assert!(p.talents.iter().any(|t| t.id == "remarkability"));
+        assert!(p.talents.iter().any(|t| t.id == "quiet_river"));
+        assert_eq!(app.sim.combatants[0].sheet.vitals.max_hp, 71);
+        assert_eq!(app.sim.combatants[0].sheet.vitals.threshold_of_pain, 29);
+    }
+
+    #[test]
     fn paired_weapon_editor_renders_without_changing_saved_equipment_options() {
         fn text_of(shape: &egui::epaint::Shape, text: &mut String) {
             match shape {

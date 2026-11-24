@@ -2,19 +2,19 @@
   "presets": [
     {
       "name": "Arthur Du Randt",
-      "level": 9,
+      "level": 10,
       "progression": {
         "attack": "V",
         "speed": "III",
         "initiative": "I",
-        "health": "IV"
+        "health": "V"
       },
       "weapon_masteries": {
         "unarmed": {
-          "attack": 0,
+          "attack": 1,
           "damage": 0,
           "speed": 0,
-          "defense": 0
+          "defense": 1
         },
         "axes": {
           "attack": 0,
@@ -97,15 +97,15 @@
       },
       "base_hp": 10,
       "move_speed": 20.0,
-      "strength_base": 18,
-      "strength_pct": 16,
+      "strength_base": 17,
+      "strength_pct": 75,
       "dex_base": 16,
-      "dex_pct": 8,
-      "intelligence": 10,
+      "dex_pct": 4,
+      "intelligence": 12,
       "wisdom": 13,
-      "constitution": 14,
+      "constitution": 16,
       "looks": 8,
-      "charisma": 9,
+      "charisma": 8,
       "weapon": "Halberd",
       "armor": "Platemail",
       "shield": "None",
@@ -206,6 +206,16 @@
         },
         {
           "id": "rohavalan_bridge",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "remarkability",
+          "rank": 1,
+          "weapon": null
+        },
+        {
+          "id": "quiet_river",
           "rank": 1,
           "weapon": null
         }
