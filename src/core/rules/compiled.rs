@@ -8,9 +8,45 @@ use rand::Rng;
 pub(super) struct Expression(Vec<Term>);
 #[derive(Clone, Debug)]
 struct Term {
+    roller: Roller,
     sign: i32,
     value: Value,
 }
+#[derive(Clone, Copy, Debug)]
+enum Roller { Standard, Penetrating, Expanded, CustomD6 }
+
+impl Roller {
+    fn sum(self, count: i32, sides: i32, rng: &mut impl Rng, triggers: Option<&[i32]>) -> i32 {
+        #[inline]
+        fn sum_with(count: i32, mut roll: impl FnMut() -> i32) -> i32 {
+            (0..count).fold(0i32, |sum, _| sum.saturating_add(roll()))
+        }
+        // Constant pool sizes let the compiler remove the general count loop.
+        // Each penetrating die finishes before the next die consumes any RNG.
+        match (self, count, sides) {
+            (Self::Penetrating, 1, 4) => return penetrating_roll(4, rng),
+            (Self::Penetrating, 1, 6) => return penetrating_roll(6, rng),
+            (Self::Penetrating, 3, 3) => return sum_with(3, || penetrating_roll(3, rng)),
+            (Self::Penetrating, 6, 3) => return sum_with(6, || penetrating_roll(3, rng)),
+            (Self::Expanded, 6, 3) => return sum_with(6, || penetrating_roll_trigger_set(3, &[2, 3], rng)),
+            (Self::CustomD6, 1, 6) => return penetrating_roll_trigger_set(6, triggers.expect("compiled custom d6"), rng),
+            _ => {}
+        }
+        match self {
+            Self::Standard => sum_with(count, || standard_roll(sides, rng)),
+            Self::Penetrating => sum_with(count, || penetrating_roll(sides, rng)),
+            Self::Expanded => {
+                let faces = [(sides - 1).max(1), sides];
+                sum_with(count, || penetrating_roll_trigger_set(sides, &faces, rng))
+            }
+            Self::CustomD6 => {
+                let faces = triggers.expect("compiled custom d6");
+                sum_with(count, || penetrating_roll_trigger_set(sides, faces, rng))
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 enum Value {
     Constant(i32),
@@ -38,6 +74,7 @@ impl Expression {
         for term in &self.0 {
             match &term.value {
                 Value::Dice { count, sides, penetrating } => terms.push(Term {
+                    roller: term.roller,
                     sign: term.sign,
                     value: Value::Dice { count: count.saturating_mul(multiplier), sides: *sides, penetrating: *penetrating },
                 }),
@@ -56,7 +93,8 @@ impl Expression {
                     if s == sides && p == penetrating)) {
                 if let Value::Dice { count, .. } = &mut term.value { *count += 1; }
             } else {
-                expression.0.push(Term { sign: 1, value: Value::Dice { count: 1, sides, penetrating } });
+                let roller = if penetrating { Roller::Penetrating } else { Roller::Standard };
+                expression.0.push(Term { roller, sign: 1, value: Value::Dice { count: 1, sides, penetrating } });
             }
         }
         expression
@@ -68,7 +106,7 @@ impl Expression {
             match term.value {
                 Value::Constant(value) => result.push_str(&value.to_string()),
                 Value::MinimumDie { sides, penetrating, offset, minimum } => {
-                    let die = Self(vec![Term { sign: 1, value: Value::Dice {
+                    let die = Self(vec![Term { roller: Roller::Standard, sign: 1, value: Value::Dice {
                         count: 1, sides, penetrating,
                     }}]).roll20(nonpenetrating, triggers, max_minus_one)?;
                     result.push_str(&format!("{{[[{die}{offset:+}]],{minimum}}}kh1"));
@@ -111,51 +149,32 @@ impl Expression {
         if parser.pos != parser.bytes.len() {
             return Err(DamageExprError("Unexpected closing parenthesis"));
         }
-        Ok(Self(parser.terms))
+        let mut expr = Self(parser.terms);
+        expr.prepare_rollers(false, false);
+        Ok(expr)
     }
-    pub(super) fn roll(
-        &self,
-        rng: &mut impl Rng,
-        nonpenetrating: bool,
-        triggers: Option<&[i32]>,
-        max_minus_one: bool,
-    ) -> i32 {
+    pub(super) fn prepare_rollers(&mut self, custom_d6: bool, expanded: bool) {
+        for term in &mut self.0 {
+            term.roller = match term.value {
+                Value::Dice { penetrating: true, sides, .. } | Value::MinimumDie { penetrating: true, sides, .. } => {
+                    if expanded { Roller::Expanded }
+                    else if custom_d6 && sides == 6 { Roller::CustomD6 }
+                    else { Roller::Penetrating }
+                }
+                _ => Roller::Standard,
+            };
+        }
+    }
+
+    pub(super) fn roll(&self, rng: &mut impl Rng, nonpenetrating: bool, triggers: Option<&[i32]>) -> i32 {
         let mut total = 0i32;
         for term in &self.0 {
+            let roller = if nonpenetrating { Roller::Standard } else { term.roller };
             let value = match term.value {
                 Value::Constant(value) => value,
-                Value::MinimumDie { sides, penetrating, offset, minimum } => {
-                    let roll = if !penetrating || nonpenetrating {
-                        standard_roll(sides, rng)
-                    } else if max_minus_one {
-                        penetrating_roll_trigger_set(sides, &[(sides - 1).max(1), sides], rng)
-                    } else if let Some(triggers) = triggers.filter(|_| sides == 6) {
-                        penetrating_roll_trigger_set(sides, triggers, rng)
-                    } else {
-                        penetrating_roll(sides, rng)
-                    };
-                    roll.saturating_add(offset).max(minimum)
-                }
-                Value::Dice {
-                    count,
-                    sides,
-                    penetrating,
-                } => {
-                    let mut subtotal = 0i32;
-                    for _ in 0..count {
-                        let roll = if !penetrating || nonpenetrating {
-                            standard_roll(sides, rng)
-                        } else if max_minus_one {
-                            penetrating_roll_trigger_set(sides, &[(sides - 1).max(1), sides], rng)
-                        } else if let Some(triggers) = triggers.filter(|_| sides == 6) {
-                            penetrating_roll_trigger_set(sides, triggers, rng)
-                        } else {
-                            penetrating_roll(sides, rng)
-                        };
-                        subtotal = subtotal.saturating_add(roll);
-                    }
-                    subtotal
-                }
+                Value::MinimumDie { sides, offset, minimum, .. } =>
+                    roller.sum(1, sides, rng, triggers).saturating_add(offset).max(minimum),
+                Value::Dice { count, sides, .. } => roller.sum(count, sides, rng, triggers),
             };
             total = total.saturating_add(term.sign.saturating_mul(value));
         }
@@ -261,7 +280,7 @@ impl Parser<'_> {
             first = false;
             if self.bytes[self.pos..].starts_with(b"max(") {
                 let value = self.minimum_die()?;
-                self.terms.push(Term { sign, value });
+                self.terms.push(Term { roller: Roller::Standard, sign, value });
             } else if self.bytes.get(self.pos) == Some(&b'(') {
                 self.pos += 1;
                 self.expression(sign, depth + 1)?;
@@ -298,7 +317,7 @@ impl Parser<'_> {
                 if self.terms.len() >= 4096 {
                     return Err(DamageExprError("Too many damage terms"));
                 }
-                self.terms.push(Term { sign, value });
+                self.terms.push(Term { roller: Roller::Standard, sign, value });
             }
             if self.pos == self.bytes.len() || self.bytes[self.pos] == b')' {
                 return Ok(());

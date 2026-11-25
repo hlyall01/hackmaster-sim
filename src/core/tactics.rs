@@ -412,30 +412,32 @@ pub fn evaluate_channel(
     channel: TacticalChannel,
     context: &TacticalContext,
 ) -> TacticalDecision {
-    if policy.enabled {
-        for (idx, rule) in policy.rules.iter().enumerate() {
-            if !rule.enabled
-                || rule.decision != decision
-                || rule.action.channel() != channel
-                || rule.conditions.len() > MAX_TACTICAL_CONDITIONS
-                || !rule
-                    .conditions
-                    .iter()
-                    .all(|condition| condition_matches(condition, context))
-                || !action_is_legal(&rule.action, context)
-            {
-                continue;
-            }
-            return TacticalDecision {
-                action: rule.action.clone(),
-                matched_rule_index: Some(idx),
-            };
+    let rules = policy.rules.iter().enumerate().filter(|(_, rule)| {
+        policy.enabled && rule.enabled && rule.decision == decision && rule.action.channel() == channel
+    });
+    first_matching_rule(rules, channel, context)
+}
+
+impl TacticalDecision {
+    pub(crate) fn fallback(channel: TacticalChannel) -> Self {
+        Self { action: fallback_action(channel), matched_rule_index: None }
+    }
+}
+
+pub(crate) fn first_matching_rule<'a>(
+    rules: impl Iterator<Item = (usize, &'a TacticalRule)>,
+    channel: TacticalChannel,
+    context: &TacticalContext,
+) -> TacticalDecision {
+    for (idx, rule) in rules {
+        if rule.conditions.len() <= MAX_TACTICAL_CONDITIONS
+            && rule.conditions.iter().all(|condition| condition_matches(condition, context))
+            && action_is_legal(&rule.action, context)
+        {
+            return TacticalDecision { action: rule.action.clone(), matched_rule_index: Some(idx) };
         }
     }
-    TacticalDecision {
-        action: fallback_action(channel),
-        matched_rule_index: None,
-    }
+    TacticalDecision::fallback(channel)
 }
 
 pub fn action_warning(action: &TacticalAction, context: &TacticalContext) -> Option<String> {

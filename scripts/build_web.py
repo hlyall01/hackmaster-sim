@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import tempfile
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,20 +27,33 @@ def main():
     command = ['cargo', 'build', '--locked', '--target', 'wasm32-unknown-unknown', '--bin', 'sim_gui', '--target-dir', str(target)]
     if not args.debug:
         command.append('--release')
-    subprocess.run(command, cwd=ROOT, check=True)
     output = target / 'web'
     # Avoid shipping stale assets (especially an old production _worker.js) in a preview.
     if output.is_symlink() or output.resolve().parent != target.resolve():
         raise SystemExit('Refusing to clean an output directory outside target/')
-    if output.exists():
-        shutil.rmtree(output)
-    output.mkdir(parents=True, exist_ok=True)
-    subprocess.run([bindgen, str(target / 'wasm32-unknown-unknown' / ('debug' if args.debug else 'release') / 'sim_gui.wasm'),
-                    '--target', 'web', '--out-dir', str(output / 'pkg'), '--out-name', 'sim_gui'], check=True)
-    for source in (ROOT / 'web').iterdir():
-        if source.is_file():
-            shutil.copy2(source, output / source.name)
-    shutil.copy2(ROOT / 'assets/icon_sim_gui.png', output / 'icon.png')
+    target.mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=target) as staging:
+        site = Path(staging) / 'site'
+        site.mkdir()
+        wasm = target / 'wasm32-unknown-unknown' / ('debug' if args.debug else 'release') / 'sim_gui.wasm'
+        for package, flags in [('pkg', []), ('pkg-simd', ['--features', 'wasm-simd-rng'])]:
+            subprocess.run(command + flags, cwd=ROOT, check=True)
+            subprocess.run([bindgen, str(wasm), '--target', 'web', '--out-dir', str(site / package),
+                            '--out-name', 'sim_gui'], check=True)
+        for source in (ROOT / 'web').iterdir():
+            if source.is_file():
+                shutil.copy2(source, site / source.name)
+        shutil.copy2(ROOT / 'assets/icon_sim_gui.png', site / 'icon.png')
+        # Only replace the previous site after both modules and all static assets are ready.
+        previous = Path(staging) / 'previous'
+        if output.exists():
+            output.rename(previous)
+        try:
+            site.rename(output)
+        except OSError:
+            if previous.exists():
+                previous.rename(output)
+            raise
     print(f'Built {output}\nPreview: python3 -m http.server 8080 --bind 127.0.0.1 --directory "{output}"')
 
 if __name__ == '__main__':

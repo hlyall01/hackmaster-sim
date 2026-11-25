@@ -1,10 +1,15 @@
-use super::damage_sources::{DamageSource, DamageSourceStats};
+#[cfg(test)]
+use crate::core::tactics::{evaluate_channel, TacticalCondition};
+use super::damage_sources::{DamageSource, DamageSourceStats, ImpactSource};
 use crate::core::rng::SimRng;
 use crate::core::rules::roll_damage_expr;
 use crate::core::tactics::{
-    TacticalAction, TacticalChannel, TacticalCondition, TacticalContext, TacticalDecisionPoint,
-    evaluate_channel,
+    TacticalAction, TacticalChannel, TacticalContext,
+    TacticalDecision,
 };
+use tactical_context::ChannelPlan;
+#[path = "tactical_context.rs"]
+mod tactical_context;
 use rand::RngCore;
 
 use super::combat::{
@@ -13,16 +18,21 @@ use super::combat::{
 use super::modifiers::{StatIdF32, StatIdI32};
 use super::movement::{max_range_for_weapon, range_modifier_for_weapon_with_scale};
 use super::types::{
-    AttackEvent, CalledShotDelayProfile, CombatEvent, CombatEventKind, Combatant, DamageBreakdown,
-    GridPos, KnockAsideEvent, ShieldDamageBreakdown, SimActor, SimConfig, TacticalEvent,
+    AttackEvent, CalledShotDelayProfile, CombatEvent, CombatEventKind, Combatant,
+    GridPos, KnockAsideEvent, SimActor, SimConfig, TacticalEvent,
     WeaponProfile, WeaponSlot,
 };
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 
 #[path = "spell_effect_engine.rs"]
 mod spell_effect_engine;
 #[path = "weapon_setup_engine.rs"]
 mod weapon_setup_engine;
+
+#[path = "bulk_metrics.rs"]
+mod bulk_metrics;
+use bulk_metrics::{BulkMetrics, DenseHistogram};
+use super::intimidation::IntimidationPlan;
 
 #[path = "bulk_parallel.rs"]
 mod bulk_parallel;
@@ -58,27 +68,6 @@ fn recovery_against_opponent(
     }
 }
 
-fn damage_prevented(
-    damage: Option<&DamageBreakdown>,
-    shield_damage: Option<&ShieldDamageBreakdown>,
-) -> (u32, u32) {
-    if let Some(damage) = damage {
-        let armor = damage
-            .raw_damage
-            .max(0)
-            .min(damage.effective_armor_dr.max(0)) as u32;
-        return (armor, 0);
-    }
-    if let Some(damage) = shield_damage {
-        let raw = damage.raw_damage.max(0);
-        let shield = raw.min(damage.shield_dr.max(0));
-        let after_shield = (raw - shield).max(0);
-        let armor = after_shield.min(damage.effective_armor_dr.max(0));
-        return (armor as u32, shield as u32);
-    }
-    (0, 0)
-}
-
 fn called_shot_delay_seconds(
     attacker: &Combatant,
     defender: &Combatant,
@@ -88,21 +77,58 @@ fn called_shot_delay_seconds(
     if !attacker.sheet.maneuvers.called_shot {
         return 0.0;
     }
-    if defender.sheet.maneuvers.called_shot_deceptive_defender {
-        return roll_damage_expr("4d4p", rng, false).max(0) as f32;
+    use crate::core::rules::DamageExprCache;
+    use std::sync::LazyLock;
+
+    static D4: LazyLock<DamageExprCache> = LazyLock::new(|| DamageExprCache::new("1d4p"));
+    static TWO_D4: LazyLock<DamageExprCache> = LazyLock::new(|| DamageExprCache::new("2d4p"));
+    static FOUR_D4: LazyLock<DamageExprCache> = LazyLock::new(|| DamageExprCache::new("4d4p"));
+    static D2: LazyLock<DamageExprCache> = LazyLock::new(|| DamageExprCache::new("1d2"));
+
+    let dice = if defender.sheet.maneuvers.called_shot_deceptive_defender {
+        &FOUR_D4
+    } else {
+        match attacker.sheet.maneuvers.called_shot_delay_profile {
+            CalledShotDelayProfile::Standard if !is_ranged => &TWO_D4,
+            CalledShotDelayProfile::Standard | CalledShotDelayProfile::PrecisionCombatant => &D4,
+            CalledShotDelayProfile::PrecisionAiming => &D2,
+        }
+    };
+    dice.roll(rng, false).max(0) as f32
+}
+
+#[derive(Clone, Debug)]
+enum PreviousPositions {
+    Duel([GridPos; 2]),
+    Roster(Vec<GridPos>),
+}
+
+impl Default for PreviousPositions {
+    fn default() -> Self { Self::Roster(Vec::new()) }
+}
+
+impl PreviousPositions {
+    fn capture(&mut self, actors: &[SimActor]) {
+        if let [a, b] = actors {
+            *self = Self::Duel([a.position, b.position]);
+        } else {
+            if !matches!(self, Self::Roster(_)) { *self = Self::default(); }
+            if let Self::Roster(v) = self {
+                v.clear();
+                v.extend(actors.iter().map(|a| a.position));
+            }
+        }
     }
-    match attacker.sheet.maneuvers.called_shot_delay_profile {
-        CalledShotDelayProfile::Standard => {
-            let delay_expr = if is_ranged { "1d4p" } else { "2d4p" };
-            roll_damage_expr(delay_expr, rng, false).max(0) as f32
-        }
-        CalledShotDelayProfile::PrecisionCombatant => {
-            roll_damage_expr("1d4p", rng, false).max(0) as f32
-        }
-        CalledShotDelayProfile::PrecisionAiming => {
-            roll_damage_expr("1d2", rng, false).max(0) as f32
-        }
+
+    fn as_slice(&self) -> &[GridPos] {
+        match self { Self::Duel(pair) => pair, Self::Roster(v) => v }
     }
+}
+
+#[derive(Clone, Copy)]
+enum EscapeDestination {
+    Known(Option<GridPos>),
+    Duel(super::movement::DuelEscape),
 }
 
 #[derive(Clone, Debug)]
@@ -120,16 +146,147 @@ pub struct SimState {
     pub trauma_first_exchange: bool,
     pub charges_started_within_20ft: u32,
     attack_metrics: Vec<AttackMetricSample>,
+    bulk_metrics: Option<Box<BulkMetrics>>,
     rng: SimRng,
     tick_accum: f32,
     hold_at_bay: HoldAtBayState,
-    previous_positions: Vec<GridPos>,
+    initial_positions: Option<std::sync::Arc<[SimActor]>>,
+    active_field_owners: Vec<usize>,
+    fist_targets: Vec<bool>,
+    streamline_inputs: Vec<(GridPos, Option<u32>)>,
+    streamline_tile_size: u32,
+    pub(super) duel_in_intimidation_range: Option<bool>,
+    previous_positions: PreviousPositions,
     predicting_movement: bool,
+    // Bulk jobs own a fixed roster and policies for the life of the batch.
+    bulk: Option<std::sync::Arc<BulkContext>>,
+}
+
+#[derive(Clone, Debug)]
+struct BulkContext {
+    prepared: Vec<std::sync::Arc<super::prepared_fighter::PreparedFighter>>,
+    tactics: Vec<[ChannelPlan; 5]>,
+    fixed_dr_called_shot: Vec<Option<bool>>,
+    fixed_move_tiles: Vec<Option<i32>>,
+    moving_reaction: Vec<bool>,
+    spell_plans: Vec<super::magic::PreparedSpellPolicies>,
+    has_weapon_setups: bool,
+    charge_indices: Vec<usize>,
+    spell_free: bool,
+    simple_recovery: bool,
+    intimidation: IntimidationPlan,
+    may_average_damage: bool,
+    possible_sheet_flags: u64,
+    has_running_bow: bool,
+    has_precognition: bool,
+}
+
+impl BulkContext {
+    #[cfg(test)]
+    fn new(combatants: &[Combatant]) -> Self {
+        Self::for_grid(combatants, SimConfig::new(0.0, 0.0).tile_size_ft)
+    }
+
+    fn for_grid(combatants: &[Combatant], tile_size: f32) -> Self {
+        let prepared = combatants.iter().enumerate().map(|(i, actor)| {
+            let start = actor.weapon_setups.as_ref().map_or(actor, |s| match s.start_with {
+                super::WeaponSetup::Melee => &s.melee, super::WeaponSetup::Ranged => &s.ranged,
+            });
+            let adjustment = if combatants.len() == 2 {
+                combatants[1-i].sheet.offense.weapon.defender_knockback_step_adjustment
+            } else { 0 };
+            super::prepared_fighter::PreparedFighter::new(&start.sheet, adjustment).into()
+        }).collect();
+        let tactics: Vec<_> = combatants.iter().map(|c|
+            TacticalChannel::ALL.map(|channel| ChannelPlan::new(&c.tactical_policy, channel))
+        ).collect();
+        // Equipment changes can replace both the loadout and available style sheets.
+        // Only a private bulk batch has a closed roster. Interactive spells and edits
+        // always take the normal refresh path.
+        let has_weapon_setups = combatants.iter().any(|c| c.weapon_setups.is_some());
+        let mut charge_indices = Vec::new();
+        let mut spell_free = true;
+        let mut intimidation = IntimidationPlan::new(combatants);
+        let mut may_average_damage = false;
+        let mut possible_sheet_flags = 0;
+        let mut has_running_bow = false;
+        let mut has_precognition = false;
+        for (idx, actor) in combatants.iter().enumerate() {
+            let alternatives = actor.weapon_setups.iter()
+                .flat_map(|s| [&s.melee, &s.ranged, &s.drawing]);
+            let mut can_charge = false;
+            for setup in std::iter::once(actor).chain(alternatives) {
+                let loadout = &setup.magic.loadout;
+                spell_free &= loadout.auto_cast == crate::core::magic::AutoCast::SpellPolicies
+                    && !loadout.knows_echo_strike && loadout.known_spells.is_empty();
+                let sheets = std::iter::once(&setup.sheet)
+                    .chain(setup.tactical_profiles.iter().map(|p| &p.sheet));
+                for sheet in sheets {
+                    can_charge |= sheet.maneuvers.charge;
+                    intimidation.include_profile(idx, sheet);
+                    possible_sheet_flags |= sheet.modifiers.positive_bits();
+                    has_running_bow |= sheet.offense.weapon.ranged_styles.whistling_wind_pace == Some(super::BowPace::Run);
+                    has_precognition |= sheet.defense.precognition;
+                    may_average_damage |= sheet.modifiers.apply_i32(0, StatIdI32::FlagStreamlineSpell) > 0;
+                }
+                may_average_damage |= crate::core::magic::spell_catalog().iter().any(|spell|
+                    setup.magic.loadout.knows_spell(&spell.id) && spell.mechanics.as_ref().is_some_and(|m|
+                        matches!(m.effect, crate::core::magic::EffectRule::TimedBuff { average_incoming_damage: true, .. })
+                    )
+                );
+            }
+            if can_charge { charge_indices.push(idx); }
+        }
+        let simple_recovery = combatants.len() == 2 && spell_free && !has_weapon_setups
+            && combatants.iter().all(|c| !c.tactical_policy.enabled && !c.arborite.warrior_woad
+                && !c.sheet.maneuvers.passive && !c.sheet.maneuvers.offensive_dualwielding);
+        let spell_plans = combatants.iter().map(|c| {
+            let start = c.weapon_setups.as_ref().map_or(c, |sets| match sets.start_with {
+                super::WeaponSetup::Melee => &sets.melee, super::WeaponSetup::Ranged => &sets.ranged,
+            });
+            super::magic::PreparedSpellPolicies::new(&start.magic.loadout)
+        }).collect();
+        let fixed_dr_called_shot = combatants.iter().enumerate().map(|(idx, actor)| {
+            if combatants.len() != 2 { return None; }
+            let (rule, tactical_context::SingleCondition::EnemyDr(compare, threshold)) =
+                tactics[idx][TacticalChannel::AttackMode as usize].single_rule? else { return None };
+            if actor.tactical_policy.rules[rule].action != TacticalAction::CalledShot { return None; }
+            let enemy = &combatants[1 - idx];
+            let options = enemy.weapon_setups.iter().flat_map(|s| [&s.melee, &s.ranged, &s.drawing]);
+            let mut results = std::iter::once(enemy).chain(options).flat_map(|c|
+                std::iter::once(&c.sheet).chain(c.tactical_profiles.iter().map(|p| &p.sheet))
+            ).map(|sheet| {
+                // Ideal Self changes the target's DR as it takes wounds and heals.
+                if sheet.modifiers.positive_at_zero(StatIdI32::FlagIdealSelf) { return None; }
+                Some(compare.matches(sheet.modifiers.apply_i32(sheet.defense.armor_dr, StatIdI32::ArmorDr).max(0) as f32, threshold))
+            });
+            let first = results.next()??;
+            results.all(|value| value == Some(first)).then_some(first)
+        }).collect();
+        let moving_reaction = combatants.iter().enumerate().map(|(idx, c)|
+            tactics[idx][TacticalChannel::Reaction as usize].rules.iter().any(|&i|
+                matches!(c.tactical_policy.rules[i].action, TacticalAction::GiveGround | TacticalAction::ScamperBack))
+        ).collect();
+        let fixed_move_tiles = combatants.iter().map(|actor| {
+            let setups = actor.weapon_setups.iter().flat_map(|s| [&s.melee, &s.ranged, &s.drawing]);
+            let mut speeds = std::iter::once(actor).chain(setups).flat_map(|c|
+                std::iter::once(&c.sheet).chain(c.tactical_profiles.iter().map(|p| &p.sheet))
+            ).map(|s| {
+                if s.offense.weapon.uses_projectiles { return None; }
+                let speed = s.modifiers.apply_f32(s.mobility.move_speed, StatIdF32::MoveSpeed).max(0.0);
+                Some(if speed == 0.0 { 0 } else { ((speed / tile_size.max(0.01)).round() as i32).max(1) })
+            });
+            let first = speeds.next()??;
+            speeds.all(|other| other == Some(first)).then_some(first)
+        }).collect();
+        Self { prepared, tactics, fixed_dr_called_shot, fixed_move_tiles, moving_reaction, spell_plans, has_weapon_setups, charge_indices, spell_free, simple_recovery, intimidation, may_average_damage,
+            possible_sheet_flags, has_running_bow, has_precognition }
+    }
 }
 
 #[derive(Clone, Debug)]
 struct AttackMetricSample {
-    damage_source: DamageSource,
+    damage_source: ImpactSource,
     time: u32,
     attacker_idx: usize,
     defender_idx: usize,
@@ -148,7 +305,7 @@ struct AttackMetricSample {
 }
 
 struct RecordedAttackMetrics {
-    damage_source: DamageSource,
+    damage_source: ImpactSource,
     attacker_idx: usize,
     defender_idx: usize,
     hp_damage: i32,
@@ -171,23 +328,13 @@ struct RecordedAttackMetrics {
 
 impl RecordedAttackMetrics {
     fn from_attack(event: &AttackOutcome) -> Self {
-        let (armor_prevented, shield_prevented) = damage_prevented(
-            event.damage_breakdown.as_ref(),
-            event.shield_damage_breakdown.as_ref(),
-        );
         Self {
             damage_source: event.damage_source.clone(),
             attacker_idx: event.attacker_idx,
             defender_idx: event.defender_idx,
             hp_damage: event.damage,
-            damage_rolled: event
-                .damage_breakdown
-                .as_ref()
-                .map(|breakdown| breakdown.raw_damage),
-            damage_landed: event
-                .damage_breakdown
-                .as_ref()
-                .map(|breakdown| (breakdown.raw_damage - breakdown.effective_armor_dr).max(0)),
+            damage_rolled: event.impact.direct.map(|(rolled, _)| rolled),
+            damage_landed: event.impact.direct.map(|(_, landed)| landed),
             highest_hit_bucket: match event.critical.as_ref() {
                 Some(crit) if crit.instant_kill => None,
                 Some(_) => Some(true),
@@ -199,11 +346,7 @@ impl RecordedAttackMetrics {
                 .map(|crit| crit.instant_kill)
                 .unwrap_or(false),
             shield_block: event.shield_block,
-            shield_broken: event
-                .shield_damage_breakdown
-                .as_ref()
-                .map(|breakdown| breakdown.shield_broken)
-                .unwrap_or(false),
+            shield_broken: event.impact.shield_broken,
             shield_damage: event.shield_damage,
             knockback_ft: event.knockback_ft,
             attempted: event.roll.attack_die > 0,
@@ -211,29 +354,19 @@ impl RecordedAttackMetrics {
             critical: event.critical.is_some(),
             trauma_applied: event.trauma_applied,
             defender_hp_after: event.defender_hp_after,
-            armor_prevented,
-            shield_prevented,
+            armor_prevented: event.impact.armor_prevented,
+            shield_prevented: event.impact.shield_prevented,
         }
     }
 
     fn from_counter(event: &CounterAttackOutcome) -> Self {
-        let (armor_prevented, shield_prevented) = damage_prevented(
-            event.damage_breakdown.as_ref(),
-            event.shield_damage_breakdown.as_ref(),
-        );
         Self {
             damage_source: event.damage_source.clone(),
             attacker_idx: event.attacker_idx,
             defender_idx: event.defender_idx,
             hp_damage: event.damage,
-            damage_rolled: event
-                .damage_breakdown
-                .as_ref()
-                .map(|breakdown| breakdown.raw_damage),
-            damage_landed: event
-                .damage_breakdown
-                .as_ref()
-                .map(|breakdown| (breakdown.raw_damage - breakdown.effective_armor_dr).max(0)),
+            damage_rolled: event.impact.direct.map(|(rolled, _)| rolled),
+            damage_landed: event.impact.direct.map(|(_, landed)| landed),
             highest_hit_bucket: match event.critical.as_ref() {
                 Some(crit) if crit.instant_kill => None,
                 Some(_) => Some(true),
@@ -245,11 +378,7 @@ impl RecordedAttackMetrics {
                 .map(|crit| crit.instant_kill)
                 .unwrap_or(false),
             shield_block: event.shield_block,
-            shield_broken: event
-                .shield_damage_breakdown
-                .as_ref()
-                .map(|breakdown| breakdown.shield_broken)
-                .unwrap_or(false),
+            shield_broken: event.impact.shield_broken,
             shield_damage: event.shield_damage,
             knockback_ft: event.knockback_ft,
             attempted: event.roll.attack_die > 0,
@@ -257,8 +386,8 @@ impl RecordedAttackMetrics {
             critical: event.critical.is_some(),
             trauma_applied: event.trauma_applied,
             defender_hp_after: event.defender_hp_after,
-            armor_prevented,
-            shield_prevented,
+            armor_prevented: event.impact.armor_prevented,
+            shield_prevented: event.impact.shield_prevented,
         }
     }
 }
@@ -299,16 +428,33 @@ impl SimState {
             trauma_first_exchange: false,
             charges_started_within_20ft: 0,
             attack_metrics: Vec::new(),
+            bulk_metrics: None,
             rng,
             tick_accum: 0.0,
             hold_at_bay: HoldAtBayState::default(),
-            previous_positions: Vec::new(),
+            initial_positions: None,
+            active_field_owners: Vec::new(),
+            fist_targets: Vec::new(),
+            streamline_inputs: Vec::new(),
+            streamline_tile_size: 0,
+            duel_in_intimidation_range: None,
+            previous_positions: PreviousPositions::default(),
             predicting_movement: false,
+            bulk: None,
         }
     }
 
+    pub(super) fn intimidation_plan(&self) -> IntimidationPlan {
+        self.bulk.as_ref().map_or(IntimidationPlan::Live, |b| b.intimidation)
+    }
+
     pub fn reset(&mut self) {
-        self.actors = self.spawn_positions();
+        if let Some(positions) = &self.initial_positions {
+            self.actors.clear();
+            self.actors.extend_from_slice(positions);
+        } else {
+            self.actors = self.spawn_positions();
+        }
         self.elapsed_seconds = 0;
         self.done = false;
         self.last_event = None;
@@ -317,8 +463,15 @@ impl SimState {
         self.trauma_first_exchange = false;
         self.charges_started_within_20ft = 0;
         self.attack_metrics.clear();
-        for combatant in &mut self.combatants {
+        self.active_field_owners.clear();
+        self.streamline_inputs.clear();
+        self.duel_in_intimidation_range = None;
+        for (index, combatant) in self.combatants.iter_mut().enumerate() {
             combatant.reset_state();
+            if let Some(bulk) = &self.bulk {
+                combatant.state.magic.quiet = true;
+                combatant.install_spell_plan(bulk.spell_plans[index].clone());
+            }
         }
         self.refresh_intimidation();
         self.tick_accum = 0.0;
@@ -331,23 +484,27 @@ impl SimState {
     }
 
     fn spawn_positions(&self) -> Vec<SimActor> {
-        let count = self.combatants.len();
+        Self::layout(self.config, &self.combatants)
+    }
+
+    fn layout(config: SimConfig, combatants: &[Combatant]) -> Vec<SimActor> {
+        let count = combatants.len();
         if count == 0 {
             return Vec::new();
         }
-        let grid_width = self.config.grid_width.max(1);
-        let grid_height = self.config.grid_height.max(1);
+        let grid_width = config.grid_width.max(1);
+        let grid_height = config.grid_height.max(1);
         let center_x = grid_width / 2;
         let center_y = grid_height / 2;
-        let tile_size_ft = self.config.tile_size_ft.max(0.01);
-        let start_tiles = (self.config.start_distance / tile_size_ft).ceil() as i32;
+        let tile_size_ft = config.tile_size_ft.max(0.01);
+        let start_tiles = (config.start_distance / tile_size_ft).ceil() as i32;
 
         // GUI duels have one actor per team; their placement needs no team maps.
-        if count == 2 && self.combatants[0].team_id != self.combatants[1].team_id {
+        if count == 2 && combatants[0].team_id != combatants[1].team_id {
             let left = ((grid_width - 1 - start_tiles) / 2).max(0);
             let right = (left + start_tiles).min(grid_width - 1);
             let mut positions = [left, right];
-            if self.combatants[0].team_id > self.combatants[1].team_id {
+            if combatants[0].team_id > combatants[1].team_id {
                 positions.swap(0, 1);
             }
             return positions
@@ -358,7 +515,7 @@ impl SimState {
                 .collect();
         }
 
-        let mut teams: Vec<u8> = self.combatants.iter().map(|c| c.team_id).collect();
+        let mut teams: Vec<u8> = combatants.iter().map(|c| c.team_id).collect();
         teams.sort_unstable();
         teams.dedup();
         if teams.is_empty() {
@@ -366,7 +523,7 @@ impl SimState {
         }
 
         let mut team_sizes: HashMap<u8, usize> = HashMap::new();
-        for combatant in &self.combatants {
+        for combatant in combatants {
             *team_sizes.entry(combatant.team_id).or_insert(0) += 1;
         }
 
@@ -394,7 +551,7 @@ impl SimState {
 
         let mut team_offsets: HashMap<u8, usize> = HashMap::new();
         let mut actors = Vec::with_capacity(count);
-        for combatant in &self.combatants {
+        for combatant in combatants {
             let team_id = combatant.team_id;
             let team_size = *team_sizes.get(&team_id).unwrap_or(&1);
             let slot = team_offsets.entry(team_id).or_insert(0);
@@ -422,12 +579,9 @@ impl SimState {
         self.rng = rng;
     }
 
+    #[inline(always)]
     pub(crate) fn apply_shield_strike_speedup(&mut self, defender_idx: usize, now: f32) {
-        let has_style =
-            self.combatants[defender_idx].apply_i32(StatIdI32::FlagLargeSwordShieldStyle, 0) > 0;
-        if !has_style {
-            return;
-        }
+        if !self.combatants[defender_idx].combat_flag_active(StatIdI32::FlagLargeSwordShieldStyle) { return; }
         let Some(next_attack) = self.combatants[defender_idx].state.next_attack_time_primary else {
             return;
         };
@@ -437,12 +591,9 @@ impl SimState {
             .set_next_attack_time(WeaponSlot::Primary, Some(adjusted));
     }
 
+    #[inline(always)]
     pub(crate) fn apply_six_paths_followup(&mut self, attacker_idx: usize, now: f32) {
-        let has_style =
-            self.combatants[attacker_idx].apply_i32(StatIdI32::FlagSixPathsStyle, 0) > 0;
-        if !has_style {
-            return;
-        }
+        if !self.combatants[attacker_idx].combat_flag_active(StatIdI32::FlagSixPathsStyle) { return; }
         let Some(next_attack) = self.combatants[attacker_idx].state.next_attack_time_primary else {
             return;
         };
@@ -481,13 +632,23 @@ impl SimState {
         let knockback = knockback_ft.max(0.0);
 
         self.combatants[attacker_idx].state.attack_events += 1;
+        if attempted && !direct_hit && !shield_block && !critical && !trauma_applied && !instant_kill
+            && defender_hp_after > 0 && hp_damage == 0 && shield_damage == 0 && knockback_ft == 0.0
+            && damage_rolled.is_none() && damage_landed.is_none() && !shield_broken
+            && armor_prevented == 0 && shield_prevented == 0
+        {
+            if let Some(bulk) = &mut self.bulk_metrics {
+                if self.collect_detailed_metrics { bulk.record_attempt(attacker_idx, damage_source, self.elapsed_seconds, 0); }
+                return;
+            }
+        }
         if attempted && self.collect_detailed_metrics {
             let shield_hits_survived_before_break = if shield_broken {
                 self.combatants[defender_idx].state.shield_blocks_taken
             } else {
                 0
             };
-            self.attack_metrics.push(AttackMetricSample {
+            let sample = AttackMetricSample {
                 damage_source,
                 time: self.elapsed_seconds,
                 attacker_idx,
@@ -504,7 +665,12 @@ impl SimState {
                 trauma_applied,
                 shield_broken,
                 shield_hits_survived_before_break,
-            });
+            };
+            if let Some(bulk) = &mut self.bulk_metrics {
+                bulk.record(sample);
+            } else {
+                self.attack_metrics.push(sample);
+            }
         }
 
         {
@@ -578,7 +744,11 @@ impl SimState {
             self.actors = self.spawn_positions();
         }
         self.refresh_intimidation();
-        if self.predicting_movement {
+        // Only private bulk jobs start every fight with reset magic state and a closed loadout.
+        let spell_free = self.bulk.as_ref().is_some_and(|b| b.spell_free);
+        if spell_free {
+            for c in &mut self.combatants { c.state.magic.now = self.elapsed_seconds; }
+        } else if self.predicting_movement {
             for actor in &mut self.combatants { actor.advance_magic(self.elapsed_seconds, &mut self.rng); }
         } else { self.advance_spellcasting(); }
         for combatant in &mut self.combatants {
@@ -594,13 +764,16 @@ impl SimState {
                 combatant.state.knockback_immobile_seconds -= 1;
             }
         }
-        self.refresh_streamline_coverage();
+        let track_streamline = self.bulk.as_ref().is_none_or(|b| b.may_average_damage);
+        if track_streamline { self.refresh_streamline_coverage(); }
         let mut old_positions = std::mem::take(&mut self.previous_positions);
-        old_positions.clear();
-        old_positions.extend(self.actors.iter().map(|actor| actor.position));
+        old_positions.capture(&self.actors);
+        let positions = old_positions.as_slice();
         let active_pair = self.active_pair();
         if let Some((a_idx, b_idx)) = active_pair {
-            self.advance_weapon_setups(a_idx, b_idx);
+            if self.bulk.as_ref().is_none_or(|b| b.has_weapon_setups) {
+                self.advance_weapon_setups(a_idx, b_idx);
+            }
             if (self.hold_at_bay.active || self.hold_at_bay.pending)
                 && self.hold_at_bay.holder_idx != a_idx
                 && self.hold_at_bay.holder_idx != b_idx
@@ -611,18 +784,8 @@ impl SimState {
             }
 
             let distance_before_combat = self.distance_between(a_idx, b_idx).unwrap_or(0.0);
-            let reach_a = self.combatants[a_idx]
-                .apply_f32(
-                    StatIdF32::WeaponReach,
-                    self.combatants[a_idx].sheet.offense.weapon.reach_ft,
-                )
-                .max(1.0);
-            let reach_b = self.combatants[b_idx]
-                .apply_f32(
-                    StatIdF32::WeaponReach,
-                    self.combatants[b_idx].sheet.offense.weapon.reach_ft,
-                )
-                .max(1.0);
+            let reach_a = self.combatants[a_idx].effective_reach();
+            let reach_b = self.combatants[b_idx].effective_reach();
             let max_reach = reach_a.max(reach_b);
             let min_reach = reach_a.min(reach_b);
             let ranged_projectile_a = self.combatants[a_idx].sheet.offense.weapon.uses_projectiles;
@@ -651,6 +814,7 @@ impl SimState {
             let eyesmite_a = self.combatants[a_idx].sheet.defense.eyesmite;
             let eyesmite_b = self.combatants[b_idx].sheet.defense.eyesmite;
 
+            let distance_after_combat;
             if distance_before_combat > max_reach && !any_ranged {
                 let step_a = self.move_tiles(a_idx);
                 let step_b = self.move_tiles(b_idx);
@@ -673,50 +837,57 @@ impl SimState {
                     self.move_toward(a_idx, b_idx, steps_a, max_reach);
                     self.move_toward(b_idx, a_idx, steps_b, max_reach);
                 }
-                for idx in 0..self.combatants.len() {
-                    let fighting_fists = self.combatants.iter().any(|c| c.state.magic.fists.as_ref().is_some_and(|f| f.spell.target == Some(idx)));
-                    if !fighting_fists { self.combatants[idx].state.clear_attack_timers(); }
+                if self.bulk.is_some() && self.active_field_owners.is_empty() {
+                    for c in &mut self.combatants { c.state.clear_attack_timers(); }
+                } else {
+                    self.fist_targets.clear();
+                    self.fist_targets.resize(self.combatants.len(), false);
+                    for caster in &self.combatants {
+                        if let Some(target) = caster.state.magic.fists.as_ref().and_then(|f| f.spell.target)
+                            .and_then(|i| self.fist_targets.get_mut(i)) { *target = true; }
+                    }
+                    for (c, targeted) in self.combatants.iter_mut().zip(&self.fist_targets) {
+                        if !targeted { c.state.clear_attack_timers(); }
+                    }
                 }
+                distance_after_combat = self.distance_between(a_idx, b_idx).unwrap_or(0.0);
             } else {
-                if !self.predicting_movement { self.resolve_combat_round(a_idx, b_idx); }
-                let distance = self.distance_between(a_idx, b_idx).unwrap_or(0.0);
-                let step_a = self.move_tiles(a_idx);
-                let step_b = self.move_tiles(b_idx);
+                if !self.predicting_movement {
+                    self.resolve_combat_round_at(a_idx, b_idx, distance_before_combat, reach_a, reach_b);
+                }
+                let mut distance = self.distance_between(a_idx, b_idx).unwrap_or(0.0);
                 if any_ranged {
                     if eyesmite_a && distance > 5.0 && !self.hold_at_bay.blocks_advance(a_idx) {
-                        self.move_toward(a_idx, b_idx, step_a, 5.0);
+                        distance = self.move_for_separation(a_idx, b_idx, Some(5.0), distance);
                     }
-                    let distance = self.distance_between(a_idx, b_idx).unwrap_or(0.0);
                     if eyesmite_b && distance > 5.0 && !self.hold_at_bay.blocks_advance(b_idx) {
-                        self.move_toward(b_idx, a_idx, step_b, 5.0);
+                        distance = self.move_for_separation(b_idx, a_idx, Some(5.0), distance);
                     }
-                    let distance = self.distance_between(a_idx, b_idx).unwrap_or(0.0);
                     let engaged = distance <= min_reach;
                     if !engaged {
                         if !eyesmite_a && ranged_projectile_a {
                             if let Some(max_range) = max_range_a {
                                 if distance <= max_range {
-                                    self.move_away(a_idx, b_idx, step_a);
+                                    distance = self.move_for_separation(a_idx, b_idx, None, distance);
                                 } else {
-                                    self.move_toward(a_idx, b_idx, step_a, max_reach);
+                                    distance = self.move_for_separation(a_idx, b_idx, Some(max_reach), distance);
                                 }
                             }
                         } else if !eyesmite_a && distance > reach_a {
                             // A melee pursuer must reach its own weapon range,
                             // even when the opponent has a longer reach.
-                            self.move_toward(a_idx, b_idx, step_a, reach_a);
+                            distance = self.move_for_separation(a_idx, b_idx, Some(reach_a), distance);
                         }
-                        let distance = self.distance_between(a_idx, b_idx).unwrap_or(0.0);
                         if !eyesmite_b && ranged_projectile_b {
                             if let Some(max_range) = max_range_b {
                                 if distance <= max_range {
-                                    self.move_away(b_idx, a_idx, step_b);
+                                    distance = self.move_for_separation(b_idx, a_idx, None, distance);
                                 } else {
-                                    self.move_toward(b_idx, a_idx, step_b, max_reach);
+                                    distance = self.move_for_separation(b_idx, a_idx, Some(max_reach), distance);
                                 }
                             }
                         } else if !eyesmite_b && distance > reach_b {
-                            self.move_toward(b_idx, a_idx, step_b, reach_b);
+                            distance = self.move_for_separation(b_idx, a_idx, Some(reach_b), distance);
                         }
                     }
                 } else if distance > min_reach || (distance > 5.0 && (eyesmite_a || eyesmite_b)) {
@@ -729,7 +900,7 @@ impl SimState {
                         } else {
                             reach_a
                         };
-                        self.move_toward(a_idx, b_idx, step_a, stop_distance);
+                        distance = self.move_for_separation(a_idx, b_idx, Some(stop_distance), distance);
                     }
                     if (eyesmite_b || reach_b < reach_a) && !self.hold_at_bay.blocks_advance(b_idx)
                     {
@@ -738,11 +909,11 @@ impl SimState {
                         } else {
                             reach_b
                         };
-                        self.move_toward(b_idx, a_idx, step_b, stop_distance);
+                        distance = self.move_for_separation(b_idx, a_idx, Some(stop_distance), distance);
                     }
                 }
+                distance_after_combat = distance;
             }
-            let distance_after_combat = self.distance_between(a_idx, b_idx).unwrap_or(0.0);
             if max_range_a.is_some()
                 && !ranged_projectile_a
                 && distance_before_combat > reach_a
@@ -772,35 +943,45 @@ impl SimState {
                 self.enforce_min_distance(a_idx, b_idx, distance_before_combat);
             }
         }
-        self.update_charge_progress(active_pair, &old_positions);
+        let duel_moved = match self.actors.as_slice() {
+            [a, b] => Some([a.position != positions[0], b.position != positions[1]]),
+            _ => None,
+        };
+        self.update_charge_progress(active_pair, positions, duel_moved);
+        let track_bow_running = self.bulk.as_ref().is_none_or(|batch| batch.has_running_bow);
         for (idx, combatant) in self.combatants.iter_mut().enumerate() {
-            let moved = self
-                .actors
-                .get(idx)
-                .zip(old_positions.get(idx))
-                .map(|(actor, old)| actor.position.x != old.x || actor.position.y != old.y)
-                .unwrap_or(false);
-            let speed = combatant.apply_f32(StatIdF32::MoveSpeed, combatant.sheet.mobility.move_speed).max(0.0);
-            let running = moved && super::ranged_styles::bow_running(combatant, speed);
-            combatant.state.whistling_wind_running = running;
-            combatant.state.whistling_wind_next_attack_penalty |= running;
+            let moved = duel_moved.map_or_else(
+                || self.actors[idx].position != positions[idx], |m| m[idx]);
+            if track_bow_running {
+                let running = moved && super::ranged_styles::bow_running(combatant);
+                combatant.state.whistling_wind_running = running;
+                combatant.state.whistling_wind_next_attack_penalty |= running;
+            }
             combatant.state.moved_last_tick = moved;
         }
         self.previous_positions = old_positions;
         self.refresh_intimidation();
         for combatant in &mut self.combatants {
-            combatant.tick_racial_effects(&mut self.rng);
-            combatant.state.tick_effects();
+            if combatant.state.active_effects.capabilities().warrior_woad {
+                combatant.tick_racial_effects(&mut self.rng);
+            } else if combatant.state.arborite.unconscious_seconds > 0 {
+                combatant.state.arborite.unconscious_seconds -= 1;
+            }
+            if !combatant.state.active_effects.is_empty() {
+                combatant.state.tick_effects();
+            }
         }
-        self.refresh_streamline_coverage();
+        if track_streamline { self.refresh_streamline_coverage(); }
         self.elapsed_seconds += 1;
-        let now = self.elapsed_seconds as f32;
-        for combatant in &mut self.combatants {
-            combatant
-                .state
-                .refresh_defense_plus_four_ready(&combatant.sheet, now);
+        if self.bulk.is_none() {
+            let now = self.elapsed_seconds as f32;
+            for combatant in &mut self.combatants {
+                combatant
+                    .state
+                    .refresh_defense_plus_four_ready(&combatant.sheet, now);
+            }
         }
-        self.flush_spell_events();
+        if !spell_free { self.flush_spell_events(); }
         self.done =
             !self.multiple_teams_remain() && !super::magic::has_pending_echoes(&self.combatants)
                 && !self.combatants.iter().any(|c| !c.state.magic.charged_objects.is_empty() || !c.state.magic.sweeping_fields.is_empty());
@@ -871,6 +1052,7 @@ impl SimState {
     }
 
     fn flush_spell_events(&mut self) {
+        if self.bulk.is_some() { return; }
         for (caster, combatant) in self.combatants.iter_mut().enumerate() {
             for spell in combatant.state.magic.events.drain(..) {
                 if self.log_events {
@@ -896,6 +1078,20 @@ impl SimState {
     fn advance_spellcasting(&mut self) {
         let now = self.elapsed_seconds;
         for caster in 0..self.combatants.len() {
+            let actor = &mut self.combatants[caster];
+            actor.state.magic.now = now;
+            let magic = &actor.state.magic;
+            if actor.magic.loadout.auto_cast == crate::core::magic::AutoCast::SpellPolicies
+                && magic.casting.is_none() && magic.channeling.is_none()
+                && magic.owned_buffs.is_empty() && magic.resolved_effects.is_empty()
+                && !magic.fatigue.is_some_and(|(_, end)| now >= end)
+                && !magic.armed_echo.as_ref().is_some_and(|echo| now >= echo.expires_at)
+                && !actor.has_eligible_spell_policy()
+            {
+                // Area effects and discharged echoes advance at arena scope below.
+                actor.state.magic.range_targets.clear();
+                continue;
+            }
             self.combatants[caster].advance_magic(now, &mut self.rng);
             self.resolve_completed_spell_effects(caster);
             self.prepare_spell_targets(caster);
@@ -918,10 +1114,7 @@ impl SimState {
             let distance = self
                 .distance_between(caster, echo.target)
                 .unwrap_or(f32::INFINITY);
-            let evasion = self.precognition_evasion_destination(echo.target, caster);
-            if let Some(target) = self.combatants.get_mut(echo.target) {
-                target.state.precognition_space_available = evasion.is_some();
-            }
+            let evasion = self.prepare_escape(echo.target, caster);
             if let Some((attack, evaded)) = super::combat::resolve_echo(
                 &mut self.combatants,
                 caster,
@@ -934,9 +1127,7 @@ impl SimState {
                     self.apply_precognition_evasion(echo.target, evasion);
                 }
                 self.record_attack_metrics(RecordedAttackMetrics {
-                    damage_source: DamageSource::Spell {
-                        name: "Echo Strike".into(),
-                    },
+                    damage_source: ImpactSource::Echo,
                     attacker_idx: caster,
                     defender_idx: echo.target,
                     hp_damage: attack.damage,
@@ -980,21 +1171,43 @@ impl SimState {
         Some(tiles as f32 * self.config.tile_size_ft)
     }
 
+    #[inline(always)]
     fn refresh_streamline_coverage(&mut self) {
-        for combatant in &mut self.combatants {
-            combatant.state.streamline_averages_incoming_damage = false;
+        if self.bulk.as_ref().is_some_and(|batch| !batch.may_average_damage) {
+            return;
         }
+        if self.bulk.is_none() && self.streamline_inputs.is_empty()
+            && !self.combatants.iter().any(|c| c.state.active_effects.capabilities().average_damage) {
+            return;
+        }
+        self.refresh_enabled_streamline_coverage();
+    }
+
+    #[inline(never)]
+    fn refresh_enabled_streamline_coverage(&mut self) {
         let tile_size_ft = self.config.tile_size_ft.max(0.01);
-        for idx in 0..self.combatants.len() {
-            let caster = &self.combatants[idx];
-            let Some(base_radius) = caster.state.active_effects.iter().filter(|e| e.remaining_seconds > 0)
-                .filter_map(|e| e.average_damage_radius).max_by(f32::total_cmp) else { continue; };
-            let Some(source) = self.actors.get(idx) else {
-                continue;
-            };
-            let radius = caster.apply_f32(StatIdF32::StreamlineRadius, base_radius);
+        let mut changed = self.streamline_tile_size != tile_size_ft.to_bits()
+            || self.streamline_inputs.len() != self.actors.len();
+        self.streamline_tile_size = tile_size_ft.to_bits();
+        self.streamline_inputs.resize(self.actors.len(), (GridPos::new(0, 0), None));
+        for ((slot, actor), caster) in self.streamline_inputs.iter_mut().zip(&self.actors).zip(&self.combatants) {
+            let radius = caster.state.active_effects.iter().filter(|e| e.remaining_seconds > 0)
+                .filter_map(|e| e.average_damage_radius).max_by(f32::total_cmp)
+                .map(|r| caster.apply_f32(StatIdF32::StreamlineRadius, r).to_bits());
+            let input = (actor.position, radius);
+            changed |= *slot != input;
+            *slot = input;
+        }
+        if self.bulk.is_some() && !changed { return; }
+        for c in &mut self.combatants { c.state.streamline_averages_incoming_damage = false; }
+        if self.bulk.is_none() && self.streamline_inputs.iter().all(|(_, radius)| radius.is_none()) {
+            self.streamline_inputs.clear();
+            return;
+        }
+        for &(position, radius) in self.streamline_inputs.iter().take(self.combatants.len()) {
+            let Some(radius) = radius.map(f32::from_bits) else { continue };
             for (target, combatant) in self.actors.iter().zip(&mut self.combatants) {
-                if source.position.manhattan_distance(target.position) as f32 * tile_size_ft
+                if position.manhattan_distance(target.position) as f32 * tile_size_ft
                     <= radius
                 {
                     combatant.state.streamline_averages_incoming_damage = true;
@@ -1003,57 +1216,53 @@ impl SimState {
         }
     }
 
-    #[cfg(test)]
-    fn tactical_context(&self, my_idx: usize, enemy_idx: usize) -> TacticalContext {
-        self.tactical_context_for_channel(my_idx, enemy_idx, None)
+    fn decide_tactic(
+        &self, actor: usize, enemy: usize, channel: TacticalChannel, incoming_charge: bool,
+    ) -> TacticalDecision {
+        let policy = &self.combatants[actor].tactical_policy;
+        let live_plan;
+        let plan = if let Some(bulk) = &self.bulk {
+            &bulk.tactics[actor][channel as usize]
+        } else {
+            // Interactive callers may edit the public policy between ticks.
+            live_plan = ChannelPlan::new(policy, channel);
+            &live_plan
+        };
+        if plan.rules.is_empty() {
+            return TacticalDecision::fallback(channel);
+        }
+        if let Some((index, condition)) = plan.single_rule {
+            let matches = match condition {
+                tactical_context::SingleCondition::Always => true,
+                tactical_context::SingleCondition::EnemyDr(comparison, value) =>
+                    comparison.matches(self.combatants[enemy].tactical_enemy_dr(), value),
+            };
+            return if matches {
+                TacticalDecision { action: policy.rules[index].action.clone(), matched_rule_index: Some(index) }
+            } else {
+                TacticalDecision::fallback(channel)
+            };
+        }
+        let mut context = self.tactical_context_with_needs(actor, enemy, plan.needs);
+        if incoming_charge {
+            context.enemy_charging = true;
+            context.give_ground_legal = false;
+        }
+        crate::core::tactics::first_matching_rule(
+            plan.rules.iter().map(|&i| (i, &policy.rules[i])), channel, &context,
+        )
     }
 
-    // Only materialize expensive profile/style information if this channel can
-    // inspect it. Scalar facts are still sampled at the current decision point.
-    fn tactical_context_for_channel(
-        &self,
-        my_idx: usize,
-        enemy_idx: usize,
-        channel: Option<TacticalChannel>,
+    #[cfg(test)]
+    fn tactical_context(&self, mine: usize, enemy: usize) -> TacticalContext {
+        self.tactical_context_with_needs(mine, enemy, tactical_context::ContextNeeds::all())
+    }
+
+    fn tactical_context_with_needs(
+        &self, my_idx: usize, enemy_idx: usize, needs: tactical_context::ContextNeeds,
     ) -> TacticalContext {
         let mine = &self.combatants[my_idx];
         let enemy = &self.combatants[enemy_idx];
-        let needs_condition = |predicate: fn(&TacticalCondition) -> bool| {
-            channel.is_none()
-                || mine.tactical_policy.rules.iter().any(|rule| {
-                    rule.enabled
-                        && Some(rule.action.channel()) == channel
-                        && rule.conditions.iter().any(predicate)
-                })
-        };
-        let needs_styles = channel.is_none()
-            || mine.tactical_policy.rules.iter().any(|rule| {
-                rule.enabled
-                    && Some(rule.action.channel()) == channel
-                    && matches!(rule.action, TacticalAction::UseWeaponStyle { .. })
-            });
-        let needs_jab = needs_condition(|c| matches!(c, TacticalCondition::MyWeaponCanJab { .. }))
-            || mine.tactical_policy.rules.iter().any(|rule| {
-                rule.enabled
-                    && Some(rule.action.channel()) == channel
-                    && matches!(rule.action, TacticalAction::Jab)
-            });
-        let needs_reaction = channel.is_none() || channel == Some(TacticalChannel::Reaction);
-        let needs_retreat = needs_reaction
-            || needs_condition(|c| matches!(c, TacticalCondition::RetreatSpaceAvailable { .. }));
-        let needs_time =
-            needs_condition(|c| matches!(c, TacticalCondition::EnemyTimeToReachSeconds { .. }));
-        let needs_reach = needs_time
-            || needs_condition(|c| matches!(c, TacticalCondition::ReachComparedToEnemy { .. }));
-        let needs_distance =
-            needs_time || needs_condition(|c| matches!(c, TacticalCondition::DistanceFt { .. }));
-        let needs_attack_speed = needs_condition(|c| {
-            matches!(
-                c,
-                TacticalCondition::EnemyAttackSpeedSeconds { .. }
-                    | TacticalCondition::EnemyAttackSpeedComparedToMine { .. }
-            )
-        });
         let hp_percent = |combatant: &Combatant| {
             if combatant.sheet.vitals.max_hp <= 0 {
                 0.0
@@ -1062,12 +1271,7 @@ impl SimState {
             }
         };
         let reach = |combatant: &Combatant| {
-            combatant
-                .apply_f32(
-                    StatIdF32::WeaponReach,
-                    combatant.sheet.offense.weapon.reach_ft,
-                )
-                .max(1.0)
+            combatant.effective_reach()
         };
         let attack_speed = |combatant: &Combatant, opponent: &Combatant| {
             let weapon = &combatant.sheet.offense.weapon;
@@ -1085,7 +1289,7 @@ impl SimState {
                 .apply_f32(StatIdF32::MoveSpeed, combatant.sheet.mobility.move_speed)
                 .max(0.0)
         };
-        let retreat_space_available = needs_retreat
+        let retreat_space_available = needs.retreat
             && self
                 .actors
                 .get(my_idx)
@@ -1096,24 +1300,24 @@ impl SimState {
                     next != mine.position
                 })
                 .unwrap_or(false);
-        let enemy_charging = (needs_reaction
-            || needs_condition(|c| matches!(c, TacticalCondition::EnemyCharging { .. })))
+        let enemy_charging = (needs.reaction
+            || needs.enemy_charging)
             && enemy.sheet.maneuvers.charge
             && enemy.state.charge_target_idx == Some(my_idx)
             && enemy.state.charge_distance_ft > 0.0;
-        let give_ground_legal = needs_reaction
+        let give_ground_legal = needs.reaction
             && retreat_space_available
             && !enemy_charging
             && move_speed(enemy) <= move_speed(mine)
             && self.move_tiles(my_idx) > 0;
-        let distance_ft = if needs_distance {
+        let distance_ft = if needs.distance {
             self.distance_between(my_idx, enemy_idx).unwrap_or(0.0)
         } else {
             0.0
         };
-        let enemy_reach_ft = if needs_reach { reach(enemy) } else { 0.0 };
+        let enemy_reach_ft = if needs.reach { reach(enemy) } else { 0.0 };
         let enemy_distance_to_reach_ft = (distance_ft - enemy_reach_ft).max(0.0);
-        let enemy_closure_per_second = if needs_time {
+        let enemy_closure_per_second = if needs.time {
             self.move_tiles(enemy_idx) as f32 * self.config.tile_size_ft.max(0.01)
         } else {
             0.0
@@ -1127,44 +1331,36 @@ impl SimState {
         };
 
         TacticalContext {
-            engaged_in_melee: enemy.state.weapon_setup.pending.is_none()
+            engaged_in_melee: needs.engaged && enemy.state.weapon_setup.pending.is_none()
                 && !enemy.sheet.offense.weapon.uses_projectiles
                 && distance_ft <= enemy.apply_f32(StatIdF32::WeaponReach, enemy.sheet.offense.weapon.reach_ft).max(1.0),
             can_equip_melee: mine.weapon_setups.is_some(),
             can_equip_ranged: mine.weapon_setups.is_some(),
-            my_hp_percent: if needs_condition(|c| {
-                matches!(c, TacticalCondition::MyHpPercent { .. })
-            }) {
+            my_hp_percent: if needs.my_hp {
                 hp_percent(mine)
             } else {
                 0.0
             },
-            enemy_hp_percent: if needs_condition(|c| {
-                matches!(c, TacticalCondition::EnemyHpPercent { .. })
-            }) {
+            enemy_hp_percent: if needs.enemy_hp {
                 hp_percent(enemy)
             } else {
                 0.0
             },
             distance_ft,
-            my_reach_ft: if needs_reach { reach(mine) } else { 0.0 },
+            my_reach_ft: if needs.reach { reach(mine) } else { 0.0 },
             enemy_reach_ft,
             retreat_space_available,
-            my_weapon_can_jab: needs_jab && mine.tactical_jab_available(),
+            my_weapon_can_jab: needs.jab && mine.tactical_jab_available(),
             my_has_active_shield: mine.sheet.defense.shield_name.is_some()
                 && mine.state.shield_intact,
-            enemy_weapon_group: if needs_condition(|c| {
-                matches!(c, TacticalCondition::EnemyWeaponGroup { .. })
-            }) {
+            enemy_weapon_group: if needs.weapon_group {
                 enemy.weapon_group.clone()
             } else {
                 String::new()
             },
             enemy_has_active_shield: enemy.sheet.defense.shield_name.is_some()
                 && enemy.state.shield_intact,
-            enemy_armor_type: if needs_condition(|c| {
-                matches!(c, TacticalCondition::EnemyArmorType { .. })
-            }) {
+            enemy_armor_type: if needs.armor {
                 enemy.armor_type.clone()
             } else {
                 String::new()
@@ -1172,39 +1368,33 @@ impl SimState {
             enemy_charging,
             my_has_attacked: mine.state.has_attacked,
             enemy_time_to_reach_seconds,
-            my_active_style_ids: if needs_condition(|c| {
-                matches!(c, TacticalCondition::MyActiveStyle { .. })
-            }) {
+            my_active_style_ids: if needs.my_styles {
                 mine.active_style_ids.clone()
             } else {
                 Vec::new()
             },
-            enemy_active_style_ids: if needs_condition(|c| {
-                matches!(c, TacticalCondition::EnemyActiveStyle { .. })
-            }) {
+            enemy_active_style_ids: if needs.enemy_styles {
                 enemy.active_style_ids.clone()
             } else {
                 Vec::new()
             },
-            available_style_ids: if needs_styles {
+            available_style_ids: if needs.styles {
                 mine.available_tactical_style_ids()
             } else {
                 Vec::new()
             },
-            style_pair_allowed: needs_styles && mine.tactical_style_pair_allowed(),
-            enemy_dr: if needs_condition(|c| matches!(c, TacticalCondition::EnemyDr { .. })) {
-                enemy
-                    .apply_i32(StatIdI32::ArmorDr, enemy.sheet.defense.armor_dr)
-                    .max(0) as f32
+            style_pair_allowed: needs.styles && mine.tactical_style_pair_allowed(),
+            enemy_dr: if needs.enemy_dr {
+                enemy.tactical_enemy_dr()
             } else {
                 0.0
             },
-            my_attack_speed_seconds: if needs_attack_speed {
+            my_attack_speed_seconds: if needs.attack_speed {
                 attack_speed(mine, enemy)
             } else {
                 0.0
             },
-            enemy_attack_speed_seconds: if needs_attack_speed {
+            enemy_attack_speed_seconds: if needs.attack_speed {
                 attack_speed(enemy, mine)
             } else {
                 0.0
@@ -1221,6 +1411,9 @@ impl SimState {
         rule_index: Option<usize>,
         detail: Option<String>,
     ) {
+        if self.bulk.is_some() {
+            return;
+        }
         let rule_label = rule_index
             .map(|index| format!("rule {}", index + 1))
             .unwrap_or_else(|| "fallback".to_string());
@@ -1257,19 +1450,13 @@ impl SimState {
             || self.combatants[attacker_idx].state.aggressive_maneuvers_locked {
             return [0.0; 2];
         }
-        let actor = &self.combatants[attacker_idx];
-        let decision = evaluate_channel(
-            &actor.tactical_policy,
-            TacticalDecisionPoint::NextAttackOpportunity,
-            TacticalChannel::AttackMode,
-            &self.tactical_context_for_channel(
-                attacker_idx,
-                defender_idx,
-                Some(TacticalChannel::AttackMode),
-            ),
-        );
-        let was_called_shot = actor.sheet.maneuvers.called_shot;
-        let called_shot = matches!(decision.action, TacticalAction::CalledShot);
+        let cached = self.bulk.as_ref().and_then(|b| b.fixed_dr_called_shot[attacker_idx])
+            .filter(|_| self.combatants[defender_idx].state.active_effects.is_empty());
+        let called_shot = cached.unwrap_or_else(|| matches!(
+            self.decide_tactic(attacker_idx, defender_idx, TacticalChannel::AttackMode, false).action,
+            TacticalAction::CalledShot
+        ));
+        let was_called_shot = self.combatants[attacker_idx].sheet.maneuvers.called_shot;
         self.combatants[attacker_idx].sheet.maneuvers.called_shot = called_shot;
         let mut added = [0.0; 2];
         if called_shot && !was_called_shot {
@@ -1313,30 +1500,27 @@ impl SimState {
         added
     }
 
-    fn apply_next_attack_tactics(&mut self, attacker_idx: usize, defender_idx: usize) {
+    fn restore_attack_profile(&mut self, idx: usize) {
+        let actor = &mut self.combatants[idx];
+        if self.bulk.is_none() || !actor.state.normal_tactical_profile_installed {
+            actor.activate_tactical_profile(false);
+        }
+    }
+
+    fn apply_next_attack_tactics(&mut self, attacker_idx: usize, defender_idx: usize) -> bool {
         self.combatants[attacker_idx].state.aggressive_maneuvers_locked = false;
         if !self.combatants[attacker_idx].tactical_policy.enabled {
-            return;
+            return false;
         }
-        let context = self.tactical_context_for_channel(
-            attacker_idx,
-            defender_idx,
-            Some(TacticalChannel::WeaponStyle),
-        );
-
-        let style = evaluate_channel(
-            &self.combatants[attacker_idx].tactical_policy,
-            TacticalDecisionPoint::NextAttackOpportunity,
-            TacticalChannel::WeaponStyle,
-            &context,
-        );
+        let style = self.decide_tactic(attacker_idx, defender_idx, TacticalChannel::WeaponStyle, false);
+        let mut installed = false;
         match &style.action {
             TacticalAction::RetainWeaponStyle => {}
             TacticalAction::NeutralWeaponStyle => {
-                self.combatants[attacker_idx].switch_tactical_style(Vec::new());
+                installed |= self.combatants[attacker_idx].switch_tactical_style(Vec::new());
             }
             TacticalAction::UseWeaponStyle { style_ids } => {
-                self.combatants[attacker_idx].switch_tactical_style(style_ids.clone());
+                installed |= self.combatants[attacker_idx].switch_tactical_style(style_ids.clone());
             }
             _ => {}
         }
@@ -1350,17 +1534,7 @@ impl SimState {
             );
         }
 
-        let stance_context = self.tactical_context_for_channel(
-            attacker_idx,
-            defender_idx,
-            Some(TacticalChannel::Stance),
-        );
-        let stance = evaluate_channel(
-            &self.combatants[attacker_idx].tactical_policy,
-            TacticalDecisionPoint::NextAttackOpportunity,
-            TacticalChannel::Stance,
-            &stance_context,
-        );
+        let stance = self.decide_tactic(attacker_idx, defender_idx, TacticalChannel::Stance, false);
         let old_stance = self.combatants[attacker_idx].active_fight_defensively_penalty;
         let new_stance = match stance.action {
             TacticalAction::FightDefensively { penalty } => Some(penalty),
@@ -1376,8 +1550,11 @@ impl SimState {
                 .state
                 .tactical_next_attack_penalty += lingering;
         }
-        self.combatants[attacker_idx].active_fight_defensively_penalty = new_stance;
-        self.combatants[attacker_idx].activate_tactical_profile(false);
+        let actor = &mut self.combatants[attacker_idx];
+        actor.active_fight_defensively_penalty = new_stance;
+        if self.bulk.is_none() || old_stance != new_stance || !actor.state.normal_tactical_profile_installed {
+            installed |= actor.activate_tactical_profile(false);
+        }
         if stance.matched_rule_index.is_some() {
             self.record_tactical_directive(
                 attacker_idx,
@@ -1388,19 +1565,12 @@ impl SimState {
             );
         }
 
-        let attack_context = self.tactical_context_for_channel(
-            attacker_idx,
-            defender_idx,
-            Some(TacticalChannel::AttackMode),
-        );
-        let attack = evaluate_channel(
-            &self.combatants[attacker_idx].tactical_policy,
-            TacticalDecisionPoint::NextAttackOpportunity,
-            TacticalChannel::AttackMode,
-            &attack_context,
-        );
+        let attack = self.decide_tactic(attacker_idx, defender_idx, TacticalChannel::AttackMode, false);
         let use_jab = matches!(attack.action, TacticalAction::Jab);
-        self.combatants[attacker_idx].activate_tactical_profile(use_jab);
+        // The stance step already installed the non-jab profile for this attack.
+        if use_jab {
+            installed |= self.combatants[attacker_idx].activate_tactical_profile(true);
+        }
         if attack.matched_rule_index.is_some() {
             self.record_tactical_directive(
                 attacker_idx,
@@ -1410,6 +1580,14 @@ impl SimState {
                 None,
             );
         }
+        installed
+    }
+
+    fn reaction_possible(&self, defender: usize) -> bool {
+        let c = &self.combatants[defender];
+        if c.tactical_policy.enabled {
+            self.bulk.as_ref().is_none_or(|b| b.moving_reaction[defender])
+        } else { c.sheet.maneuvers.give_ground || c.sheet.maneuvers.scamper_back }
     }
 
     pub(super) fn apply_incoming_attack_tactics(
@@ -1419,6 +1597,9 @@ impl SimState {
         attack_mode: AttackMode,
     ) -> bool {
         let defender = &self.combatants[defender_idx];
+        if defender.tactical_policy.enabled && self.bulk.as_ref().is_some_and(|b| !b.moving_reaction[defender_idx]) {
+            return false;
+        }
         if !defender.tactical_policy.enabled
             && !defender.sheet.maneuvers.give_ground
             && !defender.sheet.maneuvers.scamper_back
@@ -1432,24 +1613,13 @@ impl SimState {
         {
             return false;
         }
-        let mut context = self.tactical_context_for_channel(
-            defender_idx,
-            attacker_idx,
-            Some(TacticalChannel::Reaction),
-        );
-        if attack_mode == AttackMode::Charge {
-            context.give_ground_legal = false;
-            context.enemy_charging = true;
-        }
-        let policy = &self.combatants[defender_idx].tactical_policy;
-        let reaction = if policy.enabled {
-            evaluate_channel(
-                policy,
-                TacticalDecisionPoint::IncomingAttackReaction,
-                TacticalChannel::Reaction,
-                &context,
-            )
+        let reaction = if defender.tactical_policy.enabled {
+            self.decide_tactic(defender_idx, attacker_idx, TacticalChannel::Reaction, attack_mode == AttackMode::Charge)
         } else {
+            let mut context = self.tactical_context_with_needs(
+                defender_idx, attacker_idx, tactical_context::ContextNeeds::reaction(),
+            );
+            context.give_ground_legal &= attack_mode != AttackMode::Charge;
             let maneuvers = &self.combatants[defender_idx].sheet.maneuvers;
             let action = if context.give_ground_legal && maneuvers.scamper_back {
                 TacticalAction::ScamperBack
@@ -1510,36 +1680,30 @@ impl SimState {
         if pursued {
             self.combatants[attacker_idx].state.moved_last_tick = true;
         }
-        let moved_ft = moved_tiles as f32 * self.config.tile_size_ft;
-        self.record_tactical_directive(
-            defender_idx,
-            attacker_idx,
-            &reaction.action,
-            reaction.matched_rule_index,
-            Some(format!(
-                "{}: {} {:.0}ft (+5 Defense, -{} next Attack)",
-                self.combatants[defender_idx].sheet.name,
-                reaction.action.label(),
-                moved_ft,
-                if scamper { 4 } else { 1 }
-            )),
-        );
+        if self.bulk.is_none() {
+            let moved_ft = moved_tiles as f32 * self.config.tile_size_ft;
+            self.record_tactical_directive(
+                defender_idx,
+                attacker_idx,
+                &reaction.action,
+                reaction.matched_rule_index,
+                Some(format!(
+                    "{}: {} {:.0}ft (+5 Defense, -{} next Attack)",
+                    self.combatants[defender_idx].sheet.name,
+                    reaction.action.label(),
+                    moved_ft,
+                    if scamper { 4 } else { 1 }
+                )),
+            );
+        }
         if pursued
             && self.combatants[defender_idx].apply_i32(StatIdI32::FlagPilgrimsPathStyle, 0) > 0
         {
             let distance = self
                 .distance_between(attacker_idx, defender_idx)
                 .unwrap_or(f32::INFINITY);
-            let attacker_evasion =
-                self.precognition_evasion_destination(attacker_idx, defender_idx);
-            let defender_evasion =
-                self.precognition_evasion_destination(defender_idx, attacker_idx);
-            self.combatants[attacker_idx]
-                .state
-                .precognition_space_available = attacker_evasion.is_some();
-            self.combatants[defender_idx]
-                .state
-                .precognition_space_available = defender_evasion.is_some();
+            let attacker_evasion = self.prepare_escape(attacker_idx, defender_idx);
+            let defender_evasion = self.prepare_escape(defender_idx, attacker_idx);
             self.refresh_intimidation();
             for counter in super::combat::resolve_style_strike_chain(
                 &mut self.combatants,
@@ -1648,10 +1812,10 @@ impl SimState {
     }
 
     fn move_tiles(&self, idx: usize) -> i32 {
-        self.move_tiles_for(&self.combatants[idx])
+        self.movement_tiles(&self.combatants[idx], self.bulk.as_ref().and_then(|b| b.fixed_move_tiles[idx]))
     }
 
-    fn move_tiles_for(&self, combatant: &Combatant) -> i32 {
+    fn movement_tiles(&self, combatant: &Combatant, ordinary: Option<i32>) -> i32 {
         if combatant.sheet.maneuvers.passive || combatant.racial_actions_blocked()
             || combatant.state.weapon_setup.pending.is_some() {
             return 0;
@@ -1661,6 +1825,11 @@ impl SimState {
         {
             return 0;
         }
+        let fractional = combatant.state.magic.casting.is_some() || combatant.state.magic.channeling.is_some()
+            || combatant.state.magic.fatigued();
+        if !fractional && combatant.state.active_effects.is_empty() {
+            if let Some(tiles) = ordinary { return tiles; }
+        }
         let speed_ft = combatant
             .apply_f32(StatIdF32::MoveSpeed, combatant.sheet.mobility.move_speed)
             .max(0.0);
@@ -1669,16 +1838,49 @@ impl SimState {
             return 0;
         }
         let tile_size_ft = self.config.tile_size_ft.max(0.01);
-        if combatant.state.magic.casting.is_some()
-            || combatant.state.magic.channeling.is_some()
-            || combatant.state.magic.fatigued()
-        {
+        if fractional {
             let rate = speed_ft / tile_size_ft;
             return (((self.elapsed_seconds + 1) as f32 * rate).floor()
                 - (self.elapsed_seconds as f32 * rate).floor()) as i32;
         }
         let tiles = (speed_ft / tile_size_ft).round();
         if tiles <= 0.0 { 1 } else { tiles as i32 }
+    }
+
+    fn skip_stationary_recovery(&mut self, limit: u32) {
+        if self.done || !self.bulk.as_ref().is_some_and(|b| b.simple_recovery)
+            || self.hold_at_bay.active || self.hold_at_bay.pending { return; }
+        let now = self.elapsed_seconds;
+        // The caller polls cancellation before ticking at exact 64-second boundaries.
+        // Beyond this point consecutive integer seconds can share one f32 attack time.
+        if now.is_multiple_of(64) || now >= (1 << 24) { return; }
+        let mut end = limit.min(now.saturating_add(64 - now % 64));
+        let distance = self.distance_between(0, 1).unwrap_or(f32::INFINITY);
+        for c in &self.combatants {
+            let s = &c.state;
+            if s.moved_last_tick || s.knockback_applied_this_tick || s.trauma_remaining_seconds > 0
+                || s.knockback_immobile_seconds > 0 || !s.active_effects.is_empty() || c.racial_actions_blocked()
+                || c.sheet.maneuvers.offensive_dualwielding || c.sheet.maneuvers.passive
+                || distance > c.effective_reach() || (c.sheet.defense.eyesmite && distance > 5.0) { return; }
+            let Some(next) = s.next_attack_time_primary else { return };
+            let mut deadline = next.ceil() as u32;
+            if deadline > 0 && (deadline - 1) as f32 + 0.0001 >= next { deadline -= 1; }
+            end = end.min(deadline);
+        }
+        if end > now {
+            for _ in now..end { self.rng.next_u32(); }
+            for c in &mut self.combatants { c.state.magic.now = end - 1; }
+            self.elapsed_seconds = end;
+        }
+    }
+
+    fn move_for_separation(&mut self, mover: usize, target: usize, stop: Option<f32>, distance: f32) -> f32 {
+        let before = self.actors[mover].position;
+        let steps = self.move_tiles(mover);
+        if let Some(feet) = stop { self.move_toward(mover, target, steps, feet); }
+        else { self.move_away(mover, target, steps); }
+        if self.actors[mover].position == before { distance }
+        else { self.distance_between(mover, target).unwrap_or(distance) }
     }
 
     fn move_toward(
@@ -1703,6 +1905,11 @@ impl SimState {
             let distance = from.manhattan_distance(to);
             let mut low = 0;
             let mut high = steps.min(distance);
+            // All integer tile distances in this range are exactly representable.
+            if self.config.tile_size_ft == 1.0 && distance <= (1 << 24) && stop_distance_ft >= 0.0 {
+                low = high.min(distance.saturating_sub(stop_distance_ft.floor() as i32).max(0));
+                high = low;
+            }
             while low < high {
                 let middle = low + (high - low) / 2;
                 if (distance - middle) as f32 * self.config.tile_size_ft <= stop_distance_ft {
@@ -1755,10 +1962,13 @@ impl SimState {
         &mut self,
         active_pair: Option<(usize, usize)>,
         old_positions: &[GridPos],
+        duel_moved: Option<[bool; 2]>,
     ) {
         let tile_size_ft = self.config.tile_size_ft.max(0.01);
         let (pair_a, pair_b) = active_pair.unwrap_or((usize::MAX, usize::MAX));
-        for idx in 0..self.combatants.len() {
+        let indices = self.bulk.as_ref().map(|b| b.charge_indices.as_slice());
+        for i in 0..indices.map_or(self.combatants.len(), <[usize]>::len) {
+            let idx = indices.map_or(i, |v| v[i]);
             let target_idx = if idx == pair_a {
                 Some(pair_b)
             } else if idx == pair_b {
@@ -1772,16 +1982,13 @@ impl SimState {
                 || target_idx.is_none()
             {
                 let state = &mut self.combatants[idx].state;
-                state.charge_distance_ft = 0.0;
-                state.charge_target_idx = None;
+                if state.charge_target_idx.is_some() || state.charge_distance_ft != 0.0 {
+                    state.charge_distance_ft = 0.0;
+                    state.charge_target_idx = None;
+                }
                 continue;
             }
-            let reach = combatant
-                .apply_f32(
-                    StatIdF32::WeaponReach,
-                    combatant.sheet.offense.weapon.reach_ft,
-                )
-                .max(1.0);
+            let reach = combatant.effective_reach();
             let current_target = combatant.state.charge_target_idx;
             let target_idx = target_idx.expect("target index missing");
             if current_target != Some(target_idx) {
@@ -1797,21 +2004,20 @@ impl SimState {
                 continue;
             };
             let distance_before = old_pos.manhattan_distance(old_target_pos) as f32 * tile_size_ft;
-            let distance_after = new_pos.manhattan_distance(old_target_pos) as f32 * tile_size_ft;
-            let moved_tiles = old_pos.manhattan_distance(new_pos);
             let state = &mut self.combatants[idx].state;
-            if moved_tiles == 0 {
+            if !duel_moved.map_or_else(|| old_pos != new_pos, |m| m[idx]) {
                 if distance_before > reach {
                     state.charge_distance_ft = 0.0;
                 }
                 continue;
             }
+            let distance_after = new_pos.manhattan_distance(old_target_pos) as f32 * tile_size_ft;
             if distance_after >= distance_before {
                 state.charge_distance_ft = 0.0;
                 continue;
             }
             if distance_before > reach {
-                let moved_ft = moved_tiles as f32 * tile_size_ft;
+                let moved_ft = old_pos.manhattan_distance(new_pos) as f32 * tile_size_ft;
                 let max_closure_ft = (distance_before - reach).max(0.0);
                 let delta = moved_ft.min(max_closure_ft);
                 let before = state.charge_distance_ft;
@@ -1835,6 +2041,27 @@ impl SimState {
         self.move_away(defender_idx, attacker_idx, tiles);
     }
 
+    #[inline(always)]
+    fn prepare_escape(&mut self, defender: usize, attacker: usize) -> EscapeDestination {
+        if !self.combatants.get(defender).is_some_and(|c| c.sheet.defense.precognition) {
+            return EscapeDestination::Known(None);
+        }
+        self.prepare_enabled_escape(defender, attacker)
+    }
+
+    #[inline(never)]
+    fn prepare_enabled_escape(&mut self, defender: usize, attacker: usize) -> EscapeDestination {
+        let pending = if self.bulk.is_some() && self.actors.len() == 2 && attacker < 2 && defender < 2 {
+            EscapeDestination::Duel(super::movement::DuelEscape {
+                from: self.actors[defender].position, attacker: self.actors[attacker].position, config: self.config,
+            })
+        } else { EscapeDestination::Known(self.precognition_evasion_destination(defender, attacker)) };
+        let state = &mut self.combatants[defender].state;
+        state.duel_escape = match pending { EscapeDestination::Duel(d) => Some(d), _ => None };
+        state.precognition_space_available = matches!(pending, EscapeDestination::Known(Some(_)));
+        pending
+    }
+
     fn precognition_evasion_destination(
         &self,
         defender_idx: usize,
@@ -1842,18 +2069,10 @@ impl SimState {
     ) -> Option<GridPos> {
         let from = self.actors.get(defender_idx)?.position;
         let attacker = self.actors.get(attacker_idx)?.position;
-        let dx = from.x - attacker.x;
-        let dy = from.y - attacker.y;
-        let away = if dx.abs() >= dy.abs() && dx != 0 {
-            (dx.signum(), 0)
-        } else if dy != 0 {
-            (0, dy.signum())
-        } else {
-            return None;
-        };
-        let directions = [away, (-away.1, away.0), (away.1, -away.0)];
+        let geometry = super::movement::DuelEscape { from, attacker, config: self.config };
+        if self.bulk.is_some() && self.actors.len() == 2 { return geometry.destination(); }
+        let directions = geometry.directions()?;
         let steps = (5.0 / self.config.tile_size_ft.max(0.01)).ceil() as i32;
-
         for (step_x, step_y) in directions {
             let mut current = from;
             let mut valid = true;
@@ -1885,7 +2104,8 @@ impl SimState {
         None
     }
 
-    fn apply_precognition_evasion(&mut self, defender_idx: usize, destination: Option<GridPos>) {
+    fn apply_precognition_evasion(&mut self, defender_idx: usize, escape: EscapeDestination) {
+        let destination = match escape { EscapeDestination::Known(p) => p, EscapeDestination::Duel(d) => d.destination() };
         if let (Some(actor), Some(destination)) = (self.actors.get_mut(defender_idx), destination) {
             actor.position = destination;
         }
@@ -1954,6 +2174,10 @@ impl SimState {
     }
 
     fn active_pair(&self) -> Option<(usize, usize)> {
+        if let [first, second] = self.combatants.as_slice() {
+            return (first.state.hp > 0 && second.state.hp > 0 && first.team_id != second.team_id)
+                .then_some((0, 1));
+        }
         let mut best: Option<(usize, usize, i32)> = None;
         for i in 0..self.combatants.len() {
             if self.combatants[i].state.hp <= 0 {
@@ -1980,21 +2204,44 @@ impl SimState {
     }
 
     fn resolve_combat_round(&mut self, a_idx: usize, b_idx: usize) {
-        self.refresh_streamline_coverage();
-        let now = self.elapsed_seconds as f32;
         let distance = self.distance_between(a_idx, b_idx).unwrap_or(0.0);
-        let reach_a = self.combatants[a_idx]
-            .apply_f32(
-                StatIdF32::WeaponReach,
-                self.combatants[a_idx].sheet.offense.weapon.reach_ft,
-            )
-            .max(1.0);
-        let reach_b = self.combatants[b_idx]
-            .apply_f32(
-                StatIdF32::WeaponReach,
-                self.combatants[b_idx].sheet.offense.weapon.reach_ft,
-            )
-            .max(1.0);
+        let reach_a = self.combatants[a_idx].effective_reach();
+        let reach_b = self.combatants[b_idx].effective_reach();
+        self.resolve_combat_round_at(a_idx, b_idx, distance, reach_a, reach_b);
+    }
+
+    fn resolve_combat_round_at(&mut self, a_idx: usize, b_idx: usize, distance: f32, reach_a: f32, reach_b: f32) {
+        let track_streamline = self.bulk.as_ref().is_none_or(|b| b.may_average_damage);
+        if track_streamline { self.refresh_streamline_coverage(); }
+        let now = self.elapsed_seconds as f32;
+        if let Some(batch) = &self.bulk {
+            if self.combatants.len() == 2 && !self.hold_at_bay.active && !self.hold_at_bay.pending
+                && [(a_idx, b_idx), (b_idx, a_idx)].into_iter().all(|(idx, enemy)| {
+                    let c = &self.combatants[idx];
+                    let future = |time: Option<f32>| time.is_some_and(|t| t > now + 0.0001);
+                    c.state.hp > 0 && c.state.trauma_remaining_seconds == 0 && !c.sheet.maneuvers.passive
+                        && future(c.state.next_attack_time_primary)
+                        && (!c.sheet.maneuvers.offensive_dualwielding || c.sheet.offense.offhand.is_none()
+                            || future(c.state.next_attack_time_secondary))
+                        && (!c.tactical_policy.enabled || c.state.aggressive_maneuvers_locked
+                            || (self.combatants[enemy].state.active_effects.is_empty()
+                                && batch.fixed_dr_called_shot[idx] == Some(c.sheet.maneuvers.called_shot))
+                            || (batch.tactics[idx][TacticalChannel::AttackMode as usize].rules.is_empty()
+                                && !c.sheet.maneuvers.called_shot))
+                })
+            {
+                self.rng.next_u32(); // Every combat round randomises the two attack slots.
+                return;
+            }
+        }
+        // Tactical decisions may change either sheet inside this round. The batch
+        // includes every reachable sheet. Live effects may additionally grant a style.
+        let followups = self.bulk.as_ref().map_or(u64::MAX, |batch| batch.possible_sheet_flags)
+            | self.combatants[a_idx].state.active_effects.capabilities().integers
+            | self.combatants[b_idx].state.active_effects.capabilities().integers;
+        let six_paths = followups & StatIdI32::FlagSixPathsStyle.bit() != 0;
+        let twelve_paths = followups & StatIdI32::FlagLargeSwordShieldStyle.bit() != 0;
+        let precognition = self.bulk.as_ref().is_none_or(|batch| batch.has_precognition);
         let simultaneous = (reach_a - reach_b).abs() < f32::EPSILON;
         let state_snapshot = simultaneous
             .then(|| super::combat::CombatRoundSnapshot::capture(&self.combatants, a_idx, b_idx));
@@ -2024,7 +2271,7 @@ impl SimState {
             {
                 continue;
             }
-            self.refresh_streamline_coverage();
+            if track_streamline { self.refresh_streamline_coverage(); }
             if self.combatants[attacker_idx].sheet.maneuvers.passive {
                 self.combatants[attacker_idx].state.clear_attack_timers();
                 continue;
@@ -2192,9 +2439,7 @@ impl SimState {
             } else {
                 None
             };
-            let mut primary_speed_base = self.combatants[attacker_idx]
-                .apply_f32(StatIdF32::WeaponSpeed, weapon.speed)
-                .max(1.0);
+            let mut scheduled_primary_speed = None;
             let mut primary_attack_time = None;
             let mut scheduled_primary_attack_time = None;
             if !use_ranged && distance > attacker_reach {
@@ -2204,7 +2449,9 @@ impl SimState {
                 continue;
             }
             let mut called_shot_delays =
-                self.refresh_called_shot_tactic(attacker_idx, defender_idx, distance);
+                if self.combatants[attacker_idx].tactical_policy.enabled {
+                    self.refresh_called_shot_tactic(attacker_idx, defender_idx, distance)
+                } else { [0.0; 2] };
             if self.combatants[attacker_idx]
                 .state
                 .next_attack_time_primary
@@ -2245,66 +2492,59 @@ impl SimState {
                 let previous_aim = self.combatants[attacker_idx].sheet.offense.weapon.ranged_styles.aim_seconds();
                 let previous_offhand_aim = self.combatants[attacker_idx].sheet.offense.offhand.as_ref()
                     .map_or(0.0, |o| o.weapon.ranged_styles.aim_seconds());
-                self.apply_next_attack_tactics(attacker_idx, defender_idx);
-                let new_offhand_aim = self.combatants[attacker_idx].sheet.offense.offhand.as_ref()
-                    .map_or(0.0, |o| o.weapon.ranged_styles.aim_seconds());
-                let offhand_added = (new_offhand_aim - previous_offhand_aim).max(0.0);
-                if offhand_added > 0.0 {
-                    if let Some(scheduled) = self.combatants[attacker_idx].state.next_attack_time_secondary {
-                        let next = scheduled.max(now) + offhand_added;
-                        called_shot_delays[1] += next - scheduled;
-                        self.combatants[attacker_idx].state.set_next_attack_time(WeaponSlot::Secondary, Some(next));
+                let profile_changed = self.apply_next_attack_tactics(attacker_idx, defender_idx);
+                if profile_changed {
+                    let new_offhand_aim = self.combatants[attacker_idx].sheet.offense.offhand.as_ref()
+                        .map_or(0.0, |o| o.weapon.ranged_styles.aim_seconds());
+                    let offhand_added = (new_offhand_aim - previous_offhand_aim).max(0.0);
+                    if offhand_added > 0.0 {
+                        if let Some(scheduled) = self.combatants[attacker_idx].state.next_attack_time_secondary {
+                            let next = scheduled.max(now) + offhand_added;
+                            called_shot_delays[1] += next - scheduled;
+                            self.combatants[attacker_idx].state.set_next_attack_time(WeaponSlot::Secondary, Some(next));
+                        }
                     }
-                }
-                let aim_added = self.combatants[attacker_idx].sheet.offense.weapon.ranged_styles.aim_seconds() - previous_aim;
-                if aim_added > 0.0 {
-                    self.combatants[attacker_idx].state.set_next_attack_time(WeaponSlot::Primary, Some(now + aim_added));
-                    continue;
+                    let aim_added = self.combatants[attacker_idx].sheet.offense.weapon.ranged_styles.aim_seconds() - previous_aim;
+                    if aim_added > 0.0 {
+                        self.combatants[attacker_idx].state.set_next_attack_time(WeaponSlot::Primary, Some(now + aim_added));
+                        continue;
+                    }
                 }
 
                 // Style/stance rules can change attack-mode conditions. Recheck
                 // before striking, and wait if that decision newly requires aim.
-                let added = self.refresh_called_shot_tactic(attacker_idx, defender_idx, distance);
+                let added = if self.combatants[attacker_idx].tactical_policy.enabled {
+                    self.refresh_called_shot_tactic(attacker_idx, defender_idx, distance)
+                } else { [0.0; 2] };
                 if added[0] > 0.0 {
                     continue;
                 }
 
                 // The due time is intentionally unchanged. The newly selected
                 // profile controls this attack and the recovery scheduled below.
-                let updated_max_range = {
-                    let combatant = &mut self.combatants[attacker_idx];
-                    max_range_cached(
-                        &mut combatant.state,
-                        WeaponSlot::Primary,
-                        &combatant.sheet.offense.weapon,
-                    )
-                };
-                let weapon = &self.combatants[attacker_idx].sheet.offense.weapon;
-                has_range = updated_max_range.is_some();
-                attacker_reach = self.combatants[attacker_idx]
-                    .apply_f32(StatIdF32::WeaponReach, weapon.reach_ft)
-                    .max(1.0);
-                use_ranged = if has_range && !weapon.uses_projectiles {
-                    distance > attacker_reach
-                } else {
-                    has_range
-                };
-                ranged_mod = if use_ranged {
-                    let range_scale = self.combatants[attacker_idx].apply_f32(
-                        StatIdF32::RangeDistanceMultiplier,
-                        weapon.range_distance_multiplier,
-                    );
-                    range_modifier_for_weapon_with_scale(weapon.as_ref(), distance, range_scale)
-                } else {
-                    None
-                };
-                primary_speed_base = self.combatants[attacker_idx]
+                if profile_changed {
+                    let c = &mut self.combatants[attacker_idx];
+                    has_range = max_range_cached(&mut c.state, WeaponSlot::Primary, &c.sheet.offense.weapon).is_some();
+                }
+                let c = &self.combatants[attacker_idx];
+                let weapon = &c.sheet.offense.weapon;
+                attacker_reach = c.apply_f32(StatIdF32::WeaponReach, weapon.reach_ft).max(1.0);
+                let updated_ranged = has_range && (weapon.uses_projectiles || distance > attacker_reach);
+                if profile_changed || updated_ranged != use_ranged {
+                    ranged_mod = if updated_ranged {
+                        let scale = c.apply_f32(StatIdF32::RangeDistanceMultiplier, weapon.range_distance_multiplier);
+                        range_modifier_for_weapon_with_scale(weapon, distance, scale)
+                    } else { None };
+                }
+                use_ranged = updated_ranged;
+                let primary_speed_base = self.combatants[attacker_idx]
                     .apply_f32(StatIdF32::WeaponSpeed, weapon.speed)
                     .max(1.0);
+                scheduled_primary_speed = Some(primary_speed_base);
                 if (!use_ranged && distance > attacker_reach)
                     || (use_ranged && ranged_mod.is_none())
                 {
-                    self.combatants[attacker_idx].activate_tactical_profile(false);
+                    self.restore_attack_profile(attacker_idx);
                     continue;
                 }
                 if attack_mode == AttackMode::Charge {
@@ -2324,7 +2564,7 @@ impl SimState {
                             self.charges_started_within_20ft.saturating_add(1);
                     }
                 }
-                if self.apply_incoming_attack_tactics(attacker_idx, defender_idx, attack_mode)
+                if self.reaction_possible(defender_idx) && self.apply_incoming_attack_tactics(attacker_idx, defender_idx, attack_mode)
                     && self.incoming_attack_cancelled(
                         attacker_idx,
                         defender_idx,
@@ -2334,16 +2574,11 @@ impl SimState {
                 {
                     continue;
                 }
-                let defender_evasion =
-                    self.precognition_evasion_destination(defender_idx, attacker_idx);
-                let attacker_evasion =
-                    self.precognition_evasion_destination(attacker_idx, defender_idx);
-                self.combatants[defender_idx]
-                    .state
-                    .precognition_space_available = defender_evasion.is_some();
-                self.combatants[attacker_idx]
-                    .state
-                    .precognition_space_available = attacker_evasion.is_some();
+                let (defender_evasion, attacker_evasion) = if precognition {
+                    (self.prepare_escape(defender_idx, attacker_idx), self.prepare_escape(attacker_idx, defender_idx))
+                } else {
+                    (EscapeDestination::Known(None), EscapeDestination::Known(None))
+                };
                 let attack_distance = self
                     .distance_between(attacker_idx, defender_idx)
                     .unwrap_or(distance);
@@ -2365,7 +2600,7 @@ impl SimState {
                     .state
                     .tactical_give_ground_defense_bonus = 0;
                 self.combatants[defender_idx].state.tactical_retreat = None;
-                let six_paths_followup = event.hit && !event.is_ranged;
+                let six_paths_followup = six_paths && event.hit && !event.is_ranged;
                 if attack_mode == AttackMode::HoldAtBay && self.hold_at_bay.pending {
                     if event.hit {
                         self.hold_at_bay.active = true;
@@ -2374,7 +2609,7 @@ impl SimState {
                         self.hold_at_bay = HoldAtBayState::default();
                     }
                 }
-                if event.shield_block {
+                if twelve_paths && event.shield_block {
                     self.apply_shield_strike_speedup(event.defender_idx, now);
                 }
                 self.record_attack_metrics(RecordedAttackMetrics::from_attack(&event));
@@ -2402,7 +2637,7 @@ impl SimState {
                         defender_idx: event.defender_idx,
                         kind: CombatEventKind::Attack(AttackEvent {
                             source: crate::core::sim::AttackSource::Weapon,
-                            damage_source: event.damage_source.clone(),
+                            damage_source: event.damage_source.describe(),
                             called_shot: self.combatants[attacker_idx].sheet.maneuvers.called_shot,
                             hit: event.hit,
                             shield_block: event.shield_block,
@@ -2433,10 +2668,10 @@ impl SimState {
                     .into_iter()
                     .chain(event.additional_counters.drain(..))
                 {
-                    if counter.shield_block {
+                    if twelve_paths && counter.shield_block {
                         self.apply_shield_strike_speedup(counter.defender_idx, now);
                     }
-                    if counter.hit && !counter.is_ranged {
+                    if six_paths && counter.hit && !counter.is_ranged {
                         self.apply_six_paths_followup(counter.attacker_idx, now);
                     }
                     self.record_attack_metrics(RecordedAttackMetrics::from_counter(&counter));
@@ -2462,7 +2697,7 @@ impl SimState {
                             defender_idx: counter.defender_idx,
                             kind: CombatEventKind::Attack(AttackEvent {
                                 source: crate::core::sim::AttackSource::Weapon,
-                                damage_source: counter.damage_source.clone(),
+                                damage_source: counter.damage_source.describe(),
                                 called_shot: false,
                                 hit: counter.hit,
                                 shield_block: counter.shield_block,
@@ -2539,7 +2774,7 @@ impl SimState {
                 self.combatants[attacker_idx]
                     .state
                     .tactical_next_attack_penalty = 0;
-                self.combatants[attacker_idx].activate_tactical_profile(false);
+                self.restore_attack_profile(attacker_idx);
                 if six_paths_followup {
                     self.apply_six_paths_followup(attacker_idx, now);
                 }
@@ -2609,7 +2844,11 @@ impl SimState {
                     {
                         2.0
                     } else {
-                        2.0 + (primary_speed_base / 2.0).ceil()
+                        let speed = scheduled_primary_speed.unwrap_or_else(|| {
+                            let actor = &self.combatants[attacker_idx];
+                            actor.apply_f32(StatIdF32::WeaponSpeed, actor.sheet.offense.weapon.speed).max(1.0)
+                        });
+                        2.0 + (speed / 2.0).ceil()
                     };
                     let offset = if faster_against_unarmed(
                         weapon, &self.combatants[defender_idx], use_ranged,
@@ -2644,7 +2883,7 @@ impl SimState {
                 };
                 if now + 0.0001 >= next_attack {
                     self.combatants[attacker_idx].state.aggressive_maneuvers_locked = false;
-                    if self.apply_incoming_attack_tactics(
+                    if self.reaction_possible(defender_idx) && self.apply_incoming_attack_tactics(
                         attacker_idx,
                         defender_idx,
                         AttackMode::Normal,
@@ -2656,16 +2895,11 @@ impl SimState {
                     ) {
                         continue;
                     }
-                    let defender_evasion =
-                        self.precognition_evasion_destination(defender_idx, attacker_idx);
-                    let attacker_evasion =
-                        self.precognition_evasion_destination(attacker_idx, defender_idx);
-                    self.combatants[defender_idx]
-                        .state
-                        .precognition_space_available = defender_evasion.is_some();
-                    self.combatants[attacker_idx]
-                        .state
-                        .precognition_space_available = attacker_evasion.is_some();
+                    let (defender_evasion, attacker_evasion) = if precognition {
+                        (self.prepare_escape(defender_idx, attacker_idx), self.prepare_escape(attacker_idx, defender_idx))
+                    } else {
+                        (EscapeDestination::Known(None), EscapeDestination::Known(None))
+                    };
                     let attack_distance = self
                         .distance_between(attacker_idx, defender_idx)
                         .unwrap_or(distance);
@@ -2687,8 +2921,8 @@ impl SimState {
                         .state
                         .tactical_give_ground_defense_bonus = 0;
                     self.combatants[defender_idx].state.tactical_retreat = None;
-                    let six_paths_followup = event.hit && !event.is_ranged;
-                    if event.shield_block {
+                    let six_paths_followup = six_paths && event.hit && !event.is_ranged;
+                    if twelve_paths && event.shield_block {
                         self.apply_shield_strike_speedup(event.defender_idx, now);
                     }
                     self.record_attack_metrics(RecordedAttackMetrics::from_attack(&event));
@@ -2720,7 +2954,7 @@ impl SimState {
                             defender_idx: event.defender_idx,
                             kind: CombatEventKind::Attack(AttackEvent {
                                 source: crate::core::sim::AttackSource::Weapon,
-                                damage_source: event.damage_source.clone(),
+                                damage_source: event.damage_source.describe(),
                                 called_shot: self.combatants[attacker_idx].sheet.maneuvers.called_shot,
                                 hit: event.hit,
                                 shield_block: event.shield_block,
@@ -2751,10 +2985,10 @@ impl SimState {
                         .into_iter()
                         .chain(event.additional_counters.drain(..))
                     {
-                        if counter.shield_block {
+                        if twelve_paths && counter.shield_block {
                             self.apply_shield_strike_speedup(counter.defender_idx, now);
                         }
-                        if counter.hit && !counter.is_ranged {
+                        if six_paths && counter.hit && !counter.is_ranged {
                             self.apply_six_paths_followup(counter.attacker_idx, now);
                         }
                         self.record_attack_metrics(RecordedAttackMetrics::from_counter(&counter));
@@ -2780,7 +3014,7 @@ impl SimState {
                                 defender_idx: counter.defender_idx,
                                 kind: CombatEventKind::Attack(AttackEvent {
                                     source: crate::core::sim::AttackSource::Weapon,
-                                    damage_source: counter.damage_source.clone(),
+                                    damage_source: counter.damage_source.describe(),
                                     called_shot: false,
                                     hit: counter.hit,
                                     shield_block: counter.shield_block,
@@ -3853,10 +4087,6 @@ struct DetailedTeamAccumulator {
     hp_damage_histogram: BTreeMap<u64, u64>,
 }
 
-fn add_histogram_sample(histogram: &mut BTreeMap<u64, u64>, value: u64) {
-    *histogram.entry(value).or_insert(0) += 1;
-}
-
 fn histogram_count(histogram: &BTreeMap<u64, u64>) -> u64 {
     histogram.values().copied().sum()
 }
@@ -4076,6 +4306,60 @@ pub fn bulk_simulate_with_seed_controlled(
         .map(BulkSimBatch::finish)
 }
 
+/// Immutable inputs shared by all ranges belonging to one simulation request.
+#[derive(Clone, Debug)]
+pub struct PreparedBulkSimulation {
+    config: SimConfig,
+    fighters: Vec<Combatant>,
+    context: std::sync::Arc<BulkContext>,
+    positions: std::sync::Arc<[SimActor]>,
+    fighter_teams: Vec<usize>,
+    team_ids: Vec<u8>,
+    team_has_shield: Vec<bool>,
+    team_has_eyesmite: Vec<bool>,
+    shields_present: bool,
+}
+
+impl PreparedBulkSimulation {
+    pub fn new(config: SimConfig, combatants: Vec<Combatant>) -> Self {
+        let shields_present = combatants
+            .iter()
+            .any(|combatant| combatant.sheet.defense.shield_name.is_some());
+        let mut team_ids: Vec<u8> = combatants
+            .iter()
+            .map(|combatant| combatant.team_id)
+            .collect();
+        team_ids.sort_unstable();
+        team_ids.dedup();
+        let fighter_teams = combatants.iter().map(|c| team_ids.binary_search(&c.team_id).unwrap()).collect();
+        let team_has_shield: Vec<bool> = team_ids
+            .iter()
+            .map(|team_id| {
+                combatants.iter().any(|combatant| {
+                    combatant.team_id == *team_id && combatant.sheet.defense.shield_name.is_some()
+                })
+            })
+            .collect();
+        let team_has_eyesmite: Vec<bool> = team_ids
+            .iter()
+            .map(|team_id| {
+                combatants
+                    .iter()
+                    .any(|combatant| combatant.team_id == *team_id && combatant.sheet.defense.eyesmite)
+            })
+            .collect();
+        let positions = SimState::layout(config, &combatants).into();
+        let context = BulkContext::for_grid(&combatants, config.tile_size_ft).into();
+        Self { config, fighters: combatants, context, positions, fighter_teams,
+            team_ids, team_has_shield, team_has_eyesmite, shields_present }
+    }
+
+    pub fn run_range(&self, runs: u32, max_seconds: u32, seed: u64, first_run: u32,
+        keep_running: impl FnMut(u32) -> bool) -> Option<BulkSimBatch> {
+        simulate_prepared(self, runs, max_seconds, seed, Some(first_run), keep_running)
+    }
+}
+
 fn bulk_simulate_batch_inner(
     config: SimConfig,
     combatants: Vec<Combatant>,
@@ -4083,45 +4367,30 @@ fn bulk_simulate_batch_inner(
     max_seconds: u32,
     seed: u64,
     first_run: Option<u32>,
-    mut keep_running: impl FnMut(u32) -> bool,
+    keep_running: impl FnMut(u32) -> bool,
 ) -> Option<BulkSimBatch> {
     if runs == 0 {
         return Some(BulkSimBatch::default());
     }
-    let shields_present = combatants
-        .iter()
-        .any(|combatant| combatant.sheet.defense.shield_name.is_some());
-    let mut team_ids: Vec<u8> = combatants
-        .iter()
-        .map(|combatant| combatant.team_id)
-        .collect();
-    team_ids.sort_unstable();
-    team_ids.dedup();
-    let mut team_index = HashMap::new();
-    for (idx, team_id) in team_ids.iter().enumerate() {
-        team_index.insert(*team_id, idx);
-    }
-    let team_has_shield: Vec<bool> = team_ids
-        .iter()
-        .map(|team_id| {
-            combatants.iter().any(|combatant| {
-                combatant.team_id == *team_id && combatant.sheet.defense.shield_name.is_some()
-            })
-        })
-        .collect();
-    let team_has_eyesmite: Vec<bool> = team_ids
-        .iter()
-        .map(|team_id| {
-            combatants
-                .iter()
-                .any(|combatant| combatant.team_id == *team_id && combatant.sheet.defense.eyesmite)
-        })
-        .collect();
-    let initial_combatants = first_run.map(|_| combatants.clone());
-    let mut sim = SimState::with_rng(config, SimRng::from_seed(seed));
+    let prepared = PreparedBulkSimulation::new(config, combatants);
+    simulate_prepared(&prepared, runs, max_seconds, seed, first_run, keep_running)
+}
+
+fn simulate_prepared(
+    prepared: &PreparedBulkSimulation, runs: u32, max_seconds: u32, seed: u64,
+    first_run: Option<u32>, mut keep_running: impl FnMut(u32) -> bool,
+) -> Option<BulkSimBatch> {
+    if runs == 0 { return Some(BulkSimBatch::default()); }
+    let team_ids = &prepared.team_ids;
+    let team_has_shield = &prepared.team_has_shield;
+    let team_has_eyesmite = &prepared.team_has_eyesmite;
+    let shields_present = prepared.shields_present;
+    let mut sim = SimState::with_rng(prepared.config, SimRng::from_seed(seed));
     sim.log_events = false;
     sim.collect_detailed_metrics = true;
-    sim.reset_with_combatants(combatants);
+    sim.bulk = Some(prepared.context.clone());
+    sim.initial_positions = Some(prepared.positions.clone());
+    sim.combatants = prepared.fighters.clone();
     let mut wins = vec![0u32; team_ids.len()];
     let mut ties = 0u32;
     let mut fights_with_second_charge = 0u32;
@@ -4150,8 +4419,8 @@ fn bulk_simulate_batch_inner(
     let mut shield_breaks = 0u32;
     let mut total_hits_shield_survived = 0u64;
     let mut total_seconds = 0u64;
-    let mut duration_histogram = BTreeMap::new();
-    let mut detailed_accumulators: Vec<DetailedTeamAccumulator> = team_ids
+    let mut duration_histogram = DenseHistogram::default();
+    let detailed_accumulators: Vec<DetailedTeamAccumulator> = team_ids
         .iter()
         .enumerate()
         .map(|(idx, team_id)| DetailedTeamAccumulator {
@@ -4161,9 +4430,7 @@ fn bulk_simulate_batch_inner(
             ..DetailedTeamAccumulator::default()
         })
         .collect();
-    let mut first_attack_by_team = vec![None::<u32>; team_ids.len()];
-    let mut last_attack_by_combatant = vec![None::<u32>; sim.combatants.len()];
-    let mut trauma_inflicted_by_team = vec![false; team_ids.len()];
+    sim.bulk_metrics = Some(Box::new(BulkMetrics::new(detailed_accumulators, prepared.fighter_teams.clone())));
     let mut remaining_hp_by_team = vec![0u64; team_ids.len()];
     let mut shield_broke_by_team = vec![false; team_ids.len()];
     for run_idx in 0..runs {
@@ -4174,177 +4441,50 @@ fn bulk_simulate_batch_inner(
             sim.rng = SimRng::from_seed(bulk_parallel::fight_seed(seed, first_run.wrapping_add(run_idx)));
             // Tactics and weapon changes may leave a different sheet selected.
             // Restore the same inputs before every independently seeded fight.
-            sim.combatants.clone_from(initial_combatants.as_ref().unwrap());
+            for (actor, initial) in sim.combatants.iter_mut().zip(&prepared.fighters) {
+                // Alternate equipment restores its full starting profile in reset_state.
+                if actor.weapon_setups.is_none() {
+                    if !actor.tactical_profiles.is_empty() {
+                        actor.sheet.clone_from(&initial.sheet);
+                        actor.active_style_ids.clone_from(&initial.active_style_ids);
+                        actor.weapon_group.clone_from(&initial.weapon_group);
+                        actor.armor_type.clone_from(&initial.armor_type);
+                    }
+                    actor.active_fight_defensively_penalty = initial.active_fight_defensively_penalty;
+                    actor.sheet.maneuvers.called_shot = initial.sheet.maneuvers.called_shot;
+                }
+            }
         }
         sim.reset_preserve_rng();
+        for (i, actor) in sim.combatants.iter_mut().enumerate() {
+            let profile = &prepared.context.prepared[i];
+            actor.state.prepared = Some(if first_run.is_none() && actor.weapon_setups.is_none() && !actor.tactical_profiles.is_empty() {
+                super::prepared_fighter::PreparedFighter::new(&actor.sheet, profile.knockback.weapon_adjustment).into()
+            } else { profile.clone() });
+        }
+        sim.bulk_metrics.as_mut().expect("bulk metrics").begin_fight();
         while !sim.done && sim.elapsed_seconds < max_seconds {
             if sim.elapsed_seconds.is_multiple_of(64) && !keep_running(run_idx) {
                 return None;
             }
             sim.tick();
+            sim.skip_stationary_recovery(max_seconds);
         }
         let duration = sim.elapsed_seconds;
-        add_histogram_sample(&mut duration_histogram, u64::from(duration));
+        duration_histogram.add(u64::from(duration));
         total_seconds += duration as u64;
         shortest_duration = shortest_duration.min(duration);
         longest_duration = longest_duration.max(duration);
-        let mut winning_team_idx = None;
-        if sim.done {
-            let mut alive_teams = HashSet::new();
-            for combatant in &sim.combatants {
-                if combatant.state.hp > 0 {
-                    alive_teams.insert(combatant.team_id);
-                }
-            }
-            if alive_teams.len() == 1 {
-                if let Some(team_id) = alive_teams.iter().next() {
-                    if let Some(&idx) = team_index.get(team_id) {
-                        wins[idx] += 1;
-                        detailed_accumulators[idx].wins += 1;
-                        winning_team_idx = Some(idx);
-                    } else {
-                        ties += 1;
-                    }
-                } else {
-                    ties += 1;
-                }
-            } else {
-                ties += 1;
-            }
-        } else {
-            ties += 1;
-        }
-        if sim
-            .combatants
-            .iter()
-            .any(|combatant| combatant.state.charge_attacks >= 2)
-        {
-            fights_with_second_charge += 1;
-        }
-        if sim
-            .combatants
-            .iter()
-            .any(|combatant| combatant.state.saw_trauma)
-        {
-            fights_with_trauma += 1;
-        }
-        if sim.trauma_first_exchange {
-            fights_with_trauma_first_exchange += 1;
-        }
-        if sim
-            .combatants
-            .iter()
-            .any(|combatant| combatant.state.max_knockback_ft >= 20.0)
-        {
-            fights_with_knockback_20ft += 1;
-        }
-        if sim
-            .combatants
-            .iter()
-            .any(|combatant| combatant.state.charge_started_within_20ft)
-        {
-            fights_with_charge_within_20ft += 1;
-        }
-        first_attack_by_team.fill(None);
-        last_attack_by_combatant.fill(None);
-        trauma_inflicted_by_team.fill(false);
-        for sample in &sim.attack_metrics {
-            let Some(attacker) = sim.combatants.get(sample.attacker_idx) else {
-                continue;
-            };
-            let Some(defender) = sim.combatants.get(sample.defender_idx) else {
-                continue;
-            };
-            let Some(&attacker_team_idx) = team_index.get(&attacker.team_id) else {
-                continue;
-            };
-            let Some(&defender_team_idx) = team_index.get(&defender.team_id) else {
-                continue;
-            };
-            let attacker_stats = &mut detailed_accumulators[attacker_team_idx];
-            if let Some(total) = attacker_stats.damage_by_source.get_mut(&sample.damage_source) {
-                *total += u64::from(sample.hp_damage);
-            } else {
-                attacker_stats.damage_by_source.insert(
-                    sample.damage_source.clone(), u64::from(sample.hp_damage),
-                );
-            }
-            attacker_stats.attack_attempts = attacker_stats.attack_attempts.saturating_add(1);
-            if sample.direct_hit {
-                attacker_stats.direct_hits = attacker_stats.direct_hits.saturating_add(1);
-            }
-            if sample.shield_block {
-                attacker_stats.shield_blocks = attacker_stats.shield_blocks.saturating_add(1);
-            }
-            if sample.hp_damage > 0 {
-                attacker_stats.hp_hits = attacker_stats.hp_hits.saturating_add(1);
-                add_histogram_sample(
-                    &mut attacker_stats.hp_damage_histogram,
-                    u64::from(sample.hp_damage),
-                );
-            }
-            if sample.critical {
-                attacker_stats.critical_hits = attacker_stats.critical_hits.saturating_add(1);
-            }
-            if sample.knockback_ft >= 10.0 {
-                attacker_stats.knockbacks_10ft = attacker_stats.knockbacks_10ft.saturating_add(1);
-            }
-            if sample.killing_blow {
-                attacker_stats.kills = attacker_stats.kills.saturating_add(1);
-            }
-            attacker_stats.total_hp_damage = attacker_stats
-                .total_hp_damage
-                .saturating_add(u64::from(sample.hp_damage));
-            if sample.trauma_applied {
-                attacker_stats.trauma_events_inflicted =
-                    attacker_stats.trauma_events_inflicted.saturating_add(1);
-                trauma_inflicted_by_team[attacker_team_idx] = true;
-            }
-            first_attack_by_team[attacker_team_idx] = Some(
-                first_attack_by_team[attacker_team_idx]
-                    .map_or(sample.time, |current| current.min(sample.time)),
-            );
-            if let Some(last_time) = last_attack_by_combatant[sample.attacker_idx] {
-                attacker_stats.attack_interval_seconds_total = attacker_stats
-                    .attack_interval_seconds_total
-                    .saturating_add(u64::from(sample.time.saturating_sub(last_time)));
-                attacker_stats.attack_intervals = attacker_stats.attack_intervals.saturating_add(1);
-            }
-            last_attack_by_combatant[sample.attacker_idx] = Some(sample.time);
-
-            let defender_stats = &mut detailed_accumulators[defender_team_idx];
-            defender_stats.total_incoming_raw_damage = defender_stats
-                .total_incoming_raw_damage
-                .saturating_add(u64::from(sample.raw_damage));
-            defender_stats.total_armor_prevented = defender_stats
-                .total_armor_prevented
-                .saturating_add(u64::from(sample.armor_prevented));
-            defender_stats.total_shield_prevented = defender_stats
-                .total_shield_prevented
-                .saturating_add(u64::from(sample.shield_prevented));
-            defender_stats.total_hp_damage_taken = defender_stats
-                .total_hp_damage_taken
-                .saturating_add(u64::from(sample.hp_damage));
-            if sample.shield_broken {
-                defender_stats.shield_breaks = defender_stats.shield_breaks.saturating_add(1);
-                defender_stats.total_hits_shield_survived_before_break = defender_stats
-                    .total_hits_shield_survived_before_break
-                    .saturating_add(u64::from(sample.shield_hits_survived_before_break));
-                add_histogram_sample(
-                    &mut defender_stats.shield_hits_before_break_histogram,
-                    u64::from(sample.shield_hits_survived_before_break),
-                );
-                defender_stats.shield_break_seconds_total = defender_stats
-                    .shield_break_seconds_total
-                    .saturating_add(u64::from(sample.time));
-                add_histogram_sample(
-                    &mut defender_stats.shield_break_time_histogram,
-                    u64::from(sample.time),
-                );
-            }
-        }
+        let mut living_team = None;
+        let mut multiple_teams = false;
+        let mut second_charge = false;
+        let mut trauma = false;
+        let mut long_knockback = false;
+        let mut close_charge = false;
+        let metrics = sim.bulk_metrics.as_mut().expect("bulk metrics");
+        let detailed_accumulators = &mut metrics.teams;
         for team_idx in 0..team_ids.len() {
-            if let Some(first_attack) = first_attack_by_team[team_idx] {
+            if let Some(first_attack) = metrics.first_attack[team_idx] {
                 detailed_accumulators[team_idx].first_attack_seconds_total = detailed_accumulators
                     [team_idx]
                     .first_attack_seconds_total
@@ -4354,7 +4494,7 @@ fn bulk_simulate_batch_inner(
                     .fights_with_attack
                     .saturating_add(1);
             }
-            if trauma_inflicted_by_team[team_idx] {
+            if metrics.trauma_inflicted[team_idx] {
                 detailed_accumulators[team_idx].fights_with_trauma_inflicted =
                     detailed_accumulators[team_idx]
                         .fights_with_trauma_inflicted
@@ -4364,11 +4504,17 @@ fn bulk_simulate_batch_inner(
         let mut fight_max_knockback_side = 0.0f32;
         remaining_hp_by_team.fill(0);
         shield_broke_by_team.fill(false);
-        for combatant in &sim.combatants {
-            let Some(&team_idx) = team_index.get(&combatant.team_id) else {
-                continue;
-            };
+        for (fighter_idx, combatant) in sim.combatants.iter().enumerate() {
+            let team_idx = prepared.fighter_teams[fighter_idx];
             let state = &combatant.state;
+            if state.hp > 0 {
+                multiple_teams |= living_team.is_some_and(|team| team != team_idx);
+                living_team = Some(team_idx);
+            }
+            second_charge |= state.charge_attacks >= 2;
+            trauma |= state.saw_trauma;
+            long_knockback |= state.max_knockback_ft >= 20.0;
+            close_charge |= state.charge_started_within_20ft;
             highest_single_crit_hit = highest_single_crit_hit.max(state.max_crit_hit_dealt);
             highest_single_noncrit_hit =
                 highest_single_noncrit_hit.max(state.max_noncrit_hit_dealt);
@@ -4417,23 +4563,26 @@ fn bulk_simulate_batch_inner(
                     .saturating_add(1);
             }
         }
-        if let Some(team_idx) = winning_team_idx {
+        fights_with_second_charge += u32::from(second_charge);
+        fights_with_trauma += u32::from(trauma);
+        fights_with_trauma_first_exchange += u32::from(sim.trauma_first_exchange);
+        fights_with_knockback_20ft += u32::from(long_knockback);
+        fights_with_charge_within_20ft += u32::from(close_charge);
+        if let Some(team_idx) = living_team.filter(|_| sim.done && !multiple_teams) {
+            wins[team_idx] += 1;
+            detailed_accumulators[team_idx].wins += 1;
             let remaining_hp = remaining_hp_by_team[team_idx];
             detailed_accumulators[team_idx].winning_hp_total = detailed_accumulators[team_idx]
                 .winning_hp_total
                 .saturating_add(remaining_hp);
-            add_histogram_sample(
-                &mut detailed_accumulators[team_idx].winning_hp_histogram,
-                remaining_hp,
-            );
+            metrics.winning_hp[team_idx].add(remaining_hp);
             detailed_accumulators[team_idx].winning_duration_seconds_total = detailed_accumulators
                 [team_idx]
                 .winning_duration_seconds_total
                 .saturating_add(u64::from(duration));
-            add_histogram_sample(
-                &mut detailed_accumulators[team_idx].winning_duration_seconds_histogram,
-                u64::from(duration),
-            );
+            metrics.winning_time[team_idx].add(u64::from(duration));
+        } else {
+            ties += 1;
         }
         max_total_knockback_one_side_ft =
             max_total_knockback_one_side_ft.max(fight_max_knockback_side);
@@ -4479,8 +4628,8 @@ fn bulk_simulate_batch_inner(
         total_remaining_hp_by_team,
         max_total_knockback_one_side_ft,
         total_max_knockback_one_side_ft,
-        duration_histogram,
-        detailed_accumulators,
+        duration_histogram: duration_histogram.finish(),
+        detailed_accumulators: sim.bulk_metrics.take().expect("bulk metrics").finish(),
     })
 }
 

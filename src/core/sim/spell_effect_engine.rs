@@ -45,6 +45,66 @@ impl SimState {
         if ticks == 0 {
             return self.nearest_spell_enemy(caster, range);
         }
+        if let Some(distance) = self.forecast_melee_distance(caster, request, ticks) {
+            return (distance <= range).then_some(1 - caster);
+        }
+        self.predict_target_with_arena(caster, request, range, ticks)
+    }
+
+    // With two closing melee fighters, every legal step toward the enemy removes
+    // one Manhattan tile. Predict separation alone, preserving fractional cast
+    // movement and the second when closing changes from maximum to minimum reach.
+    fn forecast_melee_distance(&self, caster: usize, request: &SpellRequest, ticks: u32) -> Option<f32> {
+        if self.config.tile_size_ft != 1.0 || self.actors.len() != 2 || self.combatants.len() != 2
+            || self.active_pair() != Some((0, 1)) || self.hold_at_bay.active || self.hold_at_bay.pending
+            || self.elapsed_seconds.checked_add(ticks).is_none()
+        { return None; }
+        let mut reach = [0.0; 2];
+        let mut rates = [0.0; 2];
+        for (i, c) in self.combatants.iter().enumerate() {
+            let pos = self.actors[i].position;
+            let m = &c.state.magic;
+            if pos != pos.clamp(self.config.grid_width, self.config.grid_height)
+                || c.weapon_setups.is_some() || c.state.weapon_setup.pending.is_some()
+                || c.sheet.maneuvers.hold_at_bay || c.sheet.defense.eyesmite || c.racial_actions_blocked()
+                || c.state.trauma_remaining_seconds > 0 || !c.state.active_effects.is_empty()
+                || m.casting.is_some() || m.channeling.is_some() || m.fatigue.is_some()
+                || max_range_for_weapon(&c.sheet.offense.weapon).is_some() { return None; }
+            reach[i] = c.apply_f32(StatIdF32::WeaponReach, c.sheet.offense.weapon.reach_ft).max(1.0);
+            if !c.sheet.maneuvers.passive {
+                rates[i] = c.apply_f32(StatIdF32::MoveSpeed, c.sheet.mobility.move_speed).max(0.0);
+            }
+        }
+        let c = &self.combatants[caster];
+        request.definition.components.validate(c.magic.talents, !c.magic.loadout.arms_restricted,
+            !c.magic.loadout.silenced, false).ok()?;
+        rates[caster] = rates[caster].min(5.0);
+        let mut distance = self.grid_distance_tiles(0, 1)?;
+        if distance >= (1 << 23) { return None; }
+        for dt in 0..ticks {
+            if distance as f32 <= reach[0].min(reach[1]) { break; }
+            let now = self.elapsed_seconds + dt;
+            let steps = [0, 1].map(|i| {
+                if self.combatants[i].state.knockback_immobile_seconds as i64 > i64::from(dt) + 1 || rates[i] == 0.0 { 0 }
+                else if i == caster {
+                    (((now + 1) as f32 * rates[i]).floor() - (now as f32 * rates[i]).floor()) as i32
+                } else { (rates[i].round() as i32).max(1) }
+            });
+            let max_reach = reach[0].max(reach[1]);
+            if distance as f32 > max_reach {
+                // Match the arena's f32 subtraction before it allocates the closing steps.
+                let closure = (distance as f32 - max_reach).ceil() as i32;
+                let available = steps[0].checked_add(steps[1])?;
+                distance -= closure.min(distance - max_reach.floor() as i32).min(available);
+            } else {
+                let shorter = usize::from(reach[1] < reach[0]);
+                distance -= (distance - reach[shorter].floor() as i32).min(steps[shorter]);
+            }
+        }
+        Some(distance as f32)
+    }
+
+    fn predict_target_with_arena(&self, caster: usize, request: &SpellRequest, range: f32, ticks: u32) -> Option<usize> {
         let mut forecast = Self {
             actors: self.actors.clone(),
             combatants: self.combatants.clone(),
@@ -88,7 +148,8 @@ impl SimState {
         let reach = actor
             .apply_f32(StatIdF32::WeaponReach, actor.sheet.offense.weapon.reach_ft)
             .max(1.0);
-        for spell in spell_catalog() {
+        let plan = actor.state.magic.spell_plan.clone();
+        for spell in super::super::magic::PreparedSpellPolicies::candidates(plan.as_ref()) {
             let actor = &self.combatants[caster];
             if !actor.magic.loadout.knows_spell(&spell.id) {
                 continue;
@@ -123,7 +184,13 @@ impl SimState {
             {
                 continue;
             }
-            let Ok(request) = SpellRequest::from_loadout(&spell.id, &actor.magic.loadout) else {
+            if self.bulk.is_some() && actor.magic.loadout.auto_cast == crate::core::magic::AutoCast::SpellPolicies {
+                let repeat_needs_range = ai == SpellCastAi::AsOftenAsPossible &&
+                    (spell.kind != SpellKind::EchoStrike || actor.state.magic.started_spells.contains(&spell.id));
+                let targeted = spell.mechanics.as_ref().is_some_and(|m| m.target == crate::core::magic::EffectTarget::Enemy);
+                if !repeat_needs_range && !targeted { continue; }
+            }
+            let Ok(request) = SpellRequest::from_catalog(spell, &actor.magic.loadout) else {
                 continue;
             };
             let range = match &request.effect {
@@ -172,9 +239,7 @@ impl SimState {
 
     fn record_spell_miss(&mut self, caster: usize, target: usize, spell: &ConfiguredEffect) {
         self.record_attack_metrics(RecordedAttackMetrics {
-            damage_source: DamageSource::Spell {
-                name: spell.name.clone(),
-            },
+            damage_source: ImpactSource::spell(spell),
             attacker_idx: caster,
             defender_idx: target,
             hp_damage: 0,
@@ -214,17 +279,19 @@ impl SimState {
         let attack = a.caster_magic_save_bonus(ability);
         let defense = self.combatants[target].magic_save_bonus(kind, SpellTags::default());
         let save = roll_magic_save(attack, defense, &mut self.rng);
-        self.effect_message(
-            caster,
-            format!(
-                "{}: {:?} save {} vs {} — {}",
-                self.combatants[target].sheet.name,
-                kind,
-                save.target_total,
-                save.caster_total,
-                if save.saved { "saved" } else { "failed" }
-            ),
-        );
+        if self.bulk.is_none() {
+            self.effect_message(
+                caster,
+                format!(
+                    "{}: {:?} save {} vs {} — {}",
+                    self.combatants[target].sheet.name,
+                    kind,
+                    save.target_total,
+                    save.caster_total,
+                    if save.saved { "saved" } else { "failed" }
+                ),
+            );
+        }
         save.saved
     }
 
@@ -290,13 +357,15 @@ impl SimState {
                     penetrating_roll(attack.defense_die, &mut self.rng) + attack.defense_bonus;
                 if roll <= defense {
                     self.record_spell_miss(caster, target, spell);
-                    self.effect_message(
-                        caster,
-                        format!(
-                            "{} misses {} (attack {roll}, defense {defense})",
-                            spell.name, self.combatants[target].sheet.name
-                        ),
-                    );
+                    if self.bulk.is_none() {
+                        self.effect_message(
+                            caster,
+                            format!(
+                                "{} misses {} (attack {roll}, defense {defense})",
+                                spell.name, self.combatants[target].sheet.name
+                            ),
+                        );
+                    }
                     return;
                 }
             }
@@ -361,9 +430,7 @@ impl SimState {
             );
         }
         self.record_attack_metrics(RecordedAttackMetrics {
-            damage_source: DamageSource::Spell {
-                name: spell.name.clone(),
-            },
+            damage_source: ImpactSource::spell(spell),
             attacker_idx: caster,
             defender_idx: target,
             hp_damage: damage,
@@ -387,17 +454,19 @@ impl SimState {
             },
             shield_prevented: 0,
         });
-        self.effect_message(
-            caster,
-            format!(
-                "{} hits {}: {} {}damage{}",
-                spell.name,
-                self.combatants[target].sheet.name,
-                if phantom { wound } else { damage },
-                if phantom { "phantom " } else { "" },
-                if trauma.is_some() { "; trauma" } else { "" }
-            ),
-        );
+        if self.bulk.is_none() {
+            self.effect_message(
+                caster,
+                format!(
+                    "{} hits {}: {} {}damage{}",
+                    spell.name,
+                    self.combatants[target].sheet.name,
+                    if phantom { wound } else { damage },
+                    if phantom { "phantom " } else { "" },
+                    if trauma.is_some() { "; trauma" } else { "" }
+                ),
+            );
+        }
     }
 
     fn push_spell_target(&mut self, caster: usize, target: usize, feet: f32) {
@@ -443,13 +512,15 @@ impl SimState {
         buff.strength_score_override = Some(score);
         buff.consume_on_attack = *consume_on_attack;
         self.combatants[caster].state.add_effect(buff);
-        self.effect_message(
-            caster,
-            format!(
-                "{}: Strength {}/{:02} for {}s",
-                spell.name, score.base, score.percentile, spell.duration
-            ),
-        );
+        if self.bulk.is_none() {
+            self.effect_message(
+                caster,
+                format!(
+                    "{}: Strength {}/{:02} for {}s",
+                    spell.name, score.base, score.percentile, spell.duration
+                ),
+            );
+        }
     }
 
     pub(super) fn resolve_configured_effect(&mut self, caster: usize, spell: ConfiguredEffect) {
@@ -460,6 +531,11 @@ impl SimState {
             .active_effects
             .retain(|b| b.id != id);
         self.resolve_effect_rule(caster, spell);
+        if self.bulk.is_some() && self.combatants[caster].state.magic.has_fields() {
+            if let Err(at) = self.active_field_owners.binary_search(&caster) {
+                self.active_field_owners.insert(at, caster);
+            }
+        }
         if self.combatants[caster].state.has_active_effect(&id)
             && !self.combatants[caster]
                 .state
@@ -496,10 +572,12 @@ impl SimState {
         let Some(target) =
             target.filter(|&t| t < self.combatants.len() && self.combatants[t].state.hp > 0)
         else {
-            self.effect_message(
-                caster,
-                format!("{} dissipates: target unavailable", spell.name),
-            );
+            if self.bulk.is_none() {
+                self.effect_message(
+                    caster,
+                    format!("{} dissipates: target unavailable", spell.name),
+                );
+            }
             if spell.channelled() {
                 let _ = self.combatants[caster].stop_channeling(self.elapsed_seconds);
             }
@@ -510,10 +588,12 @@ impl SimState {
                 .distance_between(caster, target)
                 .is_none_or(|d| d > spell.range)
         {
-            self.effect_message(
-                caster,
-                format!("{} misses: target out of range", spell.name),
-            );
+            if self.bulk.is_none() {
+                self.effect_message(
+                    caster,
+                    format!("{} misses: target out of range", spell.name),
+                );
+            }
             if spell.channelled() {
                 let _ = self.combatants[caster].stop_channeling(self.elapsed_seconds);
             }
@@ -606,13 +686,15 @@ impl SimState {
                         false,
                     );
                 }
-                self.effect_message(
-                    caster,
-                    format!(
-                        "{} moves {} up to {feet:.2} feet (grid limited)",
-                        spell.name, self.combatants[moved].sheet.name
-                    ),
-                );
+                if self.bulk.is_none() {
+                    self.effect_message(
+                        caster,
+                        format!(
+                            "{} moves {} up to {feet:.2} feet (grid limited)",
+                            spell.name, self.combatants[moved].sheet.name
+                        ),
+                    );
+                }
             }
             EffectRule::Damage {
                 delivery: DamageDelivery::Volley,
@@ -789,7 +871,11 @@ impl SimState {
     }
 
     pub(super) fn advance_effect_fields(&mut self) {
-        for caster in 0..self.combatants.len() {
+        let bulk = self.bulk.is_some();
+        let count = if bulk { self.active_field_owners.len() } else { self.combatants.len() };
+        for index in 0..count {
+            let caster = if bulk { self.active_field_owners[index] } else { index };
+            if !self.combatants[caster].state.magic.has_fields() { continue; }
             let objects = std::mem::take(&mut self.combatants[caster].state.magic.charged_objects);
             for object in objects {
                 if self.elapsed_seconds < object.detonates_at {
@@ -869,7 +955,7 @@ impl SimState {
                     let y = (pos.y - field.origin.y) as f32 * self.config.tile_size_ft;
                     let along = x * field.direction.0 + y * field.direction.1;
                     let across = (x * field.direction.1 - y * field.direction.0).abs();
-                    let previous = self.previous_positions.get(target).copied().unwrap_or(pos);
+                    let previous = self.previous_positions.as_slice().get(target).copied().unwrap_or(pos);
                     let px = (previous.x - field.origin.x) as f32 * self.config.tile_size_ft;
                     let py = (previous.y - field.origin.y) as f32 * self.config.tile_size_ft;
                     let before = px * field.direction.0 + py * field.direction.1 - near;
@@ -979,13 +1065,15 @@ impl SimState {
                         self.deal_spell_wound(caster, target, &fists.spell, raw);
                     } else {
                         self.record_spell_miss(caster, target, &fists.spell);
-                        self.effect_message(
-                            caster,
-                            format!(
-                                "{} misses {}",
-                                fists.spell.name, self.combatants[target].sheet.name
-                            ),
-                        );
+                        if self.bulk.is_none() {
+                            self.effect_message(
+                                caster,
+                                format!(
+                                    "{} misses {}",
+                                    fists.spell.name, self.combatants[target].sheet.name
+                                ),
+                            );
+                        }
                     }
                     fists.next_attack = self.elapsed_seconds.saturating_add(
                         self.combatants[caster].magic.fist_speed.max(1.0).ceil() as u32,
@@ -994,6 +1082,9 @@ impl SimState {
             }
             self.combatants[caster].state.magic.fists = Some(fists);
             self.retaliate_against_fists(caster);
+        }
+        if bulk && count != 0 {
+            self.active_field_owners.retain(|&caster| self.combatants[caster].state.magic.has_fields());
         }
     }
 
@@ -1066,13 +1157,15 @@ impl SimState {
             .active_effects
             .retain(|effect| !effect.consume_on_attack);
         if attack <= defense {
-            self.effect_message(
-                caster,
-                format!(
-                    "{} misses a summoned limb",
-                    self.combatants[attacker].sheet.name
-                ),
-            );
+            if self.bulk.is_none() {
+                self.effect_message(
+                    caster,
+                    format!(
+                        "{} misses a summoned limb",
+                        self.combatants[attacker].sheet.name
+                    ),
+                );
+            }
             return;
         }
         let fists = self.combatants[caster]
@@ -1096,16 +1189,18 @@ impl SimState {
             damage,
             &mut self.rng,
         );
-        self.effect_message(
-            caster,
-            format!(
-                "{spell_name} limb {} takes {damage} damage; caster suffers the same wound",
-                hand + 1
-            ),
-        );
+        if self.bulk.is_none() {
+            self.effect_message(
+                caster,
+                format!(
+                    "{spell_name} limb {} takes {damage} damage; caster suffers the same wound",
+                    hand + 1
+                ),
+            );
+        }
         self.record_attack_metrics(RecordedAttackMetrics {
-            damage_source: DamageSource::weapon(
-                &self.combatants[attacker].sheet.offense.weapon,
+            damage_source: ImpactSource::Weapon(
+                self.combatants[attacker].sheet.offense.weapon.clone(),
                 WeaponSlot::Primary,
             ),
             attacker_idx: attacker,

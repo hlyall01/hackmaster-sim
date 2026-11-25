@@ -106,3 +106,18 @@ fn ideal_self_changes_real_attack_damage_and_survives_a_fight_reset() {
     pair[0].reset_state();
     assert_eq!(strike(&mut pair).damage, 32);
 }
+
+#[test]
+fn prepared_attack_profile_keeps_ideal_self_conditional_on_full_health() {
+    let mut fighter = actor(true);
+    fighter.state.prepared = Some(super::prepared_fighter::PreparedFighter::new(&fighter.sheet, 0).into());
+    for projectile in [false, true] {
+        Arc::make_mut(&mut fighter.sheet.offense.weapon).uses_projectiles = projectile;
+        for hp in [1000, 990, 1000] {
+            fighter.state.hp = hp;
+            let base = if projectile { 0 } else { 7 };
+            let bonus = if hp == 1000 { 5 } else { 0 };
+            assert_eq!(combat::preview_damage_bonus(&fighter, WeaponSlot::Primary, projectile), base + bonus);
+        }
+    }
+}

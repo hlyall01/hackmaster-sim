@@ -1,5 +1,5 @@
 use super::modifiers::{
-    CHRONOBLUR_EFFECT_ID, ModifierStack,
+    ActiveEffects, CHRONOBLUR_EFFECT_ID, ModifierStack,
     STREAMLINE_EFFECT_ID, StatIdF32, StatIdI32, TemporaryEffect,
 };
 use crate::core::rules::DamageExprCache;
@@ -96,6 +96,27 @@ pub struct CombatantCache {
 }
 
 #[derive(Clone, Debug)]
+pub struct BuiltWeaponRange {
+    name: Box<str>,
+    bands: Option<[f32; 4]>,
+    max: Option<f32>,
+}
+
+impl BuiltWeaponRange {
+    pub fn new(name: &str, bands: Option<[f32; 4]>) -> Self {
+        Self { name: name.into(), bands, max: bands.map(super::movement::max_range_for_bands) }
+    }
+}
+
+impl WeaponProfile {
+    pub(super) fn built_max_range(&self) -> Option<Option<f32>> {
+        let cached = self.built_range.as_ref()?;
+        (cached.bands == self.range_bands_feet && (cached.bands.is_some() || &*cached.name == self.name))
+            .then_some(cached.max)
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct WeaponProfile {
     pub is_iron: bool,
     pub ranged_styles: super::RangedStyleProfile,
@@ -108,6 +129,7 @@ pub struct WeaponProfile {
     pub speed: f32,
     pub reach_ft: f32,
     pub range_bands_feet: Option<[f32; 4]>,
+    pub built_range: Option<BuiltWeaponRange>,
     pub range_distance_multiplier: f32,
     pub two_hand_grip: bool,
     pub use_jab: bool,
@@ -323,6 +345,7 @@ pub struct CombatantSheet {
 
 #[derive(Clone, Debug)]
 pub struct CombatantState {
+    pub(super) prepared: Option<Arc<super::prepared_fighter::PreparedFighter>>,
     pub weapon_setup: super::WeaponSetupState,
     pub arborite: super::ArboriteState,
     pub attack_events: u64,
@@ -364,6 +387,7 @@ pub struct CombatantState {
     pub knockback_applied_this_tick: bool,
     pub shield_intact: bool,
     pub precognition_space_available: bool,
+    pub(super) duel_escape: Option<super::movement::DuelEscape>,
     pub has_attacked: bool,
     pub armeroci_opening_strike_available: bool,
     pub regenstat_stacks: i32,
@@ -373,6 +397,7 @@ pub struct CombatantState {
     pub three_mountains_hit_streak: i32,
     pub force_trauma_roll_20: bool,
     pub deceptive_defender_seen_attackers: Vec<usize>,
+    seen_attackers_mask: u64,
     pub tactical_give_ground_defense_bonus: i32,
     pub tactical_next_attack_penalty: i32,
     /// The retreat actually taken against this attack (true = Scamper Back).
@@ -383,7 +408,8 @@ pub struct CombatantState {
     /// Refreshed from living enemy auras and current arena positions.
     pub intimidated: bool,
     pub activated_style_ids: Vec<String>,
-    pub active_effects: Vec<TemporaryEffect>,
+    pub(super) normal_tactical_profile_installed: bool,
+    pub active_effects: ActiveEffects,
     pub cache: CombatantCache,
 }
 
@@ -562,6 +588,7 @@ impl Default for WeaponProfile {
             speed: 10.0,
             reach_ft: 1.0,
             range_bands_feet: None,
+            built_range: None,
             range_distance_multiplier: 1.0,
             two_hand_grip: false,
             use_jab: false,
@@ -663,6 +690,18 @@ impl Default for CombatantSheet {
 }
 
 impl CombatantState {
+    pub(super) fn has_seen_attacker(&self, idx: usize) -> bool {
+        if self.magic.quiet && idx < 64 { self.seen_attackers_mask & (1 << idx) != 0 }
+        else { self.deceptive_defender_seen_attackers.contains(&idx) }
+    }
+
+    pub(super) fn remember_attacker(&mut self, idx: usize) -> bool {
+        if self.has_seen_attacker(idx) { return false; }
+        if self.magic.quiet && idx < 64 { self.seen_attackers_mask |= 1 << idx; }
+        else { self.deceptive_defender_seen_attackers.push(idx); }
+        true
+    }
+
     pub(crate) fn movement_spell_defense(&self) -> (i32, f32) {
         if !self.moved_last_tick { return (0, 0.0); }
         self.active_effects.iter().filter(|e| e.remaining_seconds > 0).filter_map(|e| e.movement_defense.as_ref())
@@ -675,7 +714,7 @@ impl CombatantState {
             .modifiers
             .apply_i32(0, StatIdI32::FlagArmerociPoleStyle)
             > 0;
-        let mut active_effects = Vec::new();
+        let mut active_effects = ActiveEffects::default();
         if sheet.modifiers.apply_i32(0, StatIdI32::FlagChronoblurSpell) > 0 {
             active_effects.push(TemporaryEffect::new(
                 CHRONOBLUR_EFFECT_ID,
@@ -689,6 +728,7 @@ impl CombatantState {
             ));
         }
         let mut state = Self {
+            prepared: None,
             attack_events: 0,
             magic: super::magic::MagicState::default(),
             hp: sheet.vitals.max_hp,
@@ -730,6 +770,7 @@ impl CombatantState {
             knockback_applied_this_tick: false,
             shield_intact: sheet.defense.shield_name.is_some(),
             precognition_space_available: false,
+            duel_escape: None,
             has_attacked: false,
             armeroci_opening_strike_available: armeroci_style,
             regenstat_stacks: 0,
@@ -739,6 +780,7 @@ impl CombatantState {
             three_mountains_hit_streak: 0,
             force_trauma_roll_20: false,
             deceptive_defender_seen_attackers: Vec::new(),
+            seen_attackers_mask: 0,
             tactical_give_ground_defense_bonus: 0,
             tactical_next_attack_penalty: 0,
             tactical_retreat: None,
@@ -747,6 +789,7 @@ impl CombatantState {
             streamline_averages_incoming_damage: false,
             intimidated: false,
             activated_style_ids: Vec::new(),
+            normal_tactical_profile_installed: false,
             active_effects,
             cache: CombatantCache::default(),
         };
@@ -769,12 +812,12 @@ impl CombatantState {
             .any(|effect| effect.id == id && effect.remaining_seconds > 0)
     }
 
+    pub(super) fn has_escape_space(&self) -> bool {
+        self.duel_escape.map_or(self.precognition_space_available, |escape| escape.destination().is_some())
+    }
+
     pub fn tick_effects(&mut self) {
-        for effect in &mut self.active_effects {
-            effect.remaining_seconds -= 1;
-        }
-        self.active_effects
-            .retain(|effect| effect.remaining_seconds > 0);
+        self.active_effects.tick();
     }
 
     pub(crate) fn weapon_cache_mut(&mut self, slot: WeaponSlot) -> &mut WeaponCache {
@@ -897,6 +940,7 @@ impl Combatant {
         profiles: Vec<CombatantTacticalProfile>,
         active_style_ids: Vec<String>,
     ) {
+        self.state.normal_tactical_profile_installed = false;
         self.tactical_policy = policy;
         self.tactical_profiles = profiles.into();
         self.active_style_ids = active_style_ids;
@@ -906,6 +950,7 @@ impl Combatant {
     }
 
     pub fn activate_tactical_profile(&mut self, use_jab: bool) -> bool {
+        self.state.normal_tactical_profile_installed = false;
         let Some(profile) = self.tactical_profiles.iter().find(|profile| {
             profile.key.style_ids == self.active_style_ids
                 && profile.key.use_jab == use_jab
@@ -921,6 +966,7 @@ impl Combatant {
             (None, None) => false,
             _ => true,
         };
+        self.state.normal_tactical_profile_installed = !use_jab;
         self.sheet = profile.sheet.clone();
         if self.tactical_policy.enabled {
             // A selected called shot persists through temporary Jab/style/stance profiles.
@@ -928,6 +974,7 @@ impl Combatant {
         }
         self.weapon_group.clone_from(&profile.weapon_group);
         self.armor_type.clone_from(&profile.armor_type);
+        self.refresh_prepared_sheet();
         if primary_changed {
             self.state.invalidate_weapon_cache(WeaponSlot::Primary);
         }
@@ -1003,9 +1050,11 @@ impl Combatant {
                 .any(|active| active.eq_ignore_ascii_case(style_id))
         });
         self.active_style_ids = style_ids.clone();
+        self.state.normal_tactical_profile_installed = true;
         self.sheet = profile.sheet.clone();
         self.weapon_group = profile.weapon_group.clone();
         self.armor_type = profile.armor_type.clone();
+        self.refresh_prepared_sheet();
         self.state.regenstat_stacks = 0;
         self.state.returner_counter_available = false;
         self.state.returner_skip_opening_attack = false;
@@ -1078,27 +1127,39 @@ impl Combatant {
         if self.state.intimidated { -2 } else { 0 }
     }
 
+    #[inline]
+    pub(super) fn combat_flag_active(&self, flag: StatIdI32) -> bool {
+        if self.state.active_effects.capabilities().integers & flag.bit() == 0 {
+            self.sheet.modifiers.positive_at_zero(flag)
+        } else {
+            self.apply_i32(flag, 0) > 0
+        }
+    }
+
+    pub(super) fn tactical_enemy_dr(&self) -> f32 {
+        self.apply_i32(StatIdI32::ArmorDr, self.sheet.defense.armor_dr).max(0) as f32
+    }
+
     pub(crate) fn apply_i32(&self, stat: StatIdI32, base: i32) -> i32 {
         let base = if stat == StatIdI32::StrengthDamageBase { base + self.spell_strength_delta() } else { base };
         let mut value = self.sheet.modifiers.apply_i32(base, stat);
-        for effect in &self.state.active_effects {
+        for effect in self.state.active_effects.iter() {
             value = effect.modifiers.apply_i32(value, stat);
         }
         if matches!(stat, StatIdI32::AttackBonus | StatIdI32::AttackBonusBase) {
             value += self.intimidation_penalty();
         }
-        let ideal = self.ideal_self_bonuses();
         value += match stat {
-            StatIdI32::StrengthDamage | StatIdI32::StrengthDamageBase => ideal.damage,
-            StatIdI32::ArmorDr | StatIdI32::NaturalDr => ideal.damage_reduction,
+            StatIdI32::StrengthDamage | StatIdI32::StrengthDamageBase => self.ideal_self_bonuses().damage,
+            StatIdI32::ArmorDr | StatIdI32::NaturalDr => self.ideal_self_bonuses().damage_reduction,
             _ => 0,
         };
         value
     }
 
     pub fn ideal_self_bonuses(&self) -> IdealSelfBonuses {
-        if self.state.hp >= self.sheet.vitals.max_hp && self.state.hp > 0
-            && self.sheet.modifiers.apply_i32(0, StatIdI32::FlagIdealSelf) > 0
+        if self.sheet.modifiers.positive_at_zero(StatIdI32::FlagIdealSelf)
+            && self.state.hp >= self.sheet.vitals.max_hp && self.state.hp > 0
         {
             IdealSelfBonuses::for_level(self.magic.level)
         } else {
@@ -1111,7 +1172,7 @@ impl Combatant {
             self.state.active_effects.iter().filter_map(|e| e.average_damage_radius).max_by(f32::total_cmp).unwrap_or(base)
         } else { base };
         let mut value = self.sheet.modifiers.apply_f32(base, stat);
-        for effect in &self.state.active_effects {
+        for effect in self.state.active_effects.iter() {
             value = effect.modifiers.apply_f32(value, stat);
         }
         if stat == StatIdF32::MoveSpeed {

@@ -229,6 +229,10 @@ impl MagicLoadout {
     }
 
     pub fn validate_echo(&self, level: u8) -> Result<u32, MagicError> {
+        self.validate_echo_with_essences(level, &self.essences)
+    }
+
+    pub(crate) fn validate_echo_with_essences(&self, level: u8, essences: &[EssencePool]) -> Result<u32, MagicError> {
         if !self.knows_spell("echo_strike") {
             return Err(MagicError::UnknownSpell);
         }
@@ -237,9 +241,8 @@ impl MagicLoadout {
             self.echo_strike.duration_seconds()?;
             return Ok(0);
         }
-        validate_essences(&self.essences)?;
-        let essence = self
-            .essences
+        validate_essences(essences)?;
+        let essence = essences
             .get(self.echo_essence)
             .ok_or(MagicError::InvalidEssence)?;
         self.echo_strike.validate(level, essence.proficiency)?;

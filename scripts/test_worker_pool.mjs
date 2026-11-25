@@ -73,3 +73,18 @@ test('uneven bulk ranges cover every fight once without gaps or overlaps', () =>
     }
   }
 });
+
+test('large jobs shrink assignments toward the tail while respecting startup caps', () => {
+  const queue = new BulkQueue(1000000, 24);
+  assert.equal(queue.take('local', 250).runs, 250);
+  queue.finish('local', null);
+  const sizes = [];
+  while (queue.hasWork) {
+    sizes.push(queue.take('child').runs);
+    queue.finish('child', null);
+  }
+  assert.equal(sizes[0], 20834);
+  assert.ok(sizes.some(n => n < 20834 && n > 1000));
+  assert.ok(sizes.includes(1000));
+  assert.equal(queue.progress(), 1000000);
+});

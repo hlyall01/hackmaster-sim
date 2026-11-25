@@ -66,21 +66,21 @@ fn damage_source_remembers_weapon_before_switch_and_distinguishes_hands() {
         switched.damage
     );
     assert_eq!(
-        first.damage_source,
+        first.damage_source.describe(),
         DamageSource::Weapon {
             name: "Sword".into(),
             slot: WeaponSlot::Primary,
         }
     );
     assert_eq!(
-        offhand.damage_source,
+        offhand.damage_source.describe(),
         DamageSource::Weapon {
             name: "Sword".into(),
             slot: WeaponSlot::Secondary,
         }
     );
     assert_eq!(
-        switched.damage_source,
+        switched.damage_source.describe(),
         DamageSource::Weapon {
             name: "Mace".into(),
             slot: WeaponSlot::Primary,
@@ -97,7 +97,7 @@ fn damage_source_regular_unarmed_attack_is_not_a_weapon_hit() {
     let hit = attack(&mut actors, WeaponSlot::Primary, 7);
     assert!(hit.damage > 0);
     assert_eq!(
-        hit.damage_source,
+        hit.damage_source.describe(),
         DamageSource::Unarmed {
             name: "Fist".into(),
         }
@@ -142,7 +142,7 @@ fn damage_source_actual_near_perfect_defense_uses_punch_small_weapon_or_eyesmite
                     name: "Eyesmite".into(),
                 },
             };
-            assert_eq!(counter.damage_source, expected);
+            assert_eq!(counter.damage_source.describe(), expected);
             found = true;
             break;
         }
@@ -169,15 +169,15 @@ fn damage_source_weapon_counter_combines_with_normal_attack() {
     );
     assert!(counter.damage > 0);
     assert_eq!(
-        counter.damage_source,
+        counter.damage_source.describe(),
         DamageSource::Weapon {
             name: "Sword".into(),
             slot: WeaponSlot::Primary,
         }
     );
     assert_eq!(
-        counter.damage_source,
-        attack(&mut actors, WeaponSlot::Primary, 7).damage_source
+        counter.damage_source.describe(),
+        attack(&mut actors, WeaponSlot::Primary, 7).damage_source.describe()
     );
 }
 
@@ -308,5 +308,22 @@ fn damage_source_empty_runs_and_zero_duration_have_no_rows() {
                 .iter()
                 .all(|team| team.damage_by_source.is_empty())
         );
+    }
+}
+
+#[test]
+fn simultaneous_snapshot_sums_live_movement_defenses_once() {
+    use crate::core::magic::MovementDefenseRule;
+    use crate::core::sim::TemporaryEffect;
+    let mut actor = Combatant::default();
+    for (duration, melee_bonus, ranged_distance) in [(3, 2, 10.0), (7, 3, 15.0), (0, 100, 50.0)] {
+        let mut effect = TemporaryEffect::new("movement", duration);
+        effect.movement_defense = Some(MovementDefenseRule { melee_bonus, ranged_distance });
+        actor.state.active_effects.push(effect);
+    }
+    for (moving, expected) in [(false, (0, 0.0)), (true, (5, 25.0))] {
+        actor.state.moved_last_tick = moving;
+        let snapshot = AttackStateSnapshot::capture(&actor, 1);
+        assert_eq!((snapshot.movement_melee_bonus, snapshot.movement_ranged_distance), expected);
     }
 }

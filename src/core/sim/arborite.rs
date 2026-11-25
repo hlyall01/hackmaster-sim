@@ -1,6 +1,5 @@
 //! Arborite racial configuration and timed combat effects.
 use super::{Combatant, ModifierOpI32, StatIdI32, TemporaryEffect};
-use crate::core::rules::roll_damage_expr;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
@@ -114,7 +113,9 @@ impl Combatant {
         self.state.arborite.warpaint_used = true;
         let strength_roll = rng.gen_range(1..=6);
         self.state.arborite.woad_strength_roll = Some(strength_roll);
-        let duration = roll_damage_expr("5d12p", rng, false).max(1);
+        static WOAD_DURATION: std::sync::LazyLock<crate::core::rules::DamageExprCache> =
+            std::sync::LazyLock::new(|| crate::core::rules::DamageExprCache::new("5d12p"));
+        let duration = WOAD_DURATION.roll(rng, false).max(1);
         let mut buff = TemporaryEffect::new(WOAD_EFFECT_ID, duration);
         buff.strength_increase = strength_roll;
         buff.modifiers
@@ -125,11 +126,9 @@ impl Combatant {
     pub(crate) fn tick_racial_effects(&mut self, rng: &mut impl Rng) {
         self.state.arborite.unconscious_seconds =
             self.state.arborite.unconscious_seconds.saturating_sub(1);
-        if self
-            .state
-            .active_effects
-            .iter()
-            .any(|effect| effect.id == WOAD_EFFECT_ID && effect.remaining_seconds == 1)
+        if self.state.active_effects.capabilities().warrior_woad
+            && self.state.active_effects.iter()
+                .any(|effect| effect.remaining_seconds == 1 && effect.id == WOAD_EFFECT_ID)
         {
             use crate::core::magic::{MagicSaveKind, SpellTags, roll_magic_save};
             let physical = roll_magic_save(

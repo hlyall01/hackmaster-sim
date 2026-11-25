@@ -155,25 +155,27 @@ impl SimState {
             attack_ready_at: attack_ready,
         });
         c.finish_weapon_setup(now);
-        let action = match target {
-            WeaponSetup::Melee => TacticalAction::EquipMelee,
-            WeaponSetup::Ranged => TacticalAction::EquipRanged,
-        };
-        let message = if target == WeaponSetup::Melee {
-            format!(
-                "{} drops {} instantly and draws {}; ready at {:.0}s",
-                c.sheet.name,
-                setups.ranged.sheet.offense.weapon.name,
-                setups.melee.sheet.offense.weapon.name,
-                attack_ready
-            )
-        } else {
-            format!(
-                "{} retrieves {}; ready at {:.0}s",
-                c.sheet.name, setups.ranged.sheet.offense.weapon.name, attack_ready
-            )
-        };
-        self.record_tactical_directive(idx, enemy, &action, rule, Some(message));
+        if self.bulk.is_none() {
+            let action = match target {
+                WeaponSetup::Melee => TacticalAction::EquipMelee,
+                WeaponSetup::Ranged => TacticalAction::EquipRanged,
+            };
+            let message = if target == WeaponSetup::Melee {
+                format!(
+                    "{} drops {} instantly and draws {}; ready at {:.0}s",
+                    c.sheet.name,
+                    setups.ranged.sheet.offense.weapon.name,
+                    setups.melee.sheet.offense.weapon.name,
+                    attack_ready
+                )
+            } else {
+                format!(
+                    "{} retrieves {}; ready at {:.0}s",
+                    c.sheet.name, setups.ranged.sheet.offense.weapon.name, attack_ready
+                )
+            };
+            self.record_tactical_directive(idx, enemy, &action, rule, Some(message));
+        }
         true
     }
 
@@ -209,12 +211,7 @@ impl SimState {
             if self.combatants[idx].weapon_setups.is_none() {
                 continue;
             }
-            let decision = evaluate_channel(
-                &self.combatants[idx].tactical_policy,
-                TacticalDecisionPoint::EverySecond,
-                TacticalChannel::WeaponSetup,
-                &self.tactical_context_for_channel(idx, enemy, Some(TacticalChannel::WeaponSetup)),
-            );
+            let decision = self.decide_tactic(idx, enemy, TacticalChannel::WeaponSetup, false);
             match decision.action {
                 TacticalAction::EquipMelee => {
                     self.request_weapon_setup(

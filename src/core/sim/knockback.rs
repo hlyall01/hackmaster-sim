@@ -26,10 +26,6 @@ pub fn knockback_rule_for_attack(
     is_ranged: bool,
     charging: bool,
 ) -> KnockbackRule {
-    let base_threshold = defender.apply_i32(
-        StatIdI32::KnockbackStep,
-        defender.sheet.defense.knockback_step,
-    );
     let weapon = match weapon_slot {
         Some(WeaponSlot::Primary) => Some(&attacker.sheet.offense.weapon),
         Some(WeaponSlot::Secondary) => attacker
@@ -49,6 +45,17 @@ pub fn knockback_rule_for_attack(
     } else {
         0
     };
+    if mounted_adjustment == 0 && defender.state.active_effects.is_empty() {
+        if let Some(p) = &defender.state.prepared {
+            if p.knockback.weapon_adjustment == weapon_adjustment {
+                return KnockbackRule { damage_multiplier: if charging { 2 } else { 1 }, ..p.knockback };
+            }
+        }
+    }
+    let base_threshold = defender.apply_i32(
+        StatIdI32::KnockbackStep,
+        defender.sheet.defense.knockback_step,
+    );
     KnockbackRule {
         base_threshold,
         weapon_adjustment,

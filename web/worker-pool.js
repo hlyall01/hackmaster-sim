@@ -8,6 +8,7 @@ export function bulkWorkerCount(runs) {
 export class BulkQueue {
   constructor(runs, workers) {
     this.runs = runs;
+    this.workers = workers;
     this.chunkSize = Math.min(25000, Math.max(250, Math.ceil(runs / (workers * 2))));
     this.next = 0;
     this.completed = 0;
@@ -17,7 +18,9 @@ export class BulkQueue {
   take(worker, maximum = this.chunkSize) {
     if (this.active.has(worker)) throw new Error('Worker already has a batch');
     if (this.next >= this.runs) return null;
-    const range = { firstRun: this.next, runs: Math.min(this.chunkSize, maximum, this.runs - this.next), progress: 0 };
+    const remaining = this.runs - this.next;
+    const tailSize = this.runs > 100000 ? Math.max(1000, Math.ceil(remaining / this.workers)) : this.chunkSize;
+    const range = { firstRun: this.next, runs: Math.min(this.chunkSize, maximum, tailSize, remaining), progress: 0 };
     this.next += range.runs;
     this.active.set(worker, range);
     return range;

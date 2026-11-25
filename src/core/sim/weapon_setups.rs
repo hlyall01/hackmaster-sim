@@ -79,8 +79,13 @@ pub struct WeaponSetupState {
 
 impl Combatant {
     pub(crate) fn install_weapon_setup_profile(&mut self, source: &Combatant) {
+        self.state.normal_tactical_profile_installed = false;
         self.sheet = source.sheet.clone();
+        self.refresh_prepared_sheet();
         self.magic = source.magic.clone();
+        if self.state.magic.spell_plan.is_some() {
+            self.install_spell_plan(super::magic::PreparedSpellPolicies::new(&self.magic.loadout));
+        }
         self.tactical_profiles = source.tactical_profiles.clone();
         self.active_style_ids = source.active_style_ids.clone();
         self.active_fight_defensively_penalty = source.active_fight_defensively_penalty;
