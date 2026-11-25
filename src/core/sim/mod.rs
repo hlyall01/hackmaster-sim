@@ -13,6 +13,7 @@ mod damage_sources;
 pub use damage_sources::{DamageSource, DamageSourceStats};
 mod engine;
 mod intimidation;
+mod prepared_fighter;
 mod knockback;
 pub use knockback::{KnockbackRule, knockback_rule_for_attack};
 mod modifiers;
@@ -28,12 +29,12 @@ pub use mounted::{MountedCombatConfig, MountType, RidingMastery, MountedTargetSi
 mod types;
 
 pub use engine::{
-    BulkSimBatch, bulk_simulate_batch, BulkSimResult, DetailedSimStats, DetailedTeamStats, SimState, bulk_simulate,
+    PreparedBulkSimulation, BulkSimBatch, bulk_simulate_batch, BulkSimResult, DetailedSimStats, DetailedTeamStats, SimState, bulk_simulate,
     bulk_simulate_with_seed, bulk_simulate_with_seed_controlled,
 };
 pub use modifiers::{
     CHRONOBLUR_DURATION_SECONDS, CHRONOBLUR_EFFECT_ID, CHRONOBLUR_MELEE_DEFENSE_BONUS,
-    CHRONOBLUR_RANGED_DISTANCE_FEET, ModifierOpF32, ModifierOpI32, ModifierStack,
+    CHRONOBLUR_RANGED_DISTANCE_FEET, ActiveEffects, ModifierOpF32, ModifierOpI32, ModifierStack,
     STREAMLINE_DURATION_SECONDS, STREAMLINE_EFFECT_ID, STREAMLINE_RADIUS_FEET, StatIdF32,
     StatIdI32, TemporaryEffect, modifiers_for_magic_item,
 };
@@ -44,7 +45,7 @@ pub use types::{
     CombatantTacticalProfile, CriticalHit, DamageBreakdown, DamageDie, DefenseProfile, GridPos,
     KnockAsideEvent, KnockAsideRollBreakdown, ManeuverProfile, MobilityProfile, OffenseProfile,
     OffhandProfile, ShieldBreakageStep, ShieldDamageBreakdown, SimActor, SimConfig, TacticalEvent,
-    IdealSelfBonuses, TacticalProfileKey, Vitals, WeaponCache, WeaponProfile, WeaponSlot,
+    BuiltWeaponRange, IdealSelfBonuses, TacticalProfileKey, Vitals, WeaponCache, WeaponProfile, WeaponSlot,
 };
 
 #[cfg(test)]
@@ -57,7 +58,7 @@ mod magic_tests;
 pub(crate) fn counter_event(counter: combat::CounterAttackOutcome) -> AttackEvent {
     AttackEvent {
         source: crate::core::sim::AttackSource::Weapon,
-        damage_source: counter.damage_source.clone(),
+        damage_source: counter.damage_source.describe(),
         called_shot: false,
         hit: counter.hit,
         shield_block: counter.shield_block,

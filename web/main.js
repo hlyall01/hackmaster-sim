@@ -10,7 +10,7 @@ if (location.hostname === 'feature.sim-gui.com') {
 } else if (location.hostname === 'sim-gui.com' && new URLSearchParams(location.search).get('tab') === 'requests') {
   location.replace('https://feature.sim-gui.com/');
 } else try {
-  const { default: init, start_web } = await import('./pkg/sim_gui.js');
+  const { default: init, start_web } = await import('./sim-module.js');
   await init();
   await start_web(new URLSearchParams(location.search).get('tab') === 'requests');
   document.getElementById('loading').hidden = true;

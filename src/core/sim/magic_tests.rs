@@ -1191,3 +1191,25 @@ fn casting_limits_actual_movement_to_five_feet_even_with_casting_talents() {
         assert!(duel_movement > 0.0);
     }
 }
+
+#[test]
+fn compact_echoes_preserve_due_time_resolution_and_dismissal() {
+    let mut actors = vec![caster(), target()];
+    arm(&mut actors[0]);
+    let mut quiet = actors.clone();
+    quiet[0].state.magic.quiet = true;
+    for roster in [&mut actors, &mut quiet] {
+        strike(roster, 4, true, 19);
+        assert!(super::magic::has_pending_echoes(roster));
+        let mut dismissed = roster.clone();
+        dismissed[0].dismiss_echo_strike(5).unwrap();
+        assert!(!super::magic::has_pending_echoes(&dismissed));
+    }
+    assert!(quiet[0].state.magic.echoes.is_empty());
+    for roster in [&mut actors, &mut quiet] {
+        let echo = take_due_echoes(roster, 14).pop().unwrap().1;
+        super::combat::resolve_echo(roster, 0, &echo, 5.0, 14, &mut rng()).unwrap();
+        assert!(!super::magic::has_pending_echoes(roster));
+    }
+    assert_eq!(actors[1].state.hp, quiet[1].state.hp);
+}

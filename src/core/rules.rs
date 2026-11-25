@@ -8,14 +8,23 @@ use compiled::Expression;
 #[derive(Clone, Debug)]
 pub struct DamageExprCache {
     expression: Expression,
+    iron_variants: [std::sync::OnceLock<Box<DamageExprCache>>; 2],
     is_lower_of: bool,
     d6_penetration_triggers: Option<Vec<i32>>,
     penetrate_on_max_minus_one: bool,
 }
 
 impl DamageExprCache {
-    pub(crate) fn with_multiplied_dice(&self, multiplier: i32) -> Self {
-        Self { expression: self.expression.with_multiplied_dice(multiplier), ..self.clone() }
+    pub(crate) fn with_multiplied_dice(&self, multiplier: i32) -> &Self {
+        let multiplier = multiplier.clamp(1, 3);
+        if multiplier == 1 { return self; }
+        self.iron_variants[(multiplier - 2) as usize].get_or_init(|| Box::new(Self {
+            expression: self.expression.with_multiplied_dice(multiplier),
+            iron_variants: Default::default(),
+            is_lower_of: self.is_lower_of,
+            d6_penetration_triggers: self.d6_penetration_triggers.clone(),
+            penetrate_on_max_minus_one: self.penetrate_on_max_minus_one,
+        }))
     }
 
     pub(crate) fn roll20_extra_dice(&self, nonpenetrating: bool, dice: &[(i32, bool)]) -> Result<String, DamageExprError> {
@@ -45,6 +54,7 @@ impl DamageExprCache {
     pub fn new(expr: &str) -> Self {
         Self::try_new(expr).unwrap_or_else(|_| Self {
             expression: Expression::empty(),
+            iron_variants: Default::default(),
             is_lower_of: false,
             d6_penetration_triggers: None,
             penetrate_on_max_minus_one: false,
@@ -55,6 +65,7 @@ impl DamageExprCache {
         let cleaned = clean_damage_expr(expr);
         Ok(Self {
             expression: Expression::parse(&cleaned)?,
+            iron_variants: Default::default(),
             is_lower_of: expr.to_ascii_lowercase().contains("lower of"),
             d6_penetration_triggers: None,
             penetrate_on_max_minus_one: false,
@@ -71,6 +82,7 @@ impl DamageExprCache {
         triggers.sort_unstable();
         triggers.dedup();
         if !triggers.is_empty() {
+            cache.expression.prepare_rollers(true, false);
             cache.d6_penetration_triggers = Some(triggers);
         }
         cache
@@ -78,6 +90,7 @@ impl DamageExprCache {
 
     pub fn new_with_max_minus_one_penetration(expr: &str) -> Self {
         let mut cache = Self::new(expr);
+        cache.expression.prepare_rollers(false, true);
         cache.penetrate_on_max_minus_one = true;
         cache
     }
@@ -87,15 +100,13 @@ impl DamageExprCache {
             rng,
             nonpenetrating,
             self.d6_penetration_triggers.as_deref(),
-            self.penetrate_on_max_minus_one,
         );
         if self.is_lower_of {
             a.min(self.expression.roll(
                 rng,
                 nonpenetrating,
                 self.d6_penetration_triggers.as_deref(),
-                self.penetrate_on_max_minus_one,
-            ))
+                ))
         } else {
             a
         }
@@ -551,11 +562,20 @@ fn evaluate_term_with_detail(term: &str, rng: &mut impl Rng) -> (i32, String) {
     }
 }
 
+#[inline]
+pub(crate) fn bounded_die(sides: i32, rng: &mut impl Rng) -> i32 {
+    match sides {
+        4 => rng.gen_range(1..=4), 6 => rng.gen_range(1..=6), 8 => rng.gen_range(1..=8),
+        10 => rng.gen_range(1..=10), 12 => rng.gen_range(1..=12), 20 => rng.gen_range(1..=20),
+        _ => rng.gen_range(1..=sides),
+    }
+}
+
 pub fn penetrating_roll(sides: i32, rng: &mut impl Rng) -> i32 {
     if sides <= 1 {
         return sides.max(0);
     }
-    penetrating_roll_with(sides, || rng.gen_range(1..=sides))
+    penetrating_roll_with(sides, || bounded_die(sides, rng))
 }
 
 fn roll_die_with_penetration(sides: i32, penetration: Option<i32>, rng: &mut impl Rng) -> i32 {
@@ -594,7 +614,7 @@ pub fn penetrating_roll_trigger_set(sides: i32, triggers: &[i32], rng: &mut impl
     if sides <= 1 {
         return sides.max(0);
     }
-    penetrating_roll_trigger_set_with(sides, triggers, || rng.gen_range(1..=sides))
+    penetrating_roll_trigger_set_with(sides, triggers, || bounded_die(sides, rng))
 }
 
 pub fn penetrating_roll_trigger_set_with(
@@ -658,7 +678,7 @@ pub fn standard_roll(sides: i32, rng: &mut impl Rng) -> i32 {
     if sides <= 1 {
         return sides.max(0);
     }
-    rng.gen_range(1..=sides)
+    bounded_die(sides, rng)
 }
 
 fn strip_outer_parens(mut s: &str) -> &str {
@@ -868,5 +888,19 @@ mod tests {
         let max_minus_one = DamageExprCache::new_with_max_minus_one_penetration("d6p");
         assert!((max_minus_one.expected(false) - 4.75).abs() < f64::EPSILON);
         assert!((max_minus_one.expected(true) - 3.5).abs() < f64::EPSILON);
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn specialised_die_matches_runtime_uniform_including_following_word() {
+    use rand::{RngCore, SeedableRng, rngs::StdRng};
+    for seed in [0, 9876, u64::MAX] {
+        let mut actual = StdRng::seed_from_u64(seed);
+        let mut reference = actual.clone();
+        for sides in [1, 2, 3, 4, 6, 8, 10, 12, 20, 100, 1_073_741_825].into_iter().cycle().take(4096) {
+            assert_eq!(bounded_die(sides, &mut actual), reference.gen_range(1..=sides));
+        }
+        assert_eq!(actual.next_u64(), reference.next_u64());
     }
 }

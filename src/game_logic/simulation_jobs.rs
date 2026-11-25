@@ -14,7 +14,7 @@ pub struct JobControl {
     total: Arc<AtomicU32>,
 }
 impl JobControl {
-    fn is_cancelled(&self) -> bool {
+    pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Relaxed)
     }
     fn advance(&self, amount: u32) -> bool {

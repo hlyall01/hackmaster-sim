@@ -229,8 +229,7 @@ pub fn run_web_job(request: &str) -> String {
 
 struct PreparedBulkJob {
     request: String,
-    config: SimConfig,
-    fighters: Vec<sim::Combatant>,
+    simulation: sim::PreparedBulkSimulation,
     runs: u32,
     seed: u64,
 }
@@ -257,8 +256,7 @@ fn bulk_shard(request: &str, first_run: u32, runs: u32, report_progress: bool) -
             );
             *cache = Some(PreparedBulkJob {
                 request: request.to_owned(),
-                config: SimConfig::new(parsed.start_distance, parsed.stop_distance),
-                fighters,
+                simulation: sim::PreparedBulkSimulation::new(SimConfig::new(parsed.start_distance, parsed.stop_distance), fighters),
                 runs,
                 seed,
             });
@@ -269,14 +267,31 @@ fn bulk_shard(request: &str, first_run: u32, runs: u32, report_progress: bool) -
         }
         let control = JobControl::default();
         control.set_total(runs);
-        sim::bulk_simulate_batch(
-            job.config,
-            job.fighters.clone(),
+        let mut previous_fight = None;
+        let mut same_fight_polls = 0u32;
+        job.simulation.run_range(
             runs,
             BULK_SIM_MAX_SECONDS,
             job.seed,
             first_run,
-            |completed| !report_progress || control.keep_running(completed),
+            |completed| {
+                if !report_progress { return !control.is_cancelled(); }
+                // A long fight also polls every 64 simulated seconds. Keep its
+                // heartbeat even when its index falls between clock samples.
+                let check_clock = if previous_fight == Some(completed) {
+                    same_fight_polls = same_fight_polls.wrapping_add(1);
+                    same_fight_polls.is_multiple_of(16)
+                } else {
+                    previous_fight = Some(completed);
+                    same_fight_polls = 0;
+                    if first_run == 0 && completed == 1 {
+                        hackmaster_sim::web_progress::report_first_fight(runs);
+                        return !control.is_cancelled();
+                    }
+                    completed.is_multiple_of(64) || completed == runs
+                };
+                if check_clock { control.keep_running(completed) } else { !control.is_cancelled() }
+            },
         )
         .ok_or_else(|| "Calculation cancelled".into())
     });

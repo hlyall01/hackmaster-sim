@@ -27,7 +27,7 @@ pub(crate) fn resolve_basic_attack(
     );
     AttackEvent {
         source: crate::core::sim::AttackSource::Weapon,
-        damage_source: outcome.damage_source.clone(),
+        damage_source: outcome.damage_source.describe(),
         called_shot: combatants[attacker_idx].sheet.maneuvers.called_shot,
         hit: outcome.hit,
         shield_block: outcome.shield_block,

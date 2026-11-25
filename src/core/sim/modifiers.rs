@@ -62,6 +62,12 @@ pub enum StatIdI32 {
     FlagStreamlineSpell,
 }
 
+impl StatIdI32 {
+    pub(super) const fn bit(self) -> u64 {
+        1 << (self as u32)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum StatIdF32 {
     StreamlineRadius,
@@ -102,95 +108,235 @@ pub struct ModifierF32 {
 
 #[derive(Clone, Debug, Default)]
 pub struct ModifierStack {
-    mods_i32: Vec<ModifierI32>,
-    mods_f32: Vec<ModifierF32>,
+    // Most combat flags are queried repeatedly with a zero base.
+    positive_at_zero: u64,
+    index: Option<std::sync::Arc<ModifierIndex>>,
+}
+
+// Profiles share their prepared index until an equipment or effect builder edits it.
+#[derive(Clone, Debug, Default)]
+struct ModifierIndex {
+    integers: Vec<Option<IntegerTerms>>,
+    floats: Vec<Option<FloatTerms>>,
+    // Replaying the source operations on extend preserves insertion order and
+    // floating-point rounding, including when extending a non-empty stack.
+    integer_ops: Vec<ModifierI32>,
+    float_ops: Vec<ModifierF32>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct IntegerTerms {
+    add: i32,
+    set: Option<i32>,
+    upper: i32,
+    lower: i32,
+}
+
+impl Default for IntegerTerms {
+    fn default() -> Self {
+        Self { add: 0, set: None, upper: i32::MAX, lower: i32::MIN }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct FloatTerms {
+    add: f32,
+    multiply: f32,
+    set: Option<f32>,
+    upper: Option<f32>,
+    lower: Option<f32>,
+}
+
+impl Default for FloatTerms {
+    fn default() -> Self {
+        Self { add: 0.0, multiply: 1.0, set: None, upper: None, lower: None }
+    }
 }
 
 impl ModifierStack {
     pub fn is_empty(&self) -> bool {
-        self.mods_i32.is_empty() && self.mods_f32.is_empty()
+        self.index.is_none()
+    }
+
+    pub(super) fn integer_stats(&self) -> impl Iterator<Item = StatIdI32> + '_ {
+        self.index.iter().flat_map(|index| index.integer_ops.iter().map(|op| op.stat))
+    }
+
+    pub(super) fn positive_bits(&self) -> u64 {
+        self.positive_at_zero
+    }
+
+    fn make_mut(&mut self) -> &mut ModifierIndex {
+        std::sync::Arc::make_mut(self.index.get_or_insert_with(Default::default))
     }
 
     pub fn add_i32(&mut self, stat: StatIdI32, op: ModifierOpI32) {
-        self.mods_i32.push(ModifierI32 { stat, op });
+        let index = self.make_mut();
+        index.integer_ops.push(ModifierI32 { stat, op });
+        let key = stat as usize;
+        if index.integers.len() <= key {
+            index.integers.resize(key + 1, None);
+        }
+        let terms = index.integers[key].get_or_insert_with(IntegerTerms::default);
+        match op {
+            ModifierOpI32::Set(x) => terms.set = Some(x),
+            ModifierOpI32::Add(x) => terms.add += x,
+            ModifierOpI32::Min(x) => terms.upper = terms.upper.min(x),
+            ModifierOpI32::Max(x) => terms.lower = terms.lower.max(x),
+        }
+        if let Some(bit) = 1u64.checked_shl(stat as u32) {
+            let positive = terms.set.unwrap_or(0).wrapping_add(terms.add)
+                .min(terms.upper).max(terms.lower) > 0;
+            if positive { self.positive_at_zero |= bit; } else { self.positive_at_zero &= !bit; }
+        }
     }
 
     pub fn add_f32(&mut self, stat: StatIdF32, op: ModifierOpF32) {
-        self.mods_f32.push(ModifierF32 { stat, op });
+        let index = self.make_mut();
+        index.float_ops.push(ModifierF32 { stat, op });
+        let key = stat as usize;
+        if index.floats.len() <= key {
+            index.floats.resize(key + 1, None);
+        }
+        let terms = index.floats[key].get_or_insert_with(FloatTerms::default);
+        match op {
+            ModifierOpF32::Set(x) => terms.set = Some(x),
+            ModifierOpF32::Add(x) => terms.add += x,
+            ModifierOpF32::Mul(x) => terms.multiply *= x,
+            ModifierOpF32::Min(x) => terms.upper = Some(terms.upper.map_or(x, |v| v.min(x))),
+            ModifierOpF32::Max(x) => terms.lower = Some(terms.lower.map_or(x, |v| v.max(x))),
+        }
     }
 
     pub fn extend(&mut self, other: &ModifierStack) {
-        self.mods_i32.extend(other.mods_i32.iter().copied());
-        self.mods_f32.extend(other.mods_f32.iter().copied());
+        let Some(index) = &other.index else { return };
+        for modifier in &index.integer_ops {
+            self.add_i32(modifier.stat, modifier.op);
+        }
+        for modifier in &index.float_ops {
+            self.add_f32(modifier.stat, modifier.op);
+        }
     }
 
-    pub fn apply_i32(&self, mut value: i32, stat: StatIdI32) -> i32 {
-        let mut add_total = 0;
-        let mut set_value: Option<i32> = None;
-        let mut min_value: Option<i32> = None;
-        let mut max_value: Option<i32> = None;
-        for modifier in &self.mods_i32 {
-            if modifier.stat != stat {
-                continue;
-            }
-            match modifier.op {
-                ModifierOpI32::Add(amount) => add_total += amount,
-                ModifierOpI32::Set(amount) => set_value = Some(amount),
-                ModifierOpI32::Min(amount) => {
-                    min_value = Some(min_value.map_or(amount, |current| current.min(amount)));
-                }
-                ModifierOpI32::Max(amount) => {
-                    max_value = Some(max_value.map_or(amount, |current| current.max(amount)));
-                }
-            }
+    #[inline]
+    pub(super) fn positive_at_zero(&self, stat: StatIdI32) -> bool {
+        match 1u64.checked_shl(stat as u32) {
+            Some(bit) => self.positive_at_zero & bit != 0,
+            None => self.apply_i32(0, stat) > 0,
         }
-        if let Some(set_value) = set_value {
-            value = set_value;
-        }
-        value += add_total;
-        if let Some(min_value) = min_value {
-            value = value.min(min_value);
-        }
-        if let Some(max_value) = max_value {
-            value = value.max(max_value);
-        }
-        value
     }
 
-    pub fn apply_f32(&self, mut value: f32, stat: StatIdF32) -> f32 {
-        let mut add_total = 0.0;
-        let mut mul_total = 1.0;
-        let mut set_value: Option<f32> = None;
-        let mut min_value: Option<f32> = None;
-        let mut max_value: Option<f32> = None;
-        for modifier in &self.mods_f32 {
-            if modifier.stat != stat {
-                continue;
+    pub fn apply_i32(&self, value: i32, stat: StatIdI32) -> i32 {
+        let Some(terms) = self.index.as_ref()
+            .and_then(|index| index.integers.get(stat as usize)).and_then(Option::as_ref)
+        else { return value };
+        (terms.set.unwrap_or(value) + terms.add).min(terms.upper).max(terms.lower)
+    }
+
+    pub fn apply_f32(&self, value: f32, stat: StatIdF32) -> f32 {
+        let Some(terms) = self.index.as_ref()
+            .and_then(|index| index.floats.get(stat as usize)).and_then(Option::as_ref)
+        else { return value + 0.0 };
+        let mut result = (terms.set.unwrap_or(value) + terms.add) * terms.multiply;
+        if let Some(upper) = terms.upper {
+            result = result.min(upper);
+        }
+        if let Some(lower) = terms.lower {
+            result = result.max(lower);
+        }
+        result
+    }
+}
+
+/// Hooks and integer modifiers contributed by the *current* temporary effects.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct EffectCapabilities {
+    pub integers: u64,
+    pub warrior_woad: bool,
+    pub average_damage: bool,
+}
+
+impl EffectCapabilities {
+    fn include(&mut self, effect: &TemporaryEffect) {
+        if let Some(index) = &effect.modifiers.index {
+            for op in &index.integer_ops {
+                self.integers |= op.stat.bit();
             }
-            match modifier.op {
-                ModifierOpF32::Add(amount) => add_total += amount,
-                ModifierOpF32::Mul(amount) => mul_total *= amount,
-                ModifierOpF32::Set(amount) => set_value = Some(amount),
-                ModifierOpF32::Min(amount) => {
-                    min_value = Some(min_value.map_or(amount, |current| current.min(amount)));
-                }
-                ModifierOpF32::Max(amount) => {
-                    max_value = Some(max_value.map_or(amount, |current| current.max(amount)));
-                }
-            }
         }
-        if let Some(set_value) = set_value {
-            value = set_value;
+        self.warrior_woad |= effect.id == super::arborite::WOAD_EFFECT_ID;
+        self.average_damage |= effect.average_damage_radius.is_some();
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ActiveEffects {
+    entries: Vec<TemporaryEffect>,
+    capabilities: EffectCapabilities,
+    dirty: bool,
+}
+
+impl ActiveEffects {
+    #[inline(never)]
+    fn scan(&self) -> EffectCapabilities {
+        let mut summary = EffectCapabilities::default();
+        for effect in &self.entries { summary.include(effect); }
+        summary
+    }
+
+    #[inline]
+    pub(super) fn capabilities(&self) -> EffectCapabilities {
+        if self.dirty { self.scan() } else { self.capabilities }
+    }
+
+    pub fn push(&mut self, effect: TemporaryEffect) {
+        if self.dirty {
+            self.capabilities = self.scan();
+            self.dirty = false;
         }
-        value += add_total;
-        value *= mul_total;
-        if let Some(min_value) = min_value {
-            value = value.min(min_value);
+        self.capabilities.include(&effect);
+        self.entries.push(effect);
+    }
+
+    pub fn retain(&mut self, keep: impl FnMut(&TemporaryEffect) -> bool) {
+        let old_len = self.entries.len();
+        self.entries.retain(keep);
+        if self.dirty || self.entries.len() != old_len {
+            self.capabilities = self.scan();
+            self.dirty = false;
         }
-        if let Some(max_value) = max_value {
-            value = value.max(max_value);
-        }
-        value
+    }
+
+    pub(super) fn tick(&mut self) {
+        for effect in &mut self.entries { effect.remaining_seconds -= 1; }
+        self.retain(|effect| effect.remaining_seconds > 0);
+    }
+}
+
+impl<'a> IntoIterator for &'a ActiveEffects {
+    type Item = &'a TemporaryEffect;
+    type IntoIter = std::slice::Iter<'a, TemporaryEffect>;
+    fn into_iter(self) -> Self::IntoIter { self.entries.iter() }
+}
+
+impl<'a> IntoIterator for &'a mut ActiveEffects {
+    type Item = &'a mut TemporaryEffect;
+    type IntoIter = std::slice::IterMut<'a, TemporaryEffect>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.dirty = true;
+        self.entries.iter_mut()
+    }
+}
+
+impl std::ops::Deref for ActiveEffects {
+    type Target = Vec<TemporaryEffect>;
+    fn deref(&self) -> &Self::Target { &self.entries }
+}
+
+impl std::ops::DerefMut for ActiveEffects {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        // Direct edits can replace an entire effect, its ID, or its modifiers.
+        self.dirty = true;
+        &mut self.entries
     }
 }
 

@@ -130,7 +130,7 @@ pub struct ArmedEcho {
 }
 
 #[derive(Clone, Debug)]
-pub struct ScheduledEcho {
+pub struct ScheduledEcho<R = AttackRollBreakdown> {
     pub due_at: u32,
     pub target: usize,
     pub damage: i32,
@@ -138,7 +138,26 @@ pub struct ScheduledEcho {
     pub cast_id: u64,
     pub weapon_slot: WeaponSlot,
     pub is_ranged: bool,
-    pub original_roll: AttackRollBreakdown,
+    pub original_roll: R,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct EchoRoll {
+    pub range_mod: i32,
+    pub attack_bonus: i32,
+}
+
+impl<R> ScheduledEcho<R> {
+    fn with_roll<T>(self, original_roll: T) -> ScheduledEcho<T> {
+        ScheduledEcho { due_at: self.due_at, target: self.target, damage: self.damage, ordinal: self.ordinal,
+            cast_id: self.cast_id, weapon_slot: self.weapon_slot, is_ranged: self.is_ranged, original_roll }
+    }
+}
+
+impl From<&AttackRollBreakdown> for EchoRoll {
+    fn from(roll: &AttackRollBreakdown) -> Self {
+        Self { range_mod: roll.range_mod, attack_bonus: roll.attack_bonus }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -166,6 +185,24 @@ pub struct SpellEvent {
     pub message: String,
 }
 
+/// A bulk roster has fixed loadouts between equipment changes. Interactive
+/// callers may edit them at any time and continue using the live catalog.
+#[derive(Clone, Debug)]
+pub(super) struct PreparedSpellPolicies(std::sync::Arc<[&'static SpellCatalogEntry]>);
+
+impl PreparedSpellPolicies {
+    pub(super) fn new(loadout: &MagicLoadout) -> Self {
+        Self(spell_catalog().iter().filter(|spell| loadout.knows_spell(&spell.id)
+            && loadout.ai_for(&spell.id) != crate::core::magic::SpellCastAi::Manual).collect())
+    }
+
+    pub(super) fn candidates(plan: Option<&Self>) -> impl Iterator<Item = &'static SpellCatalogEntry> + '_ {
+        let catalog = spell_catalog();
+        (0..plan.map_or(catalog.len(), |p| p.0.len()))
+            .map(move |index| plan.map_or_else(|| &catalog[index], |p| p.0[index]))
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct MagicState {
     pub essences: Vec<EssencePool>,
@@ -175,6 +212,7 @@ pub struct MagicState {
     pub fatigue: Option<(u32, u32)>,
     pub armed_echo: Option<ArmedEcho>,
     pub echoes: Vec<ScheduledEcho>,
+    pub(super) compact_echoes: Vec<ScheduledEcho<EchoRoll>>,
     pub owned_buffs: Vec<String>,
     pub now: u32,
     pub auto_attempted: bool,
@@ -191,6 +229,10 @@ pub struct MagicState {
     pub fists: Option<super::spell_effects::SummonedLimbs>,
     pub oppressive_fields: Vec<super::spell_effects::OppressiveField>,
     pub charged_objects: Vec<super::spell_effects::ChargedObject>,
+    pub(super) quiet: bool,
+    pub(super) spell_plan: Option<PreparedSpellPolicies>,
+    eligible_policy: bool,
+    next_echo_at: Option<u32>,
     next_cast_id: u64,
 }
 
@@ -238,7 +280,19 @@ impl MagicState {
         (self.casting.is_some() || self.channeling.is_some()) && !talents.combat_casting
     }
 
+    pub(super) fn has_fields(&self) -> bool {
+        !(self.charged_objects.is_empty() && self.oppressive_fields.is_empty()
+            && self.sweeping_fields.is_empty() && self.fists.is_none())
+    }
+
+    fn event_fmt(&mut self, kind: SpellEventKind, spent: u32, message: std::fmt::Arguments<'_>) {
+        if !self.quiet {
+            self.event(kind, spent, message.to_string());
+        }
+    }
+
     pub fn event(&mut self, kind: SpellEventKind, spent: u32, message: impl Into<String>) {
+        if self.quiet { return; }
         self.events.push(SpellEvent {
             time: self.now,
             kind,
@@ -313,9 +367,8 @@ impl Combatant {
         if state.casting.is_some() || state.channeling.is_some() || state.fatigue.is_some() {
             return Err(MagicError::Busy);
         }
-        let mut loadout = self.magic.loadout.clone();
-        loadout.essences = state.essences.clone();
-        let cost = loadout.validate_echo(self.magic.level)?;
+        let loadout = &self.magic.loadout;
+        let cost = loadout.validate_echo_with_essences(self.magic.level, &state.essences)?;
         SpellKind::EchoStrike.catalog_entry().components.validate(
             self.magic.talents,
             !loadout.arms_restricted,
@@ -339,14 +392,17 @@ impl Combatant {
     pub fn cast_echo_strike(&mut self, now: u32) -> Result<(), MagicError> {
         self.state.magic.now = now;
         self.expire_spell_fatigue(now);
-        self.validate_echo_cast()?;
-        self.start_spell(
-            SpellRequest::echo_strike(
-                self.magic.loadout.echo_strike,
-                self.magic.loadout.echo_essence,
-            )?,
-            now,
-        )?;
+        let cost = self.validate_echo_cast()?;
+        if self.racial_actions_blocked() || self.state.weapon_setup.pending.is_some() {
+            return Err(MagicError::Incapacitated);
+        }
+        let definition: SpellDefinition = SpellKind::EchoStrike.catalog_entry().into();
+        if definition.casting_seconds == 0 && self.state.magic.last_instant_cast_at == Some(now) {
+            return Err(MagicError::InstantCastLimit);
+        }
+        self.magic.loadout.echo_strike.duration_seconds()?;
+        self.begin_validated_spell(definition, SpellEffect::EchoStrike(self.magic.loadout.echo_strike),
+            self.magic.loadout.echo_essence, cost, now);
         self.state.magic.auto_attempted = true;
         Ok(())
     }
@@ -470,16 +526,21 @@ impl Combatant {
             !self.magic.loadout.silenced,
             false,
         )?;
+        self.begin_validated_spell(definition, effect, essence_index, cost, now);
+        Ok(())
+    }
+
+    fn begin_validated_spell(&mut self, definition: SpellDefinition, effect: SpellEffect,
+        essence_index: usize, cost: u32, now: u32) {
         self.state.magic.now = now;
         if definition.casting_seconds == 0 {
             self.state.magic.last_instant_cast_at = Some(now);
         }
-        let message = format!(
-            "Casting {} ({} seconds)",
-            definition.name, definition.casting_seconds
-        );
+        self.state.magic.event_fmt(SpellEventKind::CastStarted, 0,
+            format_args!("Casting {} ({} seconds)", definition.name, definition.casting_seconds));
         if !self.state.magic.started_spells.contains(&definition.id) {
             self.state.magic.started_spells.push(definition.id.clone());
+            self.refresh_prepared_spell_eligibility();
         }
         self.state.magic.casting = Some(CastingSpell {
             started_at: now,
@@ -490,10 +551,6 @@ impl Combatant {
             effect,
         });
         self.state.magic.last_cast_at = Some(now);
-        self.state
-            .magic
-            .event(SpellEventKind::CastStarted, 0, message);
-        Ok(())
     }
 
     fn begin_spell_fatigue(&mut self, now: u32, seconds: u32) {
@@ -555,10 +612,10 @@ impl Combatant {
         if time_advanced {
             self.begin_spell_fatigue(now, 5);
         }
-        self.state.magic.event(
+        self.state.magic.event_fmt(
             SpellEventKind::CastCancelled,
             0,
-            format!("{name} cancelled"),
+            format_args!("{name} cancelled"),
         );
         Ok(())
     }
@@ -584,10 +641,10 @@ impl Combatant {
                 .talents
                 .fatigue_seconds(cast.definition.casting_seconds),
         );
-        self.state.magic.event(
+        self.state.magic.event_fmt(
             SpellEventKind::CastInterrupted,
             cast.cost,
-            format!("{} interrupted", cast.definition.name),
+            format_args!("{} interrupted", cast.definition.name),
         );
     }
 
@@ -612,10 +669,10 @@ impl Combatant {
                 .talents
                 .fatigue_seconds(cast.definition.casting_seconds),
         );
-        self.state.magic.event(
+        self.state.magic.event_fmt(
             SpellEventKind::ChannelStopped,
             0,
-            format!("Stopped channelling {}", cast.definition.name),
+            format_args!("Stopped channelling {}", cast.definition.name),
         );
         Ok(())
     }
@@ -635,11 +692,13 @@ impl Combatant {
         if self.magic.loadout.arms_restricted {
             return Err(MagicError::SomaticComponentBlocked);
         }
-        if self.state.magic.armed_echo.is_none() && self.state.magic.echoes.is_empty() {
+        if self.state.magic.armed_echo.is_none() && self.state.magic.echoes.is_empty() && self.state.magic.compact_echoes.is_empty() {
             return Err(MagicError::NoActiveSpell);
         }
         self.state.magic.armed_echo = None;
         self.state.magic.echoes.clear();
+        self.state.magic.compact_echoes.clear();
+        self.state.magic.next_echo_at = None;
         self.state
             .magic
             .event(SpellEventKind::Dismissed, 0, "Echo Strike dismissed");
@@ -675,10 +734,10 @@ impl Combatant {
             .active_effects
             .retain(|effect| effect.id != effect_id);
         self.state.magic.owned_buffs.retain(|id| id != effect_id);
-        self.state.magic.event(
+        self.state.magic.event_fmt(
             SpellEventKind::Dismissed,
             0,
-            format!("Dismissed {effect_id}"),
+            format_args!("Dismissed {effect_id}"),
         );
         Ok(())
     }
@@ -785,10 +844,10 @@ impl Combatant {
                     .talents
                     .fatigue_seconds(cast.definition.casting_seconds),
             );
-            self.state.magic.event(
+            self.state.magic.event_fmt(
                 SpellEventKind::CastFailed,
                 cast.cost,
-                format!(
+                format_args!(
                     "{} failed ({failure}% equipment/encumbrance failure)",
                     cast.definition.name
                 ),
@@ -817,16 +876,16 @@ impl Combatant {
             }
         }
 
-        self.state.magic.event(
+        self.state.magic.event_fmt(
             SpellEventKind::CastCompleted,
             cast.cost,
-            format!("{} cast successfully", cast.definition.name),
+            format_args!("{} cast successfully", cast.definition.name),
         );
         if cast.definition.channelled {
-            self.state.magic.event(
+            self.state.magic.event_fmt(
                 SpellEventKind::ChannelStarted,
                 0,
-                format!("Channelling {}", cast.definition.name),
+                format_args!("Channelling {}", cast.definition.name),
             );
             self.state.magic.channeling = Some(cast);
         } else {
@@ -852,6 +911,37 @@ impl Combatant {
         self.state.add_effect(buff);
     }
 
+    pub(super) fn install_spell_plan(&mut self, plan: PreparedSpellPolicies) {
+        self.state.magic.spell_plan = Some(plan);
+        self.refresh_prepared_spell_eligibility();
+    }
+
+    fn refresh_prepared_spell_eligibility(&mut self) {
+        if let Some(plan) = &self.state.magic.spell_plan {
+            self.state.magic.eligible_policy = plan.0.iter().any(|spell|
+                self.magic.loadout.ai_for(&spell.id) == crate::core::magic::SpellCastAi::AsOftenAsPossible
+                    || !self.state.magic.started_spells.contains(&spell.id));
+        }
+    }
+
+    pub(super) fn has_eligible_spell_policy(&self) -> bool {
+        if self.state.magic.spell_plan.is_some() { return self.state.magic.eligible_policy; }
+        use crate::core::magic::SpellCastAi;
+        let eligible = |id: &str| match self.magic.loadout.ai_for(id) {
+            SpellCastAi::Manual => false,
+            SpellCastAi::AtFightStart => !self
+                .state
+                .magic
+                .started_spells
+                .iter()
+                .any(|started| started == id),
+            SpellCastAi::AsOftenAsPossible => true,
+        };
+        let loadout = &self.magic.loadout;
+        loadout.known_spells.iter().any(|id| eligible(id))
+            || (loadout.knows_echo_strike && eligible("echo_strike"))
+    }
+
     fn try_spell_policies(&mut self, now: u32) {
         use crate::core::magic::SpellCastAi;
         if self.magic.loadout.known_spells.is_empty() && !self.magic.loadout.knows_echo_strike {
@@ -867,30 +957,14 @@ impl Combatant {
         {
             return;
         }
-        let eligible = |id: &str| match self.magic.loadout.ai_for(id) {
-            SpellCastAi::Manual => false,
-            SpellCastAi::AtFightStart => !self
-                .state
-                .magic
-                .started_spells
-                .iter()
-                .any(|started| started == id),
-            SpellCastAi::AsOftenAsPossible => true,
-        };
-        if !self
-            .magic
-            .loadout
-            .known_spells
-            .iter()
-            .any(|id| eligible(id))
-            && !(self.magic.loadout.knows_echo_strike && eligible("echo_strike"))
-        {
+        if !self.has_eligible_spell_policy() {
             return;
         }
         // Preserve catalog order within each priority without allocating and
         // sorting a spell list on every simulated second.
+        let plan = self.state.magic.spell_plan.clone();
         for already_started in [false, true] {
-            for spell in spell_catalog().iter() {
+            for spell in PreparedSpellPolicies::candidates(plan.as_ref()) {
                 let started = self
                     .state
                     .magic
@@ -921,7 +995,6 @@ impl Combatant {
                 match spell.kind {
                     SpellKind::EchoStrike => {
                         if self.state.magic.armed_echo.is_some()
-                            || self.validate_echo_cast().is_err()
                         {
                             continue;
                         }
@@ -961,10 +1034,10 @@ impl Combatant {
         }
         self.state.magic.auto_attempted = true;
         if let Err(error) = self.cast_echo_strike(now) {
-            self.state.magic.event(
+            self.state.magic.event_fmt(
                 SpellEventKind::CastRejected,
                 0,
-                format!("Echo Strike not cast: {error}"),
+                format_args!("Echo Strike not cast: {error}"),
             );
         }
     }
@@ -993,9 +1066,10 @@ pub(crate) fn on_attack_resolved(
             if now < buff.expires_at {
                 let state = &mut combatants[attacker].state.magic;
                 for ordinal in 0..=buff.options.additional_echoes {
-                    state.echoes.push(ScheduledEcho {
-                        due_at: now
-                            .saturating_add(buff.options.delay_seconds.saturating_mul(ordinal + 1)),
+                    let due_at = now.saturating_add(buff.options.delay_seconds.saturating_mul(ordinal + 1));
+                    state.next_echo_at = Some(state.next_echo_at.map_or(due_at, |previous| previous.min(due_at)));
+                    let echo = ScheduledEcho {
+                        due_at,
                         target: defender,
                         damage: if buff.options.full_damage {
                             damage.max(0)
@@ -1012,13 +1086,15 @@ pub(crate) fn on_attack_resolved(
                         cast_id: buff.cast_id,
                         weapon_slot: slot,
                         is_ranged,
-                        original_roll: roll.clone(),
-                    });
+                        original_roll: EchoRoll::from(roll),
+                    };
+                    if state.quiet { state.compact_echoes.push(echo); }
+                    else { state.echoes.push(echo.with_roll(roll.clone())); }
                 }
-                state.event(
+                state.event_fmt(
                     SpellEventKind::BuffDischarged,
                     0,
-                    format!(
+                    format_args!(
                         "Echo Strike discharged: {} echo(es), first in {}s",
                         buff.options.additional_echoes + 1,
                         buff.options.delay_seconds
@@ -1035,17 +1111,25 @@ pub(crate) fn on_attack_resolved(
 pub(crate) fn take_due_echoes(
     combatants: &mut [Combatant],
     now: u32,
-) -> Vec<(usize, ScheduledEcho)> {
+) -> Vec<(usize, ScheduledEcho<EchoRoll>)> {
     let mut due = Vec::new();
     for (caster, combatant) in combatants.iter_mut().enumerate() {
+        if combatant.state.magic.quiet && combatant.state.magic.next_echo_at.is_none_or(|time| time > now) {
+            continue;
+        }
         for echo in combatant
             .state
             .magic
             .echoes
             .extract_if(.., |echo| echo.due_at <= now)
         {
-            due.push((caster, echo));
+            let roll = EchoRoll::from(&echo.original_roll);
+            due.push((caster, echo.with_roll(roll)));
         }
+        let magic = &mut combatant.state.magic;
+        due.extend(magic.compact_echoes.extract_if(.., |echo| echo.due_at <= now).map(|echo| (caster, echo)));
+        magic.next_echo_at = magic.echoes.iter().map(|e| e.due_at)
+            .chain(magic.compact_echoes.iter().map(|e| e.due_at)).min();
     }
     due.sort_by_key(|(caster, echo)| (echo.due_at, *caster, echo.cast_id, echo.ordinal));
     due
@@ -1055,9 +1139,10 @@ pub(crate) fn take_due_echoes(
 pub(crate) fn has_pending_echoes(combatants: &[Combatant]) -> bool {
     combatants.iter().any(|caster| {
         (!caster.magic.loadout.echo_requires_living_caster || caster.state.hp > 0)
-            && caster.state.magic.echoes.iter().any(|echo| {
+            && caster.state.magic.echoes.iter().map(|e| e.target)
+                .chain(caster.state.magic.compact_echoes.iter().map(|e| e.target)).any(|idx| {
                 combatants
-                    .get(echo.target)
+                    .get(idx)
                     .is_some_and(|target| target.state.hp > 0)
             })
     })

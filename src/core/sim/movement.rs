@@ -129,12 +129,12 @@ pub(crate) fn range_modifier_for_weapon_with_scale(
     distance: f32,
     scale: f32,
 ) -> Option<i32> {
-    let bands = ranged_bands_for_weapon(weapon)?;
-    let max_range = bands
-        .band_8
-        .max(bands.band_6)
-        .max(bands.band_4)
-        .max(bands.band_0);
+    let (bands, max_range) = if let Some(max) = weapon.built_max_range() {
+        (RangeBands::from_array(weapon.range_bands_feet?), max?)
+    } else {
+        let bands = ranged_bands_for_weapon(weapon)?;
+        (bands, bands.band_8.max(bands.band_6).max(bands.band_4).max(bands.band_0))
+    };
     let scale = if scale > 0.0 { scale } else { 1.0 };
     let effective_distance = distance * scale;
     if max_range > 0.0 && effective_distance > max_range {
@@ -178,6 +178,7 @@ pub fn range_bands_for_weapon_name(name: &str) -> Option<[f32; 4]> {
 }
 
 pub(crate) fn max_range_for_weapon(weapon: &WeaponProfile) -> Option<f32> {
+    if let Some(max) = weapon.built_max_range() { return max; }
     ranged_bands_for_weapon(weapon).map(|bands| {
         bands
             .band_8
@@ -185,4 +186,39 @@ pub(crate) fn max_range_for_weapon(weapon: &WeaponProfile) -> Option<f32> {
             .max(bands.band_4)
             .max(bands.band_0)
     })
+}
+
+/// Pre-strike duel geometry retained until a hit qualifies for an evasion roll.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct DuelEscape {
+    pub from: super::GridPos,
+    pub attacker: super::GridPos,
+    pub config: super::SimConfig,
+}
+
+impl DuelEscape {
+    pub fn directions(self) -> Option<[(i32, i32); 3]> {
+        let Self { from, attacker, .. } = self;
+        let dx = from.x - attacker.x;
+        let dy = from.y - attacker.y;
+        let away = if dx.abs() >= dy.abs() && dx != 0 {
+            (dx.signum(), 0)
+        } else if dy != 0 {
+            (0, dy.signum())
+        } else {
+            return None;
+        };
+        Some([away, (-away.1, away.0), (away.1, -away.0)])
+    }
+
+    pub fn destination(self) -> Option<super::GridPos> {
+        let from = self.from;
+        let steps = (5.0 / self.config.tile_size_ft.max(0.01)).ceil() as i32;
+        self.directions()?.into_iter().find_map(|(dx, dy)| {
+            let x = from.x.checked_add(dx * steps.max(1))?;
+            let y = from.y.checked_add(dy * steps.max(1))?;
+            (x >= 0 && x < self.config.grid_width && y >= 0 && y < self.config.grid_height)
+                .then_some(super::GridPos::new(x, y))
+        })
+    }
 }

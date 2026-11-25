@@ -10,6 +10,49 @@ pub enum DamageSource {
     Ability { name: String },
 }
 
+/// Capture immutable equipment at impact; only materialise a display string at the output boundary.
+#[derive(Clone, Debug)]
+pub(super) enum ImpactSource {
+    Weapon(std::sync::Arc<WeaponProfile>, WeaponSlot),
+    Punch,
+    Eyesmite,
+    Echo,
+    Spell(std::sync::Arc<crate::core::magic::SpellCatalogEntry>),
+    NamedSpell(String),
+}
+
+impl ImpactSource {
+    pub(super) fn spell(effect: &super::ConfiguredEffect) -> Self {
+        if effect.name == effect.catalog.name {
+            Self::Spell(effect.catalog.clone())
+        } else {
+            Self::NamedSpell(effect.name.clone())
+        }
+    }
+
+    pub(super) fn describe(&self) -> DamageSource {
+        match self {
+            Self::Weapon(weapon, slot) => DamageSource::weapon(weapon, *slot),
+            Self::Punch => DamageSource::Unarmed { name: "Near-perfect defense punch".into() },
+            Self::Eyesmite => DamageSource::Ability { name: "Eyesmite".into() },
+            Self::Echo => DamageSource::Spell { name: "Echo Strike".into() },
+            Self::Spell(spell) => DamageSource::Spell { name: spell.name.clone() },
+            Self::NamedSpell(name) => DamageSource::Spell { name: name.clone() },
+        }
+    }
+
+    pub(super) fn same_identity(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Weapon(a, slot_a), Self::Weapon(b, slot_b)) =>
+                slot_a == slot_b && std::sync::Arc::ptr_eq(a, b),
+            (Self::Spell(a), Self::Spell(b)) => a.name == b.name,
+            (Self::NamedSpell(a), Self::NamedSpell(b)) => a == b,
+            (Self::Echo, Self::Echo) | (Self::Punch, Self::Punch) | (Self::Eyesmite, Self::Eyesmite) => true,
+            _ => false,
+        }
+    }
+}
+
 impl DamageSource {
     pub(super) fn weapon(weapon: &WeaponProfile, slot: WeaponSlot) -> Self {
         if weapon.is_unarmed {

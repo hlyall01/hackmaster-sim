@@ -1,4 +1,4 @@
-import init, { run_web_job, run_web_bulk_shard_quiet, merge_web_bulk_shards } from './pkg/sim_gui.js';
+import init, { run_web_job, run_web_bulk_shard_quiet, merge_web_bulk_shards } from './sim-module.js';
 import { bulkWorkerCount, BulkQueue } from './worker-pool.js';
 
 let ready;
@@ -34,12 +34,24 @@ function fail(job, error) {
   job.reject(error);
 }
 function report(job) {
-  self.postMessage(JSON.stringify({ progress: [job.queue.progress(), job.runs] }));
+  const now = performance.now();
+  if (job.lastReported > 0 && !job.queue.done && now - job.lastReport < 50) return;
+  const completed = job.queue.progress();
+  if (completed === job.lastReported) return;
+  job.lastReport = now;
+  job.lastReported = completed;
+  self.postMessage(JSON.stringify({ progress: [completed, job.runs] }));
+}
+// serde_json emits a compact Result envelope. Keep the payload opaque, including u64 counters.
+function shardReply(data) {
+  if (typeof data !== 'string') return data;
+  if (data.startsWith('{"Ok":') && data.endsWith('}')) return { shard: data.slice(6, -1) };
+  return JSON.parse(data);
 }
 function finish(job) {
   if (!job.queue.done) return false;
   try {
-    const result = merge_web_bulk_shards(job.request, JSON.stringify(job.queue.results), performance.now() - job.start);
+    const result = merge_web_bulk_shards(job.request, ('[' + job.queue.results.join(',') + ']'), performance.now() - job.start);
     activeJob = null;
     job.resolve(result);
   } catch (error) { fail(job, error); }
@@ -51,7 +63,7 @@ function assign(entry) {
   const range = job.queue.take(entry);
   if (!range) return;
   entry.assignment = job;
-  entry.worker.postMessage({ request: job.request, firstRun: range.firstRun, runs: range.runs });
+  entry.worker.postMessage({ request: job.request, firstRun: range.firstRun, runs: range.runs, serialized: true });
 }
 function workerError(entry, error) {
   const job = entry.assignment;
@@ -74,7 +86,7 @@ function startWorkers(job) {
       };
       worker.onmessage = ({ data }) => {
         try {
-          const value = typeof data === 'string' ? JSON.parse(data) : data;
+          const value = shardReply(data);
           if (value.ready) {
             entry.ready = true;
             assign(entry);
@@ -88,7 +100,9 @@ function startWorkers(job) {
               owner.queue.update(entry, value.progress[0]);
               report(owner);
             } else {
-              owner.queue.finish(entry, value.Ok);
+              const shard = value.shard ?? JSON.stringify(value.Ok);
+              if (typeof shard !== 'string' || !shard.length) throw new Error('Invalid bulk shard reply');
+              owner.queue.finish(entry, shard);
               entry.assignment = null;
               report(owner);
               if (!finish(owner)) assign(entry);
@@ -116,9 +130,9 @@ function scheduleLocal(job) {
     const range = job.queue.take(localWorker, 250);
     if (!range) return;
     try {
-      const result = JSON.parse(run_web_bulk_shard_quiet(job.request, range.firstRun, range.runs));
+      const result = shardReply(run_web_bulk_shard_quiet(job.request, range.firstRun, range.runs));
       if (result.Err) throw new Error(result.Err);
-      job.queue.finish(localWorker, result.Ok);
+      job.queue.finish(localWorker, result.shard ?? JSON.stringify(result.Ok));
       report(job);
       if (!finish(job)) {
         startWorkers(job);
@@ -131,11 +145,12 @@ function runBulk(request, runs, count) {
   return new Promise((resolve, reject) => {
     const job = { request, runs, count, queue: new BulkQueue(runs, count), start: performance.now(), localScheduled: false, resolve, reject };
     activeJob = job;
+    report(job);
     nestedWorkersAvailable = true;
     for (let index = pool.length - 1; index >= 0; index--) {
       if (pool[index].dead) pool.splice(index, 1);
     }
-    // Lowering the slider releases surplus idle workers and their memory.
+    // A smaller job can use fewer workers than the existing pool.
     while (pool.length > count) terminate(pool.pop());
     if (runs <= 100000 && pool.filter(entry => entry.ready).length === count) {
       job.queue.chunkSize = Math.ceil(runs / count);

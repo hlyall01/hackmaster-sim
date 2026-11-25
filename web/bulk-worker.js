@@ -1,4 +1,4 @@
-import init, { run_web_bulk_shard } from './pkg/sim_gui.js';
+import init, { run_web_bulk_shard } from './sim-module.js';
 
 let ready;
 function initialize(module) {
@@ -16,7 +16,9 @@ self.onmessage = async ({ data }) => {
   try {
     if (!data.request) { await initialize(data.module); return; }
     await initialize();
-    self.postMessage(run_web_bulk_shard(data.request, data.firstRun, data.runs));
+    const result = run_web_bulk_shard(data.request, data.firstRun, data.runs);
+    self.postMessage(data.serialized && result.startsWith('{"Ok":') && result.endsWith('}')
+      ? { shard: result.slice(6, -1) } : result);
   } catch (error) {
     self.postMessage(JSON.stringify({ Err: `Calculation failed: ${String(error)}` }));
   }

@@ -1,5 +1,5 @@
 use rand::Rng;
-use super::damage_sources::DamageSource;
+use super::damage_sources::{DamageSource, ImpactSource};
 
 use crate::core::rules::{DamageExprCache, clean_damage_expr, penetrating_roll, roll_damage_expr};
 
@@ -40,7 +40,7 @@ const CHARGE_ATTACK_BONUS: i32 = 4;
 const CHARGE_DEFENSE_PENALTY_SECONDS: i32 = 5;
 const CHARGE_DEFENSE_EFFECT_ID: &str = "charge_defense_penalty";
 pub(crate) fn aggressive_attack_bonus(combatant: &Combatant) -> i32 {
-    5 + i32::from(combatant.apply_i32(StatIdI32::FlagProjectConfidence, 0) > 0)
+    5 + i32::from(combatant.combat_flag_active(StatIdI32::FlagProjectConfidence))
 }
 
 fn aggressive_attack_available(combatant: &Combatant, mode: AttackMode, ranged: bool) -> bool {
@@ -68,7 +68,7 @@ const DEFAULT_SHIELD_BLOCK_WINDOW: i32 = 10;
 pub(crate) fn resolve_echo(
     combatants: &mut [Combatant],
     caster: usize,
-    echo: &super::magic::ScheduledEcho,
+    echo: &super::magic::ScheduledEcho<super::magic::EchoRoll>,
     distance_ft: f32,
     now: u32,
     rng: &mut impl Rng,
@@ -104,17 +104,23 @@ pub(crate) fn resolve_echo(
         combatants[caster].state.magic.event(SpellEventKind::EchoSkipped, 0, "Echo Strike dissipated: target unavailable or configured caster/range requirement not met");
         return None;
     }
-    let attack_bonus = attack_profile_for_slot(attacker, echo.weapon_slot)
-        .map(|profile| profile.attack_bonus)
-        .unwrap_or(echo.original_roll.attack_bonus)
-        + if regenstat_active(combatants, caster) {
-            regenstat_stack_from_state(&attacker.state)
-        } else {
-            0
-        }
-        - fight_defensively_attack_penalty(attacker);
-    let attack_falling_sun = attacker.apply_i32(StatIdI32::FlagFallingSunStyle, 0) > 0;
     let defender = &combatants[target];
+    let echo_rules = StatIdI32::FlagRegenstatStyle.bit() | StatIdI32::FlagFallingSunStyle.bit()
+        | StatIdI32::FlagPilgrimsPathStyle.bit();
+    let attacker_rules = effective_rules(attacker, echo_rules);
+    let defender_rules = effective_rules(defender, echo_rules);
+    // Only the current attack bonus transfers to an echo; it never rolls weapon damage.
+    let base_attack = match echo.weapon_slot {
+        WeaponSlot::Primary => Some(attacker.sheet.offense.attack_bonus),
+        WeaponSlot::Secondary => attacker.sheet.offense.offhand.as_ref().map(|w| w.attack_bonus),
+    };
+    let attack_bonus = base_attack.map(|base| attacker.apply_i32(StatIdI32::AttackBonus, base))
+        .unwrap_or(echo.original_roll.attack_bonus)
+        + if attacker_rules.has(StatIdI32::FlagRegenstatStyle) {
+            regenstat_stack_from_state(&attacker.state)
+        } else { 0 }
+        - fight_defensively_attack_penalty(attacker);
+    let attack_falling_sun = attacker_rules.has(StatIdI32::FlagFallingSunStyle);
     let shield = defender.state.shield_intact;
     let sides = defense_die_sides(
         echo.is_ranged,
@@ -133,15 +139,15 @@ pub(crate) fn resolve_echo(
     let (attack_die, _) = roll_attack_or_defense_d20(attack_falling_sun, rng);
     let (defense_die, _) = if sides == 20 {
         roll_attack_or_defense_d20(
-            defender.apply_i32(StatIdI32::FlagFallingSunStyle, 0) > 0,
+            defender_rules.has(StatIdI32::FlagFallingSunStyle),
             rng,
         )
     } else {
         penetrating_roll_with_first(sides, rng)
     };
-    let stance = fight_defensively_defense_bonus(defender)
+    let stance = stance_defense_bonus(defender, defender_rules.has(StatIdI32::FlagPilgrimsPathStyle))
         + common_defense_bonus(defender)
-        + if regenstat_active(combatants, target) {
+        + if defender_rules.has(StatIdI32::FlagRegenstatStyle) {
             regenstat_stack_from_state(&defender.state)
         } else {
             0
@@ -204,7 +210,7 @@ pub(crate) fn resolve_echo(
     let precognition_triggered = hit
         && !echo.is_ranged
         && defender.sheet.defense.precognition
-        && defender.state.precognition_space_available
+        && defender.state.has_escape_space()
         && feat_of_agility_succeeds(defender, roll.attack_total - roll.defense_total, rng);
     let raw_damage = if !hit {
         0
@@ -267,10 +273,10 @@ const CALLED_SHOT_PRECISION_BONUS_SCALE_BASE: i32 = 8;
 const TWELVE_PATHS_DAMAGE_PENALTY: i32 = 3;
 
 fn reaper_extra_dice_multiplier(
-    attacker: &Combatant,
+    attacker_rules: CombatFlags,
     weapon: Option<&super::types::WeaponProfile>,
 ) -> i32 {
-    if attacker.apply_i32(StatIdI32::FlagReaperOfTermonStyle, 0) > 0
+    if attacker_rules.has(StatIdI32::FlagReaperOfTermonStyle)
         && weapon.is_some_and(|weapon| {
             matches!(
                 weapon.name.to_ascii_lowercase().as_str(),
@@ -284,10 +290,16 @@ fn reaper_extra_dice_multiplier(
     }
 }
 
-fn style_armor_penetration(attacker: &Combatant, defender: &Combatant, base: i32) -> i32 {
-    if attacker.apply_i32(StatIdI32::FlagOnePathCrushingStyle, 0) > 0
+fn impact_armor(defender: &Combatant, penetration: i32, attacker_rules: CombatFlags) -> (i32, i32, bool, i32) {
+    (defender.apply_i32(StatIdI32::ArmorDr, defender.sheet.defense.armor_dr),
+     defender.apply_i32(StatIdI32::NaturalDr, defender.sheet.defense.natural_dr),
+     defender.sheet.defense.armor_is_heavy, style_armor_penetration(attacker_rules, defender, penetration))
+}
+
+fn style_armor_penetration(attacker_rules: CombatFlags, defender: &Combatant, base: i32) -> i32 {
+    if attacker_rules.has(StatIdI32::FlagOnePathCrushingStyle)
         && !defender.sheet.defense.armor_is_heavy
-        && !(defender.apply_i32(StatIdI32::FlagNpcCombatant, 0) > 0
+        && !(defender.combat_flag_active(StatIdI32::FlagNpcCombatant)
             && defender.apply_i32(StatIdI32::ArmorDr, defender.sheet.defense.armor_dr) >= 5)
     {
         return 0;
@@ -357,6 +369,7 @@ pub(crate) fn resolve_style_strike_chain(
     ) else {
         return Vec::new();
     };
+    if first.hit || !has_evonia(&combatants[defender_idx]) { return vec![first]; }
     let mut extra = resolve_evonia_counters(
         combatants,
         attacker_idx,
@@ -372,6 +385,10 @@ pub(crate) fn resolve_style_strike_chain(
     results
 }
 
+fn has_evonia(actor: &Combatant) -> bool {
+    actor.combat_flag_active(StatIdI32::FlagLeftHandOfEvoniaStyle)
+}
+
 fn resolve_evonia_counters(
     combatants: &mut [Combatant],
     attacker_idx: usize,
@@ -382,11 +399,6 @@ fn resolve_evonia_counters(
     now: f32,
     rng: &mut impl Rng,
 ) -> Vec<CounterAttackOutcome> {
-    if combatants[attacker_idx].apply_i32(StatIdI32::FlagLeftHandOfEvoniaStyle, 0) == 0
-        && combatants[defender_idx].apply_i32(StatIdI32::FlagLeftHandOfEvoniaStyle, 0) == 0
-    {
-        return Vec::new();
-    }
     let mut pending = std::collections::VecDeque::new();
     if let Some(counter) = normal_counter {
         distance_ft += counter.knockback_ft;
@@ -433,6 +445,21 @@ struct AttackProfile {
 }
 
 fn attack_profile_for_slot(attacker: &Combatant, slot: WeaponSlot) -> Option<AttackProfile> {
+    if slot == WeaponSlot::Primary && attacker.state.active_effects.is_empty() {
+        if let Some(p) = &attacker.state.prepared {
+            let weapon = &attacker.sheet.offense.weapon;
+            let ideal_self_damage = attacker.ideal_self_bonuses().damage;
+            return Some(AttackProfile {
+                weapon: weapon.clone(), attack_bonus: p.attack + attacker.intimidation_penalty(),
+                ideal_self_damage,
+                strength_damage: p.strength + ideal_self_damage + if !attacker.state.shield_intact && p.lost_shield_penalty {
+                    TWELVE_PATHS_DAMAGE_PENALTY
+                } else { 0 },
+                armor_penetration: p.penetration, use_jab: weapon.use_jab,
+                uses_projectiles: weapon.uses_projectiles, damage_penalty: 0,
+            });
+        }
+    }
     match slot {
         WeaponSlot::Primary => Some(AttackProfile {
             ideal_self_damage: attacker.ideal_self_bonuses().damage,
@@ -443,7 +470,7 @@ fn attack_profile_for_slot(attacker: &Combatant, slot: WeaponSlot) -> Option<Att
                 WeaponSlot::Primary,
                 attacker.sheet.offense.strength_damage,
             ) + if !attacker.state.shield_intact
-                && attacker.apply_i32(StatIdI32::FlagLargeSwordShieldStyle, 0) > 0
+                && effective_rules(attacker, StatIdI32::FlagLargeSwordShieldStyle.bit()).has(StatIdI32::FlagLargeSwordShieldStyle)
             {
                 TWELVE_PATHS_DAMAGE_PENALTY
             } else {
@@ -475,8 +502,7 @@ fn attack_profile_for_slot(attacker: &Combatant, slot: WeaponSlot) -> Option<Att
                     ),
                     use_jab: offhand.weapon.use_jab,
                     uses_projectiles: offhand.weapon.uses_projectiles,
-                    damage_penalty: if attacker.apply_i32(StatIdI32::FlagLeftHandOfEvoniaStyle, 0)
-                        > 0
+                    damage_penalty: if attacker.combat_flag_active(StatIdI32::FlagLeftHandOfEvoniaStyle)
                     {
                         0
                     } else {
@@ -502,6 +528,7 @@ pub(crate) struct AttackStateSnapshot {
 impl AttackStateSnapshot {
     pub fn capture(combatant: &Combatant, opponent_idx: usize) -> Self {
         let state = &combatant.state;
+        let (movement_melee_bonus, movement_ranged_distance) = state.movement_spell_defense();
         Self {
             next_attack_time_primary: state.next_attack_time_primary,
             next_attack_time_secondary: state.next_attack_time_secondary,
@@ -509,11 +536,10 @@ impl AttackStateSnapshot {
             shield_intact: state.shield_intact,
             moved_last_tick: state.moved_last_tick,
             regenstat_stacks: state.regenstat_stacks,
-            movement_melee_bonus: state.movement_spell_defense().0,
-            movement_ranged_distance: state.movement_spell_defense().1,
-            deceptive_defender_seen_attacker: state
-                .deceptive_defender_seen_attackers
-                .contains(&opponent_idx),
+            movement_melee_bonus,
+            movement_ranged_distance,
+            deceptive_defender_seen_attacker: combatant.sheet.maneuvers.called_shot_deceptive_defender
+                && state.has_seen_attacker(opponent_idx),
         }
     }
     fn defense_ready(&self, sheet: &super::types::CombatantSheet, now: f32) -> bool {
@@ -548,7 +574,7 @@ fn regenstat_stack_from_state(state: &CombatantState) -> i32 {
 }
 
 fn regenstat_active(combatants: &[Combatant], idx: usize) -> bool {
-    combatants[idx].apply_i32(StatIdI32::FlagRegenstatStyle, 0) > 0
+    combatants[idx].combat_flag_active(StatIdI32::FlagRegenstatStyle)
 }
 
 pub(crate) fn preview_attack_bonus(combatant: &Combatant, slot: WeaponSlot) -> i32 {
@@ -571,7 +597,7 @@ pub(crate) fn preview_damage_bonus(combatant: &Combatant, slot: WeaponSlot, is_r
 }
 
 pub(crate) fn persistent_defense_bonus(combatant: &Combatant) -> i32 {
-    if combatant.apply_i32(StatIdI32::FlagPilgrimsPathStyle, 0) > 0 { 4 } else { 0 }
+    if combatant.combat_flag_active(StatIdI32::FlagPilgrimsPathStyle) { 4 } else { 0 }
 }
 
 pub(crate) struct DefensePreview {
@@ -638,6 +664,10 @@ fn common_defense_bonus(combatant: &Combatant) -> i32 {
 }
 
 fn fight_defensively_defense_bonus(combatant: &Combatant) -> i32 {
+    stance_defense_bonus(combatant, combatant.combat_flag_active(StatIdI32::FlagPilgrimsPathStyle))
+}
+
+fn stance_defense_bonus(combatant: &Combatant, pilgrims_path: bool) -> i32 {
     let stance_bonus = if combatant.sheet.maneuvers.fight_defensively {
         combatant
             .sheet
@@ -654,7 +684,7 @@ fn fight_defensively_defense_bonus(combatant: &Combatant) -> i32 {
             .magic
             .defense_penalty(combatant.magic.talents)
         + combatant.state.tactical_give_ground_defense_bonus.max(0)
-        + persistent_defense_bonus(combatant)
+        + if pilgrims_path { 4 } else { 0 }
 }
 
 fn called_shot_active(combatant: &Combatant) -> bool {
@@ -712,9 +742,31 @@ fn update_regenstat_on_exchange(
     }
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct ImpactTotals {
+    pub direct: Option<(i32, i32)>,
+    pub armor_prevented: u32,
+    pub shield_prevented: u32,
+    pub shield_broken: bool,
+}
+
+impl ImpactTotals {
+    fn direct(raw: i32, armor: i32) -> Self {
+        Self { direct: Some((raw, (raw - armor).max(0))),
+            armor_prevented: raw.max(0).min(armor.max(0)) as u32, ..Self::default() }
+    }
+
+    fn shield(raw: i32, armor: i32, shield: i32, broken: bool) -> Self {
+        let shield = raw.max(0).min(shield.max(0));
+        Self { direct: None, armor_prevented: (raw.max(0) - shield).min(armor.max(0)) as u32,
+            shield_prevented: shield as u32, shield_broken: broken }
+    }
+}
+
 pub(crate) struct AttackOutcome {
+    pub(super) impact: ImpactTotals,
     pub is_aggressive: bool,
-    pub(super) damage_source: DamageSource,
+    pub(super) damage_source: ImpactSource,
     pub(super) attacker_idx: usize,
     pub(super) defender_idx: usize,
     pub(super) knockback_ft: f32,
@@ -739,7 +791,8 @@ pub(crate) struct AttackOutcome {
 }
 
 pub(crate) struct CounterAttackOutcome {
-    pub(super) damage_source: DamageSource,
+    pub(super) impact: ImpactTotals,
+    pub(super) damage_source: ImpactSource,
     pub(super) attacker_idx: usize,
     pub(super) defender_idx: usize,
     pub(super) knockback_ft: f32,
@@ -791,8 +844,11 @@ pub(crate) fn defense_die_sides(
     }
 }
 
+static TRAUMA_DICE: std::sync::LazyLock<DamageExprCache> = std::sync::LazyLock::new(|| DamageExprCache::new("5d6p"));
+static EYESMITE_DICE: std::sync::LazyLock<DamageExprCache> = std::sync::LazyLock::new(|| DamageExprCache::new("2d4p"));
+
 fn roll_die(sides: i32, rng: &mut impl Rng) -> i32 {
-    rng.gen_range(1..=sides)
+    crate::core::rules::bounded_die(sides, rng)
 }
 
 fn penetrating_roll_with_first(sides: i32, rng: &mut impl Rng) -> (i32, i32) {
@@ -1230,7 +1286,7 @@ pub struct WeaponDamageOption {
 
 fn opening_engagement_extra_dice(attacker: &Combatant) -> i32 {
     attacker.apply_i32(StatIdI32::OpeningEngagementExtraDamageDice,
-        i32::from(attacker.apply_i32(StatIdI32::FlagArmerociPoleStyle, 0) > 0)).max(0)
+        i32::from(attacker.combat_flag_active(StatIdI32::FlagArmerociPoleStyle))).max(0)
 }
 
 /// Available outcomes of the resolved weapon's rules, independent of the macro UI.
@@ -1278,11 +1334,7 @@ struct CloseHitDamage<'a> {
 
 impl CloseHitDamage<'_> {
     fn roll(&self, rng: &mut impl rand::Rng, average: bool, iron_multiplier: i32) -> i32 {
-        let multiplied;
-        let cache = if iron_multiplier > 1 {
-            multiplied = self.cache.with_multiplied_dice(iron_multiplier);
-            &multiplied
-        } else { self.cache };
+        let cache = self.cache.with_multiplied_dice(iron_multiplier);
         if average { average_damage_cache_rounded_down(cache, self.nonpenetrating) }
         else { cache.roll(rng, self.nonpenetrating) }
     }
@@ -1356,6 +1408,36 @@ fn roll_mounted_weapon_damage(
     roll_mounted_weapon_damage_with_multiplier(weapon, plan, use_jab, shield, 1, average, rng)
 }
 
+// A worker repeatedly encounters a handful of immutable body, Jab and shield
+// expressions. Key by their contents so edited weapons cannot reuse stale dice.
+fn mounted_base_pool(expr: &str, nonpenetrating: bool, cache: &DamageExprCache) -> std::rc::Rc<[DamageDie]> {
+    struct Entry {
+        expr: String,
+        nonpenetrating: bool,
+        curse: bool,
+        expanded: bool,
+        dice: std::rc::Rc<[DamageDie]>,
+    }
+    thread_local! {
+        static POOLS: std::cell::RefCell<std::collections::VecDeque<Entry>> = const {
+            std::cell::RefCell::new(std::collections::VecDeque::new())
+        };
+    }
+    let curse = cache.d6_penetration_triggers() == Some(CURSE_OF_AXE_D6_TRIGGERS);
+    let expanded = cache.penetrate_on_max_minus_one();
+    POOLS.with_borrow_mut(|entries| {
+        if let Some(entry) = entries.iter().find(|e| e.nonpenetrating == nonpenetrating
+            && e.curse == curse && e.expanded == expanded && e.expr == expr) {
+            return entry.dice.clone();
+        }
+        let dice: std::rc::Rc<[_]> = parse_damage_dice(expr, nonpenetrating,
+            cache.d6_penetration_triggers(), expanded).into();
+        if entries.len() == 16 { entries.pop_front(); }
+        entries.push_back(Entry { expr: expr.to_owned(), nonpenetrating, curse, expanded, dice: dice.clone() });
+        dice
+    })
+}
+
 fn roll_mounted_weapon_damage_with_multiplier(
     weapon: &super::WeaponProfile,
     plan: MountedDamagePlan,
@@ -1377,17 +1459,12 @@ fn roll_mounted_weapon_damage_with_multiplier(
     };
     let nonpenetrating = !shield && (use_jab || weapon.force_nonpenetrating_damage);
     let iron_multiplier = iron_multiplier.max(1) as usize;
-    let multiplied;
-    let cache = if iron_multiplier > 1 {
-        multiplied = cache.with_multiplied_dice(iron_multiplier as i32);
-        &multiplied
-    } else { cache };
+    let cache = cache.with_multiplied_dice(iron_multiplier as i32);
     if !plan.double_base_dice && plan.extra_smallest == 0 {
         return if average { average_damage_cache_rounded_down(cache, nonpenetrating) }
             else { cache.roll(rng, nonpenetrating) };
     }
-    let pool = parse_damage_dice(expr, nonpenetrating, cache.d6_penetration_triggers(),
-        cache.penetrate_on_max_minus_one());
+    let pool = mounted_base_pool(expr, nonpenetrating, cache);
     let extra = mounted_extra_dice_iter(&pool, plan)
         .flat_map(|die| std::iter::repeat_n(die, iron_multiplier));
     if average {
@@ -1537,7 +1614,7 @@ fn maybe_apply_trauma_with_failure(
         return None;
     }
     let duration = if trauma_roll == 20 {
-        roll_damage_expr("5d6p", rng, false) * 60
+        TRAUMA_DICE.roll(rng, false) * 60
     } else {
         // A forced failure lasts at least five seconds without manufacturing a natural 20.
         (trauma_roll - con_half).max(1) * 5
@@ -1565,11 +1642,6 @@ fn feat_of_agility_succeeds(combatant: &Combatant, difficulty: i32, rng: &mut im
     total >= difficulty.max(0)
 }
 
-fn is_buckler_or_small_shield(name: &str) -> bool {
-    let normalized = name.trim().to_ascii_lowercase();
-    normalized == "buckler" || (normalized.starts_with("small ") && normalized.contains("shield"))
-}
-
 fn resolve_eyesmite(
     combatants: &mut [Combatant],
     attacker_idx: usize,
@@ -1577,14 +1649,11 @@ fn resolve_eyesmite(
     now: f32,
     rng: &mut impl Rng,
 ) -> CounterAttackOutcome {
-    let drops_shield = combatants[attacker_idx].state.shield_intact
-        && combatants[attacker_idx]
-            .sheet
-            .defense
-            .shield_name
-            .as_deref()
-            .map(is_buckler_or_small_shield)
-            .unwrap_or(false);
+    let defender_rules = possible_strike_rules(&combatants[defender_idx]);
+    let actor = &combatants[attacker_idx];
+    let drops_shield = actor.state.shield_intact && actor.state.prepared.as_ref().map_or_else(
+        || super::prepared_fighter::drops_shield(actor.sheet.defense.shield_name.as_deref()),
+        |p| p.drops_shield_for_eyesmite);
     if drops_shield {
         combatants[attacker_idx].state.shield_intact = false;
     }
@@ -1609,7 +1678,8 @@ fn resolve_eyesmite(
     let shield_active = defender_state.shield_intact;
     let defense_mod = defender.apply_i32(StatIdI32::DefenseMod, defender.sheet.defense.defense_mod)
         + common_defense_bonus(defender)
-        + fight_defensively_defense_bonus(defender)
+        + stance_defense_bonus(defender, defender_rules & StatIdI32::FlagPilgrimsPathStyle.bit() != 0
+            && defender.combat_flag_active(StatIdI32::FlagPilgrimsPathStyle))
         - called_shot_defense_penalty(defender)
         + defender_state.movement_defense_bonus();
     let defense_ready = defender_state.defense_ready(&defender.sheet, now);
@@ -1667,15 +1737,17 @@ fn resolve_eyesmite(
     combatants[defender_idx].state.aggressive_defense_pending = false;
     let mut damage = 0;
     let mut trauma_seconds = None;
+    let mut impact = ImpactTotals::default();
+    let detailed = combatants[attacker_idx].state.prepared.is_none();
     let mut damage_breakdown = None;
     if hit {
         let rolled_damage = if combatants[defender_idx]
             .state
             .streamline_averages_incoming_damage
         {
-            DamageExprCache::new("2d4p").expected(false).floor() as i32
+            EYESMITE_DICE.expected(false).floor() as i32
         } else {
-            roll_damage_expr("2d4p", rng, false)
+            EYESMITE_DICE.roll(rng, false)
         };
         let raw_damage = (rolled_damage + strength_damage).max(0);
         damage = raw_damage;
@@ -1693,7 +1765,8 @@ fn resolve_eyesmite(
                 damage.saturating_mul(10),
             ));
         }
-        damage_breakdown = Some(DamageBreakdown {
+        impact = ImpactTotals::direct(raw_damage, 0);
+        damage_breakdown = detailed.then(|| DamageBreakdown {
             rolled_damage,
             strength_damage,
             raw_damage,
@@ -1714,10 +1787,14 @@ fn resolve_eyesmite(
         false,
         &roll,
     );
-    update_regenstat_on_exchange(combatants, attacker_idx, defender_idx, hit);
+    if (possible_strike_rules(&combatants[attacker_idx]) | possible_strike_rules(&combatants[defender_idx]))
+        & StatIdI32::FlagRegenstatStyle.bit() != 0 {
+        update_regenstat_on_exchange(combatants, attacker_idx, defender_idx, hit);
+    }
 
     CounterAttackOutcome {
-        damage_source: DamageSource::Ability { name: "Eyesmite".into() },
+        impact,
+        damage_source: ImpactSource::Eyesmite,
         attacker_idx,
         defender_idx,
         knockback_ft: 0.0,
@@ -1759,6 +1836,119 @@ pub(crate) fn apply_knockback_recovery(
     }
 }
 
+// Ordinary strikes and counters share the same rules implementation. When neither
+// participant can contribute these optional rules, Rust compiles their hooks out.
+const CRITICAL_DEFENSE_RULES: u64 = StatIdI32::FlagIncomingCritExtraDamageHalved.bit()
+    | StatIdI32::FlagIgnoreAncillaryCritEffects.bit();
+
+const STRIKE_RULES: u64 = StatIdI32::FlagHammererStyle.bit()
+    | StatIdI32::FlagHobblerStyle.bit()
+    | StatIdI32::FlagFallingSunStyle.bit()
+    | StatIdI32::FlagThreeMountainsStyle.bit()
+    | StatIdI32::FlagReturnerStyle.bit()
+    | StatIdI32::FlagArmerociPoleStyle.bit()
+    | StatIdI32::FlagRegenstatStyle.bit()
+    | StatIdI32::FlagQuietRiverStyle.bit()
+    | StatIdI32::FlagSixPathsStyle.bit()
+    | StatIdI32::FlagUnbreakableWallStyle.bit()
+    | StatIdI32::FlagSuperiorDefense.bit()
+    | StatIdI32::FlagEdgeCounter.bit()
+    | StatIdI32::FlagOnePathPiercingStyle.bit()
+    | StatIdI32::FlagOnePathCrushingStyle.bit()
+    | StatIdI32::FlagDefiant.bit()
+    | StatIdI32::FlagLeftHandOfEvoniaStyle.bit()
+    | StatIdI32::FlagPilgrimsPathStyle.bit()
+    | StatIdI32::FlagReaperOfTermonStyle.bit();
+
+fn possible_strike_rules(actor: &Combatant) -> u64 {
+    (actor.sheet.modifiers.positive_bits() | actor.state.active_effects.capabilities().integers) & STRIKE_RULES
+}
+
+#[derive(Clone, Copy, Default)]
+struct CombatFlags(u64);
+
+impl CombatFlags {
+    #[inline]
+    fn has(self, rule: StatIdI32) -> bool {
+        self.0 & rule.bit() != 0
+    }
+}
+
+fn strike_flags(actor: &Combatant) -> CombatFlags {
+    effective_rules(actor, STRIKE_RULES)
+}
+
+fn effective_rules(actor: &Combatant, mask: u64) -> CombatFlags {
+    let mut flags = actor.sheet.modifiers.positive_bits() & mask;
+    let mut overrides = actor.state.active_effects.capabilities().integers & mask;
+    if overrides != 0 {
+        for effect in actor.state.active_effects.iter() {
+            for stat in effect.modifiers.integer_stats() {
+                let bit = stat.bit();
+                if overrides & bit != 0 {
+                    if actor.apply_i32(stat, 0) > 0 { flags |= bit; } else { flags &= !bit; }
+                    overrides &= !bit;
+                }
+            }
+        }
+    }
+    CombatFlags(flags)
+}
+
+#[cfg(test)]
+#[test]
+fn strike_rule_dispatch_tracks_effect_grants_suppression_and_raw_edits() {
+    let mut actor = Combatant::default();
+    let flag = StatIdI32::FlagRegenstatStyle;
+    let mut effect = TemporaryEffect::new("penalty", 2);
+    effect.modifiers.add_i32(StatIdI32::DefenseMod, ModifierOpI32::Add(-2));
+    actor.state.add_effect(effect);
+    assert_eq!(possible_strike_rules(&actor), 0);
+
+    actor.state.active_effects[0].modifiers.add_i32(flag, ModifierOpI32::Set(1));
+    assert_ne!(possible_strike_rules(&actor) & flag.bit(), 0);
+    assert!(strike_flags(&actor).has(flag));
+    let mut suppress = TemporaryEffect::new("consume", 1);
+    suppress.consume_on_attack = true;
+    suppress.modifiers.add_i32(flag, ModifierOpI32::Add(-1));
+    actor.state.add_effect(suppress);
+    assert!(!strike_flags(&actor).has(flag));
+    actor.state.active_effects.retain(|e| !e.consume_on_attack);
+    assert!(strike_flags(&actor).has(flag));
+    actor.state.tick_effects();
+    actor.state.tick_effects();
+    assert_eq!(possible_strike_rules(&actor), 0);
+
+    actor.sheet.modifiers.add_i32(flag, ModifierOpI32::Set(-3));
+    let mut grant = TemporaryEffect::new("grant", 1);
+    grant.modifiers.add_i32(flag, ModifierOpI32::Add(2));
+    actor.state.add_effect(grant);
+    assert!(!strike_flags(&actor).has(flag));
+    actor.state.active_effects[0].modifiers.add_i32(flag, ModifierOpI32::Add(2));
+    assert!(strike_flags(&actor).has(flag));
+    actor.state.active_effects.clear();
+    assert_eq!(possible_strike_rules(&actor), 0);
+}
+
+#[cfg(test)]
+#[test]
+fn consumed_suppression_reenables_regenstat_for_the_same_exchange() {
+    let mut fighters = [Combatant::default(), Combatant::default()];
+    let attacker = &mut fighters[0];
+    attacker.sheet.offense.attack_bonus = 100;
+    attacker.state.regenstat_stacks = 3;
+    attacker.sheet.modifiers.add_i32(StatIdI32::FlagRegenstatStyle, ModifierOpI32::Set(1));
+    let mut effect = TemporaryEffect::new("suppress until next strike", 10);
+    effect.modifiers.add_i32(StatIdI32::FlagRegenstatStyle, ModifierOpI32::Set(0));
+    effect.consume_on_attack = true;
+    attacker.state.add_effect(effect);
+    let event = super::test_support::resolve_basic_attack(&mut fighters, 0, 1, 0, false, 0.0, 0.0,
+        &mut crate::core::rng::SimRng::from_seed(3));
+    assert!(event.hit);
+    assert_eq!(event.roll.attack_bonus, 100);
+    assert_eq!(fighters[0].state.regenstat_stacks, 4);
+}
+
 fn resolve_counter_attack(
     combatants: &mut [Combatant],
     attacker_idx: usize,
@@ -1773,10 +1963,37 @@ fn resolve_counter_attack(
     damage_multiplier: i32,
     rng: &mut impl Rng,
 ) -> CounterAttackOutcome {
-    let knockback_rule = super::knockback_rule_for_attack(
-        &combatants[attacker_idx], &combatants[defender_idx],
-        use_weapon.then_some(weapon_slot), false, false,
-    );
+    let rules = possible_strike_rules(&combatants[attacker_idx]) | possible_strike_rules(&combatants[defender_idx]);
+    if rules == 0 {
+        resolve_counter_attack_with_rules::<false>(
+            CombatFlags(rules), combatants, attacker_idx, defender_idx, now, weapon_slot, use_weapon,
+            ignore_armor, allow_critical, force_critical, superior_unarmed, damage_multiplier, rng,
+        )
+    } else {
+        resolve_counter_attack_with_rules::<true>(
+            CombatFlags(rules), combatants, attacker_idx, defender_idx, now, weapon_slot, use_weapon,
+            ignore_armor, allow_critical, force_critical, superior_unarmed, damage_multiplier, rng,
+        )
+    }
+}
+
+fn resolve_counter_attack_with_rules<const STYLES: bool>(
+    possible: CombatFlags,
+    combatants: &mut [Combatant],
+    attacker_idx: usize,
+    defender_idx: usize,
+    now: f32,
+    weapon_slot: WeaponSlot,
+    use_weapon: bool,
+    ignore_armor: bool,
+    allow_critical: bool,
+    force_critical: bool,
+    superior_unarmed: bool,
+    damage_multiplier: i32,
+    rng: &mut impl Rng,
+) -> CounterAttackOutcome {
+    let attacker_rules = if STYLES { strike_flags(&combatants[attacker_idx]) } else { CombatFlags::default() };
+    let defender_rules = if STYLES { strike_flags(&combatants[defender_idx]) } else { CombatFlags::default() };
     combatants[attacker_idx].state.has_attacked = true;
     let tactical_attack_penalty = combatants[attacker_idx]
         .state
@@ -1793,18 +2010,18 @@ fn resolve_counter_attack(
     let defender = &combatants[defender_idx];
     let defender_infinite_hp = defender.sheet.vitals.infinite_hp;
     let damage_multiplier = damage_multiplier.max(1);
-    let attacker_hammerer = combatants[attacker_idx].apply_i32(StatIdI32::FlagHammererStyle, 0) > 0;
-    let attacker_hobbler = combatants[attacker_idx].apply_i32(StatIdI32::FlagHobblerStyle, 0) > 0;
+    let attacker_hammerer = attacker_rules.has(StatIdI32::FlagHammererStyle);
+    let attacker_hobbler = attacker_rules.has(StatIdI32::FlagHobblerStyle);
     let attacker_falling_sun =
-        combatants[attacker_idx].apply_i32(StatIdI32::FlagFallingSunStyle, 0) > 0;
+        attacker_rules.has(StatIdI32::FlagFallingSunStyle);
     let attacker_three_mountains =
-        combatants[attacker_idx].apply_i32(StatIdI32::FlagThreeMountainsStyle, 0) > 0;
-    let attacker_regenstat_bonus = if regenstat_active(combatants, attacker_idx) {
+        attacker_rules.has(StatIdI32::FlagThreeMountainsStyle);
+    let attacker_regenstat_bonus = if attacker_rules.has(StatIdI32::FlagRegenstatStyle) {
         regenstat_stack_from_state(&combatants[attacker_idx].state)
     } else {
         0
     };
-    let defender_regenstat_bonus = if regenstat_active(combatants, defender_idx) {
+    let defender_regenstat_bonus = if defender_rules.has(StatIdI32::FlagRegenstatStyle) {
         defender_state
             .regenstat_stacks
             .clamp(0, REGENSTAT_STACK_CAP)
@@ -1885,12 +2102,12 @@ fn resolve_counter_attack(
         )
     };
     let damage_source = weapon_profile.as_ref().map_or_else(
-        || DamageSource::Unarmed { name: "Near-perfect defense punch".into() },
-        |weapon| DamageSource::weapon(weapon, weapon_slot),
+        || ImpactSource::Punch,
+        |weapon| ImpactSource::Weapon(weapon.clone(), weapon_slot),
     );
     let unarmed_expr = unarmed_expr.unwrap_or("d4p");
     let quiet_river_unarmed = !use_weapon
-        && combatants[attacker_idx].apply_i32(StatIdI32::FlagQuietRiverStyle, 0) > 0;
+        && attacker_rules.has(StatIdI32::FlagQuietRiverStyle);
     let halve_damage = quiet_river_unarmed
         || weapon_profile.as_ref().is_some_and(|weapon| weapon.halve_damage);
     let weapon_ignores_all_dr = quiet_river_unarmed
@@ -1898,32 +2115,19 @@ fn resolve_counter_attack(
     let mounted_plan = weapon_profile.as_ref().map(|weapon| mounted_damage_plan(
         &combatants[attacker_idx], &combatants[defender_idx], weapon, false,
     )).unwrap_or_default();
-    let armor_penetration = style_armor_penetration(
-        &combatants[attacker_idx],
-        &combatants[defender_idx],
-        armor_penetration,
-    );
+    let base_penetration = armor_penetration;
     let attacker_fight_defensively_penalty =
         fight_defensively_attack_penalty(&combatants[attacker_idx]);
-    let defender_fight_defensively_bonus = fight_defensively_defense_bonus(defender);
+    let defender_fight_defensively_bonus = stance_defense_bonus(defender, defender_rules.has(StatIdI32::FlagPilgrimsPathStyle));
     let defender_called_shot_penalty = called_shot_defense_penalty(defender);
 
     let (
         defense_mod,
-        armor_dr,
-        natural_dr,
-        armor_is_heavy,
         shield_active,
         shield_defense_bonus,
-        shield_dr,
-        shield_breakage,
         trauma_incapacitated,
         defender_weapon_defense_always,
         defender_weapon_speed,
-        defender_defiant,
-        defender_crit_severity_reduction,
-        defender_halves_crit_extra_damage,
-        defender_ignore_ancillary_crit_effects,
         defender_six_paths,
         defender_unbreakable_wall,
         defender_falling_sun,
@@ -1935,16 +2139,10 @@ fn resolve_counter_attack(
                 + defender_fight_defensively_bonus
                 - defender_called_shot_penalty
                 + defender_state.movement_defense_bonus(),
-            defender.apply_i32(StatIdI32::ArmorDr, defender.sheet.defense.armor_dr),
-            defender.apply_i32(StatIdI32::NaturalDr, defender.sheet.defense.natural_dr),
-            defender.sheet.defense.armor_is_heavy,
             defender_state.shield_intact,
-            defender.apply_i32(
-                StatIdI32::ShieldDefenseBonus,
-                defender.sheet.defense.shield_defense_bonus,
-            ),
-            defender.apply_i32(StatIdI32::ShieldDr, defender.sheet.defense.shield_dr),
-            defender.sheet.defense.shield_breakage,
+            if defender_state.shield_intact {
+                defender.apply_i32(StatIdI32::ShieldDefenseBonus, defender.sheet.defense.shield_defense_bonus)
+            } else { 0 },
             defender_state.trauma_remaining_seconds > 0
                 || combatants[defender_idx]
                     .state
@@ -1952,15 +2150,9 @@ fn resolve_counter_attack(
                     .restricted_defense(combatants[defender_idx].magic.talents),
             defender.sheet.offense.weapon.defense_bonus_always,
             defender.apply_f32(StatIdF32::WeaponSpeed, defender.sheet.offense.weapon.speed),
-            defender.apply_i32(StatIdI32::FlagDefiant, 0) > 0,
-            defender
-                .apply_i32(StatIdI32::IncomingCritSeverityReduction, 0)
-                .max(0),
-            defender.apply_i32(StatIdI32::FlagIncomingCritExtraDamageHalved, 0) > 0,
-            defender.apply_i32(StatIdI32::FlagIgnoreAncillaryCritEffects, 0) > 0,
-            defender.apply_i32(StatIdI32::FlagSixPathsStyle, 0) > 0,
-            defender.apply_i32(StatIdI32::FlagUnbreakableWallStyle, 0) > 0,
-            defender.apply_i32(StatIdI32::FlagFallingSunStyle, 0) > 0,
+            defender_rules.has(StatIdI32::FlagSixPathsStyle),
+            defender_rules.has(StatIdI32::FlagUnbreakableWallStyle),
+            defender_rules.has(StatIdI32::FlagFallingSunStyle),
         )
     };
     let defense_ready = defender_state.defense_ready(&combatants[defender_idx].sheet, now);
@@ -2023,26 +2215,31 @@ fn resolve_counter_attack(
     }
     let precognition_triggered = hit
         && defender.sheet.defense.precognition
-        && combatants[defender_idx].state.precognition_space_available
+        && combatants[defender_idx].state.has_escape_space()
         && feat_of_agility_succeeds(defender, attack_roll - defense_roll, rng);
 
     combatants[defender_idx].state.aggressive_defense_pending = false;
     let mut damage = 0;
     let mut shield_block = false;
     let mut shield_damage = 0;
-    let mut shield_broken = false;
     let mut knockback_ft = 0.0;
     let mut trauma_seconds = None;
+    let mut impact = ImpactTotals::default();
+    let detailed = combatants[attacker_idx].state.prepared.is_none();
     let mut damage_breakdown = None;
     let mut shield_damage_breakdown = None;
     let mut critical = None;
     let crit_trigger = force_critical || (allow_critical && attack_first >= crit_min_roll);
     let iron_multiplier = combatants[defender_idx].iron_dice_multiplier(
         weapon_profile.as_ref().is_some_and(|w| w.is_iron));
-    let reaper_multiplier =
-        reaper_extra_dice_multiplier(&combatants[attacker_idx], weapon_profile.as_deref());
 
     if hit {
+        let (armor_dr, natural_dr, armor_is_heavy, armor_penetration) =
+            impact_armor(&combatants[defender_idx], base_penetration, attacker_rules);
+        let knockback_rule = super::knockback_rule_for_attack(
+            &combatants[attacker_idx], &combatants[defender_idx],
+            use_weapon.then_some(weapon_slot), false, false,
+        );
         let roll = |rng: &mut _| {
             if let Some(weapon) = weapon_profile.as_ref() {
                 roll_mounted_weapon_damage_with_multiplier(weapon, mounted_plan, false, false, iron_multiplier, average_damage, rng)
@@ -2053,7 +2250,7 @@ fn resolve_counter_attack(
             }
         };
         let mut rolled_damage = roll(rng);
-        if !average_damage && crit_trigger && defender_defiant {
+        if !average_damage && crit_trigger && defender_rules.has(StatIdI32::FlagDefiant) {
             rolled_damage = rolled_damage.min(roll(rng));
         }
         let mut raw = rolled_damage + strength_damage + damage_penalty;
@@ -2077,6 +2274,12 @@ fn resolve_counter_attack(
         };
         let mut crit_trauma_seconds = None;
         if crit_trigger || attacker_hobbler {
+            let reaper_multiplier = reaper_extra_dice_multiplier(attacker_rules, weapon_profile.as_deref());
+            let defender = &combatants[defender_idx];
+            let defender_crit_severity_reduction = defender.apply_i32(StatIdI32::IncomingCritSeverityReduction, 0).max(0);
+            let critical_defenses = effective_rules(defender, CRITICAL_DEFENSE_RULES);
+            let defender_halves_crit_extra_damage = critical_defenses.has(StatIdI32::FlagIncomingCritExtraDamageHalved);
+            let defender_ignore_ancillary_crit_effects = critical_defenses.has(StatIdI32::FlagIgnoreAncillaryCritEffects);
             let severity = (attack_roll - defense_roll + raw_base - effective_dr + crit_severity
                 - defender_crit_severity_reduction)
                 .max(1);
@@ -2146,7 +2349,7 @@ fn resolve_counter_attack(
                     armor_dr.max(0)
                 };
                 if effect.auto_trauma {
-                    let forced = roll_damage_expr("5d6p", rng, false) * 60;
+                    let forced = TRAUMA_DICE.roll(rng, false) * 60;
                     let applied = apply_trauma_duration(combatants, defender_idx, forced);
                     crit_trauma_seconds = Some(applied);
                 }
@@ -2203,7 +2406,8 @@ fn resolve_counter_attack(
                 }
             }
         }
-        damage_breakdown = Some(DamageBreakdown {
+        impact = ImpactTotals::direct(raw, effective_dr);
+        damage_breakdown = detailed.then(|| DamageBreakdown {
             rolled_damage,
             strength_damage,
             raw_damage: raw,
@@ -2230,6 +2434,12 @@ fn resolve_counter_attack(
             DEFAULT_SHIELD_BLOCK_WINDOW
         };
         if miss_margin < shield_block_window {
+            let (armor_dr, natural_dr, armor_is_heavy, armor_penetration) =
+                impact_armor(&combatants[defender_idx], base_penetration, attacker_rules);
+            let knockback_rule = super::knockback_rule_for_attack(
+                &combatants[attacker_idx], &combatants[defender_idx],
+                use_weapon.then_some(weapon_slot), false, false,
+            );
             shield_block = true;
             let (rolled_damage, raw) = if use_weapon {
                 let weapon = weapon_profile.as_ref().expect("weapon profile missing");
@@ -2260,7 +2470,7 @@ fn resolve_counter_attack(
             };
             shield_damage = raw;
             knockback_ft = knockback_rule.distance_ft(raw);
-            let effective_shield_dr = if ignore_armor || weapon_ignores_all_dr { 0 } else { shield_dr };
+            let effective_shield_dr = if ignore_armor || weapon_ignores_all_dr { 0 } else { combatants[defender_idx].apply_i32(StatIdI32::ShieldDr, combatants[defender_idx].sheet.defense.shield_dr) };
             let shield_after_dr = (raw - effective_shield_dr).max(0);
             let effective_dr = if weapon_ignores_all_dr {
                 0
@@ -2283,22 +2493,13 @@ fn resolve_counter_attack(
             } else {
                 raw
             };
-            if let Some(steps) = shield_breakage {
-                if breakage_raw >= steps[3].threshold {
-                    shield_broken = true;
-                } else if breakage_raw >= steps[2].threshold {
-                    shield_broken = breakage_roll(steps[2], rng);
-                } else if breakage_raw >= steps[1].threshold {
-                    shield_broken = breakage_roll(steps[1], rng);
-                } else if breakage_raw >= steps[0].threshold {
-                    shield_broken = breakage_roll(steps[0], rng);
-                }
-            }
+            let shield_broken = shield_breaks(&combatants[defender_idx], breakage_raw, rng);
             if shield_broken {
                 combatants[defender_idx].state.shield_intact = false;
             }
             damage = hp_damage;
-            shield_damage_breakdown = Some(ShieldDamageBreakdown {
+            impact = ImpactTotals::shield(raw, effective_dr, effective_shield_dr, shield_broken);
+            shield_damage_breakdown = detailed.then(|| ShieldDamageBreakdown {
                 rolled_damage,
                 strength_damage,
                 raw_damage: raw,
@@ -2324,9 +2525,13 @@ fn resolve_counter_attack(
         &roll,
     );
     let defender_hp_after = combatants[defender_idx].state.hp;
-    let qualifying_woad_wound = damage_breakdown.is_some() && weapon_profile.as_ref().is_some_and(|w| w.hacking_or_piercing);
-    combatants[defender_idx].trigger_warrior_woad(damage, qualifying_woad_wound, rng);
-    update_regenstat_on_exchange(combatants, attacker_idx, defender_idx, hit);
+    if combatants[defender_idx].arborite.warrior_woad {
+        let wound = impact.direct.is_some() && weapon_profile.as_ref().is_some_and(|w| w.hacking_or_piercing);
+        combatants[defender_idx].trigger_warrior_woad(damage, wound, rng);
+    }
+    if STYLES && possible.has(StatIdI32::FlagRegenstatStyle) {
+        update_regenstat_on_exchange(combatants, attacker_idx, defender_idx, hit);
+    }
     if hit && attacker_three_mountains {
         combatants[attacker_idx].state.three_mountains_hit_streak += 1;
         if combatants[attacker_idx].state.three_mountains_hit_streak >= 3 {
@@ -2346,6 +2551,7 @@ fn resolve_counter_attack(
     }
     let trauma_applied = trauma_seconds.is_some();
     CounterAttackOutcome {
+        impact,
         damage_source,
         attacker_idx,
         defender_idx,
@@ -2381,6 +2587,36 @@ pub(crate) fn resolve_attack(
     state_snapshot: Option<&CombatRoundSnapshot>,
     rng: &mut impl Rng,
 ) -> AttackOutcome {
+    let rules = possible_strike_rules(&combatants[attacker_idx]) | possible_strike_rules(&combatants[defender_idx]);
+    if rules == 0 {
+        resolve_attack_with_rules::<false>(
+            CombatFlags(rules), combatants, attacker_idx, defender_idx, range_mod, is_ranged,
+            distance_ft, attack_mode, weapon_slot, now, state_snapshot, rng,
+        )
+    } else {
+        resolve_attack_with_rules::<true>(
+            CombatFlags(rules), combatants, attacker_idx, defender_idx, range_mod, is_ranged,
+            distance_ft, attack_mode, weapon_slot, now, state_snapshot, rng,
+        )
+    }
+}
+
+fn resolve_attack_with_rules<const STYLES: bool>(
+    possible: CombatFlags,
+    combatants: &mut [Combatant],
+    attacker_idx: usize,
+    defender_idx: usize,
+    range_mod: i32,
+    is_ranged: bool,
+    distance_ft: f32,
+    attack_mode: AttackMode,
+    weapon_slot: WeaponSlot,
+    now: f32,
+    state_snapshot: Option<&CombatRoundSnapshot>,
+    rng: &mut impl Rng,
+) -> AttackOutcome {
+    let attacker_rules = if STYLES { strike_flags(&combatants[attacker_idx]) } else { CombatFlags::default() };
+    let defender_rules = if STYLES { strike_flags(&combatants[defender_idx]) } else { CombatFlags::default() };
     let is_aggressive = aggressive_attack_available(&combatants[attacker_idx], attack_mode, is_ranged)
         && attack_profile_for_slot(&combatants[attacker_idx], weapon_slot)
             .is_some_and(|profile| !profile.use_jab);
@@ -2395,10 +2631,6 @@ pub(crate) fn resolve_attack(
         .and_then(|snapshot| snapshot.get(defender_idx))
         .copied()
         .unwrap_or_else(|| AttackStateSnapshot::capture(&combatants[defender_idx], attacker_idx));
-    let attacker_state = state_snapshot
-        .and_then(|snapshot| snapshot.get(attacker_idx))
-        .copied()
-        .unwrap_or_else(|| AttackStateSnapshot::capture(&combatants[attacker_idx], defender_idx));
     let average_damage = combatants[defender_idx]
         .state
         .streamline_averages_incoming_damage;
@@ -2408,29 +2640,25 @@ pub(crate) fn resolve_attack(
         attack_profile_for_slot(attacker, weapon_slot).expect("weapon slot missing for attack")
     };
     let iron_multiplier = combatants[defender_idx].iron_dice_multiplier(attack_profile.weapon.is_iron);
-    let damage_source = DamageSource::weapon(&attack_profile.weapon, weapon_slot);
-    let knockback_rule = super::knockback_rule_for_attack(
-        &combatants[attacker_idx], &combatants[defender_idx], Some(weapon_slot),
-        is_ranged, attack_mode == AttackMode::Charge,
-    );
-    let attacker_hammerer = combatants[attacker_idx].apply_i32(StatIdI32::FlagHammererStyle, 0) > 0;
-    let attacker_hobbler = combatants[attacker_idx].apply_i32(StatIdI32::FlagHobblerStyle, 0) > 0;
+    let damage_source = ImpactSource::Weapon(attack_profile.weapon.clone(), weapon_slot);
+    let attacker_hammerer = attacker_rules.has(StatIdI32::FlagHammererStyle);
+    let attacker_hobbler = attacker_rules.has(StatIdI32::FlagHobblerStyle);
     let attacker_falling_sun =
-        combatants[attacker_idx].apply_i32(StatIdI32::FlagFallingSunStyle, 0) > 0;
+        attacker_rules.has(StatIdI32::FlagFallingSunStyle);
     let attacker_three_mountains =
-        combatants[attacker_idx].apply_i32(StatIdI32::FlagThreeMountainsStyle, 0) > 0;
-    let attacker_returner = combatants[attacker_idx].apply_i32(StatIdI32::FlagReturnerStyle, 0) > 0;
-    let defender_returner = combatants[defender_idx].apply_i32(StatIdI32::FlagReturnerStyle, 0) > 0;
+        attacker_rules.has(StatIdI32::FlagThreeMountainsStyle);
+    let attacker_returner = attacker_rules.has(StatIdI32::FlagReturnerStyle);
+    let defender_returner = defender_rules.has(StatIdI32::FlagReturnerStyle);
     let attacker_armeroci =
-        combatants[attacker_idx].apply_i32(StatIdI32::FlagArmerociPoleStyle, 0) > 0;
-    let attacker_regenstat_bonus = if regenstat_active(combatants, attacker_idx) {
-        attacker_state
-            .regenstat_stacks
+        attacker_rules.has(StatIdI32::FlagArmerociPoleStyle);
+    let attacker_regenstat_bonus = if attacker_rules.has(StatIdI32::FlagRegenstatStyle) {
+        state_snapshot.and_then(|snapshot| snapshot.get(attacker_idx))
+            .map_or(combatants[attacker_idx].state.regenstat_stacks, |s| s.regenstat_stacks)
             .clamp(0, REGENSTAT_STACK_CAP)
     } else {
         0
     };
-    let defender_regenstat_bonus = if regenstat_active(combatants, defender_idx) {
+    let defender_regenstat_bonus = if defender_rules.has(StatIdI32::FlagRegenstatStyle) {
         defender_state
             .regenstat_stacks
             .clamp(0, REGENSTAT_STACK_CAP)
@@ -2452,7 +2680,7 @@ pub(crate) fn resolve_attack(
         if attacker_three_mountains {
             combatants[attacker_idx].state.three_mountains_hit_streak = 0;
         }
-        if regenstat_active(combatants, attacker_idx) {
+        if attacker_rules.has(StatIdI32::FlagRegenstatStyle) {
             combatants[attacker_idx].state.regenstat_stacks = 0;
         }
         let roll = AttackRollBreakdown {
@@ -2467,6 +2695,7 @@ pub(crate) fn resolve_attack(
             defense_total: 0,
         };
         return AttackOutcome {
+            impact: ImpactTotals::default(),
             is_aggressive: false,
             damage_source,
             attacker_idx,
@@ -2509,35 +2738,13 @@ pub(crate) fn resolve_attack(
         .maneuvers
         .called_shot_deceptive_defender
     {
-        let seen_in_snapshot = defender_state.deceptive_defender_seen_attacker;
-        let seen_in_live = combatants[defender_idx]
-            .state
-            .deceptive_defender_seen_attackers
-            .contains(&attacker_idx);
-        if seen_in_snapshot || seen_in_live {
-            0
-        } else {
-            1
-        }
+        let first = combatants[defender_idx].state.remember_attacker(attacker_idx);
+        i32::from(first && !defender_state.deceptive_defender_seen_attacker)
     } else {
         0
     };
-    if combatants[defender_idx]
-        .sheet
-        .maneuvers
-        .called_shot_deceptive_defender
-        && !combatants[defender_idx]
-            .state
-            .deceptive_defender_seen_attackers
-            .contains(&attacker_idx)
-    {
-        combatants[defender_idx]
-            .state
-            .deceptive_defender_seen_attackers
-            .push(attacker_idx);
-    }
     let defender_fight_defensively_bonus =
-        fight_defensively_defense_bonus(&combatants[defender_idx]);
+        stance_defense_bonus(&combatants[defender_idx], defender_rules.has(StatIdI32::FlagPilgrimsPathStyle));
     let attacker_called_shot = called_shot_active(&combatants[attacker_idx]);
     let attacker_called_shot_precision_bonus =
         called_shot_precision_target_bonus(&combatants[attacker_idx], &combatants[defender_idx]);
@@ -2562,11 +2769,7 @@ pub(crate) fn resolve_attack(
     attack_bonus += attacker_regenstat_bonus;
     attack_bonus -= tactical_attack_penalty;
     let strength_damage = attack_damage_bonus(&attack_profile, is_ranged);
-    let armor_penetration = style_armor_penetration(
-        &combatants[attacker_idx],
-        &combatants[defender_idx],
-        attack_profile.armor_penetration,
-    );
+    let base_penetration = attack_profile.armor_penetration;
     let use_jab = attack_profile.use_jab;
     let damage_penalty = attack_profile.damage_penalty;
     let weapon = attack_profile.weapon;
@@ -2576,7 +2779,6 @@ pub(crate) fn resolve_attack(
         &weapon,
         is_ranged,
     );
-    let reaper_multiplier = reaper_extra_dice_multiplier(&combatants[attacker_idx], Some(&weapon));
     let movement_ranged_distance = defender_state.movement_ranged_distance;
     let chronoblur_melee_bonus = if is_ranged {
         0
@@ -2607,21 +2809,12 @@ pub(crate) fn resolve_attack(
     let (
         defense_mod,
         ranged_defense_mod,
-        armor_dr,
-        natural_dr,
-        armor_is_heavy,
         shield_active,
         shield_defense_bonus,
         shield_cover_value,
-        shield_dr,
-        shield_breakage,
         trauma_incapacitated,
         defender_weapon_defense_always,
         defender_weapon_speed,
-        defender_defiant,
-        defender_crit_severity_reduction,
-        defender_halves_crit_extra_damage,
-        defender_ignore_ancillary_crit_effects,
         defender_superior_defense,
         defender_edge_counter,
         defender_six_paths,
@@ -2630,27 +2823,20 @@ pub(crate) fn resolve_attack(
     ) = {
         let defender = &combatants[defender_idx];
         (
-            base_defense_modifier(defender, false)
-                + defender_regenstat_bonus
-                + defender_initial_attack_bonus
-                + chronoblur_melee_bonus,
-            base_defense_modifier(defender, true) + defender_regenstat_bonus
-                + defender_initial_attack_bonus,
-            defender.apply_i32(StatIdI32::ArmorDr, defender.sheet.defense.armor_dr),
-            defender.apply_i32(StatIdI32::NaturalDr, defender.sheet.defense.natural_dr),
-            defender.sheet.defense.armor_is_heavy,
+            if !is_ranged || defender.sheet.defense.prescience {
+                base_defense_modifier(defender, false) + defender_regenstat_bonus
+                    + defender_initial_attack_bonus + chronoblur_melee_bonus
+            } else { 0 },
+            if is_ranged {
+                base_defense_modifier(defender, true) + defender_regenstat_bonus + defender_initial_attack_bonus
+            } else { 0 },
             defender_state.shield_intact,
-            defender.apply_i32(
-                StatIdI32::ShieldDefenseBonus,
-                defender.sheet.defense.shield_defense_bonus,
-            ),
-            defender
-                .sheet
-                .defense
-                .shield_cover_value
-                .map(|value| defender.apply_i32(StatIdI32::ShieldCoverValue, value)),
-            defender.apply_i32(StatIdI32::ShieldDr, defender.sheet.defense.shield_dr),
-            defender.sheet.defense.shield_breakage,
+            if defender_state.shield_intact {
+                defender.apply_i32(StatIdI32::ShieldDefenseBonus, defender.sheet.defense.shield_defense_bonus)
+            } else { 0 },
+            if defender_state.shield_intact {
+                defender.sheet.defense.shield_cover_value.map(|v| defender.apply_i32(StatIdI32::ShieldCoverValue, v))
+            } else { None },
             defender_state.trauma_remaining_seconds > 0
                 || combatants[defender_idx]
                     .state
@@ -2658,17 +2844,11 @@ pub(crate) fn resolve_attack(
                     .restricted_defense(combatants[defender_idx].magic.talents),
             defender.sheet.offense.weapon.defense_bonus_always,
             defender.apply_f32(StatIdF32::WeaponSpeed, defender.sheet.offense.weapon.speed),
-            defender.apply_i32(StatIdI32::FlagDefiant, 0) > 0,
-            defender
-                .apply_i32(StatIdI32::IncomingCritSeverityReduction, 0)
-                .max(0),
-            defender.apply_i32(StatIdI32::FlagIncomingCritExtraDamageHalved, 0) > 0,
-            defender.apply_i32(StatIdI32::FlagIgnoreAncillaryCritEffects, 0) > 0,
-            defender.apply_i32(StatIdI32::FlagSuperiorDefense, 0) > 0,
-            defender.apply_i32(StatIdI32::FlagEdgeCounter, 0) > 0,
-            defender.apply_i32(StatIdI32::FlagSixPathsStyle, 0) > 0,
-            defender.apply_i32(StatIdI32::FlagUnbreakableWallStyle, 0) > 0,
-            defender.apply_i32(StatIdI32::FlagFallingSunStyle, 0) > 0,
+            defender_rules.has(StatIdI32::FlagSuperiorDefense),
+            defender_rules.has(StatIdI32::FlagEdgeCounter),
+            defender_rules.has(StatIdI32::FlagSixPathsStyle),
+            defender_rules.has(StatIdI32::FlagUnbreakableWallStyle),
+            defender_rules.has(StatIdI32::FlagFallingSunStyle),
         )
     };
     let defense_ready = if is_ranged {
@@ -2756,9 +2936,10 @@ pub(crate) fn resolve_attack(
     let mut hit = false;
     let mut shield_block = false;
     let mut shield_damage = 0;
-    let mut shield_broken = false;
     let mut knockback_ft = 0.0;
     let mut trauma_seconds = None;
+    let mut impact = ImpactTotals::default();
+    let detailed = combatants[attacker_idx].state.prepared.is_none();
     let mut damage_breakdown = None;
     let mut shield_damage_breakdown = None;
     let mut critical = None;
@@ -2810,11 +2991,11 @@ pub(crate) fn resolve_attack(
     }
     let crit_trigger = crit_trigger
         || (called_shot_precise_hit
-            && combatants[attacker_idx].apply_i32(StatIdI32::FlagOnePathPiercingStyle, 0) > 0);
+            && attacker_rules.has(StatIdI32::FlagOnePathPiercingStyle));
     let precognition_triggered = attack_hits
         && !is_ranged
         && combatants[defender_idx].sheet.defense.precognition
-        && combatants[defender_idx].state.precognition_space_available
+        && combatants[defender_idx].state.has_escape_space()
         && feat_of_agility_succeeds(&combatants[defender_idx], attack_roll - defense_roll, rng);
     let armeroci_opening = attacker_armeroci
         && !is_ranged
@@ -2828,10 +3009,16 @@ pub(crate) fn resolve_attack(
     }
 
     if attack_hits {
+        let (armor_dr, natural_dr, armor_is_heavy, armor_penetration) =
+            impact_armor(&combatants[defender_idx], base_penetration, attacker_rules);
+        let knockback_rule = super::knockback_rule_for_attack(
+            &combatants[attacker_idx], &combatants[defender_idx], Some(weapon_slot),
+            is_ranged, attack_mode == AttackMode::Charge,
+        );
         hit = true;
         let mut rolled_damage = roll_mounted_weapon_damage_with_multiplier(
             &weapon, mounted_plan, use_jab, false, iron_multiplier, average_damage, rng);
-        if !average_damage && crit_trigger && defender_defiant {
+        if !average_damage && crit_trigger && defender_rules.has(StatIdI32::FlagDefiant) {
             rolled_damage = rolled_damage.min(roll_mounted_weapon_damage_with_multiplier(
                 &weapon, mounted_plan, use_jab, false, iron_multiplier, average_damage, rng));
         }
@@ -2894,6 +3081,12 @@ pub(crate) fn resolve_attack(
             let mut crit_extra_damage = 0;
             let mut crit_trauma_seconds = None;
             if crit_trigger || attacker_hobbler {
+                let reaper_multiplier = reaper_extra_dice_multiplier(attacker_rules, Some(&weapon));
+                let defender = &combatants[defender_idx];
+                let defender_crit_severity_reduction = defender.apply_i32(StatIdI32::IncomingCritSeverityReduction, 0).max(0);
+                let critical_defenses = effective_rules(defender, CRITICAL_DEFENSE_RULES);
+                let defender_halves_crit_extra_damage = critical_defenses.has(StatIdI32::FlagIncomingCritExtraDamageHalved);
+                let defender_ignore_ancillary_crit_effects = critical_defenses.has(StatIdI32::FlagIgnoreAncillaryCritEffects);
                 let severity_defense_roll = if armor_ignored {
                     called_shot_precision_target
                 } else {
@@ -2978,7 +3171,7 @@ pub(crate) fn resolve_attack(
                     });
                 } else {
                     if effect.auto_trauma {
-                        let forced = roll_damage_expr("5d6p", rng, false) * 60;
+                        let forced = TRAUMA_DICE.roll(rng, false) * 60;
                         let applied = apply_trauma_duration(combatants, defender_idx, forced);
                         crit_trauma_seconds = Some(applied);
                     }
@@ -3023,7 +3216,8 @@ pub(crate) fn resolve_attack(
                     }
                 }
             }
-            damage_breakdown = Some(DamageBreakdown {
+            impact = ImpactTotals::direct(raw, effective_dr);
+            damage_breakdown = detailed.then(|| DamageBreakdown {
                 rolled_damage,
                 strength_damage,
                 raw_damage: raw,
@@ -3051,6 +3245,12 @@ pub(crate) fn resolve_attack(
             DEFAULT_SHIELD_BLOCK_WINDOW
         };
         if miss_margin < shield_block_window {
+            let (armor_dr, natural_dr, armor_is_heavy, armor_penetration) =
+                impact_armor(&combatants[defender_idx], base_penetration, attacker_rules);
+            let knockback_rule = super::knockback_rule_for_attack(
+                &combatants[attacker_idx], &combatants[defender_idx], Some(weapon_slot),
+                is_ranged, attack_mode == AttackMode::Charge,
+            );
             shield_block = true;
             let (rolled_damage, raw) = shield_block_raw_damage(
                 &weapon,
@@ -3064,7 +3264,7 @@ pub(crate) fn resolve_attack(
             let raw = if halve_aggressive_damage { raw / 2 } else { raw };
             shield_damage = raw;
             knockback_ft = knockback_rule.distance_ft(raw);
-            let effective_shield_dr = if weapon.ignore_all_dr { 0 } else { shield_dr };
+            let effective_shield_dr = if weapon.ignore_all_dr { 0 } else { combatants[defender_idx].apply_i32(StatIdI32::ShieldDr, combatants[defender_idx].sheet.defense.shield_dr) };
             let shield_after_dr = (raw - effective_shield_dr).max(0);
 
             let effective_dr = if weapon.ignore_all_dr {
@@ -3089,22 +3289,13 @@ pub(crate) fn resolve_attack(
             } else {
                 raw
             };
-            if let Some(steps) = shield_breakage {
-                if breakage_raw >= steps[3].threshold {
-                    shield_broken = true;
-                } else if breakage_raw >= steps[2].threshold {
-                    shield_broken = breakage_roll(steps[2], rng);
-                } else if breakage_raw >= steps[1].threshold {
-                    shield_broken = breakage_roll(steps[1], rng);
-                } else if breakage_raw >= steps[0].threshold {
-                    shield_broken = breakage_roll(steps[0], rng);
-                }
-            }
+            let shield_broken = shield_breaks(&combatants[defender_idx], breakage_raw, rng);
             if shield_broken {
                 combatants[defender_idx].state.shield_intact = false;
             }
             damage = hp_damage;
-            shield_damage_breakdown = Some(ShieldDamageBreakdown {
+            impact = ImpactTotals::shield(raw, effective_dr, effective_shield_dr, shield_broken);
+            shield_damage_breakdown = detailed.then(|| ShieldDamageBreakdown {
                 rolled_damage,
                 strength_damage,
                 raw_damage: raw,
@@ -3118,7 +3309,9 @@ pub(crate) fn resolve_attack(
         }
     }
 
-    combatants[defender_idx].trigger_warrior_woad(damage, hit && weapon.hacking_or_piercing, rng);
+    if combatants[defender_idx].arborite.warrior_woad {
+        combatants[defender_idx].trigger_warrior_woad(damage, hit && weapon.hacking_or_piercing, rng);
+    }
 
     super::magic::on_attack_resolved(
         combatants,
@@ -3135,7 +3328,9 @@ pub(crate) fn resolve_attack(
     if attack_mode == AttackMode::Charge {
         apply_charge_defense_penalty(combatants, attacker_idx);
     }
-    update_regenstat_on_exchange(combatants, attacker_idx, defender_idx, hit);
+    if STYLES && possible.has(StatIdI32::FlagRegenstatStyle) {
+        update_regenstat_on_exchange(combatants, attacker_idx, defender_idx, hit);
+    }
     if attacker_three_mountains {
         if hit {
             combatants[attacker_idx].state.three_mountains_hit_streak += 1;
@@ -3155,12 +3350,7 @@ pub(crate) fn resolve_attack(
         && !combatants[defender_idx].sheet.maneuvers.passive
         && defense_roll > attack_roll
     {
-        let defender_reach = combatants[defender_idx]
-            .apply_f32(
-                StatIdF32::WeaponReach,
-                combatants[defender_idx].sheet.offense.weapon.reach_ft,
-            )
-            .max(1.0);
+        let defender_reach = combatants[defender_idx].effective_reach();
         let perfect_in_reach = distance_ft <= defender_reach;
         let near_in_reach = distance_ft <= 5.0;
         let near_perfect_min = if defender_superior_defense { 18 } else { 19 };
@@ -3228,20 +3418,15 @@ pub(crate) fn resolve_attack(
         }
     }
     if counter_attack.is_none()
-        && combatants[defender_idx].magic_can_attack(WeaponSlot::Primary, now)
         && defender_returner
+        && combatants[defender_idx].magic_can_attack(WeaponSlot::Primary, now)
         && combatants[defender_idx].state.returner_counter_available
         && combatants[defender_idx].state.trauma_remaining_seconds <= 0
         && combatants[attacker_idx].state.hp > 0
         && combatants[defender_idx].state.hp > 0
         && !combatants[defender_idx].sheet.maneuvers.passive
     {
-        let defender_reach = combatants[defender_idx]
-            .apply_f32(
-                StatIdF32::WeaponReach,
-                combatants[defender_idx].sheet.offense.weapon.reach_ft,
-            )
-            .max(1.0);
+        let defender_reach = combatants[defender_idx].effective_reach();
         if !is_ranged && distance_ft <= defender_reach {
             let returner_multiplier =
                 if combatants[defender_idx].state.returner_double_counter_ready {
@@ -3286,18 +3471,17 @@ pub(crate) fn resolve_attack(
     }
 
     let defender_hp_after = combatants[defender_idx].state.hp;
-    let additional_counters = resolve_evonia_counters(
-        combatants,
-        attacker_idx,
-        defender_idx,
-        !hit && !is_ranged,
-        counter_attack.as_ref(),
-        distance_ft,
-        now,
-        rng,
-    );
+    let evonia = STYLES && possible.has(StatIdI32::FlagLeftHandOfEvoniaStyle);
+    let parry = evonia && !hit && !is_ranged && has_evonia(&combatants[defender_idx]);
+    let counter_parry = evonia && counter_attack.as_ref().is_some_and(|c|
+        !c.hit && !c.is_ranged && has_evonia(&combatants[c.defender_idx]));
+    let additional_counters = if parry || counter_parry {
+        resolve_evonia_counters(combatants, attacker_idx, defender_idx, !hit && !is_ranged,
+            counter_attack.as_ref(), distance_ft, now, rng)
+    } else { Vec::new() };
     let trauma_applied = trauma_seconds.is_some();
     AttackOutcome {
+        impact,
         is_aggressive,
         damage_source,
         attacker_idx,
@@ -3418,6 +3602,17 @@ pub(crate) fn resolve_knock_aside(
         defense_total: defense_roll,
     };
     KnockAsideOutcome { success, roll }
+}
+
+fn shield_breaks(defender: &Combatant, raw: i32, rng: &mut impl Rng) -> bool {
+    let Some(steps) = &defender.sheet.defense.shield_breakage else { return false };
+    let tier = defender.state.prepared.as_ref().and_then(|p| p.break_tier(raw))
+        .unwrap_or_else(|| super::prepared_fighter::shield_tier(steps, raw));
+    match tier {
+        0 => false,
+        4 => true,
+        n => breakage_roll(steps[usize::from(n) - 1], rng),
+    }
 }
 
 fn breakage_roll(step: ShieldBreakageStep, rng: &mut impl Rng) -> bool {

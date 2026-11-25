@@ -2,15 +2,22 @@
 
 use rand::{RngCore, SeedableRng};
 
+#[cfg(all(target_arch = "wasm32", feature = "wasm-simd-rng"))]
+mod wasm_chacha;
+#[cfg(all(target_arch = "wasm32", feature = "wasm-simd-rng"))]
+type Engine = rand_core::block::BlockRng<wasm_chacha::ChaCha12>;
+#[cfg(not(all(target_arch = "wasm32", feature = "wasm-simd-rng")))]
+type Engine = rand::rngs::StdRng;
+
 #[derive(Clone, Debug)]
 pub struct SimRng {
-    rng: rand::rngs::StdRng,
+    rng: Engine,
 }
 
 impl SimRng {
     pub fn from_seed(seed: u64) -> Self {
         Self {
-            rng: rand::rngs::StdRng::seed_from_u64(seed),
+            rng: Engine::seed_from_u64(seed),
         }
     }
 }
@@ -18,7 +25,7 @@ impl SimRng {
 impl Default for SimRng {
     fn default() -> Self {
         Self {
-            rng: rand::rngs::StdRng::from_entropy(),
+            rng: Engine::from_entropy(),
         }
     }
 }

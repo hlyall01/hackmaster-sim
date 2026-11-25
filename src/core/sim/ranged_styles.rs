@@ -111,8 +111,8 @@ pub(crate) fn shooting_move_speed(combatant: &super::Combatant, modified_speed: 
     modified_speed.min(normal_speed * fraction)
 }
 
-pub(crate) fn bow_running(combatant: &super::Combatant, modified_speed: f32) -> bool {
-    combatant
+pub(crate) fn bow_running(combatant: &super::Combatant) -> bool {
+    let can_run = combatant
         .sheet
         .offense
         .weapon
@@ -123,7 +123,11 @@ pub(crate) fn bow_running(combatant: &super::Combatant, modified_speed: f32) -> 
         && combatant.state.moved_last_tick
         && !combatant.magic_blocks_running()
         && combatant.state.trauma_remaining_seconds == 0
-        && combatant.state.knockback_immobile_seconds == 0
-        && shooting_move_speed(combatant, modified_speed)
-            > combatant.sheet.mobility.move_speed * 0.5
+        && combatant.state.knockback_immobile_seconds == 0;
+    if !can_run {
+        return false;
+    }
+    let base_speed = combatant.sheet.mobility.move_speed;
+    let modified_speed = combatant.apply_f32(super::StatIdF32::MoveSpeed, base_speed).max(0.0);
+    shooting_move_speed(combatant, modified_speed) > base_speed * 0.5
 }

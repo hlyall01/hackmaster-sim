@@ -434,7 +434,7 @@ fn fist_damage_is_reflected_only_up_to_remaining_hand_hp() {
 
 impl AttackMetricSample {
     fn source_is_spell_for_test(&self, name: &str) -> bool {
-        matches!(&self.damage_source, DamageSource::Spell { name: actual } if actual == name)
+        matches!(&self.damage_source.describe(), DamageSource::Spell { name: actual } if actual == name)
     }
 }
 
@@ -862,4 +862,115 @@ fn targeted_explosion_checks_range_before_scheduling_or_detonating() {
         assert_eq!(sim.combatants[1].state.hp, 1000);
         assert!(sim.combatants[0].state.magic.charged_objects.is_empty());
     }
+}
+
+#[test]
+fn bulk_fields_keep_caster_order_and_remove_the_last_expired_effect() {
+    let mut sim = arena("kinetic_overload", 5.0, SpellCastAi::Manual);
+    sim.bulk = Some(BulkContext::new(&sim.combatants).into());
+    let bomb = effect(&sim, "kinetic_overload");
+    for caster in [1, 0, 1] {
+        sim.resolve_configured_effect(caster, bomb.clone());
+    }
+    assert_eq!(sim.active_field_owners, [0, 1]);
+    sim.elapsed_seconds = 29;
+    sim.advance_effect_fields();
+    assert_eq!(sim.active_field_owners, [0, 1]);
+    sim.elapsed_seconds = 30;
+    sim.advance_effect_fields();
+    assert!(sim.active_field_owners.is_empty());
+    assert!(sim.combatants.iter().all(|c| c.state.hp < 1000));
+    sim.resolve_configured_effect(1, bomb);
+    sim.reset();
+    assert!(sim.active_field_owners.is_empty());
+}
+
+#[test]
+fn compact_melee_forecast_matches_private_arena_at_the_targeting_boundary() {
+    for start in [1.0, 5.0, 11.0, 30.0, 75.0] {
+        for caster in 0..2 {
+            for immobile in [0, 1, 3] {
+                let mut sim = arena("bash_face", start, SpellCastAi::AtFightStart);
+                sim.elapsed_seconds = 7;
+                sim.combatants[0].sheet.mobility.move_speed = 2.25;
+                sim.combatants[1].sheet.mobility.move_speed = 0.75;
+                sim.combatants[1].state.knockback_immobile_seconds = immobile;
+                Arc::make_mut(&mut sim.combatants[1].sheet.offense.weapon).reach_ft = 6.5;
+                sim.actors[0].position.y = 0;
+                let request = SpellRequest::from_loadout("bash_face", &sim.combatants[0].magic.loadout).unwrap();
+                let ticks = request.definition.casting_seconds - 1;
+                let distance = sim.forecast_melee_distance(caster, &request, ticks).unwrap();
+                for range in [distance - 0.25, distance, distance + 0.25] {
+                    assert_eq!(sim.predict_spell_target(caster, &request, range),
+                        sim.predict_target_with_arena(caster, &request, range, ticks));
+                }
+                sim.combatants[0].state.magic.fatigue = Some((7, 10));
+                assert!(sim.forecast_melee_distance(caster, &request, ticks).is_none());
+            }
+        }
+    }
+}
+
+#[test]
+fn two_casters_can_protect_the_same_attack_timer_before_retargeting() {
+    let mut sim = arena("pugilism", 50.0, SpellCastAi::Manual);
+    let ally = sim.combatants[0].clone();
+    sim.combatants.push(ally);
+    sim.reset();
+    sim.bulk = Some(BulkContext::new(&sim.combatants).into());
+    sim.predicting_movement = true;
+    for c in &mut sim.combatants { c.sheet.maneuvers.passive = true; }
+    sim.actors[2].position = sim.actors[0].position;
+    let summon = effect(&sim, "pugilism");
+    for caster in [0, 2] { sim.resolve_configured_effect(caster, summon.clone()); }
+    assert_eq!(sim.active_field_owners, [0, 2]);
+    let check = |sim: &mut SimState, expected: [bool; 3]| {
+        for c in &mut sim.combatants { c.state.next_attack_time_primary = Some(30.0); }
+        sim.tick();
+        for (c, kept) in sim.combatants.iter().zip(expected) {
+            assert_eq!(c.state.next_attack_time_primary.is_some(), kept);
+        }
+    };
+    check(&mut sim, [false, true, false]);
+    sim.combatants[0].state.magic.fists.as_mut().unwrap().spell.target = Some(2);
+    check(&mut sim, [false, true, true]);
+    sim.combatants[2].state.magic.fists = None;
+    check(&mut sim, [false, false, true]);
+}
+
+#[test]
+fn streamline_cache_tracks_overlapping_sources_movement_and_expiration() {
+    let mut sim = arena("spell_streamline", 20.0, SpellCastAi::Manual);
+    sim.bulk = Some(BulkContext::new(&sim.combatants).into());
+    let mut aura = TemporaryEffect::new("area", 3);
+    aura.average_damage_radius = Some(10.0);
+    for c in &mut sim.combatants { c.state.add_effect(aura.clone()); }
+    let check = |sim: &mut SimState, expected: [bool; 2]| {
+        sim.refresh_streamline_coverage();
+        sim.refresh_streamline_coverage();
+        for (c, active) in sim.combatants.iter().zip(expected) {
+            assert_eq!(c.state.streamline_averages_incoming_damage, active);
+        }
+    };
+    check(&mut sim, [true, true]);
+    sim.combatants[1].state.active_effects.clear();
+    check(&mut sim, [true, false]);
+    sim.actors[1].position = sim.actors[0].position;
+    sim.actors[1].position.x += 10;
+    check(&mut sim, [true, true]);
+    sim.actors[1].position.x += 1;
+    check(&mut sim, [true, false]);
+    sim.combatants[0].state.active_effects[0].remaining_seconds = 0;
+    check(&mut sim, [false, false]);
+}
+
+#[test]
+fn compact_forecast_matches_arena_closure_rounding_near_an_integer() {
+    let mut sim = arena("bash_face", 100.0, SpellCastAi::Manual);
+    sim.combatants[1].sheet.mobility.move_speed = 1000.0;
+    Arc::make_mut(&mut sim.combatants[1].sheet.offense.weapon).reach_ft = 2.0_f32.next_down();
+    let mut request = SpellRequest::from_loadout("bash_face", &sim.combatants[0].magic.loadout).unwrap();
+    request.definition.casting_seconds = 2;
+    assert_eq!(sim.forecast_melee_distance(0, &request, 1), Some(2.0));
+    assert_eq!(sim.predict_spell_target(0, &request, 1.0), sim.predict_target_with_arena(0, &request, 1.0, 1));
 }
