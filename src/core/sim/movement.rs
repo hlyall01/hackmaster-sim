@@ -193,32 +193,25 @@ pub(crate) fn max_range_for_weapon(weapon: &WeaponProfile) -> Option<f32> {
 pub(super) struct DuelEscape {
     pub from: super::GridPos,
     pub attacker: super::GridPos,
-    pub config: super::SimConfig,
+    pub tile_size_ft: f32,
 }
 
 impl DuelEscape {
     pub fn directions(self) -> Option<[(i32, i32); 3]> {
-        let Self { from, attacker, .. } = self;
-        let dx = from.x - attacker.x;
-        let dy = from.y - attacker.y;
-        let away = if dx.abs() >= dy.abs() && dx != 0 {
-            (dx.signum(), 0)
-        } else if dy != 0 {
-            (0, dy.signum())
-        } else {
+        let away = self.attacker.direction_to(self.from);
+        if away == (0, 0) {
             return None;
-        };
+        }
         Some([away, (-away.1, away.0), (away.1, -away.0)])
     }
 
     pub fn destination(self) -> Option<super::GridPos> {
         let from = self.from;
-        let steps = (5.0 / self.config.tile_size_ft.max(0.01)).ceil() as i32;
+        let steps = (5.0 / self.tile_size_ft.max(0.01)).ceil() as i32;
         self.directions()?.into_iter().find_map(|(dx, dy)| {
             let x = from.x.checked_add(dx * steps.max(1))?;
             let y = from.y.checked_add(dy * steps.max(1))?;
-            (x >= 0 && x < self.config.grid_width && y >= 0 && y < self.config.grid_height)
-                .then_some(super::GridPos::new(x, y))
+            Some(super::GridPos::new(x, y))
         })
     }
 }

@@ -51,18 +51,16 @@ fn batched_movement_matches_individual_steps() {
     let mut enemy = Combatant::default();
     enemy.team_id = 1;
     sim.reset_with_combatants(vec![Combatant::default(), enemy]);
-    sim.config.grid_width = 9;
-    sim.config.grid_height = 9;
-    for x in 0..9 {
-        for y in 0..9 {
-            for tx in 0..9 {
-                for ty in 0..9 {
+    for x in -4..5 {
+        for y in -4..5 {
+            for tx in -4..5 {
+                for ty in -4..5 {
                     let from = GridPos::new(x, y);
                     let target = GridPos::new(tx, ty);
                     for steps in [0, 1, 4, 20] {
                         let mut expected = from;
                         for _ in 0..steps {
-                            expected = SimState::step_away(expected, target).clamp(9, 9);
+                            expected = expected.offset(target.direction_to(expected), 1);
                         }
                         sim.actors[0].position = from;
                         sim.actors[1].position = target;
@@ -78,7 +76,7 @@ fn batched_movement_matches_individual_steps() {
                                     {
                                         break;
                                     }
-                                    expected = SimState::step_toward(expected, target).clamp(9, 9);
+                                    expected = expected.offset(expected.direction_to(target), 1);
                                 }
                                 sim.actors[0].position = from;
                                 sim.move_toward(0, 1, steps, stop);
@@ -314,10 +312,8 @@ fn idle_round_preserves_clocks_and_rng_and_escape_endpoints_match_the_walk() {
         for p in 0..35 { for q in 0..35 {
             for sim in [&mut original, &mut fast] {
                 sim.config.tile_size_ft = size;
-                sim.config.grid_width = 7;
-                sim.config.grid_height = 5;
-                sim.actors[0].position = GridPos::new(p % 7, p / 7);
-                sim.actors[1].position = GridPos::new(q % 7, q / 7);
+                sim.actors[0].position = GridPos::new(p % 7 - 3, p / 7 - 2);
+                sim.actors[1].position = GridPos::new(q % 7 - 3, q / 7 - 2);
             }
             assert_eq!(original.precognition_evasion_destination(0, 1), fast.precognition_evasion_destination(0, 1));
         }}

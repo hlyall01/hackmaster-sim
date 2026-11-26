@@ -62,10 +62,8 @@ impl SimState {
         let mut reach = [0.0; 2];
         let mut rates = [0.0; 2];
         for (i, c) in self.combatants.iter().enumerate() {
-            let pos = self.actors[i].position;
             let m = &c.state.magic;
-            if pos != pos.clamp(self.config.grid_width, self.config.grid_height)
-                || c.weapon_setups.is_some() || c.state.weapon_setup.pending.is_some()
+            if c.weapon_setups.is_some() || c.state.weapon_setup.pending.is_some()
                 || c.sheet.maneuvers.hold_at_bay || c.sheet.defense.eyesmite || c.racial_actions_blocked()
                 || c.state.trauma_remaining_seconds > 0 || !c.state.active_effects.is_empty()
                 || m.casting.is_some() || m.channeling.is_some() || m.fatigue.is_some()

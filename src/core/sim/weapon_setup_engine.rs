@@ -12,16 +12,7 @@ impl SimState {
         let weapon = &c.sheet.offense.weapon;
         if weapon.uses_projectiles {
             if max_range_for_weapon(weapon).is_some_and(|range| distance <= range) {
-                let from = self.actors[idx].position;
-                let step = Self::step_away(from, self.actors[target].position);
-                let tiles = (speed / self.config.tile_size_ft.max(0.01)).round() as i32;
-                let dest = super::super::GridPos::new(
-                    from.x + (step.x - from.x) * tiles,
-                    from.y + (step.y - from.y) * tiles,
-                )
-                .clamp(self.config.grid_width, self.config.grid_height);
-                return -(from.manhattan_distance(dest) as f32
-                    * self.config.tile_size_ft.max(0.01));
+                return if self.actors[idx].position != self.actors[target].position { -speed } else { 0.0 };
             }
         }
         if distance > weapon.reach_ft.max(1.0) {

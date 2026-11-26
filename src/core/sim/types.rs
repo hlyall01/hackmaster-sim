@@ -14,7 +14,9 @@ const DEFAULT_TILE_SIZE_FT: f32 = 1.0;
 pub struct SimConfig {
     pub start_distance: f32,
     pub stop_distance: f32,
+    /// Width of the initial formation, in tiles. Fighters can move beyond it.
     pub grid_width: i32,
+    /// Height of the initial formation, in tiles.
     pub grid_height: i32,
     pub tile_size_ft: f32,
 }
@@ -51,7 +53,22 @@ impl GridPos {
     }
 
     pub fn manhattan_distance(self, other: GridPos) -> i32 {
-        (self.x - other.x).abs() + (self.y - other.y).abs()
+        self.x.abs_diff(other.x).saturating_add(self.y.abs_diff(other.y)).min(i32::MAX as u32) as i32
+    }
+
+    /// One cardinal step toward the target, preferring x when the axes tie.
+    pub(super) fn direction_to(self, other: Self) -> (i32, i32) {
+        let dx = i64::from(other.x) - i64::from(self.x);
+        let dy = i64::from(other.y) - i64::from(self.y);
+        if dx.abs() >= dy.abs() {
+            (dx.signum() as i32, 0)
+        } else {
+            (0, dy.signum() as i32)
+        }
+    }
+
+    pub(super) fn offset(self, (dx, dy): (i32, i32), steps: i32) -> Self {
+        Self::new(self.x.saturating_add(dx * steps), self.y.saturating_add(dy * steps))
     }
 
     pub fn clamp(self, width: i32, height: i32) -> Self {

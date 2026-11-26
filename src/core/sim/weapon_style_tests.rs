@@ -558,7 +558,7 @@ fn pilgrim_pursuit_attacks_require_actual_legal_pursuit_and_keep_regular_timer()
         let mut sim = SimState::with_rng(config, crate::core::rng::SimRng::from_seed(18));
         sim.reset_with_combatants(vec![pursuer, pilgrim]);
         sim.actors[0].position = GridPos::new(if blocked { 1 } else { 5 }, 5);
-        sim.actors[1].position = GridPos::new(if blocked { 0 } else { 6 }, 5);
+        sim.actors[1].position = GridPos::new(if blocked { 1 } else { 6 }, 5);
         sim.combatants[1].state.next_attack_time_primary = Some(50.0);
         let before = sim.actors[1].position;
         sim.apply_incoming_attack_tactics(0, 1, AttackMode::Normal);
@@ -1029,17 +1029,18 @@ fn whistling_wind_real_movement_accelerates_and_does_not_penalize_a_blocked_retr
         defender.sheet.maneuvers.passive = true;
         let mut config = SimConfig::new(100.0, 1.0);
         config.tile_size_ft = 5.0;
-        config.grid_width = 200;
+        if blocked {
+            attacker.sheet.mobility.move_speed = 0.0;
+        }
         let mut sim = SimState::with_rng(config, crate::core::rng::SimRng::from_seed(42));
         sim.reset_with_combatants(vec![attacker, defender]);
-        let start_x = if blocked { 0 } else { 50 };
-        sim.actors[0].position = GridPos::new(start_x, 0);
-        sim.actors[1].position = GridPos::new(start_x + 20, 0);
+        sim.actors[0].position = GridPos::new(0, 0);
+        sim.actors[1].position = GridPos::new(20, 0);
         sim.tick();
-        assert_eq!(sim.actors[0].position.x, if blocked { 0 } else { 48 });
+        assert_eq!(sim.actors[0].position.x, if blocked { 0 } else { -2 });
         assert!(!sim.combatants[0].state.whistling_wind_running);
         sim.tick();
-        assert_eq!(sim.actors[0].position.x, if blocked { 0 } else { 45 });
+        assert_eq!(sim.actors[0].position.x, if blocked { 0 } else { -5 });
         assert_eq!(sim.combatants[0].state.whistling_wind_running, !blocked);
         assert_eq!(
             sim.combatants[0].state.whistling_wind_next_attack_penalty,

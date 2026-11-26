@@ -251,6 +251,16 @@ struct DerivedCache {
     breakdowns: game_logic::DerivedStatBreakdowns,
 }
 
+/// Keep the opening view steady until a fighter needs more room on either side.
+fn fight_view_tiles(config: SimConfig, positions: [i32; 2]) -> std::ops::Range<f64> {
+    let [a, b] = positions.map(f64::from);
+    let opening_tiles = f64::from(config.start_distance) / f64::from(config.tile_size_ft.max(0.01));
+    let span = opening_tiles.max((b - a).abs()).max(1.0) * 1.5;
+    let opening_center = f64::from(config.grid_width - 1) * 0.5;
+    let center = opening_center.clamp(a.max(b) - span * 0.4, a.min(b) + span * 0.4);
+    center - span * 0.5..center + span * 0.5
+}
+
 impl SimGuiApp {
     fn new() -> Self {
         let npc_presets = match data::load_npc_presets("data/npc_presets.json") {
@@ -610,27 +620,24 @@ impl SimGuiApp {
         let left = rect.left() + padding;
         let right = rect.right() - padding;
         let arena_width = (right - left).max(1.0);
-        let scale = arena_width / self.sim.config.start_distance.max(1.0);
-        if !scale.is_finite() {
-            return;
+        let positions = [self.sim.actors[0].position.x, self.sim.actors[1].position.x];
+        let view = fight_view_tiles(self.sim.config, positions);
+        let span = view.end - view.start;
+        let screen_x = |tile: f64| left + ((tile - view.start) / span) as f32 * arena_width;
+        let ground = (2.0, Color32::from_gray(80));
+        painter.line_segment([Pos2::new(left, ground_y), Pos2::new(right, ground_y)], ground);
+        // World-fixed ground marks make movement visible while the camera pans.
+        let spacing = 2.0_f64.powf((span / 8.0).log2().ceil());
+        let first_mark = (view.start / spacing).ceil() * spacing;
+        for i in 0..=8 {
+            let tile = first_mark + f64::from(i) * spacing;
+            if tile > view.end { break; }
+            let x = screen_x(tile);
+            painter.line_segment([Pos2::new(x, ground_y), Pos2::new(x, ground_y + 4.0)], ground);
         }
-
-        painter.line_segment(
-            [Pos2::new(left, ground_y), Pos2::new(right, ground_y)],
-            (2.0, Color32::from_gray(80)),
-        );
-
-        let tile_size = self.sim.config.tile_size_ft.max(0.01);
-        let start_tiles = (self.sim.config.start_distance / tile_size).ceil() as i32;
-        let padding_tiles = ((self.sim.config.grid_width - 1 - start_tiles) / 2).max(0);
-        let x0_ft = (self.sim.actors[0].position.x - padding_tiles) as f32 * tile_size;
-        let x1_ft = (self.sim.actors[1].position.x - padding_tiles) as f32 * tile_size;
-        let mut x0 = left + x0_ft * scale;
-        let mut x1 = left + x1_ft * scale;
-        x0 = x0.clamp(left, right);
-        x1 = x1.clamp(left, right);
+        let [mut x0, mut x1] = positions.map(|x| screen_x(f64::from(x)));
         let gap = (x1 - x0).abs();
-        let min_gap = 28.0;
+        let min_gap = 28.0_f32.min(arena_width);
         if gap < min_gap {
             let dir = if x1 >= x0 { 1.0 } else { -1.0 };
             if self.sim.combatants[0].sheet.offense.weapon.reach_ft
@@ -642,6 +649,9 @@ impl SimGuiApp {
             }
         }
 
+        let shift = (left - x0.min(x1)).max(0.0) - (x0.max(x1) - right).max(0.0);
+        x0 += shift;
+        x1 += shift;
         let fighter_positions = [(0usize, x0, 1.0_f32), (1usize, x1, -1.0_f32)];
         for (idx, x, facing) in fighter_positions {
             let combatant = &self.sim.combatants[idx];
@@ -7455,6 +7465,19 @@ mod tests {
 
         assert_eq!(app.players[0].tactical_policy, draft);
         assert_eq!(app.sim.combatants[0].tactical_policy, draft);
+    }
+
+    #[test]
+    fn fight_view_shows_retreat_and_keeps_both_fighters_on_screen() {
+        let config = SimConfig::new(200.0, 1.0);
+        let opening = fight_view_tiles(config, [5, 205]);
+        assert_eq!(fight_view_tiles(config, [-10, 185]), opening);
+        for positions in [[-295, -245], [600, 540], [-2_000, 2_000]] {
+            let view = fight_view_tiles(config, positions);
+            for x in positions {
+                assert!(view.start < f64::from(x) && f64::from(x) < view.end);
+            }
+        }
     }
 
     #[test]

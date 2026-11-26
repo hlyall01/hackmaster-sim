@@ -865,28 +865,22 @@ impl SimState {
                     }
                     let engaged = distance <= min_reach;
                     if !engaged {
-                        if !eyesmite_a && ranged_projectile_a {
-                            if let Some(max_range) = max_range_a {
-                                if distance <= max_range {
-                                    distance = self.move_for_separation(a_idx, b_idx, None, distance);
-                                } else {
-                                    distance = self.move_for_separation(a_idx, b_idx, Some(max_reach), distance);
-                                }
+                        // Resolve the archer's movement before pursuit on either side.
+                        // Otherwise a pursuer can reach melee and lose contact again
+                        // before it gets an attack opportunity at the next tick.
+                        for (mover, target, range) in [
+                            (a_idx, b_idx, max_range_a.filter(|_| ranged_projectile_a && !eyesmite_a)),
+                            (b_idx, a_idx, max_range_b.filter(|_| ranged_projectile_b && !eyesmite_b)),
+                        ] {
+                            if let Some(range) = range {
+                                let stop = (distance > range).then_some(max_reach);
+                                distance = self.move_for_separation(mover, target, stop, distance);
                             }
-                        } else if !eyesmite_a && distance > reach_a {
-                            // A melee pursuer must reach its own weapon range,
-                            // even when the opponent has a longer reach.
+                        }
+                        if !eyesmite_a && !ranged_projectile_a && distance > reach_a {
                             distance = self.move_for_separation(a_idx, b_idx, Some(reach_a), distance);
                         }
-                        if !eyesmite_b && ranged_projectile_b {
-                            if let Some(max_range) = max_range_b {
-                                if distance <= max_range {
-                                    distance = self.move_for_separation(b_idx, a_idx, None, distance);
-                                } else {
-                                    distance = self.move_for_separation(b_idx, a_idx, Some(max_reach), distance);
-                                }
-                            }
-                        } else if !eyesmite_b && distance > reach_b {
+                        if !eyesmite_b && !ranged_projectile_b && distance > reach_b {
                             distance = self.move_for_separation(b_idx, a_idx, Some(reach_b), distance);
                         }
                     }
@@ -1294,12 +1288,7 @@ impl SimState {
                 .actors
                 .get(my_idx)
                 .zip(self.actors.get(enemy_idx))
-                .map(|(mine, enemy)| {
-                    let next = Self::step_away(mine.position, enemy.position)
-                        .clamp(self.config.grid_width, self.config.grid_height);
-                    next != mine.position
-                })
-                .unwrap_or(false);
+                .is_some_and(|(mine, enemy)| mine.position != enemy.position);
         let enemy_charging = (needs.reaction
             || needs.enemy_charging)
             && enemy.sheet.maneuvers.charge
@@ -1918,11 +1907,7 @@ impl SimState {
                     low = middle + 1;
                 }
             }
-            self.actors[mover_idx].position = GridPos::new(
-                from.x + (to.x - from.x).signum() * low,
-                from.y + (to.y - from.y).signum() * low,
-            )
-            .clamp(self.config.grid_width, self.config.grid_height);
+            self.actors[mover_idx].position = from.offset(from.direction_to(to), low);
             return;
         }
         for _ in 0..steps {
@@ -1932,8 +1917,7 @@ impl SimState {
             }
             let from = self.actors[mover_idx].position;
             let to = self.actors[target_idx].position;
-            let next =
-                Self::step_toward(from, to).clamp(self.config.grid_width, self.config.grid_height);
+            let next = from.offset(from.direction_to(to), 1);
             if next.x == from.x && next.y == from.y {
                 break;
             }
@@ -1946,16 +1930,9 @@ impl SimState {
             return;
         }
         let from = self.actors[mover_idx].position;
-        let next = Self::step_away(from, self.actors[target_idx].position);
-        // Moving away increases the dominant axis, so each subsequent step
-        // has the same direction until the edge of the board stops movement.
-        self.actors[mover_idx].position = GridPos::new(
-            from.x
-                .saturating_add((next.x - from.x).saturating_mul(steps)),
-            from.y
-                .saturating_add((next.y - from.y).saturating_mul(steps)),
-        )
-        .clamp(self.config.grid_width, self.config.grid_height);
+        // Every step away stays on the same axis.
+        let away = self.actors[target_idx].position.direction_to(from);
+        self.actors[mover_idx].position = from.offset(away, steps);
     }
 
     fn update_charge_progress(
@@ -2053,7 +2030,7 @@ impl SimState {
     fn prepare_enabled_escape(&mut self, defender: usize, attacker: usize) -> EscapeDestination {
         let pending = if self.bulk.is_some() && self.actors.len() == 2 && attacker < 2 && defender < 2 {
             EscapeDestination::Duel(super::movement::DuelEscape {
-                from: self.actors[defender].position, attacker: self.actors[attacker].position, config: self.config,
+                from: self.actors[defender].position, attacker: self.actors[attacker].position, tile_size_ft: self.config.tile_size_ft,
             })
         } else { EscapeDestination::Known(self.precognition_evasion_destination(defender, attacker)) };
         let state = &mut self.combatants[defender].state;
@@ -2069,7 +2046,7 @@ impl SimState {
     ) -> Option<GridPos> {
         let from = self.actors.get(defender_idx)?.position;
         let attacker = self.actors.get(attacker_idx)?.position;
-        let geometry = super::movement::DuelEscape { from, attacker, config: self.config };
+        let geometry = super::movement::DuelEscape { from, attacker, tile_size_ft: self.config.tile_size_ft };
         if self.bulk.is_some() && self.actors.len() == 2 { return geometry.destination(); }
         let directions = geometry.directions()?;
         let steps = (5.0 / self.config.tile_size_ft.max(0.01)).ceil() as i32;
@@ -2077,12 +2054,8 @@ impl SimState {
             let mut current = from;
             let mut valid = true;
             for _ in 0..steps.max(1) {
-                let next = GridPos::new(current.x + step_x, current.y + step_y);
-                if next.x < 0
-                    || next.y < 0
-                    || next.x >= self.config.grid_width
-                    || next.y >= self.config.grid_height
-                    || self.actors.iter().enumerate().any(|(idx, actor)| {
+                let next = current.offset((step_x, step_y), 1);
+                if next == current || self.actors.iter().enumerate().any(|(idx, actor)| {
                         idx != defender_idx
                             && self
                                 .combatants
@@ -2111,30 +2084,6 @@ impl SimState {
         }
     }
 
-    fn step_toward(from: GridPos, to: GridPos) -> GridPos {
-        let dx = to.x - from.x;
-        let dy = to.y - from.y;
-        if dx.abs() >= dy.abs() && dx != 0 {
-            GridPos::new(from.x + dx.signum(), from.y)
-        } else if dy != 0 {
-            GridPos::new(from.x, from.y + dy.signum())
-        } else {
-            from
-        }
-    }
-
-    fn step_away(from: GridPos, away_from: GridPos) -> GridPos {
-        let dx = from.x - away_from.x;
-        let dy = from.y - away_from.y;
-        if dx.abs() >= dy.abs() && dx != 0 {
-            GridPos::new(from.x + dx.signum(), from.y)
-        } else if dy != 0 {
-            GridPos::new(from.x, from.y + dy.signum())
-        } else {
-            from
-        }
-    }
-
     fn enforce_min_distance(&mut self, a_idx: usize, b_idx: usize, distance_ft: f32) {
         let tile_size_ft = self.config.tile_size_ft.max(0.01);
         let min_tiles = (distance_ft / tile_size_ft).round() as i32;
@@ -2150,17 +2099,7 @@ impl SimState {
             b_idx
         };
         let other_idx = if mover_idx == a_idx { b_idx } else { a_idx };
-        let mut remaining = min_tiles - current_tiles;
-        while remaining > 0 {
-            let from = self.actors[mover_idx].position;
-            let next = Self::step_away(from, self.actors[other_idx].position)
-                .clamp(self.config.grid_width, self.config.grid_height);
-            if next.x == from.x && next.y == from.y {
-                break;
-            }
-            self.actors[mover_idx].position = next;
-            remaining -= 1;
-        }
+        self.move_away(mover_idx, other_idx, min_tiles - current_tiles);
     }
 
     fn multiple_teams_remain(&self) -> bool {
