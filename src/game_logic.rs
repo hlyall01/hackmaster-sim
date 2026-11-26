@@ -4661,7 +4661,7 @@ pub fn derived_stat_breakdowns(
         && !weapon.defense_bonus_always
         && !shield_of_blades_active;
     if conditional_weapon_defense {
-        melee_defense.note("+4 weapon defense becomes available after your attack.");
+        melee_defense.note("+4 on your first melee defense. Making an attack restores this bonus.");
     }
     melee_defense.note(
         if offensive_dualwielding && !perfect_two_weapon_fighting_active {
@@ -4932,7 +4932,7 @@ fn defense_display_summary(
     let weapon_note = if !combatant.sheet.offense.weapon.defense_bonus_always
         && (combatant.sheet.maneuvers.defensive_dualwielding
             || combatant.sheet.offense.weapon.two_hand_grip) {
-        " (+4 after you attack)"
+        " (+4 on first melee defense, restored by attacking)"
     } else { "" };
     let melee_roll_label = if let Some(shield) = shield_bonus {
         format!("Defense roll (melee): d{}p + {} + {shield}{weapon_note}",
@@ -10448,7 +10448,7 @@ mod tests {
             baseline
                 .defense
                 .melee_roll_label
-                .contains("(+4 after you attack)")
+                .contains("(+4 on first melee defense, restored by attacking)")
         );
 
         add_talent(&mut player, TALENT_ID_SHIELD_OF_BLADES, None);

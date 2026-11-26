@@ -968,11 +968,10 @@ impl SimState {
         if track_streamline { self.refresh_streamline_coverage(); }
         self.elapsed_seconds += 1;
         if self.bulk.is_none() {
-            let now = self.elapsed_seconds as f32;
             for combatant in &mut self.combatants {
                 combatant
                     .state
-                    .refresh_defense_plus_four_ready(&combatant.sheet, now);
+                    .refresh_defense_plus_four_ready(&combatant.sheet);
             }
         }
         if !spell_free { self.flush_spell_events(); }
@@ -2295,7 +2294,6 @@ impl SimState {
                         &mut self.combatants,
                         attacker_idx,
                         defender_idx,
-                        now,
                         state_snapshot.as_ref(),
                         &mut self.rng,
                     );

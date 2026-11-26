@@ -11,6 +11,8 @@
 
 ## Styles
 
+The conditional +4 weapon defense for a two-handed weapon, a two-handed grip, or defensive dual wielding starts ready. The first melee defense spends it, hit or miss. Making an attack restores it. Ranged attacks against the fighter leave this bonus available for melee. The fighter can use a ready bonus immediately upon drawing their weapons, even during the opening attack delay.
+
 ### Attacking Unarmed Opponents
 - Armed melee attacks against an unarmed opponent recover at half their normal interval, including primary and offhand attacks. Apply this after weapon speed modifiers and dualwield recovery penalties, always rounding up to whole seconds with a one-second minimum. The initial offhand delay is also halved and rounded up.
 - A weapon in either hand makes the opponent armed. An unarmed weapon or a shield alone does not; Quiet River users remain unarmed.
@@ -28,7 +30,7 @@
 
 ### Two-Handed Weapon
 - **Attack:** Attack normally.
-- **Defense:** d20p + modifiers against one enemy attack between your own attacks; second and later defenses in that window use d20p - 4 + modifiers.
+- **Defense:** d20p + modifiers against the first melee attack between your own attacks. Second and later melee defenses in that window use d20p - 4 + modifiers.
 
 ### One-Handed Weapon (one-handed)
 - **Attack:** -1 speed bonus for focusing on a single weapon.
@@ -36,7 +38,7 @@
 
 ### One-Handed Weapon (two-handed grip)
 - **Attack:** +3 damage; +2 to speed.
-- **Defense:** d20p + modifiers against one enemy attack between your own attacks; second and later defenses in that window use d20p - 4 + modifiers.
+- **Defense:** d20p + modifiers against the first melee attack between your own attacks. Second and later melee defenses in that window use d20p - 4 + modifiers.
 
 ### Two One-Handed Weapons (offensive)
 - **Attack:** Primary initial attack normal. Subsequent primary attacks at primary speed + 2. Secondary initial attack occurs 2 seconds after primary plus half primary speed; subsequent secondary attacks at secondary speed + 2. Secondary weapon takes -2 damage.
@@ -44,7 +46,7 @@
 
 ### Two One-Handed Weapons (defensive)
 - **Attack:** Attack normally with primary weapon.
-- **Defense:** d20p + both weapon defense bonuses + modifiers against one enemy attack between primary weapon attacks; second and later defenses in that window use d20p - 4 + same modifiers. Near-perfect defense damage is full if the secondary weapon is smaller than the wielder.
+- **Defense:** d20p + both weapon defense bonuses + modifiers against the first melee attack after both weapons are drawn or after your own attack. Second and later melee defenses in that window use d20p - 4 + the same modifiers. Near-perfect defense damage is full if the secondary weapon is smaller than the wielder.
 
 ### Shield Only
 - **Attack:** Unarmed or shield bash only.

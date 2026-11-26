@@ -371,6 +371,8 @@ pub struct CombatantState {
     pub next_attack_time_primary: Option<f32>,
     pub next_attack_time_secondary: Option<f32>,
     pub defense_plus_four_ready: bool,
+    // Persists across recovery, tactical profile changes and equipment draws.
+    pub(super) weapon_defense_spent: bool,
     pub moved_last_tick: bool,
     pub whistling_wind_running: bool,
     pub whistling_wind_next_attack_penalty: bool,
@@ -754,6 +756,7 @@ impl CombatantState {
             next_attack_time_primary: None,
             next_attack_time_secondary: None,
             defense_plus_four_ready: false,
+            weapon_defense_spent: false,
             moved_last_tick: false,
             whistling_wind_running: false,
             whistling_wind_next_attack_penalty: false,
@@ -810,13 +813,21 @@ impl CombatantState {
             active_effects,
             cache: CombatantCache::default(),
         };
-        state.refresh_defense_plus_four_ready(sheet, 0.0);
+        state.refresh_defense_plus_four_ready(sheet);
         state
     }
 
-    pub(crate) fn refresh_defense_plus_four_ready(&mut self, sheet: &CombatantSheet, now: f32) {
-        let ready = defense_plus_four_ready_at(sheet, self, now);
-        self.defense_plus_four_ready = ready;
+    pub(super) fn conditional_weapon_defense_ready(&self, sheet: &CombatantSheet, trauma: i32) -> bool {
+        !self.weapon_defense_spent && trauma <= 0 && defense_plus_four_eligible(sheet)
+    }
+
+    pub(crate) fn refresh_defense_plus_four_ready(&mut self, sheet: &CombatantSheet) {
+        self.defense_plus_four_ready = self.conditional_weapon_defense_ready(sheet, self.trauma_remaining_seconds);
+    }
+
+    pub(super) fn record_attack(&mut self) {
+        self.has_attacked = true;
+        self.weapon_defense_spent = false;
     }
 
     pub fn add_effect(&mut self, effect: TemporaryEffect) {
@@ -880,37 +891,6 @@ fn defense_plus_four_eligible(sheet: &CombatantSheet) -> bool {
     (weapon.two_hand_grip || sheet.maneuvers.defensive_dualwielding)
         && weapon.has_weapon
         && !weapon.defense_bonus_always
-}
-
-pub(crate) fn defense_plus_four_ready_at(
-    sheet: &CombatantSheet,
-    state: &CombatantState,
-    now: f32,
-) -> bool {
-    defense_plus_four_ready_with_timing(
-        sheet,
-        state.trauma_remaining_seconds,
-        state.next_attack_time_primary,
-        now,
-    )
-}
-
-pub(crate) fn defense_plus_four_ready_with_timing(
-    sheet: &CombatantSheet,
-    trauma_remaining_seconds: i32,
-    next_attack_time_primary: Option<f32>,
-    now: f32,
-) -> bool {
-    if !defense_plus_four_eligible(sheet) {
-        return false;
-    }
-    if trauma_remaining_seconds > 0 {
-        return false;
-    }
-    match next_attack_time_primary {
-        Some(next_attack) => now + 0.0001 >= next_attack,
-        None => true,
-    }
 }
 
 impl Combatant {

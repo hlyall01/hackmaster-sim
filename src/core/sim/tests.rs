@@ -4018,7 +4018,7 @@ fn fight_defensively_applies_to_knock_aside_rolls() {
         .fight_defensively_defense_bonus = 2;
 
     let mut rng = FixedRng(0);
-    let outcome = resolve_knock_aside(&mut state.combatants, 0, 1, 0.0, None, &mut rng);
+    let outcome = resolve_knock_aside(&mut state.combatants, 0, 1, None, &mut rng);
     assert_eq!(outcome.roll.attack_bonus, 4);
     assert_eq!(outcome.roll.defense_base, 7);
 }
@@ -6684,79 +6684,106 @@ fn eyesmite_user_closes_to_five_feet_inside_weapon_reach() {
 }
 
 #[test]
-fn two_hand_grip_bonus_ready_on_attack_timer() {
-    let mut combatant = combatant_basic(
-        "Attacker".to_string(),
-        "Test Blade".to_string(),
-        0,
-        0,
-        0,
-        false,
-        0,
-        "1d1".to_string(),
-        0,
-        10.0,
-        1.0,
-        5.0,
-        true,
-        false,
-        None,
-        true,
-        false,
-        20,
+fn first_halberd_attack_gets_weapon_defense_after_the_longbow_to_melee_draw() {
+    let (weapons, armor, shields) = data::load_catalogs().unwrap();
+    let talents = data::load_talents(data::TALENTS_PATH).unwrap();
+    let npcs = game_logic::NpcPresetCatalog::new(Vec::new());
+    let weapon_id = |name| find_weapon_id_by_name(&weapons, name).unwrap();
+    let mut archer = game_logic::PlayerConfig::new("Archer", weapon_id("Longsword"));
+    archer.offhand_weapon_id = Some(weapon_id("Dagger"));
+    archer.defensive_dualwielding = true;
+    archer.ranged_weapon_setup = Some(
+        serde_json::from_value(serde_json::json!({
+            "weapon": "Longbow", "start_with": "ranged", "auto_switch_to_melee": true
+        }))
+        .unwrap(),
     );
-    assert!(combatant.state.defense_plus_four_ready);
-
-    combatant.state.next_attack_time_primary = Some(2.0);
-    combatant
-        .state
-        .refresh_defense_plus_four_ready(&combatant.sheet, 1.0);
-    assert!(!combatant.state.defense_plus_four_ready);
-
-    combatant
-        .state
-        .refresh_defense_plus_four_ready(&combatant.sheet, 2.0);
-    assert!(combatant.state.defense_plus_four_ready);
+    let mut enemy = game_logic::PlayerConfig::new("Pursuer", weapon_id("Halberd"));
+    // Isolate the draw and opening defense from injury, knockback and trauma.
+    archer.base_hp = 1000;
+    enemy.base_hp = 1000;
+    archer.misc_modifiers.attack_bonus = -100;
+    enemy.misc_modifiers.attack_bonus = -100;
+    for archer_idx in [0, 1] {
+        let mut players = [archer.clone(), enemy.clone()];
+        players.swap(0, archer_idx);
+        let actors =
+            game_logic::build_combatants(&players, &weapons, &armor, &shields, &npcs, &talents);
+        let mut sim = SimState::with_rng(SimConfig::new(30.0, 1.0), SimRng::from_seed(1));
+        sim.reset_with_combatants(actors);
+        for _ in 0..30 {
+            sim.tick();
+            if sim.combat_events.iter().any(|e| {
+                e.attacker_idx != archer_idx && matches!(&e.kind, CombatEventKind::Attack(_))
+            }) {
+                break;
+            }
+        }
+        let (attack_time, attack) = sim
+            .combat_events
+            .iter()
+            .find_map(|e| match &e.kind {
+                CombatEventKind::Attack(a) if e.defender_idx == archer_idx => Some((e.time, a)),
+                _ => None,
+            })
+            .expect("the halberd should reach the archer first");
+        let actor = &sim.combatants[archer_idx];
+        assert_eq!(actor.state.weapon_setup.active, WeaponSetup::Melee);
+        assert!(actor.sheet.maneuvers.defensive_dualwielding);
+        assert!(!actor.state.weapon_setup.has_attacked[WeaponSetup::Melee.index()]);
+        assert!(
+            actor
+                .state
+                .next_attack_time_primary
+                .is_some_and(|t| t > attack_time as f32)
+        );
+        assert_eq!(attack.roll.weapon_defense_bonus, 4);
+    }
 }
 
 #[test]
-fn defensive_dualwielding_bonus_ready_on_attack_timer() {
-    let mut combatant = combatant_basic(
-        "Attacker".to_string(),
-        "Test Blade".to_string(),
-        0,
-        0,
-        0,
-        false,
-        0,
-        "1d1".to_string(),
-        0,
-        10.0,
-        1.0,
-        5.0,
-        false,
-        false,
-        None,
-        true,
-        false,
-        20,
-    );
-    combatant.sheet.maneuvers.defensive_dualwielding = true;
-    combatant
-        .state
-        .refresh_defense_plus_four_ready(&combatant.sheet, 0.0);
-    assert!(combatant.state.defense_plus_four_ready);
+fn conditional_weapon_defense_is_spent_on_melee_defense_and_restored_by_attacking() {
+    for dual_wield in [false, true] {
+        let mut fighters = vec![Combatant::default(), Combatant::default()];
+        for fighter in &mut fighters {
+            fighter.sheet.offense.attack_bonus = -100;
+        }
+        let defender = &mut fighters[1];
+        let weapon = Arc::make_mut(&mut defender.sheet.offense.weapon);
+        weapon.has_weapon = true;
+        weapon.two_hand_grip = !dual_wield;
+        defender.sheet.maneuvers.defensive_dualwielding = dual_wield;
+        defender.state.next_attack_time_primary = Some(10.0);
 
-    combatant.state.next_attack_time_primary = Some(2.0);
-    combatant
-        .state
-        .refresh_defense_plus_four_ready(&combatant.sheet, 1.0);
-    assert!(!combatant.state.defense_plus_four_ready);
-
-    combatant
-        .state
-        .refresh_defense_plus_four_ready(&combatant.sheet, 2.0);
-    assert!(combatant.state.defense_plus_four_ready);
+        // A fixed ordinary roll avoids incidental criticals or counterattacks.
+        let mut rng = FixedRng(0x8000000080000000);
+        let opening = super::combat::CombatRoundSnapshot::capture(&fighters, 0, 1);
+        let strike = |fighters: &mut [Combatant], attacker, ranged, now, rng: &mut FixedRng| {
+            let snapshot = if now == 1.0 { Some(&opening) } else { None };
+            let outcome = resolve_attack(
+                fighters,
+                attacker,
+                1 - attacker,
+                0,
+                ranged,
+                1.0,
+                AttackMode::Normal,
+                WeaponSlot::Primary,
+                now,
+                snapshot,
+                rng,
+            );
+            assert!(!outcome.hit);
+            outcome.roll.weapon_defense_bonus
+        };
+        assert_eq!(strike(&mut fighters, 0, true, 0.0, &mut rng), 0);
+        assert_eq!(strike(&mut fighters, 0, false, 1.0, &mut rng), 4);
+        assert_eq!(strike(&mut fighters, 0, false, 1.0, &mut rng), 0);
+        assert_eq!(strike(&mut fighters, 0, false, 11.0, &mut rng), 0);
+        strike(&mut fighters, 1, false, 12.0, &mut rng);
+        fighters[1].state.next_attack_time_primary = Some(20.0);
+        assert_eq!(strike(&mut fighters, 0, false, 13.0, &mut rng), 4);
+    }
 }
 
 #[test]
@@ -7731,7 +7758,7 @@ fn one_handed_weapon_does_not_grant_defense_bonus() {
     );
     defender
         .state
-        .refresh_defense_plus_four_ready(&defender.sheet, 0.0);
+        .refresh_defense_plus_four_ready(&defender.sheet);
     assert!(!defender.state.defense_plus_four_ready);
 }
 

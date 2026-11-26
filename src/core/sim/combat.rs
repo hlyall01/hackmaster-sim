@@ -11,7 +11,6 @@ use super::mounted::MountedDamagePlan;
 use super::types::{
     AttackRollBreakdown, Combatant, CombatantState, CriticalHit, DamageBreakdown, DamageDie,
     KnockAsideRollBreakdown, ShieldBreakageStep, ShieldDamageBreakdown, WeaponCache, WeaponSlot,
-    defense_plus_four_ready_at,
 };
 use std::sync::Arc;
 
@@ -104,6 +103,9 @@ pub(crate) fn resolve_echo(
         combatants[caster].state.magic.event(SpellEventKind::EchoSkipped, 0, "Echo Strike dissipated: target unavailable or configured caster/range requirement not met");
         return None;
     }
+    let trauma = combatants[target].state.trauma_remaining_seconds;
+    let weapon_defense_bonus = take_weapon_defense_bonus(&mut combatants[target], echo.is_ranged, trauma);
+    let attacker = &combatants[caster];
     let defender = &combatants[target];
     let echo_rules = StatIdI32::FlagRegenstatStyle.bit() | StatIdI32::FlagFallingSunStyle.bit()
         | StatIdI32::FlagPilgrimsPathStyle.bit();
@@ -178,14 +180,6 @@ pub(crate) fn resolve_echo(
                 + movement_melee_defense_bonus(&defender.state),
             shield_bonus,
         )
-    };
-    let weapon_defense_bonus = if !echo.is_ranged
-        && (defender.sheet.offense.weapon.defense_bonus_always
-            || defense_plus_four_ready_at(&defender.sheet, &defender.state, now as f32))
-    {
-        4
-    } else {
-        0
     };
     let defense_base = defense_base + echo.ordinal as i32 * crate::core::magic::SpellKind::EchoStrike.catalog_entry().echo_rules.as_ref().expect("validated echo rules").defense_per_echo;
     let roll = AttackRollBreakdown {
@@ -542,17 +536,26 @@ impl AttackStateSnapshot {
                 && state.has_seen_attacker(opponent_idx),
         }
     }
-    fn defense_ready(&self, sheet: &super::types::CombatantSheet, now: f32) -> bool {
-        super::types::defense_plus_four_ready_with_timing(
-            sheet,
-            self.trauma_remaining_seconds,
-            self.next_attack_time_primary,
-            now,
-        )
-    }
     fn movement_defense_bonus(&self) -> i32 { self.movement_melee_bonus }
 
 }
+
+/// Read the live spent flag even for simultaneous attacks. Two defense rolls in
+/// the same round cannot both spend the same bonus.
+fn take_weapon_defense_bonus(defender: &mut Combatant, is_ranged: bool, trauma: i32) -> i32 {
+    if is_ranged {
+        return 0;
+    }
+    if defender.sheet.offense.weapon.defense_bonus_always {
+        return 4;
+    }
+    if defender.state.conditional_weapon_defense_ready(&defender.sheet, trauma) {
+        defender.state.weapon_defense_spent = true;
+        return 4;
+    }
+    0
+}
+
 pub(crate) struct CombatRoundSnapshot([(usize, AttackStateSnapshot); 2]);
 impl CombatRoundSnapshot {
     pub fn capture(combatants: &[Combatant], a: usize, b: usize) -> Self {
@@ -1657,7 +1660,7 @@ fn resolve_eyesmite(
     if drops_shield {
         combatants[attacker_idx].state.shield_intact = false;
     }
-    combatants[attacker_idx].state.has_attacked = true;
+    combatants[attacker_idx].state.record_attack();
 
     let attack_bonus = combatants[attacker_idx].apply_i32(
         StatIdI32::AttackBonusBase,
@@ -1672,6 +1675,9 @@ fn resolve_eyesmite(
     );
 
     let defender_state = AttackStateSnapshot::capture(&combatants[defender_idx], attacker_idx);
+    let weapon_defense_bonus = take_weapon_defense_bonus(
+        &mut combatants[defender_idx], false, defender_state.trauma_remaining_seconds,
+    );
     let defender = &combatants[defender_idx];
     let defender_infinite_hp = defender.sheet.vitals.infinite_hp;
     let defender_total_dr = defender.sheet.defense.armor_dr + defender.sheet.defense.natural_dr;
@@ -1682,13 +1688,7 @@ fn resolve_eyesmite(
             && defender.combat_flag_active(StatIdI32::FlagPilgrimsPathStyle))
         - called_shot_defense_penalty(defender)
         + defender_state.movement_defense_bonus();
-    let defense_ready = defender_state.defense_ready(&defender.sheet, now);
-    let weapon_defense_bonus =
-        if defender.sheet.offense.weapon.defense_bonus_always || defense_ready {
-            4
-        } else {
-            0
-        };
+
     let shield_defense_bonus = if shield_active {
         4 + defender.apply_i32(
             StatIdI32::ShieldDefenseBonus,
@@ -1994,7 +1994,7 @@ fn resolve_counter_attack_with_rules<const STYLES: bool>(
 ) -> CounterAttackOutcome {
     let attacker_rules = if STYLES { strike_flags(&combatants[attacker_idx]) } else { CombatFlags::default() };
     let defender_rules = if STYLES { strike_flags(&combatants[defender_idx]) } else { CombatFlags::default() };
-    combatants[attacker_idx].state.has_attacked = true;
+    combatants[attacker_idx].state.record_attack();
     let tactical_attack_penalty = combatants[attacker_idx]
         .state
         .tactical_next_attack_penalty
@@ -2007,6 +2007,9 @@ fn resolve_counter_attack_with_rules<const STYLES: bool>(
     let average_damage = combatants[defender_idx]
         .state
         .streamline_averages_incoming_damage;
+    let weapon_defense_bonus = take_weapon_defense_bonus(
+        &mut combatants[defender_idx], false, defender_state.trauma_remaining_seconds,
+    );
     let defender = &combatants[defender_idx];
     let defender_infinite_hp = defender.sheet.vitals.infinite_hp;
     let damage_multiplier = damage_multiplier.max(1);
@@ -2126,7 +2129,6 @@ fn resolve_counter_attack_with_rules<const STYLES: bool>(
         shield_active,
         shield_defense_bonus,
         trauma_incapacitated,
-        defender_weapon_defense_always,
         defender_weapon_speed,
         defender_six_paths,
         defender_unbreakable_wall,
@@ -2148,19 +2150,13 @@ fn resolve_counter_attack_with_rules<const STYLES: bool>(
                     .state
                     .magic
                     .restricted_defense(combatants[defender_idx].magic.talents),
-            defender.sheet.offense.weapon.defense_bonus_always,
             defender.apply_f32(StatIdF32::WeaponSpeed, defender.sheet.offense.weapon.speed),
             defender_rules.has(StatIdI32::FlagSixPathsStyle),
             defender_rules.has(StatIdI32::FlagUnbreakableWallStyle),
             defender_rules.has(StatIdI32::FlagFallingSunStyle),
         )
     };
-    let defense_ready = defender_state.defense_ready(&combatants[defender_idx].sheet, now);
-    let weapon_defense_bonus = if defender_weapon_defense_always || defense_ready {
-        4
-    } else {
-        0
-    };
+
     let shield_defense_bonus = if shield_active {
         4 + shield_defense_bonus
     } else {
@@ -2728,7 +2724,7 @@ fn resolve_attack_with_rules<const STYLES: bool>(
         let recovery = now + actor.apply_f32(StatIdF32::WeaponSpeed, attack_profile.weapon.speed).max(1.0);
         actor.state.weapon_setup.recoveries[setup] = Some(actor.state.weapon_setup.recoveries[setup].unwrap_or(0.0).max(recovery));
     }
-    combatants[attacker_idx].state.has_attacked = true;
+    combatants[attacker_idx].state.record_attack();
     combatants[attacker_idx].state.aggressive_maneuvers_locked = is_aggressive;
     if is_aggressive {
         combatants[attacker_idx].state.aggressive_defense_pending = true;
@@ -2806,6 +2802,9 @@ fn resolve_attack_with_rules<const STYLES: bool>(
         .is_some_and(super::GravesendAim::ignores_armor);
     let gravesend_forces_trauma = is_ranged && weapon.ranged_styles.gravesend_aim
         == Some(super::GravesendAim::ForceTrauma);
+    let weapon_defense_bonus = take_weapon_defense_bonus(
+        &mut combatants[defender_idx], is_ranged, defender_state.trauma_remaining_seconds,
+    );
     let (
         defense_mod,
         ranged_defense_mod,
@@ -2813,7 +2812,6 @@ fn resolve_attack_with_rules<const STYLES: bool>(
         shield_defense_bonus,
         shield_cover_value,
         trauma_incapacitated,
-        defender_weapon_defense_always,
         defender_weapon_speed,
         defender_superior_defense,
         defender_edge_counter,
@@ -2842,7 +2840,6 @@ fn resolve_attack_with_rules<const STYLES: bool>(
                     .state
                     .magic
                     .restricted_defense(combatants[defender_idx].magic.talents),
-            defender.sheet.offense.weapon.defense_bonus_always,
             defender.apply_f32(StatIdF32::WeaponSpeed, defender.sheet.offense.weapon.speed),
             defender_rules.has(StatIdI32::FlagSuperiorDefense),
             defender_rules.has(StatIdI32::FlagEdgeCounter),
@@ -2851,18 +2848,7 @@ fn resolve_attack_with_rules<const STYLES: bool>(
             defender_rules.has(StatIdI32::FlagFallingSunStyle),
         )
     };
-    let defense_ready = if is_ranged {
-        false
-    } else {
-        defender_state.defense_ready(&combatants[defender_idx].sheet, now)
-    };
-    let weapon_defense_bonus = if is_ranged {
-        0
-    } else if defender_weapon_defense_always || defense_ready {
-        4
-    } else {
-        0
-    };
+
     let shield_defense_bonus = if shield_active {
         let base = if is_ranged { 0 } else { 4 };
         base + shield_defense_bonus
@@ -3532,7 +3518,6 @@ pub(crate) fn resolve_knock_aside(
     combatants: &mut [Combatant],
     attacker_idx: usize,
     defender_idx: usize,
-    now: f32,
     state_snapshot: Option<&CombatRoundSnapshot>,
     rng: &mut impl Rng,
 ) -> KnockAsideOutcome {
@@ -3548,6 +3533,10 @@ pub(crate) fn resolve_knock_aside(
         .and_then(|snapshot| snapshot.get(defender_idx))
         .copied()
         .unwrap_or_else(|| AttackStateSnapshot::capture(&combatants[defender_idx], attacker_idx));
+    combatants[attacker_idx].state.weapon_defense_spent = false;
+    let weapon_defense_bonus = take_weapon_defense_bonus(
+        &mut combatants[defender_idx], false, defender_state.trauma_remaining_seconds,
+    );
     let attacker = &combatants[attacker_idx];
     let defender = &combatants[defender_idx];
     let attacker_fight_defensively_penalty = fight_defensively_attack_penalty(attacker);
@@ -3577,13 +3566,7 @@ pub(crate) fn resolve_knock_aside(
         ),
         rng,
     );
-    let defense_ready = defender_state.defense_ready(&defender.sheet, now);
-    let weapon_defense_bonus =
-        if defender.sheet.offense.weapon.defense_bonus_always || defense_ready {
-            4
-        } else {
-            0
-        };
+
     let defense_base = defender
         .apply_i32(StatIdI32::DefenseMod, defender.sheet.defense.defense_mod)
         + defender_fight_defensively_bonus
