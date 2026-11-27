@@ -57,7 +57,7 @@ impl SimState {
     fn forecast_melee_distance(&self, caster: usize, request: &SpellRequest, ticks: u32) -> Option<f32> {
         if self.config.tile_size_ft != 1.0 || self.actors.len() != 2 || self.combatants.len() != 2
             || self.active_pair() != Some((0, 1)) || self.hold_at_bay.active || self.hold_at_bay.pending
-            || self.elapsed_seconds.checked_add(ticks).is_none()
+            || self.closing_after_knockback.is_some() || self.elapsed_seconds.checked_add(ticks).is_none()
         { return None; }
         let mut reach = [0.0; 2];
         let mut rates = [0.0; 2];
@@ -108,6 +108,7 @@ impl SimState {
             combatants: self.combatants.clone(),
             elapsed_seconds: self.elapsed_seconds,
             hold_at_bay: self.hold_at_bay.clone(),
+            closing_after_knockback: self.closing_after_knockback,
             previous_positions: self.previous_positions.clone(),
             predicting_movement: true,
             ..Self::with_rng_and_log(self.config, self.rng.clone(), false)

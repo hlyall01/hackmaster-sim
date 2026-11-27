@@ -170,30 +170,6 @@ impl SimState {
         true
     }
 
-    /// A shorter weapon's opening delay starts at enemy contact, while closing
-    /// to its own reach. Starting it again after closing would count that second twice.
-    fn prime_melee_engagement_attack(&mut self, idx: usize, enemy: usize) {
-        let now = self.elapsed_seconds as f32;
-        let c = &self.combatants[idx];
-        if c.weapon_setups.is_none()
-            || c.state.weapon_setup.active != WeaponSetup::Melee
-            || c.state.weapon_setup.has_attacked[WeaponSetup::Melee.index()]
-            || c.state.next_attack_time_primary.is_some()
-            || !c.magic_can_attack(WeaponSlot::Primary, now)
-            || c.state.hp <= 0 || c.state.trauma_remaining_seconds > 0
-            || c.sheet.maneuvers.passive
-        { return; }
-        let opponent = &self.combatants[enemy];
-        if opponent.sheet.offense.weapon.uses_projectiles { return; }
-        let distance = self.distance_between(idx, enemy).unwrap_or(f32::INFINITY);
-        let mine = c.apply_f32(StatIdF32::WeaponReach, c.sheet.offense.weapon.reach_ft).max(1.0);
-        let theirs = opponent.apply_f32(StatIdF32::WeaponReach, opponent.sheet.offense.weapon.reach_ft).max(1.0);
-        if distance <= mine || distance > theirs { return; }
-        self.refresh_called_shot_tactic(idx, enemy, distance);
-        let aim = called_shot_delay_seconds(&self.combatants[idx], &self.combatants[enemy], false, &mut self.rng);
-        self.combatants[idx].state.set_next_attack_time(WeaponSlot::Primary, Some(now + 1.0 + aim));
-    }
-
     pub(super) fn advance_weapon_setups(&mut self, a: usize, b: usize) {
         let now = self.elapsed_seconds as f32;
         self.combatants[a].finish_weapon_setup(now);
@@ -246,7 +222,6 @@ impl SimState {
                     }
                 }
             }
-            self.prime_melee_engagement_attack(idx, enemy);
         }
     }
 }

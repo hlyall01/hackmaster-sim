@@ -6961,6 +6961,47 @@ mod tests {
     }
 
     #[test]
+    fn wren_knockback_keeps_arthurs_melee_count_while_he_closes() {
+        use hackmaster_sim::core::rng::SimRng;
+
+        let mut app = SimGuiApp::new();
+        app.apply_default_fighter_preset(0, "Arthur Du Randt");
+        app.apply_default_fighter_preset(1, "Wren");
+        // Seed 2 gives a five-foot push, seed 4 a miss. A slow return also
+        // checks an overdue swing and a swing still on cooldown after closing.
+        for (seed, knockback, return_speed, existing_due, expected_swing) in [
+            (2, 5.0, 20.0, None, 6),
+            (4, 0.0, 20.0, None, 6),
+            (2, 5.0, 2.0, None, 8),
+            (2, 5.0, 2.0, Some(10.0), 10),
+        ] {
+            app.reset_positions();
+            app.sim.set_rng(SimRng::from_seed(seed));
+            while app.sim.elapsed_seconds < 5 { app.sim.tick(); }
+            if let Some(due) = existing_due {
+                app.sim.combatants[0].state.next_attack_time_primary = Some(due);
+            }
+            app.sim.tick();
+            let opening = &app.sim.combat_events[0];
+            assert_eq!((opening.time, opening.attacker_idx), (5, 1));
+            assert!(matches!(&opening.kind, sim::CombatEventKind::Attack(hit)
+                if hit.knockback_ft == knockback));
+            assert_eq!(app.sim.combatants[0].state.next_attack_time_primary,
+                Some(existing_due.unwrap_or(6.0)));
+
+            // Wren stands her ground so Arthur must cover the full distance.
+            app.sim.combatants[1].sheet.mobility.move_speed = 0.0;
+            app.sim.combatants[0].sheet.mobility.move_speed = return_speed;
+            while app.sim.elapsed_seconds <= expected_swing { app.sim.tick(); }
+            let first = app.sim.combat_events.iter().find(|e| e.attacker_idx == 0
+                && matches!(e.kind, sim::CombatEventKind::Attack(_))).unwrap();
+            assert_eq!(first.time, expected_swing);
+            assert_eq!(app.sim.combatants[0].state.next_attack_time_primary,
+                Some(expected_swing as f32 + app.sim.combatants[0].sheet.offense.weapon.speed));
+        }
+    }
+
+    #[test]
     fn mounted_wren_impaler_against_errit_uses_five_damage_knockback_steps() {
         let presets = data::load_fighter_presets("data/sim/fighter_presets.json").unwrap();
         let mut app = app_fixture();

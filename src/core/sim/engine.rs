@@ -150,6 +150,7 @@ pub struct SimState {
     rng: SimRng,
     tick_accum: f32,
     hold_at_bay: HoldAtBayState,
+    closing_after_knockback: Option<(usize, usize)>,
     initial_positions: Option<std::sync::Arc<[SimActor]>>,
     active_field_owners: Vec<usize>,
     fist_targets: Vec<bool>,
@@ -400,6 +401,12 @@ struct HoldAtBayState {
     target_idx: usize,
 }
 
+// A melee swing held past its due second starts recovery when the attack is made.
+// Fractional weapon speeds keep their cadence if the swing was taken on time.
+fn attack_recovery_anchor(due: f32, now: f32, ranged: bool) -> f32 {
+    if !ranged && due.ceil() < now { now } else { due }
+}
+
 impl SimState {
     pub fn new(config: SimConfig) -> Self {
         Self::with_rng_and_log(config, SimRng::default(), true)
@@ -432,6 +439,7 @@ impl SimState {
             rng,
             tick_accum: 0.0,
             hold_at_bay: HoldAtBayState::default(),
+            closing_after_knockback: None,
             initial_positions: None,
             active_field_owners: Vec::new(),
             fist_targets: Vec::new(),
@@ -475,6 +483,7 @@ impl SimState {
         }
         self.refresh_intimidation();
         self.tick_accum = 0.0;
+        self.closing_after_knockback = None;
         self.hold_at_bay = HoldAtBayState::default();
     }
 
@@ -814,8 +823,13 @@ impl SimState {
             let eyesmite_a = self.combatants[a_idx].sheet.defense.eyesmite;
             let eyesmite_b = self.combatants[b_idx].sheet.defense.eyesmite;
 
+            // A five-foot push can put both weapons out of reach without ending the exchange.
+            let reapproaching = self.closing_after_knockback.take() == active_pair;
+            let melee = !ranged_projectile_a && !ranged_projectile_b
+                && (reapproaching || ((!ranged_a || distance_before_combat <= reach_a)
+                    && (!ranged_b || distance_before_combat <= reach_b)));
             let distance_after_combat;
-            if distance_before_combat > max_reach && !any_ranged {
+            if distance_before_combat > max_reach && !any_ranged && !reapproaching {
                 let step_a = self.move_tiles(a_idx);
                 let step_b = self.move_tiles(b_idx);
                 let tile_size_ft = self.config.tile_size_ft.max(0.01);
@@ -852,11 +866,29 @@ impl SimState {
                 }
                 distance_after_combat = self.distance_between(a_idx, b_idx).unwrap_or(0.0);
             } else {
-                if !self.predicting_movement {
-                    self.resolve_combat_round_at(a_idx, b_idx, distance_before_combat, reach_a, reach_b);
+                let mut attack_distance = distance_before_combat;
+                if melee && (attack_distance > min_reach || ((eyesmite_a || eyesmite_b) && attack_distance > 5.0)) {
+                    // The longer weapon stops at its own reach. The other fighter can
+                    // spend their movement closing the remaining gap this same second.
+                    let mut approaches = [
+                        (a_idx, b_idx, reach_a, eyesmite_a),
+                        (b_idx, a_idx, reach_b, eyesmite_b),
+                    ];
+                    if reach_b > reach_a { approaches.swap(0, 1); }
+                    for (mover, target, reach, eyesmite) in approaches {
+                        let stop = if eyesmite { reach.min(5.0) } else { reach };
+                        if attack_distance > stop && !self.hold_at_bay.blocks_advance(mover)
+                            && !(self.hold_at_bay.pending && self.hold_at_bay.target_idx == mover)
+                        {
+                            attack_distance = self.move_for_separation(mover, target, Some(stop), attack_distance);
+                        }
+                    }
+                }
+                if !self.predicting_movement && (!melee || attack_distance <= max_reach) {
+                    self.resolve_combat_round_at(a_idx, b_idx, attack_distance, reach_a, reach_b);
                 }
                 let mut distance = self.distance_between(a_idx, b_idx).unwrap_or(0.0);
-                if any_ranged {
+                if !melee {
                     if eyesmite_a && distance > 5.0 && !self.hold_at_bay.blocks_advance(a_idx) {
                         distance = self.move_for_separation(a_idx, b_idx, Some(5.0), distance);
                     }
@@ -884,53 +916,37 @@ impl SimState {
                             distance = self.move_for_separation(b_idx, a_idx, Some(reach_b), distance);
                         }
                     }
-                } else if distance > min_reach || (distance > 5.0 && (eyesmite_a || eyesmite_b)) {
-                    // Eyesmite changes its user's preferred distance, but must not
-                    // prevent the opponent from closing to their own weapon reach.
-                    if (eyesmite_a || reach_a < reach_b) && !self.hold_at_bay.blocks_advance(a_idx)
+                } else if distance > max_reach {
+                    let pair = [&self.combatants[a_idx].state, &self.combatants[b_idx].state];
+                    if (reapproaching && attack_distance > max_reach)
+                        || (pair.iter().any(|s| s.knockback_applied_this_tick)
+                            && pair.iter().all(|s| s.knockback_immobile_seconds == 0))
                     {
-                        let stop_distance = if eyesmite_a {
-                            reach_a.min(5.0)
-                        } else {
-                            reach_a
-                        };
-                        distance = self.move_for_separation(a_idx, b_idx, Some(stop_distance), distance);
-                    }
-                    if (eyesmite_b || reach_b < reach_a) && !self.hold_at_bay.blocks_advance(b_idx)
-                    {
-                        let stop_distance = if eyesmite_b {
-                            reach_b.min(5.0)
-                        } else {
-                            reach_b
-                        };
-                        distance = self.move_for_separation(b_idx, a_idx, Some(stop_distance), distance);
+                        self.closing_after_knockback = active_pair;
                     }
                 }
                 distance_after_combat = distance;
             }
-            if max_range_a.is_some()
+            if !reapproaching && max_range_a.is_some()
                 && !ranged_projectile_a
                 && distance_before_combat > reach_a
                 && distance_after_combat <= reach_a
             {
                 self.combatants[a_idx].state.clear_attack_timers();
             }
-            if max_range_b.is_some()
+            if !reapproaching && max_range_b.is_some()
                 && !ranged_projectile_b
                 && distance_before_combat > reach_b
                 && distance_after_combat <= reach_b
             {
                 self.combatants[b_idx].state.clear_attack_timers();
             }
-            self.maybe_start_hold_at_bay(
-                a_idx,
-                b_idx,
-                distance_before_combat,
-                distance_after_combat,
-                reach_a,
-                reach_b,
-            );
-            if (self.combatants[a_idx].state.knockback_applied_this_tick
+            if !reapproaching {
+                self.maybe_start_hold_at_bay(
+                    a_idx, b_idx, distance_before_combat, distance_after_combat, reach_a, reach_b,
+                );
+            }
+            if !melee && (self.combatants[a_idx].state.knockback_applied_this_tick
                 || self.combatants[b_idx].state.knockback_applied_this_tick)
                 && distance_after_combat < distance_before_combat
             {
@@ -2334,7 +2350,7 @@ impl SimState {
             };
             let weapon = &self.combatants[attacker_idx].sheet.offense.weapon;
             let mut has_range = max_range.is_some();
-            let mut attacker_reach = weapon.reach_ft.max(1.0);
+            let mut attacker_reach = if attacker_idx == a_idx { reach_a } else { reach_b };
             let mut use_ranged = if has_range && !weapon.uses_projectiles {
                 distance > attacker_reach
             } else {
@@ -2379,7 +2395,13 @@ impl SimState {
             let mut scheduled_primary_speed = None;
             let mut primary_attack_time = None;
             let mut scheduled_primary_attack_time = None;
-            if !use_ranged && distance > attacker_reach {
+            let defender_reach = if defender_idx == a_idx { reach_a } else { reach_b };
+            let outside_reach = !use_ranged && distance > attacker_reach;
+            // The shorter weapon's one-second opening count starts at enemy contact,
+            // even if it will take several seconds to reach striking distance.
+            if outside_reach && (distance > defender_reach
+                || self.combatants[defender_idx].sheet.offense.weapon.uses_projectiles)
+            {
                 continue;
             }
             if use_ranged && ranged_mod.is_none() {
@@ -2394,7 +2416,6 @@ impl SimState {
                 .next_attack_time_primary
                 .is_none()
             {
-                let defender_reach = self.combatants[defender_idx].sheet.offense.weapon.reach_ft;
                 let delay = if !use_ranged && attacker_reach < defender_reach {
                     1.0
                 } else {
@@ -2413,6 +2434,7 @@ impl SimState {
                     .set_next_attack_time(WeaponSlot::Primary, Some(scheduled_time));
                 scheduled_primary_attack_time = Some(scheduled_time);
             }
+            if outside_reach { continue; }
             let next_attack = if use_snapshot_timing {
                 snapshot_next_attack_primary
                     .map(|time| time + called_shot_delays[0])
@@ -2424,6 +2446,7 @@ impl SimState {
                     .next_attack_time_primary
                     .unwrap_or(now)
             };
+            let next_attack = attack_recovery_anchor(next_attack, now, use_ranged);
             if now + 0.0001 >= next_attack {
                 primary_attack_time = Some(next_attack);
                 let previous_aim = self.combatants[attacker_idx].sheet.offense.weapon.ranged_styles.aim_seconds();
@@ -2818,6 +2841,7 @@ impl SimState {
                         .next_attack_time_secondary
                         .unwrap_or(now)
                 };
+                let next_attack = attack_recovery_anchor(next_attack, now, use_ranged);
                 if now + 0.0001 >= next_attack {
                     self.combatants[attacker_idx].state.aggressive_maneuvers_locked = false;
                     if self.reaction_possible(defender_idx) && self.apply_incoming_attack_tactics(
